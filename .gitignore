@@ -1,0 +1,7 @@
+.sync.ffs_db
+*.info
+*.gcda
+*.gcno
+*_test
+*.dSYM/
+tmp_*
