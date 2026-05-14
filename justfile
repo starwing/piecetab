@@ -1,7 +1,7 @@
 # marktree test runner
 
 CC := "gcc"
-CFLAGS := "-Wall -Wextra -Werror -pedantic -std=c89"
+CFLAGS := "-Wall -Wextra -Werror -pedantic -std=c89 -Wno-variadic-macros"
 
 test *tests='':
     {{ CC }} {{ CFLAGS }} -O2 -o linecache_test linecache_test.c && ./linecache_test {{ tests }}

@@ -1494,11 +1494,11 @@ static lc_Cache *cacheV(lc_State *S, unsigned levels, lc_Node *root) {
 }
 
 /* ================================================================ */
-/*  Phase 1: single-leaf clearleaf tests (Examples 1-3 from plan)   */
+/*  Phase 1: single-leaf spliceleaf tests (Examples 1-3 from plan)  */
 /* ================================================================ */
 
 /* Ex1a: 叶内不跨段 — [10,10], seek(5), del=3 → [7,10], bytes=17 */
-static void test_clearleaf_1a(void) {
+static void test_spliceleaf_1a(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cursor cur;
     size_t    del;
@@ -1510,15 +1510,12 @@ static void test_clearleaf_1a(void) {
     lc_seek(&cur, c, 5);
     assert(lc_offset(&cur) == 5);
     del = 3;
-    lcD_clearleaf(&cur, &del, 0);
+    lcD_spliceleaf(&cur, &del);
     fprintf(stderr, "1a del=%zu\n", del);
-    dump_tree(c, "1a after clearleaf");
+    dump_tree(c, "1a after spliceleaf");
 
-    assert(del == 0 && c->bytes == 17 && c->breaks == 2);
-    {
-        lc_Leaf *l = (lc_Leaf *)c->root.children[0];
-        assert(l->bytes[0] == 7 && l->bytes[1] == 10);
-    }
+    assert(del == 0);
+    assert_tree(c, 0, botV(leafV(7, 10)));
     check_tree(c);
 
     lc_deltree(S, c);
@@ -1526,7 +1523,7 @@ static void test_clearleaf_1a(void) {
 }
 
 /* Ex1b: 叶内跨段 — [10,10], seek(5), del=8 → [5,7], bytes=12 */
-static void test_clearleaf_1b(void) {
+static void test_spliceleaf_1b(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cursor cur;
     size_t    del;
@@ -1536,15 +1533,12 @@ static void test_clearleaf_1b(void) {
 
     lc_seek(&cur, c, 5);
     del = 8;
-    lcD_clearleaf(&cur, &del, 0);
+    lcD_spliceleaf(&cur, &del);
     fprintf(stderr, "1b del=%zu\n", del);
-    dump_tree(c, "1b after clearleaf");
+    dump_tree(c, "1b after spliceleaf");
 
-    assert(del == 0 && c->bytes == 12 && c->breaks == 2);
-    {
-        lc_Leaf *l = (lc_Leaf *)c->root.children[0];
-        assert(l->bytes[0] == 5 && l->bytes[1] == 7);
-    }
+    assert(del == 0);
+    assert_tree(c, 0, botV(leafV(5, 7)));
     check_tree(c);
 
     lc_deltree(S, c);
@@ -1552,7 +1546,7 @@ static void test_clearleaf_1b(void) {
 }
 
 /* Ex1c: 整段消失 — [5,10,5], seek(3), del=12 → [3,5], bytes=8 */
-static void test_clearleaf_1c(void) {
+static void test_spliceleaf_1c(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cursor cur;
     size_t    del;
@@ -1562,17 +1556,97 @@ static void test_clearleaf_1c(void) {
 
     lc_seek(&cur, c, 3);
     del = 12;
-    lcD_clearleaf(&cur, &del, 0);
+    lcD_spliceleaf(&cur, &del);
     fprintf(stderr, "1c del=%zu\n", del);
-    dump_tree(c, "1c after clearleaf");
+    dump_tree(c, "1c after spliceleaf");
 
-    assert(del == 0 && c->bytes == 8 && c->breaks == 2);
-    {
-        lc_Leaf *l = (lc_Leaf *)c->root.children[0];
-        assert(l->bytes[0] == 3 && l->bytes[1] == 5);
-    }
+    assert(del == 0);
+    assert_tree(c, 0, botV(leafV(3, 5)));
     check_tree(c);
 
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* divergence: same leaf, C1/C2 in same leaf → l > levels */
+static void test_divergence_same(void) {
+    lc_State  *S = lc_open(&test_alloc, NULL);
+    lc_Cursor  C1, C2;
+    lc_Cache  *c = cacheV(S, 0, botV(leafV(10, 10)));
+
+    lc_seek(&C1, c, 3);
+    lc_seek(&C2, c, 7);
+    assert(lcD_divergence(&C1, &C2) == (int)lcK_levels(&C1) + 1);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* divergence: different leaves, same parent → diverge at levels */
+static void test_divergence_leaf(void) {
+    lc_State  *S = lc_open(&test_alloc, NULL);
+    lc_Cursor  C1, C2;
+    lc_Cache  *c = cacheV(S, 0, botV(leafV(10, 10), leafV(10, 10)));
+
+    lc_seek(&C1, c, 5);
+    lc_seek(&C2, c, 25);
+    assert(lcD_divergence(&C1, &C2) == (int)lcK_levels(&C1));
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* divergence: different internal nodes (levels=2) → diverge at l=1 */
+static void test_divergence_node(void) {
+    lc_State  *S = lc_open(&test_alloc, NULL);
+    lc_Cursor  C1, C2;
+    lc_Cache  *c = cacheV(S, 2,
+            innerV(innerV(botV(leafV(10)), botV(leafV(10)))));
+
+    /* C1 in first botV (off=3), C2 in second botV (off=13) */
+    lc_seek(&C1, c, 3);
+    lc_seek(&C2, c, 13);
+    assert(lcD_divergence(&C1, &C2) == 1);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* prune: levels=1, C1 in L1, C2 in L4 → delete L2 L3, shrink to [L1,L4] */
+static void test_prune_leaf(void) {
+    lc_State  *S = lc_open(&test_alloc, NULL);
+    lc_Cursor  C1, C2;
+    lc_Node   *p;
+    lc_Cache  *c = cacheV(S, 1,
+            innerV(botV(leafV(10), leafV(10), leafV(10), leafV(10))));
+
+    lc_seek(&C1, c, 3);
+    lc_seek(&C2, c, 33);
+    p = lcK_parent(&C1, 1);
+    assert(p->child_count == 4);
+
+    lcD_prune(&C1, &C2, 1);
+    assert_tree(c, 1,
+            innerV(botV(leafV(10), leafV(10))));
+    assert(lcK_idx(&C2, p, 1) == 1);
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* prune: levels=2, C1 in innerV0.botV0, C2 in innerV1.botV0 → delete middle */
+static void test_prune_node(void) {
+    lc_State  *S = lc_open(&test_alloc, NULL);
+    lc_Cursor  C1, C2;
+    lc_Cache  *c = cacheV(S, 2,
+            innerV(innerV(botV(leafV(10)), botV(leafV(10))),
+                   innerV(botV(leafV(10))),
+                   innerV(botV(leafV(10)))));
+
+    lc_seek(&C1, c, 3);
+    lc_seek(&C2, c, 33);
+    lcD_prune(&C1, &C2, 0);
+    assert_tree(c, 2,
+            innerV(innerV(botV(leafV(10)), botV(leafV(10))),
+                   innerV(botV(leafV(10)))));
+    check_tree(c);
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -1778,6 +1852,340 @@ static void test_merge_combine_deep(void) {
     lc_close(S);
 }
 
+/* ================================================================ */
+/*  Phase 4: trimnode / trimleaf tests                              */
+/* ================================================================ */
+
+/* trimnode_left: levels=1 root[4 botV], C in botV1 → keep [0..1], del right */
+static void test_trimnode_left(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor cur;
+    lc_Cache *c = cacheV(S, 1,
+            innerV(botV(leafV(10,10)), botV(leafV(10,10)),
+                   botV(leafV(10,10)), botV(leafV(10,10))));
+    check_tree(c);
+    lc_seek(&cur, c, 25);
+    lcD_trimnode(&cur, 0, 1);
+    assert_tree(c, 1, innerV(botV(leafV(10,10)), botV(leafV(10,10))));
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* trimnode_right: levels=1 root[4 botV], C in botV2 → keep [2..3], del left */
+static void test_trimnode_right(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor cur;
+    lc_Node *root;
+    lc_Cache *c = cacheV(S, 1,
+            innerV(botV(leafV(10,10)), botV(leafV(10,10)),
+                   botV(leafV(10,10)), botV(leafV(10,10))));
+    check_tree(c);
+    lc_seek(&cur, c, 45);
+    root = &c->root;
+    lcD_trimnode(&cur, 0, 0);
+    assert_tree(c, 1, innerV(botV(leafV(10,10)), botV(leafV(10,10))));
+    assert(cur.paths[0] == &root->children[0]);
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* trimleaf_left: leaf[10,10,10,10], C at lidx=1,col=3 → keep [0..0]+3,del rest */
+static void test_trimleaf_left(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor cur;
+    lc_Cache *c = cacheV(S, 0, botV(leafV(10,10,10,10)));
+    check_tree(c);
+    lc_seek(&cur, c, 13);
+    assert(cur.lidx == 1);
+    lcD_trimleaf(&cur, 1);
+    assert_tree(c, 0, botV(leafV(10,3)));
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* trimleaf_right: leaf[10,10,10,10], C at lidx=2,col=2 → del left [0..1]+2 bytes */
+static void test_trimleaf_right(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor cur;
+    lc_Cache *c = cacheV(S, 0, botV(leafV(10,10,10,10)));
+    check_tree(c);
+    lc_seek(&cur, c, 22);
+    assert(cur.lidx == 2);
+    lcD_trimleaf(&cur, 0);
+    assert_tree(c, 0, botV(leafV(8,10)));
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* lcL_append: append src leaf bytes[0..n-1] to dst at dst_segs */
+static void test_lcL_append(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Leaf *src, *dst;
+    unsigned n;
+    src = (lc_Leaf *)lc_poolalloc(S, &S->leaves);
+    dst = (lc_Leaf *)lc_poolalloc(S, &S->leaves);
+    memset(src->bytes, 0, LC_LEAF_FANOUT * sizeof(unsigned));
+    memset(dst->bytes, 0, LC_LEAF_FANOUT * sizeof(unsigned));
+    src->bytes[0] = 10; src->bytes[1] = 20;
+    dst->bytes[0] = 5; dst->bytes[1] = 15;
+    n = lcL_append(dst, 2, src, 2);
+    assert(n == 4);
+    assert(dst->bytes[0] == 5 && dst->bytes[1] == 15
+           && dst->bytes[2] == 10 && dst->bytes[3] == 20);
+    lc_poolfree(&S->leaves, src);
+    lc_poolfree(&S->leaves, dst);
+    lc_close(S);
+}
+
+/* lcN_append: append src node children/bytes/breaks to dst */
+static void test_lcN_append(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Node *src, *dst;
+    src = (lc_Node *)lc_poolalloc(S, &S->nodes);
+    dst = (lc_Node *)lc_poolalloc(S, &S->nodes);
+    memset(src, 0, sizeof(lc_Node));
+    memset(dst, 0, sizeof(lc_Node));
+    src->children[0] = (lc_Node *)(size_t)1; src->bytes[0] = 10; src->breaks[0] = 1;
+    src->children[1] = (lc_Node *)(size_t)2; src->bytes[1] = 20; src->breaks[1] = 2;
+    src->child_count = 2;
+    dst->children[0] = (lc_Node *)(size_t)3; dst->bytes[0] = 5; dst->breaks[0] = 1;
+    dst->child_count = 1;
+    lcN_append(dst, src, 2);
+    assert(dst->child_count == 3);
+    assert(dst->children[0] == (lc_Node *)(size_t)3);
+    assert(dst->bytes[0] == 5 && dst->breaks[0] == 1);
+    assert(dst->children[1] == (lc_Node *)(size_t)1);
+    assert(dst->bytes[1] == 10 && dst->breaks[1] == 1);
+    assert(dst->children[2] == (lc_Node *)(size_t)2);
+    assert(dst->bytes[2] == 20 && dst->breaks[2] == 2);
+    lc_poolfree(&S->nodes, src);
+    lc_poolfree(&S->nodes, dst);
+    lc_close(S);
+}
+
+/* mergeleaf2_sufficient: 2 leaves with 3 segs each (≥2) → no-op, return 0 */
+static void test_mergeleaf2_sufficient(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor C1, C2;
+    int ret;
+    lc_Cache *c = cacheV(S, 0, botV(leafV(10,10,10), leafV(10,10,10)));
+    check_tree(c);
+    lc_seek(&C1, c, 5);
+    lc_seek(&C2, c, 35);
+    ret = lcD_mergeleaf2(&C1, &C2);
+    assert(ret == 0);
+    assert_tree(c, 0, botV(leafV(10,10,10), leafV(10,10,10)));
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* mergeleaf2_combine: 2 leaves 1 seg each → merge, return 1 */
+static void test_mergeleaf2_combine(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor C1, C2;
+    int ret;
+    lc_Cache *c = cacheV(S, 0, botV(leafV(10), leafV(20)));
+    check_tree(c);
+    lc_seek(&C1, c, 5);
+    lc_seek(&C2, c, 15);
+    ret = lcD_mergeleaf2(&C1, &C2);
+    assert(ret == 1);
+    assert_tree(c, 0, botV(leafV(10,20)));
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* mergeleaf2_redistribute: left 1 seg, right 4 segs → redistribute, return 0 */
+static void test_mergeleaf2_redistribute(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor C1, C2;
+    int ret;
+    lc_Cache *c = cacheV(S, 0, botV(leafV(10), leafV(10,10,10,10)));
+    check_tree(c);
+    lc_seek(&C1, c, 5);
+    lc_seek(&C2, c, 15);
+    ret = lcD_mergeleaf2(&C1, &C2);
+    assert(ret == 0);
+    assert_tree(c, 0, botV(leafV(10,10), leafV(10,10,10)));
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* mergenode_sufficient: 2 botV with 3 leaves each (≥2) → no-op, return 0 */
+static void test_mergenode_sufficient(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor C1, C2;
+    int ret;
+    lc_Cache *c = cacheV(S, 1,
+            innerV(botV(leafV(10), leafV(10), leafV(10)),
+                   botV(leafV(10), leafV(10), leafV(10))));
+    check_tree(c);
+    lc_seek(&C1, c, 5);
+    lc_seek(&C2, c, 35);
+    ret = lcD_mergenode(&C1, &C2, 0);
+    assert(ret == 0);
+    assert_tree(c, 1,
+            innerV(botV(leafV(10), leafV(10), leafV(10)),
+                   botV(leafV(10), leafV(10), leafV(10))));
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* mergenode_combine: 2 botV 1 leaf each → merge, return 1 */
+static void test_mergenode_combine(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor C1, C2;
+    int ret;
+    lc_Cache *c = cacheV(S, 1,
+            innerV(botV(leafV(10)), botV(leafV(20))));
+    check_tree(c);
+    lc_seek(&C1, c, 5);
+    lc_seek(&C2, c, 15);
+    ret = lcD_mergenode(&C1, &C2, 0);
+    assert(ret == 1);
+    assert_tree(c, 1, innerV(botV(leafV(10), leafV(20))));
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* mergenode_redistribute: left cc=1, right cc=4 → redistribute, return 0 */
+static void test_mergenode_redistribute(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor C1, C2;
+    int ret;
+    lc_Cache *c = cacheV(S, 1,
+            innerV(botV(leafV(10)),
+                   botV(leafV(10), leafV(10), leafV(10), leafV(10))));
+    check_tree(c);
+    lc_seek(&C1, c, 5);
+    lc_seek(&C2, c, 15);
+    ret = lcD_mergenode(&C1, &C2, 0);
+    assert(ret == 0);
+    assert_tree(c, 1,
+            innerV(botV(leafV(10), leafV(10)),
+                   botV(leafV(10), leafV(10), leafV(10))));
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* rebalance_noop: tree with sufficient children → no change */
+static void test_rebalance_noop(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor cur;
+    lc_Cache *c = cacheV(S, 1,
+            innerV(botV(leafV(10), leafV(10), leafV(10)),
+                   botV(leafV(10), leafV(10), leafV(10))));
+    check_tree(c);
+    lc_seek(&cur, c, 5);
+    lcD_rebalance(&cur, 0);
+    assert_tree(c, 1,
+            innerV(botV(leafV(10), leafV(10), leafV(10)),
+                   botV(leafV(10), leafV(10), leafV(10))));
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* rebalance_shrink: levels=1 root with 1 botV → shrink to levels=0 */
+static void test_rebalance_shrink(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor cur;
+    lc_Cache *c = cacheV(S, 1, innerV(botV(leafV(10), leafV(20))));
+    check_tree(c);
+    lc_seek(&cur, c, 5);
+    lcD_rebalance(&cur, 0);
+    assert_tree(c, 0, botV(leafV(10), leafV(20)));
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* rebalance_double: levels=2 root with 1 child → double shrink to levels=0 */
+/* checktree: exercise lcD_checktree to silence -Wunused-function */
+static void test_checktree(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = cacheV(S, 0, botV(leafV(10), leafV(20)));
+    lcD_checktree(c, "test_checktree");
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_rebalance_double(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor cur;
+    lc_Cache *c = cacheV(S, 2, innerV(innerV(botV(leafV(10)))));
+    check_tree(c);
+    lc_seek(&cur, c, 5);
+    lcD_rebalance(&cur, 0);
+    assert_tree(c, 0, botV(leafV(10)));
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* ================================================================ */
+/*  Phase 9: splicerange integration tests                          */
+/* ================================================================ */
+
+/* splicerange_2leaf: levels=0 2 leaves, C1 in leaf0 C2 in leaf1, col=0 */
+static void test_splicerange_2leaf(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor C1, C2;
+    lc_Cache *c = cacheV(S, 0,
+            botV(leafV(10,10,10), leafV(10,10,10)));
+    check_tree(c);
+    lc_seek(&C1, c, 20);
+    lc_seek(&C2, c, 40);
+    lcD_splicerange(&C1, &C2);
+    assert_tree(c, 0, botV(leafV(10,10), leafV(10,10)));
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* splicerange_prune: levels=0 4 leaves, C1 in leaf0 C2 in leaf3, middle freed */
+static void test_splicerange_prune(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor C1, C2;
+    lc_Cache *c = cacheV(S, 0,
+            botV(leafV(10,10), leafV(10,10),
+                 leafV(10,10), leafV(10,10)));
+    check_tree(c);
+    lc_seek(&C1, c, 10);
+    lc_seek(&C2, c, 70);
+    lcD_splicerange(&C1, &C2);
+    assert_tree(c, 0, botV(leafV(10,10)));
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* splicerange_all: delete entire tree via lc_splice */
+static void test_splicerange_all(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor cur;
+    lc_Cache *c = cacheV(S, 0, botV(leafV(10), leafV(20)));
+    check_tree(c);
+    lc_seek(&cur, c, 0);
+    lc_splice(&cur, 30, 0);
+    assert(c->bytes == 0 && c->breaks == 0);
+    assert(c->root.child_count == 0);
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 /* main */
 
 #define TESTS(X)                   \
@@ -1824,9 +2232,14 @@ static void test_merge_combine_deep(void) {
     X(markbreak_root_split)        \
     X(markbreak_split_right)       \
     X(markbreak_root_split_on_add) \
-    X(clearleaf_1a)                \
-    X(clearleaf_1b)                \
-    X(clearleaf_1c)                \
+    X(spliceleaf_1a)                \
+    X(spliceleaf_1b)                \
+    X(spliceleaf_1c)                \
+    X(divergence_same)              \
+    X(divergence_leaf)              \
+    X(divergence_node)              \
+    X(prune_leaf)                   \
+    X(prune_node)                   \
     X(freerange_4)                 \
     X(freerange_5)                 \
     X(freerange_6)                 \
@@ -1835,7 +2248,26 @@ static void test_merge_combine_deep(void) {
     X(merge_redistribute)          \
     X(merge_combine)               \
     X(merge_shrink_root)           \
-    X(merge_combine_deep)
+    X(merge_combine_deep)          \
+    X(trimnode_left)               \
+    X(trimnode_right)              \
+    X(trimleaf_left)               \
+    X(trimleaf_right)              \
+    X(lcL_append)                  \
+    X(lcN_append)                  \
+    X(mergeleaf2_sufficient)       \
+    X(mergeleaf2_combine)          \
+    X(mergeleaf2_redistribute)     \
+    X(mergenode_sufficient)        \
+    X(mergenode_combine)           \
+    X(mergenode_redistribute)       \
+    X(checktree)                   \
+    X(rebalance_noop)               \
+    X(rebalance_shrink)             \
+    X(rebalance_double)             \
+    X(splicerange_2leaf)           \
+    X(splicerange_prune)           \
+    X(splicerange_all)
 
 int main(int argc, char *argv[]) {
     typedef struct entry {

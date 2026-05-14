@@ -729,15 +729,25 @@ LC_API int lc_scan(lc_Cache *c, lc_Scanner *scanner, void *ud) {
 }
 
 static void lcD_shrink(lc_Cursor *C, int l, int start, int end);
-static int  lcD_clearleaf(lc_Cursor *C, size_t *pdel, int whole);
+static int lcD_divergence(lc_Cursor *C1, lc_Cursor *C2);
+static void lcD_prune(lc_Cursor *C1, lc_Cursor *C2, int l);
+static void lcD_trimnode(lc_Cursor *C, int l, int left);
+static void lcD_trimleaf(lc_Cursor *C, int left);
+static unsigned lcL_append(lc_Leaf *dst, unsigned dst_segs,
+                            const lc_Leaf *src, unsigned n);
+static void     lcN_append(lc_Node *dst, const lc_Node *src, unsigned n);
+static int  lcD_mergeleaf2(lc_Cursor *C1, lc_Cursor *C2);
+static int  lcD_mergenode(lc_Cursor *C1, lc_Cursor *C2, unsigned l);
+static void lcD_rebalance(lc_Cursor *C, unsigned l);
+static void lcD_splicerange(lc_Cursor *C1, lc_Cursor *C2);
+static int  lcD_clearleaf(lc_Cursor *C, size_t *pdel, int whole); /* TODO: remove */
+static void lcD_spliceleaf(lc_Cursor *C, size_t *pdel);
 static void lcD_mergeleaf(lc_Cursor *C1, int no_break_boundary);
 static void lcD_merge(lc_Cursor *C1, int l);
 static void lcD_freerange(
         lc_Cursor *C1, lc_Cursor *C2, size_t *pdel, int *no_break_boundary);
 
-/* Delete *pdel bytes from leaf starting at C's position (whole=0) or
- * from leaf start (whole=1). Returns 1 if first segment was partially
- * consumed (its leading break is gone) — only meaningful for whole=1. */
+/* TODO: remove when freerange is deleted */
 static int lcD_clearleaf(lc_Cursor *C, size_t *pdel, int whole) {
     lc_Node *p = lcK_parent(C, lcK_levels(C));
     int      li = lcK_idx(C, p, lcK_levels(C));
@@ -757,7 +767,6 @@ static int lcD_clearleaf(lc_Cursor *C, size_t *pdel, int whole) {
         off_in_seg = C->col;
     }
 
-    /* normalize: cursor at segment boundary moves to next segment start */
     if (!whole && off_in_seg > 0 && seg + 1 < count
         && off_in_seg == leaf->bytes[seg])
         off_in_seg = 0, seg++, first = seg;
@@ -767,7 +776,6 @@ static int lcD_clearleaf(lc_Cursor *C, size_t *pdel, int whole) {
     segs_removed = 0;
     no_leading_break = 0;
 
-    /* ----- first segment (may be partially consumed) ----- */
     {
         unsigned remaining = leaf->bytes[seg] - off_in_seg;
         unsigned consumed = (unsigned)(del < remaining ? del : remaining);
@@ -781,6 +789,71 @@ static int lcD_clearleaf(lc_Cursor *C, size_t *pdel, int whole) {
             if (whole) {
                 if (consumed > 0) no_leading_break = 1;
             } else if (off_in_seg == 0 && seg > 0) {
+                leaf->bytes[seg - 1] += leaf->bytes[seg];
+                leaf->bytes[seg] = 0;
+                first = seg - 1;
+                segs_removed++;
+            }
+            seg++;
+        }
+    }
+
+    while (del > 0 && seg < count) {
+        unsigned consumed = (unsigned)(del < leaf->bytes[seg]
+                                               ? del : leaf->bytes[seg]);
+        leaf->bytes[seg] -= consumed;
+        del -= consumed;
+        if (leaf->bytes[seg] == 0) segs_removed++, seg++;
+        else { seg++; break; }
+    }
+
+    if (segs_removed > 0) {
+        unsigned write = first, read;
+        for (read = first; read < count; read++)
+            if (leaf->bytes[read] > 0) leaf->bytes[write++] = leaf->bytes[read];
+    }
+
+    lcK_upmetrics(C, lcK_levels(C), -(ptrdiff_t)(total_del - del),
+                  -(ptrdiff_t)segs_removed);
+    *pdel = del;
+    return no_leading_break;
+}
+
+/* Delete *pdel bytes from leaf starting at C's position.
+ * Same-leaf deletion only — no whole flag, no return value. */
+static void lcD_spliceleaf(lc_Cursor *C, size_t *pdel) {
+    lc_Node *p = lcK_parent(C, lcK_levels(C));
+    int      li = lcK_idx(C, p, lcK_levels(C));
+    lc_Leaf *leaf = (lc_Leaf *)p->children[li];
+    unsigned count = (unsigned)p->breaks[li];
+    unsigned first, seg, segs_removed, off_in_seg;
+    size_t   del, total_del;
+
+    first = C->lidx;
+    seg = C->lidx;
+    off_in_seg = C->col;
+
+    /* normalize: cursor at segment boundary moves to next segment start */
+    if (off_in_seg > 0 && seg + 1 < count
+        && off_in_seg == leaf->bytes[seg])
+        off_in_seg = 0, seg++, first = seg;
+
+    del = *pdel;
+    total_del = del;
+    segs_removed = 0;
+
+    /* first segment (may be partially consumed) */
+    {
+        unsigned remaining = leaf->bytes[seg] - off_in_seg;
+        unsigned consumed = (unsigned)(del < remaining ? del : remaining);
+        leaf->bytes[seg] -= consumed;
+        del -= consumed;
+        if (leaf->bytes[seg] == 0) {
+            if (off_in_seg == 0 && seg > 0) first = seg - 1;
+            segs_removed++;
+            seg++;
+        } else {
+            if (off_in_seg == 0 && seg > 0) {
                 /* consumed leading break: merge remainder into prev segment */
                 leaf->bytes[seg - 1] += leaf->bytes[seg];
                 leaf->bytes[seg] = 0;
@@ -791,34 +864,270 @@ static int lcD_clearleaf(lc_Cursor *C, size_t *pdel, int whole) {
         }
     }
 
-    /* ----- consume full subsequent segments ----- */
+    /* consume full subsequent segments */
     while (del > 0 && seg < count) {
         unsigned consumed = (unsigned)(del < leaf->bytes[seg]
                                                ? del
                                                : leaf->bytes[seg]);
         leaf->bytes[seg] -= consumed;
         del -= consumed;
-        if (leaf->bytes[seg] == 0) {
-            segs_removed++;
-            seg++;
-        } else {
-            seg++;
-            break;
-        }
+        if (leaf->bytes[seg] == 0) segs_removed++, seg++;
+        else { seg++; break; }
     }
 
-    /* ----- compact: drop zero-length segments ----- */
+    /* compact: drop zero-length segments */
     if (segs_removed > 0) {
         unsigned write = first, read;
         for (read = first; read < count; read++)
             if (leaf->bytes[read] > 0) leaf->bytes[write++] = leaf->bytes[read];
     }
 
-    lcK_upmetrics(
-            C, lcK_levels(C), -(ptrdiff_t)(total_del - del),
-            -(ptrdiff_t)segs_removed);
+    lcK_upmetrics(C, lcK_levels(C), -(ptrdiff_t)(total_del - del),
+                  -(ptrdiff_t)segs_removed);
     *pdel = del;
-    return no_leading_break;
+}
+
+/* Find first level where C1 and C2 diverge. Returns l <= levels.
+ * If l > levels, C1 and C2 are in the same leaf. */
+static int lcD_divergence(lc_Cursor *C1, lc_Cursor *C2) {
+    int l;
+    for (l = 0; l <= (int)lcK_levels(C1); l++)
+        if (C1->paths[l] != C2->paths[l]) return l;
+    return l;
+}
+
+/* Delete subtrees between C1 and C2 at divergence layer l.
+ * Frees children[i1+1..i2-1], shrinks parent arrays, fixes C2 paths. */
+static void lcD_prune(lc_Cursor *C1, lc_Cursor *C2, int l) {
+    lc_Node *p = lcK_parent(C1, l);
+    int      i1 = lcK_idx(C1, p, l);
+    int      i2 = lcK_idx(C2, p, l);
+    int      mi;
+    size_t   mid_bytes, mid_breaks;
+    if (i2 <= i1 + 1) return;
+    mid_bytes = mid_breaks = 0;
+    for (mi = i1 + 1; mi < i2; mi++)
+        mid_bytes += p->bytes[mi], mid_breaks += p->breaks[mi];
+    lcD_shrink(C1, l, i1 + 1, i2);
+    C2->paths[l] = &p->children[i1 + 1];
+    lcK_upmetrics(C1, l - 1, -(ptrdiff_t)mid_bytes, -(ptrdiff_t)mid_breaks);
+}
+
+/* Trim boundary node: left=1 keeps children[0..idx], left=0 keeps [idx..end).
+ * Frees trimmed subtrees via lcD_shrink, updates parent-of-parent metrics. */
+static void lcD_trimnode(lc_Cursor *C, int l, int left) {
+    lc_Node *p = lcK_parent(C, l);
+    int      idx = lcK_idx(C, p, l);
+    int      mi;
+    size_t   del_bytes, del_breaks;
+    if (left) {
+        if (idx + 1 >= (int)p->child_count) return;
+        del_bytes = del_breaks = 0;
+        for (mi = idx + 1; mi < (int)p->child_count; mi++)
+            del_bytes += p->bytes[mi], del_breaks += p->breaks[mi];
+        lcD_shrink(C, l, idx + 1, (int)p->child_count);
+    } else {
+        if (idx <= 0) return;
+        del_bytes = del_breaks = 0;
+        for (mi = 0; mi < idx; mi++)
+            del_bytes += p->bytes[mi], del_breaks += p->breaks[mi];
+        lcD_shrink(C, l, 0, idx);
+        C->paths[l] = &p->children[0];
+    }
+    lcK_upmetrics(C, l - 1, -(ptrdiff_t)del_bytes, -(ptrdiff_t)del_breaks);
+}
+
+/* Trim boundary leaf: left=1 deletes from C to end of leaf,
+ * left=0 deletes from start of leaf to C.
+ * Normalizes col==bytes[lidx] to next segment start first. */
+static void lcD_trimleaf(lc_Cursor *C, int left) {
+    lc_Node *p = lcK_parent(C, lcK_levels(C));
+    int      li = lcK_idx(C, p, lcK_levels(C));
+    lc_Leaf *leaf = (lc_Leaf *)p->children[li];
+    int      count = (int)p->breaks[li];
+    size_t   db = 0;
+    int      dl = 0, si;
+
+    /* trailing: left=keep-all (no-op), right=delete-all */
+    if ((int)C->lidx >= count) {
+        if (left) return;
+        for (si = 0; si < count; si++) db += leaf->bytes[si];
+        lcK_upmetrics(C, lcK_levels(C), -(ptrdiff_t)db, -(ptrdiff_t)count);
+        return;
+    }
+
+    /* normalize: cursor at segment end → next segment start */
+    if (C->col > 0 && C->col == leaf->bytes[C->lidx]
+        && C->lidx + 1 < (unsigned)count)
+        C->lidx++, C->col = 0;
+
+    if (left) {
+        if (C->col > 0) {
+            db = leaf->bytes[C->lidx] - C->col;
+            leaf->bytes[C->lidx] = C->col;
+            dl = count - (int)C->lidx - 1;
+            for (si = (int)C->lidx + 1; si < count; si++) db += leaf->bytes[si];
+        } else {
+            for (si = (int)C->lidx; si < count; si++) db += leaf->bytes[si];
+            dl = count - (int)C->lidx;
+        }
+    } else {
+        if (C->col > 0) {
+            for (si = 0; si < (int)C->lidx; si++) db += leaf->bytes[si];
+            db += C->col;
+            leaf->bytes[C->lidx] -= C->col;
+            dl = (int)C->lidx;
+            if (C->lidx > 0)
+                memmove(leaf->bytes, &leaf->bytes[C->lidx],
+                        (unsigned)(count - (int)C->lidx) * sizeof(unsigned));
+        } else {
+            for (si = 0; si < (int)C->lidx; si++) db += leaf->bytes[si];
+            dl = (int)C->lidx;
+            if (C->lidx > 0)
+                memmove(leaf->bytes, &leaf->bytes[C->lidx],
+                        (unsigned)(count - (int)C->lidx) * sizeof(unsigned));
+        }
+    }
+    lcK_upmetrics(C, lcK_levels(C), -(ptrdiff_t)db, -(ptrdiff_t)dl);
+}
+
+static unsigned lcL_append(
+        lc_Leaf *dst, unsigned dst_segs, const lc_Leaf *src, unsigned n) {
+    memcpy(&dst->bytes[dst_segs], src->bytes, n * sizeof(unsigned));
+    return dst_segs + n;
+}
+
+static void lcN_append(lc_Node *dst, const lc_Node *src, unsigned n) {
+    unsigned cc = dst->child_count;
+    memcpy(&dst->children[cc], src->children, n * sizeof(lc_Node *));
+    memcpy(&dst->bytes[cc], src->bytes, n * sizeof(size_t));
+    memcpy(&dst->breaks[cc], src->breaks, n * sizeof(size_t));
+    dst->child_count = (unsigned short)(cc + n);
+}
+
+/* lcD_mergeleaf2: merge C2's leaf into C1's leaf (adjacent siblings).
+ * Returns 1 if C2's leaf was freed, 0 if redistributed or no-op. */
+static int lcD_mergeleaf2(lc_Cursor *C1, lc_Cursor *C2) {
+    lc_Node *p = lcK_parent(C1, lcK_levels(C1));
+    int      i1 = lcK_idx(C1, p, lcK_levels(C1));
+    int      i2 = lcK_idx(C2, p, lcK_levels(C2));
+    lc_Leaf *left, *right;
+    unsigned left_segs, right_segs, total, mid, n;
+    if (i2 != i1 + 1) return 0;
+    left = (lc_Leaf *)p->children[i1];
+    right = (lc_Leaf *)p->children[i2];
+    left_segs = (unsigned)p->breaks[i1];
+    right_segs = (unsigned)p->breaks[i2];
+    if (left_segs >= LC_LEAF_FANOUT / 2 && right_segs >= LC_LEAF_FANOUT / 2)
+        return 0;
+    total = left_segs + right_segs;
+    if (total > LC_LEAF_FANOUT) {
+        mid = total / 2;
+        if (left_segs < mid) {
+            n = mid - left_segs;
+            lcL_append(left, left_segs, right, n);
+            right_segs -= n;
+            memmove(right->bytes, &right->bytes[n],
+                    right_segs * sizeof(unsigned));
+            p->breaks[i1] = mid, p->breaks[i2] = right_segs;
+            p->bytes[i1] = lcL_sumbytes(left, 0, (int)mid);
+            p->bytes[i2] = lcL_sumbytes(right, 0, (int)right_segs);
+        }
+        return 0;
+    }
+    lcL_append(left, left_segs, right, right_segs);
+    if (C1->col > 0) {
+        left->bytes[left_segs - 1] += left->bytes[left_segs];
+        if (right_segs > 1)
+            memmove(&left->bytes[left_segs], &left->bytes[left_segs + 1],
+                    (right_segs - 1) * sizeof(unsigned));
+        total--;
+    }
+    p->breaks[i1] = total;
+    p->bytes[i1] += p->bytes[i2];
+    lcD_shrink(C1, lcK_levels(C1), i2, i2 + 1);
+    C1->paths[lcK_levels(C1)] = &p->children[i1];
+    return 1;
+}
+
+/* lcD_mergenode: merge C2's node into C1's node at level l (adjacent siblings).
+ * Returns 1 if C2's node was freed, 0 if redistributed or no-op. */
+static int lcD_mergenode(lc_Cursor *C1, lc_Cursor *C2, unsigned l) {
+    lc_Node *p = lcK_parent(C1, (int)l);
+    int      i1 = lcK_idx(C1, p, (int)l);
+    int      i2 = lcK_idx(C2, p, (int)l);
+    lc_Node *cur, *sib;
+    unsigned cur_cc, sib_cc, total, mid, n;
+    if (i2 != i1 + 1) return 0;
+    cur = p->children[i1], sib = p->children[i2];
+    cur_cc = cur->child_count, sib_cc = sib->child_count;
+    if (cur_cc >= LC_FANOUT / 2 && sib_cc >= LC_FANOUT / 2) return 0;
+    total = cur_cc + sib_cc;
+    if (total > LC_FANOUT) {
+        mid = total / 2;
+        if (cur_cc < mid) {
+            n = mid - cur_cc;
+            lcN_append(cur, sib, n);
+            sib_cc -= n;
+            memmove(sib->children, &sib->children[n],
+                    sib_cc * sizeof(lc_Node *));
+            memmove(sib->bytes, &sib->bytes[n], sib_cc * sizeof(size_t));
+            memmove(sib->breaks, &sib->breaks[n], sib_cc * sizeof(size_t));
+            sib->child_count = (unsigned short)sib_cc;
+            p->bytes[i1] = lcN_sumbytes(cur, 0, (int)cur->child_count);
+            p->breaks[i1] = lcN_sumbreaks(cur, 0, (int)cur->child_count);
+            p->bytes[i2] = lcN_sumbytes(sib, 0, (int)sib_cc);
+            p->breaks[i2] = lcN_sumbreaks(sib, 0, (int)sib_cc);
+        }
+        return 0;
+    }
+    lcN_append(cur, sib, sib_cc);
+    p->bytes[i1] += p->bytes[i2];
+    p->breaks[i1] += p->breaks[i2];
+    if (C1->paths[l + 1] >= sib->children
+        && C1->paths[l + 1] < sib->children + sib_cc)
+        C1->paths[l + 1] = cur->children + cur_cc
+                         + (unsigned)(C1->paths[l + 1] - sib->children);
+    sib->child_count = 0;
+    lcD_shrink(C1, (int)l, i2, i2 + 1);
+    return 1;
+}
+
+/* lcD_rebalance: fix under-filled nodes from level l upward, shrink root. */
+static void lcD_rebalance(lc_Cursor *C, unsigned l) {
+    int dl;
+    for (dl = (int)lcK_levels(C) - 1; dl >= (int)l; dl--)
+        lcD_merge(C, dl);
+    while (lcK_levels(C) > 0 && C->tree->root.child_count == 1) {
+        lc_Node *only = C->tree->root.children[0], save = *only;
+        C->tree->root = save;
+        lc_poolfree(&C->tree->S->nodes, only);
+        C->tree->levels--;
+        if (lcK_levels(C) > 0)
+            memmove(C->paths + 1, C->paths + 2,
+                    lcK_levels(C) * sizeof(lc_Node **));
+    }
+}
+
+static void lcD_splicerange(lc_Cursor *C1, lc_Cursor *C2) {
+    int l = lcD_divergence(C1, C2);
+    int levels = (int)lcK_levels(C1);
+    int dl, removed;
+    assert(l <= levels);
+    lcD_prune(C1, C2, l);
+    for (dl = l + 1; dl <= levels; dl++) {
+        lcD_trimnode(C1, dl, 1);
+        lcD_trimnode(C2, dl, 0);
+    }
+    lcD_trimleaf(C1, 1);
+    lcD_trimleaf(C2, 0);
+    removed = lcD_mergeleaf2(C1, C2);
+    for (dl = levels - 1; dl > l; dl--) {
+        if (removed) C2->paths[dl - 1] = C1->paths[dl - 1];
+        removed = lcD_mergenode(C1, C2, (unsigned)dl);
+    }
+    if (removed) C2->paths[l] = C1->paths[l];
+    lcD_rebalance(C1, (unsigned)l);
 }
 
 static void lcD_shrink(lc_Cursor *C, int l, int start, int end) {
@@ -1211,7 +1520,6 @@ LC_API void lc_splice(lc_Cursor *C, size_t del, size_t ins) {
     lc_Node *parent;
     lc_Leaf *leaf;
     size_t   remaining;
-    int      no_break_boundary = 0;
     unsigned leaf_i;
     if (C == NULL || C->tree == NULL || (del == 0 && ins == 0)) return;
     if (lcK_levels(C) == 0 && C->tree->root.child_count == 0) return;
@@ -1220,31 +1528,19 @@ LC_API void lc_splice(lc_Cursor *C, size_t del, size_t ins) {
     if (del == 0 && ins == 0) return;
     parent = lcK_parent(C, lcK_levels(C));
 
-    /* step 1: delete — same-leaf fast path or cross-leaf freerange */
+    /* step 1: delete — same-leaf fast path or cross-leaf splicerange */
     if (C->loff + C->col + del
         <= parent->bytes[lcK_idx(C, parent, lcK_levels(C))]) {
-        lcD_clearleaf(C, &del, 0);
+        lcD_spliceleaf(C, &del);
+        lcD_mergeleaf(C, 0);
+        if (lcK_levels(C) > 0) lcD_merge(C, (int)lcK_levels(C) - 1);
     } else {
         lc_Cursor C2 = *C;
         lc_advance(&C2, (ptrdiff_t)del);
-        fprintf(stderr,
-                "DBG splice C2 after advance: off=%zu loff=%zu lidx=%u "
-                "col=%u\n",
-                lc_offset(&C2), (size_t)C2.loff, C2.lidx, C2.col);
-        lcD_freerange(C, &C2, &del, &no_break_boundary);
-        fprintf(stderr,
-                "DBG splice after freerange: del=%zu C->loff=%zu C->col=%u\n",
-                del, (size_t)C->loff, C->col);
-        lcD_checktree(C->tree, "post-freerange");
+        lcD_splicerange(C, &C2);
     }
 
-    /* step 2: merge — both paths may leave leaf/node under-filled */
-    lcD_mergeleaf(C, no_break_boundary);
-    lcD_checktree(C->tree, "post-mergeleaf");
-    if (lcK_levels(C) > 0) lcD_merge(C, (int)lcK_levels(C) - 1);
-    lcD_checktree(C->tree, "post-merge");
-
-    /* step 3: empty tree reset */
+    /* step 2: empty tree reset */
     if (C->tree->bytes == 0 && C->tree->breaks == 0) {
         memset(&C->tree->root, 0, sizeof(lc_Node));
         C->tree->levels = 0;
@@ -1252,7 +1548,7 @@ LC_API void lc_splice(lc_Cursor *C, size_t del, size_t ins) {
         return;
     }
 
-    /* step 4: insert */
+    /* step 3: insert */
     if (ins == 0) return;
     parent = lcK_parent(C, lcK_levels(C));
     leaf_i = (unsigned)lcK_idx(C, parent, lcK_levels(C));
