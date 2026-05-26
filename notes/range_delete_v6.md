@@ -28,7 +28,7 @@ function splicerange(L, R):
     1. 求分歧层 l
     2. Bottom-Up Cleanup（自叶向上至 l+1 层）
        - trimleaf(L, right), trimleaf(R, left), shiftleaf(L, R)
-       - for dl in [levels-1 .. l+1]:
+        - for dl in [levels .. l+1]:
             trimnode(L, dl, right)
             trimnode(R, dl, left)
             shiftnode(L, R, dl-1)
@@ -154,7 +154,7 @@ shiftleaf 合并时 `R->paths[levels-1] += 1` 可能越界（指向 `&parent->ch
 故循环为：
 
 ```c
-for (dl = levels - 1; dl >= l + 1; --dl) {
+for (dl = levels; dl >= l + 1; --dl) {
     trimnode(L, dl, 0);
     trimnode(R, dl, 1);
     shiftnode(L, R, dl - 1);
@@ -357,11 +357,11 @@ R->paths[levels - 1] += 1;  /* 关键：让 R 之父视图后移一槽 */
 return 1;
 ```
 
-注意：若 `levels == 0`（L、R 共同在 root 之 children 中，分歧层 l=0），则 `levels-1 = -1` 越界，需特殊处理。但 `splicerange` 之分歧层 l < levels 才进入；`levels-1 < l` 不可能（因为 dl 循环为 levels-1 downto l+1，dl >= l+1 即 levels-1 >= l+1 即 levels >= l+2）。故 levels >= 1 + l + 1 ≥ 1，levels-1 ≥ 0 安全。
+注意：循环自 `levels` 而非 `levels-1` 始，因首轮 dl=levels 之 trimnode 需对叶子父操作（shiftleaf 已处理叶子数据，trimnode 需回收空叶及其同父兄弟）。
 
-但有个例外：l=0 且 levels=0 即整树仅一叶时——此情形不进 splicerange（同叶走 spliceleaf）。所以安全。
+若 `levels == 0`（仅一叶，分歧层 l=0），循环条件 `levels >= l+1` 即 `0 >= 1` 为假，不进循环。此情形不进 splicerange（同叶走 spliceleaf），安全。
 
-实则 `levels-1` 处之 `R->paths[levels-1]` 在 shiftleaf 合并时 +1，保证下一轮 dl=levels-1 之 trimnode(R, levels-1, left) 用更新后之值。
+shiftleaf 合并后 `R->paths[levels-1]` 漂移，下一轮 dl=levels 之 trimnode(R, levels, 1) 使用已漂移的 R->paths[levels]（指向叶槽），而 shiftnode(L, R, levels-1) 操作 levels-1 层父节点。若其合并，则 `R->paths[levels-2] += 1`，依此类推。
 
 ### 9.2 shiftnode 合并分支之 R 路径漂移
 
@@ -505,7 +505,7 @@ static void lcD_splicerange(lc_Cursor *L, lc_Cursor *R) {
     if (L->col) { ... }
     lcD_shiftleaf(L, R);   /* 合并或均分；合并时 R->paths[levels-1] += 1 */
     
-    for (dl = levels - 1; dl >= l + 1; --dl) {
+    for (dl = levels; dl >= l + 1; --dl) {
         lcD_trimnode(L, dl, 0);
         lcD_trimnode(R, dl, 1);
         lcD_shiftnode(L, R, dl - 1);  /* 合并或均分；合并时 R->paths[dl-1] += 1 */

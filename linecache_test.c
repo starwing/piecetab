@@ -643,6 +643,8 @@ static void test_splice(void) {
     assert(r == LC_OK && lc_breaks(c) == 100 && lc_bytes(c) == 1000);
     lc_seek(&cur, c, 11);
     lc_splice(&cur, 980, 0); /* delete all but first 11 + last 9 */
+    fprintf(stderr, "splice result: breaks=%zu bytes=%zu\n",
+            lc_breaks(c), lc_bytes(c));
     assert(r == LC_OK && lc_breaks(c) == 2 && lc_bytes(c) == 20);
     check_tree(c);
 
@@ -1794,7 +1796,7 @@ static void test_trimleaf_mergeleaf(void) {
     lc_seek(&C2, c, 20); /* leaf1 start: lidx=0 col=0 */
     lcD_trimleaf(&C1, 0);
     lcD_trimleaf(&C2, 1);
-    lcD_shiftleaf(&C1, &C2, 0);
+    lcD_shiftleaf(&C1, &C2);
     assert(C1.paths[0] + 2 == C2.paths[0]);
     assert_tree(c, 0, botV(leafV(10, 10), leafV_(S, 0), leafV(10)));
     check_tree(c);
@@ -1871,22 +1873,6 @@ static void test_trimnode_mergenode(void) {
     lc_close(S);
 }
 
-/* mergeleaf_sufficient: 2 leaves with 3 segs each (≥2) → no-op, return 0 */
-static void test_mergeleaf_sufficient(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cursor C1, C2;
-    lc_Cache *c = cacheV(S, 0, botV(leafV(10, 10, 10), leafV(10, 10, 10)));
-    assert(c);
-
-    lc_seek(&C1, c, 5);
-    lc_seek(&C2, c, 35);
-    lcD_mergeleaf(&C1, C2.lidx);
-    assert_tree(c, 0, botV(leafV(10, 10, 10), leafV(10, 10, 10)));
-    check_tree(c);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
 /* mergeleaf_combine: 2 leaves 1 seg each → merge, return 1 */
 static void test_mergeleaf_combine(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
@@ -1896,24 +1882,8 @@ static void test_mergeleaf_combine(void) {
 
     lc_seek(&C1, c, 5);
     lc_seek(&C2, c, 15);
-    lcD_shiftleaf(&C1, &C2, 0);
+    lcD_shiftleaf(&C1, &C2);
     assert_tree(c, 0, botV(leafV(10, 20), leafV_(S, 0)));
-    check_tree(c);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* mergeleaf_redistribute: left 1 seg, right 4 segs → redistribute, return 0 */
-static void test_mergeleaf_redistribute(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cursor C1, C2;
-    lc_Cache *c = cacheV(S, 0, botV(leafV(10), leafV(10, 10, 10, 10)));
-    check_tree(c);
-    assert(c);
-    lc_seek(&C1, c, 5);
-    lc_seek(&C2, c, 15);
-    lcD_mergeleaf(&C1, C2.lidx);
-    assert_tree(c, 0, botV(leafV(10, 10, 10), leafV(10, 10)));
     check_tree(c);
     lc_deltree(S, c);
     lc_close(S);
@@ -1929,7 +1899,7 @@ static void test_mergeleaf_sr_nonzero(void) {
 
     lc_seek(&C1, c, 5);
     lc_seek(&C2, c, 25);
-    lcD_shiftleaf(&C1, &C2, 0);
+    lcD_shiftleaf(&C1, &C2);
     /* tree consistent — mergeleaf copied cr=2 segs from r->bytes[1],
      * leaf becomes [10,10,10]; pr->bytes includes dead seg bytes (known issue)
      */
@@ -1953,33 +1923,11 @@ static void test_mergeleaf_cross_subtree(void) {
     assert(c->root.breaks[1] == 2);
     lc_seek(&C1, c, 5);  /* botV0 leaf0: lidx=0 col=5 */
     lc_seek(&C2, c, 25); /* botV1 leaf0: lidx=0 col=5 (botV0=20 bytes) */
-    lcD_shiftleaf(&C1, &C2, 1);
+    lcD_shiftleaf(&C1, &C2);
     assert_tree(
             c, 1,
             innerV(botV(leafV(10, 20), leafV(10)),
                    botV(leafV_(S, 0), leafV(10))));
-    check_tree(c);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* mergenode_sufficient: 2 botV with 3 leaves each (≥2) → no-op, return 0 */
-static void test_mergenode_sufficient(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cursor C1, C2;
-    lc_Cache *c = cacheV(
-            S, 1,
-            innerV(botV(leafV(10), leafV(10), leafV(10)),
-                   botV(leafV(10), leafV(10), leafV(10))));
-    assert(c);
-
-    lc_seek(&C1, c, 5);
-    lc_seek(&C2, c, 35);
-    lcD_mergenode(&C1, 0, 0);
-    assert_tree(
-            c, 1,
-            innerV(botV(leafV(10), leafV(10), leafV(10)),
-                   botV(leafV(10), leafV(10), leafV(10))));
     check_tree(c);
     lc_deltree(S, c);
     lc_close(S);
@@ -1997,27 +1945,6 @@ static void test_mergenode_combine(void) {
     lcD_shiftnode(&C1, &C2, 0);
     assert_tree(c, 1, innerV(botV(leafV(10), leafV(20)), botV_(S, 0)));
     check_tree_allow_empty(c, 1);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* mergenode_redistribute: left cc=1, right cc=4 → redistribute, return 0 */
-static void test_mergenode_redistribute(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cursor C1, C2;
-    lc_Cache *c = cacheV(
-            S, 1,
-            innerV(botV(leafV(10)),
-                   botV(leafV(10), leafV(10), leafV(10), leafV(10))));
-    check_tree(c);
-    lc_seek(&C1, c, 5);
-    lc_seek(&C2, c, 15);
-    lcD_mergenode(&C1, 0, 0);
-    assert_tree(
-            c, 1,
-            innerV(botV(leafV(10), leafV(10), leafV(10)),
-                   botV(leafV(10), leafV(10))));
-    check_tree(c);
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -2095,6 +2022,82 @@ static void test_splicerange_prune(void) {
     lcD_splicerange(&C1, &C2);
     assert_tree(c, 0, botV(leafV(10, 10)));
     check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* splicerange_merge_rebalance: levels=2, root has 2 children. L and R
+ * diverge at level 1 (l=1, within root's left child). After prune the
+ * common parent (left innerV) is underfull (child_count==1 < FANOUT/2).
+ * foldnode(L, l-1) at root level merges left with right sibling,
+ * then rebalance shrinks the root. */
+static void test_splicerange_merge_rebalance(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Node  *left = innerV(
+            botV(leafV(2, 0)), botV(leafV(2, 0)), botV(leafV(2, 0)));
+    lc_Node  *right = innerV(botV(leafV(2, 0)));
+    lc_Node  *root = innerV(left, right);
+    lc_Cache *c = cacheV(S, 2, root);
+    lc_Cursor C1, C2;
+    assert(c);
+    assert(lc_bytes(c) == 8 && lc_breaks(c) == 4);
+    check_tree(c);
+
+    /* L in left->botV[0], R in left->botV[2], l=1 */
+    lc_seek(&C1, c, 0);
+    lc_seek(&C2, c, 4);
+    assert(C1.paths[0] == C2.paths[0]);
+    assert(C1.paths[0] == &c->root.children[0]);
+    assert(C1.paths[1] != C2.paths[1]);
+
+    lcD_splicerange(&C1, &C2);
+    check_tree(c);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* splicerange_foldnode_upper: levels=2, L and R in different root children
+ * (l=0). After trim/shift, upper node has underfull child → foldnode at
+ * level 1. (covers L835) */
+static void test_splicerange_foldnode_upper(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Node  *left = innerV(botV(leafV(2, 0)), botV(leafV(2, 0)));
+    lc_Node  *mid = innerV(botV(leafV(2, 2, 0)), botV(leafV(2, 0)));
+    lc_Node  *rgt = innerV(botV(leafV(2, 0)), botV(leafV(2, 0)));
+    lc_Node  *root = innerV(left, mid, rgt);
+    lc_Cache *c = cacheV(S, 2, root);
+    lc_Cursor C1, C2;
+    assert(c);
+    check_tree(c);
+
+    /* L in left innerV first botV, R in mid innerV first botV, l=0 */
+    lc_seek(&C1, c, 0);
+    lc_seek(&C2, c, 4);
+    assert(C1.paths[0] != C2.paths[0]);
+
+    lcD_splicerange(&C1, &C2);
+    check_tree(c);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* trimleaf_right_end: splice deletes from mid-leaf to tree end. R goes to
+ * locend (lidx >= count of last leaf). trimleaf(R,1) hits L614.
+ * After trim, db = p->bytes[li], dl = count. */
+static void test_trimleaf_right_end(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor cur;
+    lc_Cache *c = cacheV(S, 0, botV(leafV(10, 0), leafV(10, 0), leafV(10, 0)));
+    assert(c);
+    check_tree(c);
+
+    lc_seek(&cur, c, 5);
+    lc_splice(&cur, 25, 0);
+    check_tree(c);
+
+    assert(c->root.child_count == 0);
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -2256,10 +2259,212 @@ static void test_splice_removed2(void) {
     /* Delete large middle portion, leaving edges intact.
      * Offset 60, del=500 keeps L and R in different subtrees. */
     lc_seek(&cur, c, 60);
-    dump_tree(c, "before splice_removed2:");
     lc_splice(&cur, 500, 0);
-    dump_tree(c, "after splice_removed2:");
     check_tree(c);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* empty_tree_reset: lcD_emptytree path — delete all at offset 0
+ * (with and without insert) to cover both early return branches
+ * and the post-delete empty-tree reset in lc_splice. */
+static void test_empty_tree_reset(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c;
+    lc_Cursor cur;
+
+    /* delete all (ins=0) */
+    c = cacheV(S, 0, botV(leafV(10, 10), leafV(10)));
+    assert(c);
+    lc_seek(&cur, c, 0);
+    lc_splice(&cur, 30, 0);
+    assert(c->bytes == 0 && c->breaks == 0);
+    check_tree_allow_empty(c, 1);
+    lc_deltree(S, c);
+
+    /* delete all + insert (ins>0) to cover C->col += ins in lcD_emptytree */
+    c = cacheV(S, 0, botV(leafV(10, 10), leafV(10)));
+    lc_seek(&cur, c, 0);
+    lc_splice(&cur, 30, 7);
+    assert(c->bytes == 0 && c->breaks == 0);
+    assert(cur.col == 7);
+    check_tree_allow_empty(c, 1);
+    lc_deltree(S, c);
+
+    lc_close(S);
+}
+
+/* shiftleaf_neg_d: shiftleaf d<0 path (L649-654). L at lidx=2, R at lidx=1
+ * in 4-seg leaves → cl=2, cr=3 → cl+cr=5>4, d=-1 → move 1 seg R→L. */
+static void test_shiftleaf_neg_d(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = cacheV(
+            S, 1,
+            innerV(botV(leafV(10, 10, 10, 10), leafV(10)),
+                   botV(leafV(10, 10, 10, 10), leafV(10)), botV(leafV(10))));
+    lc_Cursor cur;
+    assert(c);
+    lc_seek(&cur, c, 20);   /* L at lidx=2 col=0 in botV0.leaf0 */
+    lc_splice(&cur, 40, 0); /* R at offset 60, botV1.leaf0 lidx=1 */
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* foldnode_redistribute: foldnode redistribute (L778-790).
+ * levels=2. spliceleaf del=3 makes leaf underfull → foldleaf merge
+ * botV cc→1 → rebalance → foldnode at innerV level.
+ * botV0 cc=1 + botV1 cc=4 → 5>4 → redistribute. */
+static void test_foldnode_redistribute(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Node  *inner0 = innerV(
+            botV(leafV(2, 2), leafV(2, 2, 2)),
+            botV(leafV(2), leafV(2), leafV(2), leafV(2)));
+    lc_Node  *inner1 = innerV(botV(leafV(2)));
+    lc_Node  *root = innerV(inner0, inner1);
+    lc_Cache *c = cacheV(S, 2, root);
+    lc_Cursor cur;
+    assert(c);
+    lc_seek(&cur, c, 0);
+    lc_splice(&cur, 3, 0);
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* trimleaf_left_full: trimleaf left with lidx beyond count (L614). */
+static void test_trimleaf_left_full(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = cacheV(
+            S, 1, innerV(botV(leafV(10, 10), leafV(10)), botV(leafV(10, 10))));
+    lc_Cursor cur;
+    assert(c);
+    lc_seek(&cur, c, 20); /* in botV1 leaf0, lidx=0 col=0 */
+    lc_splice(
+            &cur, 10,
+            0); /* R in same leaf? Actually cross-leaf within same botV */
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* foldleaf_redistribute_left: cl=4 cr=2 dl=1>0, cursor in left leaf
+ * at lidx=3 (>= cl-dl=3). foldleaf redistributes, cursor data moves
+ * from left leaf tail to right leaf head. lidx: 4→3, paths switches. */
+static void test_foldleaf_redistribute_left(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = cacheV(S, 0, botV(leafV(10, 10, 10, 10), leafV(10, 10)));
+    lc_Cursor cur;
+    assert(c && lc_breaks(c) == 6 && lc_bytes(c) == 60);
+
+    /* cursor in left leaf, lidx=3 (last segment), col=5 */
+    lc_seek(&cur, c, 35);
+    assert(lc_offset(&cur) == 35 && cur.lidx == 3 && cur.col == 5);
+    assert(cur.paths[0] == &c->root.children[0]);
+
+    lcD_foldleaf(&cur);
+    check_tree(c);
+
+    assert(lc_breaks(c) == 6 && lc_bytes(c) == 60);
+    assert(cur.paths[0] == &c->root.children[1]);
+    assert(cur.lidx == 0 && cur.col == 5);
+    assert(lc_offset(&cur) == 35);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* foldnode_redistribute_left: cl=4 cr=2 dl=1>0, cursor in left inner node
+ * at child index 3 (>= cl-dl=3). foldnode redistributes, cursor child
+ * moves from left inner node to right inner node. Paths must switch. */
+static void test_foldnode_redistribute_left(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Node  *left = innerV(
+            botV(leafV(1, 0)), botV(leafV(1, 0)), botV(leafV(1, 0)),
+            botV(leafV(1, 0)));
+    lc_Node  *right = innerV(botV(leafV(1, 0)), botV(leafV(1, 0)));
+    lc_Node  *r = innerV(left, right);
+    lc_Cache *c = cacheV(S, 2, r);
+    lc_Cursor cur;
+    assert(c);
+    assert(lc_breaks(c) == 6 && lc_bytes(c) == 6);
+
+    /* seek to last child of left inner node (4th botV, index 3) */
+    lc_seek(&cur, c, 3);
+    assert(lc_offset(&cur) == 3);
+    assert(cur.paths[0] == &c->root.children[0]);
+
+    lcD_foldnode(&cur, 0);
+    check_tree(c);
+
+    /* dl=1 child moved left->right, paths[0] must switch to right child */
+    assert(lc_breaks(c) == 6 && lc_bytes(c) == 6);
+    assert(cur.paths[0] == &c->root.children[1]);
+    assert(lc_offset(&cur) == 3);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* foldnode_redistribute_right: cl=2 cr=4 dl=-1<0, cursor in right inner
+ * node at child index 0 (< -dl=1). foldnode redistributes right->left,
+ * cursor child moves to left inner node. (covers L747) */
+static void test_foldnode_redistribute_right(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Node  *left = innerV(botV(leafV(1, 0)), botV(leafV(1, 0)));
+    lc_Node  *right = innerV(
+            botV(leafV(1, 0)), botV(leafV(1, 0)), botV(leafV(1, 0)),
+            botV(leafV(1, 0)));
+    lc_Node  *r = innerV(left, right);
+    lc_Cache *c = cacheV(S, 2, r);
+    lc_Cursor cur;
+    assert(c);
+    assert(lc_breaks(c) == 6 && lc_bytes(c) == 6);
+
+    /* seek to first child of right inner node, offset=2 */
+    lc_seek(&cur, c, 2);
+    assert(lc_offset(&cur) == 2);
+    assert(cur.paths[0] == &c->root.children[1]);
+
+    lcD_foldnode(&cur, 0);
+    check_tree(c);
+
+    /* dl=-1 child moved right->left, paths[0] switched to left child */
+    assert(lc_breaks(c) == 6 && lc_bytes(c) == 6);
+    assert(cur.paths[0] == &c->root.children[0]);
+    assert(lc_offset(&cur) == 2);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* foldnode_redistribute_shift: cl=4 cr=1 dl=1>0, cursor in right inner
+ * node. Child stays in right, shifted right by dl. (covers L752) */
+static void test_foldnode_redistribute_shift(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Node  *left = innerV(
+            botV(leafV(1, 0)), botV(leafV(1, 0)), botV(leafV(1, 0)),
+            botV(leafV(1, 0)));
+    lc_Node  *right = innerV(botV(leafV(1, 0)));
+    lc_Node  *r = innerV(left, right);
+    lc_Cache *c = cacheV(S, 2, r);
+    lc_Cursor cur;
+    assert(c);
+    assert(lc_breaks(c) == 5 && lc_bytes(c) == 5);
+
+    /* seek to right innerV's only child, offset=4 */
+    lc_seek(&cur, c, 4);
+    assert(lc_offset(&cur) == 4);
+    assert(cur.paths[0] == &c->root.children[1]);
+
+    lcD_foldnode(&cur, 0);
+    check_tree(c);
+
+    /* dl>0, cursor in right: child shifted right, paths[0] unchanged */
+    assert(lc_breaks(c) == 5 && lc_bytes(c) == 5);
+    assert(cur.paths[0] == &c->root.children[1]);
+    assert(lc_offset(&cur) == 4);
 
     lc_deltree(S, c);
     lc_close(S);
@@ -2347,22 +2552,21 @@ static void test_boundary_cmp(void) {
     X(trimleaf_trimleft)                \
     X(trimleaf_trimright)               \
     X(trimleaf_mergeleaf)               \
+    X(trimleaf_right_end)               \
     X(trimnode_trimright)               \
     X(trimnode_trimleft)                \
     X(trimnode_mergenode)               \
-    X(mergeleaf_sufficient)             \
     X(mergeleaf_combine)                \
-    X(mergeleaf_redistribute)           \
     X(mergeleaf_sr_nonzero)             \
     X(mergeleaf_cross_subtree)          \
-    X(mergenode_sufficient)             \
     X(mergenode_combine)                \
-    X(mergenode_redistribute)           \
     X(mergenode_sr_nonzero)             \
     X(mergenode_cross_subtree)          \
     X(splicerange_2leaf)                \
     X(splicerange_prune)                \
     X(splicerange_all)                  \
+    X(splicerange_merge_rebalance)       \
+    X(splicerange_foldnode_upper)       \
     X(splice_uf_last)                   \
     X(splice_mergeleaf_sr)              \
     X(splice_mergeleaf_dpos)            \
@@ -2370,6 +2574,14 @@ static void test_boundary_cmp(void) {
     X(splice_mergenode_dpos)            \
     X(splice_mergenode_last)            \
     X(splice_removed2)                  \
+    X(empty_tree_reset)                 \
+    X(shiftleaf_neg_d)                  \
+    X(foldnode_redistribute)            \
+    X(trimleaf_left_full)               \
+    X(foldleaf_redistribute_left)       \
+    X(foldnode_redistribute_left)       \
+    X(foldnode_redistribute_right)      \
+    X(foldnode_redistribute_shift)      \
     X(boundary_cmp)                     \
     X(markbreak)                        \
     X(markbreaks)                       \
