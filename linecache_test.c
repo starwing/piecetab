@@ -775,10 +775,10 @@ static void test_cov_forwardline_crossnode(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
     lc_Cursor cur;
-    unsigned  brs[34] = {10,10,10,10,10,10,10,10,10,10,
-                          10,10,10,10,10,10,10,10,10,10,
-                          10,10,10,10,10,10,10,10,10,10,
-                          10,10,10,0}, *p = brs;
+    unsigned  brs[34] = {10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
+                         10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
+                         10, 10, 10, 10, 10, 10, 10, 10, 10, 0},
+              *p = brs;
     int       r;
 
     r = lc_scan(c, scanner, &p);
@@ -1490,8 +1490,7 @@ static void test_cov_backwardline_cross(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(
             S, 1,
-            innerV(botV(leafV(10), leafV(10), leafV(10)),
-                   botV(leafV(10))));
+            innerV(botV(leafV(10), leafV(10), leafV(10)), botV(leafV(10))));
     lc_Cursor cur;
     int       r;
     assert(c && lc_breaks(c) == 4 && lc_bytes(c) == 40);
@@ -2583,7 +2582,8 @@ static void test_scan_oom_items(void) {
 /* scan OOM: fail during flush cascade when pend has internal nodes.
  * LC_PAGE_SIZE=512 → node page holds 4 nodes; leaf page 30 leaves.
  * With 170 segments the cascade exhausts node page → allocf #5 triggers OOM.
- * This exercises lcB_disposepend freeing internal-node children via lcN_freechildren. */
+ * This exercises lcB_disposepend freeing internal-node children via
+ * lcN_freechildren. */
 static void test_scan_oom_flush(void) {
     lc_State *S;
     lc_Cache *c;
@@ -2660,10 +2660,9 @@ static void test_boundary_cmp(void) {
  * Call shiftnode directly to avoid splicerange path complexity. */
 static void test_cov_shiftnode_balance(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Node  *innerA = innerV(botV(leafV(10)), botV(leafV(10)),
-                               botV(leafV(10)));
-    lc_Node  *innerB = innerV(botV(leafV(10)), botV(leafV(10)));
-    lc_Node  *root = innerV(innerA, innerB);
+    lc_Node *innerA = innerV(botV(leafV(10)), botV(leafV(10)), botV(leafV(10)));
+    lc_Node *innerB = innerV(botV(leafV(10)), botV(leafV(10)));
+    lc_Node *root = innerV(innerA, innerB);
     lc_Cache *c = cacheV(S, 2, root);
     lc_Cursor C1, C2;
     assert(c);
@@ -2699,6 +2698,275 @@ static void test_cov_foldleaf_inmarkbreak(void) {
 }
 
 /* main */
+
+/* insert into non-empty tree: single leaf, middle insert */
+static void test_insert_single_leaf(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  brs_a[5] = {10, 15, 15, 0}, *pa = brs_a;
+    unsigned  brs_b[3] = {3, 3, 0}, *pb = brs_b;
+    int       r;
+
+    r = lc_scan(c, scanner, &pa);
+    assert(r == LC_OK && lc_breaks(c) == 3 && lc_bytes(c) == 40);
+
+    lc_seek(&C, c, 10);
+    r = lc_insert(&C, 3, scanner, &pb);
+    assert(r == LC_OK);
+    check_tree(c);
+    assert(lc_breaks(c) == 5 && lc_bytes(c) == 49);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* insert col>0: split current line, merge first br, prepend e */
+static void test_insert_col_mid(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  brs_a[3] = {4, 7, 0}, *pa = brs_a;
+    unsigned  brs_b[3] = {4, 4, 0}, *pb = brs_b;
+    int       r;
+
+    r = lc_scan(c, scanner, &pa);
+    assert(r == LC_OK && lc_breaks(c) == 2 && lc_bytes(c) == 11);
+
+    lc_seek(&C, c, 6);
+    assert(C.lidx == 1 && C.col == 2);
+    r = lc_insert(&C, 3, scanner, &pb);
+    assert(r == LC_OK);
+    check_tree(c);
+    assert(lc_breaks(c) == 4 && lc_bytes(c) == 22);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* br==0, e>0: add e to current line */
+static void test_insert_no_scanner(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  brs[3] = {10, 10, 0}, *pbrs = brs;
+    unsigned  zero[1] = {0}, *pz = zero;
+    int       r;
+
+    r = lc_scan(c, scanner, &pbrs);
+    assert(r == LC_OK && lc_breaks(c) == 2 && lc_bytes(c) == 20);
+
+    lc_seek(&C, c, 5);
+    r = lc_insert(&C, 7, scanner, &pz);
+    assert(r == LC_OK);
+    check_tree(c);
+    assert(lc_breaks(c) == 2 && lc_bytes(c) == 27);
+    assert(lc_linelen(&C) == 17);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* trailing area insert */
+static void test_insert_trailing(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  brs_a[3] = {10, 10, 0}, *pa = brs_a;
+    unsigned  brs_b[3] = {5, 5, 0}, *pb = brs_b;
+    int       r;
+
+    r = lc_scan(c, scanner, &pa);
+    assert(r == LC_OK && lc_breaks(c) == 2 && lc_bytes(c) == 20);
+
+    lc_seek(&C, c, 20);
+    assert(lc_offset(&C) == 20 && C.col == 0);
+    C.col = 5;
+    r = lc_insert(&C, 7, scanner, &pb);
+    assert(r == LC_OK);
+    check_tree(c);
+    assert(lc_breaks(c) == 4 && lc_bytes(c) == 30);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* insert causing leaf split */
+static void test_insert_leaf_split(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  brs_a[4] = {5, 5, 5, 0}, *pa = brs_a;
+    unsigned  brs_b[4] = {3, 3, 3, 0}, *pb = brs_b;
+    int       r;
+
+    r = lc_scan(c, scanner, &pa);
+    assert(r == LC_OK && lc_breaks(c) == 3 && lc_bytes(c) == 15);
+
+    lc_seek(&C, c, 5);
+    r = lc_insert(&C, 2, scanner, &pb);
+    assert(r == LC_OK);
+    check_tree(c);
+    assert(lc_breaks(c) == 6 && lc_bytes(c) == 26);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* br==0, e==0: no-op */
+static void test_insert_noop(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  brs[3] = {10, 10, 0}, *pbrs = brs;
+    unsigned  zero[1] = {0}, *pz = zero;
+    int       r;
+
+    r = lc_scan(c, scanner, &pbrs);
+    assert(r == LC_OK && lc_breaks(c) == 2 && lc_bytes(c) == 20);
+
+    lc_seek(&C, c, 5);
+    r = lc_insert(&C, 0, scanner, &pz);
+    assert(r == LC_OK);
+    check_tree(c);
+    assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* verify cursor position after col>0 insert */
+static void test_insert_cursor_pos(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  brs_a[3] = {4, 7, 0}, *pa = brs_a;
+    unsigned  brs_b[3] = {4, 4, 0}, *pb = brs_b;
+    int       r;
+
+    r = lc_scan(c, scanner, &pa);
+    assert(r == LC_OK);
+    lc_seek(&C, c, 6);
+    assert(C.lidx == 1 && C.col == 2);
+    r = lc_insert(&C, 3, scanner, &pb);
+    assert(r == LC_OK);
+    assert(C.idx == 3 && C.col == 3);
+    assert(lc_offset(&C) == 17);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* insert enough data to trigger driverun while-loop (fill->flush->refill) */
+static void test_insert_many(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  brs_a[4] = {10, 10, 10, 0}, *pa = brs_a;
+    unsigned  brs_b[18], *pb = brs_b;
+    int       i, r;
+
+    r = lc_scan(c, scanner, &pa);
+    assert(r == LC_OK && lc_breaks(c) == 3 && lc_bytes(c) == 30);
+
+    for (i = 0; i < 17; ++i) brs_b[i] = 1;
+    brs_b[17] = 0;
+    lc_seek(&C, c, 5);
+    r = lc_insert(&C, 0, scanner, &pb);
+    assert(r == LC_OK);
+    check_tree(c);
+    assert(lc_breaks(c) == 20 && lc_bytes(c) == 47);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* empty tree insert */
+static void test_insert_empty(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  brs[4] = {10, 10, 10, 0}, *pbrs = brs;
+    int       r;
+
+    lc_seek(&C, c, 0);
+    r = lc_insert(&C, 5, scanner, &pbrs);
+    assert(r == LC_OK);
+    check_tree(c);
+    assert(lc_breaks(c) == 3 && lc_bytes(c) == 30);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* empty tree + no scanner + no e: hits flushat empty-pend path */
+static void test_insert_empty_noop(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  zero[1] = {0}, *pz = zero;
+    int       r;
+
+    lc_seek(&C, c, 0);
+    r = lc_insert(&C, 0, scanner, &pz);
+    assert(r == LC_OK);
+    assert(lc_breaks(c) == 0 && lc_bytes(c) == 0);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* OOM in driverun for trailing path */
+static void test_insert_oom_trailing(void) {
+    lc_State *S;
+    lc_Cache *c;
+    lc_Cursor C;
+    unsigned  brs[3] = {2, 0}, *pbrs = brs;
+    int       found = 0, k;
+    for (k = 3; k <= 10; ++k) {
+        oom_cnt = k;
+        S = lc_open(&oom_alloc, NULL);
+        if (!S) continue;
+        c = lc_newtree(S);
+        if (!c) {
+            lc_close(S);
+            continue;
+        }
+        lc_seek(&C, c, 0);
+        pbrs = brs;
+        if (lc_insert(&C, 0, scanner, &pbrs) == LC_ERRMEM) found = 1;
+        lc_deltree(S, c);
+        lc_close(S);
+        if (found) break;
+    }
+    assert(found);
+}
+
+/* OOM in driverun for normal path */
+static void test_insert_oom_normal(void) {
+    lc_State *S;
+    lc_Cache *c;
+    lc_Cursor C;
+    unsigned  brs_a[3] = {5, 5, 0}, *pa;
+    unsigned  brs_b[18], *pb;
+    int       i, k, found = 0;
+
+    for (k = 4; k <= 15; ++k) {
+        oom_cnt = k;
+        S = lc_open(&oom_alloc, NULL);
+        if (!S) continue;
+        c = lc_newtree(S);
+        if (!c) {
+            lc_close(S);
+            continue;
+        }
+        pa = brs_a;
+        if (lc_scan(c, scanner, &pa) != LC_OK) {
+            lc_deltree(S, c);
+            lc_close(S);
+            continue;
+        }
+        for (i = 0; i < 17; ++i) brs_b[i] = 1;
+        brs_b[17] = 0;
+        pb = brs_b;
+        lc_seek(&C, c, 3);
+        if (lc_insert(&C, 0, scanner, &pb) == LC_ERRMEM) found = 1;
+        lc_deltree(S, c);
+        lc_close(S);
+        if (found) break;
+    }
+    assert(found);
+}
 
 #define TESTS(X)                        \
     X(lifecycle)                        \
@@ -2801,8 +3069,20 @@ static void test_cov_foldleaf_inmarkbreak(void) {
     X(markbreak_split_right)            \
     X(markbreak_root_split_on_add)      \
     X(markbreak_crossleaf)              \
-    X(cov_shiftnode_balance)             \
-    X(cov_foldleaf_inmarkbreak)
+    X(cov_shiftnode_balance)            \
+    X(cov_foldleaf_inmarkbreak)         \
+    X(insert_single_leaf)               \
+    X(insert_col_mid)                   \
+    X(insert_no_scanner)                \
+    X(insert_trailing)                  \
+    X(insert_leaf_split)                \
+    X(insert_noop)                      \
+    X(insert_cursor_pos)                \
+    X(insert_many)                      \
+    X(insert_empty)                     \
+    X(insert_empty_noop)                \
+    X(insert_oom_trailing)              \
+    X(insert_oom_normal)
 
 int main(int argc, char *argv[]) {
     typedef struct entry {
