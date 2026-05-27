@@ -178,6 +178,11 @@ static unsigned test_scanner(void *ud, size_t prev) {
     return (unsigned)(s->breaks[s->pos++] - prev);
 }
 
+static unsigned scanner(void *ud, size_t prev) {
+    unsigned **brs = (unsigned **)ud;
+    return (void)prev, *(*brs)++;
+}
+
 static void test_scan_seek(void) {
     lc_State  *S = lc_open(&test_alloc, NULL);
     lc_Cache  *c = lc_newtree(S);
@@ -643,8 +648,8 @@ static void test_splice(void) {
     assert(r == LC_OK && lc_breaks(c) == 100 && lc_bytes(c) == 1000);
     lc_seek(&cur, c, 11);
     lc_splice(&cur, 980, 0); /* delete all but first 11 + last 9 */
-    fprintf(stderr, "splice result: breaks=%zu bytes=%zu\n",
-            lc_breaks(c), lc_bytes(c));
+    fprintf(stderr, "splice result: breaks=%zu bytes=%zu\n", lc_breaks(c),
+            lc_bytes(c));
     assert(r == LC_OK && lc_breaks(c) == 2 && lc_bytes(c) == 20);
     check_tree(c);
 
@@ -1348,16 +1353,15 @@ static void test_markbreaks(void) {
     lc_State  *S = lc_open(&test_alloc, NULL);
     lc_Cache  *c = lc_newtree(S);
     lc_Cursor  cur;
+    unsigned   brs[4] = {10, 20, 30, 0}, *pbrs = brs;
     lc_ScanCtx s = init_scanner(10, 100, 200, 300, 0);
-    unsigned   brs[3];
     int        r = lc_scan(c, &test_scanner, &s);
     assert(r == LC_OK && lc_breaks(c) == 4 && lc_bytes(c) == 300);
     check_tree(c);
 
     /* split lines 1,2,3 at their midpoints */
     lc_seekline(&cur, c, 1);
-    brs[0] = 10, brs[1] = 20, brs[2] = 30;
-    r = lc_markbreaks(&cur, brs, 3);
+    r = lc_markbreaks(&cur, scanner, &pbrs);
     assert(r == LC_OK);
     check_tree(c);
     assert(lc_bytes(c) == 300 && lc_breaks(c) == 7);
@@ -2565,7 +2569,7 @@ static void test_boundary_cmp(void) {
     X(splicerange_2leaf)                \
     X(splicerange_prune)                \
     X(splicerange_all)                  \
-    X(splicerange_merge_rebalance)       \
+    X(splicerange_merge_rebalance)      \
     X(splicerange_foldnode_upper)       \
     X(splice_uf_last)                   \
     X(splice_mergeleaf_sr)              \

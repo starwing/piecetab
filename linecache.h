@@ -108,7 +108,7 @@ LC_API unsigned lc_col(const lc_Cursor *C);
 
 /* mutation breaks */
 LC_API int lc_markbreak(lc_Cursor *C, unsigned br);
-LC_API int lc_markbreaks(lc_Cursor *C, const unsigned *brs, size_t count);
+LC_API int lc_markbreaks(lc_Cursor *C, lc_Scanner *scanner, void *ud);
 LC_API int lc_clearbreaks(lc_Cursor *C, size_t len);
 
 /* mutation texts */
@@ -1009,11 +1009,11 @@ LC_API int lc_markbreak(lc_Cursor *C, unsigned br) {
     return LC_OK;
 }
 
-LC_API int lc_markbreaks(lc_Cursor *C, const unsigned *brs, size_t count) {
-    size_t i;
-    int    r;
-    for (i = 0; i < count; ++i)
-        if ((r = lc_markbreak(C, brs[i])) < 0) return r;
+LC_API int lc_markbreaks(lc_Cursor *C, lc_Scanner *scanner, void *ud) {
+    unsigned br;
+    int      r;
+    while ((br = scanner(ud, C->tree->bytes)) > 0)
+        if ((r = lc_markbreak(C, br)) < 0) return r;
     return LC_OK;
 }
 
