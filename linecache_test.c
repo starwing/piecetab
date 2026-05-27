@@ -770,22 +770,6 @@ static void test_advline_cross(void) {
 }
 
 /* coverage: backward cross-leaf (L490 in lcK_backwardline) */
-static void test_cov_backwardline_cross(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    unsigned  brs[6] = {10,10,10,10,10,0}, *p = brs;
-    int       r;
-
-    r = lc_scan(c, scanner, &p);
-    assert(r == LC_OK && lc_breaks(c) == 5);
-    lc_seekline(&cur, c, 4);
-    r = lc_advline(&cur, -1);
-    assert(r == LC_OK && lc_line(&cur) == 3);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
 /* coverage: forward cross-node (L466 in lcK_forwardline via lcK_findline) */
 static void test_cov_forwardline_crossnode(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
@@ -1496,6 +1480,26 @@ static lc_Cache *cacheV(lc_State *S, unsigned levels, lc_Node *root) {
         c->bytes += c->root.bytes[i], c->breaks += c->root.breaks[i];
     check_tree_allow_empty(c, 1);
     return c;
+}
+
+/* coverage: backwardline outer for iteration (L488).
+ * lc_scan creates full leaves (4 breaks each). With a half-tree where the
+ * deepest-level parent has only 1 child, the inner for loop is empty and
+ * the outer for continues to the next level. */
+static void test_cov_backwardline_cross(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = cacheV(
+            S, 1,
+            innerV(botV(leafV(10), leafV(10), leafV(10)),
+                   botV(leafV(10))));
+    lc_Cursor cur;
+    int       r;
+    assert(c && lc_breaks(c) == 4 && lc_bytes(c) == 40);
+    lc_seekline(&cur, c, 3);
+    r = lc_advline(&cur, -1);
+    assert(r == LC_OK && lc_line(&cur) == 2);
+    lc_deltree(S, c);
+    lc_close(S);
 }
 
 /* ================================================================ */
@@ -2651,6 +2655,49 @@ static void test_boundary_cmp(void) {
     lc_close(S);
 }
 
+/* coverage: shiftnode balance branch (L694-L695).
+ * Two adjacent innerV nodes with 3+2=5 > LC_FANOUT=4 children.
+ * Call shiftnode directly to avoid splicerange path complexity. */
+static void test_cov_shiftnode_balance(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Node  *innerA = innerV(botV(leafV(10)), botV(leafV(10)),
+                               botV(leafV(10)));
+    lc_Node  *innerB = innerV(botV(leafV(10)), botV(leafV(10)));
+    lc_Node  *root = innerV(innerA, innerB);
+    lc_Cache *c = cacheV(S, 2, root);
+    lc_Cursor C1, C2;
+    assert(c);
+    assert(lc_bytes(c) == 50 && lc_breaks(c) == 5);
+    check_tree(c);
+    lc_seek(&C1, c, 20); /* innerA last botV */
+    lc_seek(&C2, c, 30); /* innerB first botV */
+    lcD_shiftnode(&C1, &C2, 0);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* coverage: foldleaf inmarkbreak right→left cursor move (L718).
+ * cl=2 cr=4: right leaf larger, cursor at lidx=0 in right leaf.
+ * After balanceleaf, dl=-1, lidx<1 → cursor moves to left leaf (L718). */
+static void test_cov_foldleaf_inmarkbreak(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = cacheV(S, 0, botV(leafV(10, 10), leafV(10, 10, 10, 10)));
+    lc_Cursor cur;
+    assert(c && lc_breaks(c) == 6 && lc_bytes(c) == 60);
+    check_tree(c);
+    lc_seek(&cur, c, 20);
+    assert(lc_offset(&cur) == 20 && cur.lidx == 0 && cur.col == 0);
+    assert(cur.paths[0] == &c->root.children[1]);
+    lcD_foldleaf(&cur);
+    check_tree(c);
+    assert(lc_breaks(c) == 6 && lc_bytes(c) == 60);
+    assert(cur.paths[0] == &c->root.children[0]);
+    assert(cur.lidx == 2 && cur.col == 0);
+    assert(lc_offset(&cur) == 20);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 /* main */
 
 #define TESTS(X)                        \
@@ -2753,7 +2800,9 @@ static void test_boundary_cmp(void) {
     X(markbreak_root_split)             \
     X(markbreak_split_right)            \
     X(markbreak_root_split_on_add)      \
-    X(markbreak_crossleaf)
+    X(markbreak_crossleaf)              \
+    X(cov_shiftnode_balance)             \
+    X(cov_foldleaf_inmarkbreak)
 
 int main(int argc, char *argv[]) {
     typedef struct entry {
