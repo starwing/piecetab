@@ -275,6 +275,19 @@ static void lcN_freechildren(lc_State *S, lc_Node *p, int rl) {
     }
 }
 
+static void lcN_freerange(lc_State *S, lc_Node *p, int rl, int s, int e) {
+    int i;
+    if (rl == 0) {
+        for (i = s; i < e; ++i) lc_poolfree(&S->leaves, p->children[i]);
+    } else {
+        for (i = s; i < e; ++i) {
+            lc_Node *child = p->children[i];
+            lcN_freechildren(S, child, rl - 1);
+            lc_poolfree(&S->nodes, child);
+        }
+    }
+}
+
 LC_API void lc_deltree(lc_State *S, lc_Cache *c) {
     lcN_freechildren(S, &c->root, c->levels);
     S->allocf(S->alloc_ud, c, sizeof(lc_Cache), 0);
@@ -282,12 +295,12 @@ LC_API void lc_deltree(lc_State *S, lc_Cache *c) {
 
 /* cursor macros */
 
-#define lcK_levels(C) ((C)->tree->levels)
+#define lcK_levels(C) ((int)(C)->tree->levels)
 #define lcK_breaks(C) ((C)->tree->breaks)
 #define lcK_bytes(C)  ((C)->tree->bytes)
 
 #define lcK_parent(C, l) ((l) > 0 ? *(C)->paths[(l) - 1] : &(C)->tree->root)
-#define lcK_idx(C, p, l) ((C)->paths[(l)] - (p)->children)
+#define lcK_idx(C, p, l) ((int)((C)->paths[(l)] - (p)->children))
 #define lcK_leaf(C)      (*(lc_Leaf **)(C)->paths[lcK_levels(C)])
 
 /* utils */
@@ -336,7 +349,7 @@ LC_API size_t lc_bytes(const lc_Cache *c) { return c->bytes; }
 
 /* cursor helpers */
 
-static void lcK_findleaf(lc_Cursor *C, unsigned l, size_t *poff) {
+static void lcK_findleaf(lc_Cursor *C, int l, size_t *poff) {
     assert(C->off + *poff <= lcK_bytes(C));
     for (; l <= lcK_levels(C); ++l) {
         lc_Node *p = lcK_parent(C, l);
@@ -350,7 +363,7 @@ static void lcK_findleaf(lc_Cursor *C, unsigned l, size_t *poff) {
     }
 }
 
-static void lcK_findline(lc_Cursor *C, unsigned l, size_t *pline) {
+static void lcK_findline(lc_Cursor *C, int l, size_t *pline) {
     assert(C->idx + *pline <= lcK_breaks(C));
     for (; l <= lcK_levels(C); ++l) {
         lc_Node *p = lcK_parent(C, l);
@@ -366,9 +379,9 @@ static void lcK_findline(lc_Cursor *C, unsigned l, size_t *pline) {
 
 static void lcK_findinleaf(lc_Cursor *C, size_t off) {
     lc_Node *p = lcK_parent(C, lcK_levels(C));
-    unsigned leaf_i = (unsigned)lcK_idx(C, p, lcK_levels(C));
-    size_t   i = C->lidx, count = p->breaks[leaf_i];
-    lc_Leaf *leaf = (lc_Leaf *)p->children[leaf_i];
+    int      li = lcK_idx(C, p, lcK_levels(C));
+    size_t   i = C->lidx, count = p->breaks[li];
+    lc_Leaf *leaf = (lc_Leaf *)p->children[li];
     for (off += C->col; i < count; ++i) {
         if (off < leaf->bytes[i]) break;
         off -= leaf->bytes[i], C->loff += leaf->bytes[i], C->idx += 1;
@@ -378,7 +391,7 @@ static void lcK_findinleaf(lc_Cursor *C, size_t off) {
 
 static void lcK_locend(lc_Cursor *C) {
     lc_Node *n = &C->tree->root;
-    unsigned l;
+    int      l;
     if (n->child_count == 0) return;
     for (l = 0; l < lcK_levels(C); ++l)
         n = *(C->paths[l] = &n->children[n->child_count - 1]);
@@ -576,28 +589,13 @@ static void lcM_tx(lc_Cursor *L, lc_Cursor *R, int l, lc_Diff db, lc_Diff dl) {
     }
 }
 
-static void lcD_freerange(lc_Cursor *C, int l, int start, int end) {
-    lc_Node *p = lcK_parent(C, l);
-    int      i;
-    if (l == lcK_levels(C)) {
-        for (i = start; i < end; ++i)
-            lc_poolfree(&C->tree->S->leaves, p->children[i]);
-    } else {
-        for (i = start; i < end; ++i) {
-            lc_Node *child = p->children[i];
-            lcN_freechildren(C->tree->S, child, lcK_levels(C) - l - 1);
-            lc_poolfree(&C->tree->S->nodes, child);
-        }
-    }
-}
-
 static void lcD_prune(lc_Cursor *L, int sr, int l) {
     lc_Node *p = lcK_parent(L, l);
     int      i = lcK_idx(L, p, l);
     lc_Diff  db, dl;
     if (i + 1 >= sr) return;
     db = lcN_sumbytes(p, i + 1, sr), dl = lcN_sumbreaks(p, i + 1, sr);
-    lcD_freerange(L, l, i + 1, sr);
+    lcN_freerange(L->tree->S, p, lcK_levels(L) - l, i + 1, sr);
     lcN_move(p, i + 1, sr, p->child_count - sr);
     p->child_count -= (sr - i) - 1;
     if (db && dl) lcM_up(L, l - 1, -db, -dl);
@@ -629,7 +627,7 @@ static void lcD_trimnode(lc_Cursor *C, int l, int left) {
     if (!left) s = i + 1, e = p->child_count;
     p->child_count = (unsigned short)(left ? (p->child_count - i) : (i + 1));
     db = lcN_sumbytes(p, s, e), dl = lcN_sumbreaks(p, s, e);
-    lcD_freerange(C, l, s, e);
+    lcN_freerange(C->tree->S, p, lcK_levels(C) - l, s, e);
     lcM_up(C, l - 1, -db, -dl);
 }
 
@@ -959,12 +957,6 @@ static int lcB_makeroom(lc_Cursor *C) {
     return LC_OK;
 }
 
-static int lcB_fitleaf(lc_Cursor *C) {
-    lc_Node *parent = lcK_parent(C, lcK_levels(C));
-    int      i = lcK_idx(C, parent, lcK_levels(C));
-    return parent->breaks[i] < LC_LEAF_FANOUT ? LC_OK : lcB_makeroom(C);
-}
-
 static void lcB_putbreak(lc_Cursor *C, unsigned br) {
     lc_Node *p = lcK_parent(C, lcK_levels(C));
     int      i = lcK_idx(C, p, lcK_levels(C));
@@ -980,13 +972,13 @@ static void lcB_putbreak(lc_Cursor *C, unsigned br) {
 }
 
 LC_API int lc_markbreak(lc_Cursor *C, unsigned br) {
-    int    r;
-    size_t need, remain;
+    lc_Node *p;
+    int      r, i;
+    size_t   remain, need = lc_offset(C) + br;
     if (C == NULL || C->tree == NULL) return LC_ERRPARAM;
     if (lcK_levels(C) == 0 && C->tree->root.child_count == 0)
         return lcB_initempty(C, br);
     if (br == (remain = lc_linelen(C) - C->col)) return LC_OK;
-    need = lc_offset(C) + br;
     if (br > remain) {
         lc_splice(C, br, br);
         if (C->tree->root.child_count == 0) return lcB_initempty(C, br);
@@ -997,15 +989,123 @@ LC_API int lc_markbreak(lc_Cursor *C, unsigned br) {
             lcK_leaf(C)->bytes[C->lidx] += (unsigned)ext;
             lcM_up(C, lcK_levels(C), ext, 0);
         }
-        lcB_putbreak(C, 0);
-        C->loff += C->col, C->lidx++;
-        C->loff += lcK_leaf(C)->bytes[C->lidx];
-        C->idx++, C->lidx++, C->col = 0;
-        return LC_OK;
+        lcB_putbreak(C, 0), C->loff += C->col + lcK_leaf(C)->bytes[C->lidx + 1];
+        return (C->idx += 1, C->lidx += 2, C->col = 0), LC_OK;
     }
-    if ((r = lcB_fitleaf(C)) < 0) return r;
-    lcB_putbreak(C, br);
-    C->loff += C->col + br, C->idx++, C->lidx++, C->col = 0;
+    p = lcK_parent(C, lcK_levels(C)), i = lcK_idx(C, p, lcK_levels(C));
+    if (p->breaks[i] >= LC_LEAF_FANOUT && (r = lcB_makeroom(C)) < 0) return r;
+    lcB_putbreak(C, br), C->loff += C->col + br;
+    return (C->idx += 1, C->lidx += 1, C->col = 0), LC_OK;
+}
+
+/* bulk loading */
+
+typedef struct lcB_Ctx {
+    lc_Cursor c; /* tree-end cursor: tree/paths/metrics inside */
+    lc_Node   pend[LC_MAX_LEVEL];
+    lc_Node  *pend_root; /* lazy-allocated spare node for root split */
+} lcB_Ctx;
+
+static int lcB_checkpendroot(lcB_Ctx *x) {
+    if (x->pend_root) return LC_OK;
+    x->pend_root = (lc_Node *)lc_poolalloc(x->c.tree->S, &x->c.tree->S->nodes);
+    return x->pend_root ? LC_OK : LC_ERRMEM;
+}
+
+static int lcB_init(lcB_Ctx *x, lc_Cache *c) {
+    memset(x, 0, sizeof(lcB_Ctx));
+    x->c.tree = c;
+    if (c->root.child_count > 0) lcK_locend(&x->c);
+    return LC_OK;
+}
+
+static void lcB_merge(lcB_Ctx *x, int l, lc_Node *next) {
+    lc_Node *parent = lcK_parent(&x->c, l);
+    lc_Node *pend = &x->pend[l];
+    int      space = LC_FANOUT - (int)parent->child_count;
+    int      n = lc_min(space, (int)pend->child_count);
+    int      pcc = (int)parent->child_count;
+    lc_Diff  db, dl;
+    lcN_copy(parent, pcc, pend, 0, (unsigned)n);
+    parent->child_count = (unsigned short)(pcc + n);
+    x->c.paths[l] = &parent->children[parent->child_count - 1];
+    db = (lc_Diff)lcN_sumbytes(pend, 0, n);
+    dl = (lc_Diff)lcN_sumbreaks(pend, 0, n);
+    if (l > 0)
+        lcM_up(&x->c, l - 1, db, dl);
+    else
+        x->c.tree->bytes += (size_t)db, x->c.tree->breaks += (size_t)dl;
+    if (next && n < (int)pend->child_count) {
+        int rest = (int)pend->child_count - n;
+        lcN_copy(next, 0, pend, n, (unsigned)rest);
+        next->child_count = (unsigned short)rest;
+    }
+    pend->child_count = 0;
+}
+
+static int lcB_rootpush(lcB_Ctx *x, lc_Node *nr) {
+    lc_Cache *c = x->c.tree;
+    int       l = (int)c->levels, i;
+    lc_Node  *nl = (assert(x->pend_root != NULL), x->pend_root);
+    if (l + 1 >= LC_MAX_LEVEL) return LC_ERRPARAM;
+    i = (int)(x->c.paths[0] - c->root.children);
+    *nl = c->root;
+    c->root.children[0] = nl, c->root.children[1] = nr;
+    c->root.child_count = 2;
+    c->root.bytes[0] = c->bytes, c->root.breaks[0] = c->breaks;
+    c->root.bytes[1] = lcN_sumbytes(nr, 0, (int)nr->child_count);
+    c->root.breaks[1] = lcN_sumbreaks(nr, 0, (int)nr->child_count);
+    c->bytes += c->root.bytes[1], c->breaks += c->root.breaks[1];
+    memmove(x->c.paths + 1, x->c.paths, (size_t)(l + 1) * sizeof(lc_Node **));
+    x->c.paths[0] = &c->root.children[i >= (int)nl->child_count];
+    x->c.paths[1] = &nl->children[i];
+    c->levels++, x->pend_root = NULL;
+    return (x->pend[c->levels].child_count = 0), LC_OK;
+}
+
+static int lcB_fill(lcB_Ctx *x, int l, lc_Scanner *sc, void *ud) {
+    lc_Node *pend = &x->pend[l];
+    size_t   sum, bytes = x->c.tree->bytes;
+    while ((int)pend->child_count < LC_FANOUT) {
+        lc_Leaf *lf;
+        unsigned br, i;
+        lf = (lc_Leaf *)lc_poolalloc(x->c.tree->S, &x->c.tree->S->leaves);
+        if (!lf) return LC_ERRMEM;
+        memset(lf, 0, sizeof(lc_Leaf));
+        for (sum = i = 0; i < LC_LEAF_FANOUT; ++i) {
+            if ((br = sc(ud, bytes)) == 0) break;
+            lf->bytes[i] = br, sum += br, bytes += br;
+        }
+        if (i == 0) return (lc_poolfree(&x->c.tree->S->leaves, lf), 0);
+        pend->children[pend->child_count] = (lc_Node *)lf;
+        pend->bytes[pend->child_count] = sum;
+        pend->breaks[pend->child_count] = i;
+        pend->child_count++;
+        if (i < LC_LEAF_FANOUT) return 0;
+    }
+    return 1;
+}
+
+static int lcB_flush(lcB_Ctx *x, int l) {
+    lc_State *S = x->c.tree->S;
+    for (; l >= 0; --l) {
+        lc_Node *pend = &x->pend[l], *n;
+        int      pi;
+        if (pend->child_count == 0) continue;
+        if (lcK_parent(&x->c, l)->child_count + pend->child_count
+            <= LC_FANOUT) {
+            lcB_merge(x, l, NULL);
+            return LC_OK;
+        }
+        if (!(n = (lc_Node *)lc_poolalloc(S, &S->nodes))) return LC_ERRMEM;
+        memset(n, 0, sizeof(lc_Node));
+        lcB_merge(x, l, n);
+        if (l == 0) return lcB_rootpush(x, n);
+        pi = x->pend[l - 1].child_count++;
+        x->pend[l - 1].children[pi] = n;
+        x->pend[l - 1].bytes[pi] = lcN_sumbytes(n, 0, (int)n->child_count);
+        x->pend[l - 1].breaks[pi] = lcN_sumbreaks(n, 0, (int)n->child_count);
+    }
     return LC_OK;
 }
 
@@ -1018,26 +1118,24 @@ LC_API int lc_markbreaks(lc_Cursor *C, lc_Scanner *scanner, void *ud) {
 }
 
 LC_API int lc_scan(lc_Cache *c, lc_Scanner *scanner, void *ud) {
-    lc_Cursor C;
-    unsigned  br;
-    int       r;
+    lcB_Ctx x;
+    int     r, i, levels;
     if (c == NULL || scanner == NULL) return LC_ERRPARAM;
-    C.tree = c;
-    if (c->root.child_count == 0) {
-        if ((br = scanner(ud, c->bytes)) == 0) return LC_OK;
-        if ((r = lcB_initempty(&C, br)) < 0) return r;
+    if ((r = lcB_init(&x, c)) != LC_OK) return r;
+    levels = (int)c->levels;
+    r = lcB_fill(&x, levels, scanner, ud);
+    while (r > 0) {
+        if ((r = lcB_checkpendroot(&x)) != LC_OK) break;
+        if ((r = lcB_flush(&x, levels)) != LC_OK) break;
+        levels = (int)c->levels;
+        r = lcB_fill(&x, levels, scanner, ud);
     }
-    lcK_locend(&C);
-    while ((br = scanner(ud, c->bytes)) > 0) {
-        lc_Leaf *wr_leaf;
-        unsigned wr_lidx;
-        if ((r = lcB_fitleaf(&C)) < 0) return r;
-        wr_leaf = lcK_leaf(&C), wr_lidx = C.lidx;
-        wr_leaf->bytes[wr_lidx] = br;
-        C.loff += br, C.lidx++, C.idx++, lcM_up(&C, lcK_levels(&C), br, 1);
-    }
-    C.col = 0;
-    return LC_OK;
+    if (r >= 0) r = lcB_flush(&x, levels);
+    if (r != LC_OK)
+        for (i = 0; i <= levels; ++i)
+            lcN_freechildren(c->S, &x.pend[i], levels - i);
+    if (x.pend_root) lc_poolfree(&c->S->nodes, x.pend_root);
+    return r;
 }
 
 LC_NS_END
