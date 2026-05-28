@@ -1,19 +1,20 @@
-# marktree test runner
+# linecache test runner
 
 CC := "gcc"
 CFLAGS := "-Wall -Wextra -Werror -pedantic -std=c89 -Wno-variadic-macros"
+INCS := "-I. -Itests"
 
 dbg *tests='':
-    {{ CC }} {{ CFLAGS }} -Wno-variadic-macros -g -O0 -fsanitize=address,undefined -o linecache_test linecache_test.c && ./linecache_test {{ tests }}
+    {{ CC }} {{ CFLAGS }} {{ INCS }} -g -O0 -fsanitize=address,undefined -o tests/lc_test4 tests/lc_test4.c && ./tests/lc_test4 {{ tests }}
 
 # large fanout tests (LC_LEAF_FANOUT=8, LC_FANOUT=8)
 dbg_lc8 *tests='':
-    {{ CC }} {{ CFLAGS }} -g -O0 -fsanitize=address,undefined -o linecache_test_large linecache_test_large.c && ./linecache_test_large {{ tests }}
+    {{ CC }} {{ CFLAGS }} {{ INCS }} -g -O0 -fsanitize=address,undefined -o tests/lc_test8 tests/lc_test8.c && ./tests/lc_test8 {{ tests }}
 
-cov_run src:
-    {{ CC }} {{ CFLAGS }} --coverage -O0 -o {{ src }} {{ src }}.c && ./{{ src }}
+cov_run t:
+    {{ CC }} {{ CFLAGS }} {{ INCS }} --coverage -O0 -o tests/{{ t }} tests/{{ t }}.c && ./tests/{{ t }}
 
-lc-cov: clean-gcda (cov_run "linecache_test") (cov_run "linecache_test_large")
+lc-cov: clean-gcda (cov_run "lc_test4") (cov_run "lc_test8")
     lcov --capture --directory . --output-file coverage.info --no-external --ignore-errors unsupported
     lcov --extract coverage.info '*/linecache.h' --output-file lcov.info
     @echo ""
@@ -34,7 +35,7 @@ lc-lines:
 cov: lc-cov lc-uncovered lc-lines
 
 clean-gcda:
-    rm -f ./*.gcda ./*.gcno ./*.info
+    rm -f tests/*.gcda tests/*.gcno ./*.gcda ./*.gcno *.info
 
 clean: clean-gcda
-    rm -f linecache_test linecache_test_large
+    rm -f tests/lc_test4 tests/lc_test8

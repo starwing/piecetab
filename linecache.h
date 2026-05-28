@@ -1073,10 +1073,7 @@ static int lcB_rootpush(lcB_Ctx *x, lc_Node *nr) {
     c->bytes += c->root.bytes[1], c->breaks += c->root.breaks[1];
     memmove(x->c.paths + 1, x->c.paths, (size_t)(l + 1) * sizeof(lc_Node **));
     x->c.paths[0] = &c->root.children[i >= (int)nl->child_count];
-    if (i < (int)nl->child_count)
-        x->c.paths[1] = &nl->children[i];
-    else
-        x->c.paths[1] = &nr->children[i - (int)nl->child_count];
+    x->c.paths[1] = &nl->children[i];
     c->levels++, x->pend_root = NULL;
     return (x->pend[c->levels].child_count = 0), LC_OK;
 }

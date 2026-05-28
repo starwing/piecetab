@@ -1,5 +1,7 @@
 # Linecache Splice 区间删除终极重构计划
 
+> **旧算法记录**：此前探索之四段法 (`range_bulk_deletion.md`)、第六代双游标拉链法 (`range_delete_v6.md`) 已删，仅存 git 历史。演进脉络见 [history_range_delete.md](history_range_delete.md)。
+
 ## 1. 危机与理论来龙去脉
 
 在实现并测试经典的度量 B+ 树（Metric B+ Tree）进行大规模 Range Delete (`splice` / `clearbreaks`) 时，我们遭遇了深层悬垂下无法治愈的 Underfull 结构。原有的算法及通常粗糙的修改都惨遭失败。
@@ -175,7 +177,7 @@
 
 ## 4. 验证策略
 
-以下场景须有测试覆盖，入 `linecache_test.c`，以 `just debug` 运行：
+以下场景须有测试覆盖，入 `tests/lc_test4.c` (或 `tests/lc_test8.c` 若测试大型扇出)，以 `just dbg` (或 `just dbg_lc8`) 运行：
 
 1. **深谷悬切** `[1..1000] -> [1, 1000]`：4 层树，极左极右各留 1 项。验 Phase 2 自 l 层逐级下放资源，终叶满足最少填充，树结构合法。
 2. **叶 shift-many-to-one**：左叶 2 项 + 右叶 3 项 ≤ LEAF_FANOUT。验 foldleaf（于 mergeleaf 回退）正确 shift 合并。若合并后仍不足半，验 rebalance 向上修。

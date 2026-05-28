@@ -4,4 +4,6 @@
 *.gcno
 *_test
 *.dSYM/
+tests/lc_test4
+tests/lc_test8
 tmp_*

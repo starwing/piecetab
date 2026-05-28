@@ -15,8 +15,10 @@
 | 文件 | 行数 | 用途 |
 |------|------|------|
 | `linecache.h` | 1045 | 单头文件，含全部声明与实现 |
-| `linecache_test.c` | 2629 | 全部单元测试，85 测试用例 |
-| `justfile` | -- | 构建命令: `just debug`, `just lc-cov`, `just test` |
+| `tests/lc_test4.c` | -- | 单元测试 (LC_FANOUT=4)，84 测试用例 |
+| `tests/lc_test8.c` | -- | 单元测试 (LC_FANOUT=8)，6 测试用例 |
+| `tests/lc_tests.h` | -- | 共享测试辅助 (定义宏、构造器、扫描器) |
+| `justfile` | -- | 构建命令: `just dbg`, `just dbg_lc8`, `just lc-cov` |
 
 编译参数（测试用）: `-DLC_LEAF_FANOUT=4 -DLC_FANOUT=4` 以极小扇出迫树分裂。
 
@@ -172,8 +174,10 @@ LC_API int lc_scan(lc_Cache *c, lc_Scanner *scanner, void *ud) {
 ## 十、测试框架
 
 ```bash
-just debug          # 编译 + 运行 (gcc -O0 -fsanitize=address,undefined)
-just debug <test>   # 运行特定测试
+just dbg            # 编译 + 运行 lc_test4 (gcc -O0 -fsanitize=address,undefined)
+just dbg <test>     # 运行特定测试
+just dbg_lc8        # 编译 + 运行 lc_test8 (gcc -O0 -fsanitize=address,undefined)
+just dbg_lc8 <test> # 运行特定测试
 just lc-cov         # 覆盖率 (目标 100%)
 ```
 
@@ -183,13 +187,15 @@ just lc-cov         # 覆盖率 (目标 100%)
 
 | 文档 | 内容 |
 |------|------|
-| [marktree_design.md](marktree_design.md) | Mark Tree 设计 (B+树 + gap 编码 + 哈希映射) |
-| [range_delete_v6.md](range_delete_v6.md) | 第六代区间删除算法蓝本 (Bottom-Up + Top-Down) |
-| [range_delete_evolution.md](range_delete_evolution.md) | 区间删除算法五代演进史 |
-| [splice_repair_plan.md](splice_repair_plan.md) | 第三代三段法重构计划 |
-| [range_bulk_deletion.md](range_bulk_deletion.md) | 批量删除设计 (已被取代) |
-| [trimnode-mergenode-lessons.md](trimnode-mergenode-lessons.md) | trimnode/mergenode 重构教训 |
-| [bulk_loading_plan.md](bulk_loading_plan.md) | lc_scan Bulk Loading 实现计划 |
+| [design_bulk_loading.md](design_bulk_loading.md) | lc_scan Bulk Loading 实现设计 |
+| [research_bulk_loading.md](research_bulk_loading.md) | B+ 树 Bulk Loading 算法理论 (Wikipedia) |
+| [design_marktree.md](design_marktree.md) | Mark Tree 设计 (B+树 + gap 编码 + 哈希映射) |
+| [design_splice.md](design_splice.md) | Splice 区间删除三段法设计 (当前实现) |
+| [history_range_delete.md](history_range_delete.md) | 区间删除算法五代演进史 |
+| [research_piecetab_insert.md](research_piecetab_insert.md) | piecetab insert 算法分析 |
+| [research_piecetab_splitpiece.md](research_piecetab_splitpiece.md) | piecetab splitpiece 源码分析 |
+| [brief_tests.md](brief_tests.md) | 测试结构笔记 |
+| [lessons_trimnode_mergenode.md](lessons_trimnode_mergenode.md) | trimnode/mergenode 重构教训 |
 
 ## 十二、编码规范 (CLAUDE.md)
 

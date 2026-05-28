@@ -1,6 +1,8 @@
-# linecache_test.c 研究笔记
+# lc_test4.c 测试结构笔记
 
-## 一、TESTS 宏定义位置与格式 (2656-2756 行)
+> **注**：本文原基于旧版单文件 `linecache_test.c` 撰写。代码已重构为 `tests/lc_tests.h` (共享辅助) + `tests/lc_test4.c` (LC_FANOUT=4) + `tests/lc_test8.c` (LC_FANOUT=8)。下述行号已废，但测试逻辑、模式、范例仍适用。
+
+## 一、TESTS 宏定义与格式
 
 ```c
 #define TESTS(X)                        \
@@ -176,7 +178,7 @@ static void test_SOMETHING(void) {
 
 ## 三、扫描器设置模式 (`scanner` / `test_alloc`)
 
-### 3.1 分配器 (123-131 行)
+### 3.1 分配器
 ```c
 static void *test_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
     (void)ud;
@@ -189,7 +191,7 @@ static void *test_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
 }
 ```
 
-### 3.2 扫描器 (166-170 行)
+### 3.2 扫描器
 ```c
 static unsigned scanner(void *ud, size_t prev) {
     unsigned **brs = (unsigned **)ud;
@@ -200,7 +202,7 @@ static unsigned scanner(void *ud, size_t prev) {
 
 此 scanner 取 `ud` 为 `unsigned *` 的指针的指针（即 `unsigned **`）。每次被调用时，从数组中取下一个 `unsigned` 值并递增指针。返回 0 表示扫描结束。
 
-### 3.3 OOM 分配器 (133-143 行)
+### 3.3 OOM 分配器
 ```c
 static int   oom_cnt;
 static void *oom_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
@@ -371,7 +373,7 @@ static void test_splicerange_merge_rebalance(void) {
 
 ## 六、三个特定测试的完整代码
 
-### 6.1 `test_rootsplit_left_deep` (1120-1142 行)
+### 6.1 `test_rootsplit_left_deep`
 
 ```
 T31: root split left path via markbreak on deep tree
@@ -409,7 +411,7 @@ static void test_rootsplit_left_deep(void) {
 
 ---
 
-### 6.2 `test_findlines_skip_deep` (1170-1194 行)
+### 6.2 `test_findlines_skip_deep`
 
 ```
 T33: findlines skip-child in deep multi-level tree
@@ -449,7 +451,7 @@ static void test_findlines_skip_deep(void) {
 
 ---
 
-### 6.3 `test_markbreak_root_split` (834-856 行)
+### 6.3 `test_markbreak_root_split`
 
 ```
 T19: markbreak triggers root split on deep tree
@@ -516,7 +518,7 @@ static void test_markbreak_root_split_on_add(void) {
 
 ## 七、cacheV 命令用法
 
-### 7.1 定义 (1485-1499 行)
+### 7.1 定义
 
 ```c
 /* cacheV(S, levels, root) — wrap pre-built root node into a cache. */
@@ -541,7 +543,7 @@ static lc_Cache *cacheV(lc_State *S, unsigned levels, lc_Node *root) {
 - `levels`: 树的层级深度（0=仅叶层, 1=root+叶层, 2=root+inner+叶层, ...）
 - `rootExpr`: 根节点表达式，通常由 `botV(...)` 或 `innerV(...)` 构建
 
-### 7.2 配合使用的助手宏/函数 (1415-1483 行)
+### 7.2 配合使用的助手宏/函数
 
 ```c
 #define leafV(...)  leafV_(S, __VA_ARGS__, 0)   // 构造叶节点（段大小列表，0 结尾）
@@ -590,7 +592,7 @@ lc_Cache *c = cacheV(S, 3, innerV(innerV(innerV(botV(leafV(10))))));
 
 ---
 
-## 八、main 函数结尾 (2758-2806 行)
+## 八、main 函数
 
 ```c
 int main(int argc, char *argv[]) {
@@ -645,11 +647,13 @@ int main(int argc, char *argv[]) {
 ```
 
 **关键点**：
-- `(void)&innerV_;` 在 main 函数体中，用于抑制 compiler 关于 `innerV_` 函数未被（直接）使用的警告。测试仅通过 `innerV` 宏调用 `innerV_`。
+- 旧版 `(void)&innerV_;` 用于抑制 compiler 警告。新版中 `innerV_` 定义于 `tests/lc_tests.h`，由 `LC_TEST_MAIN` 宏集中处理。
 - 无参数运行全部测试 （按 TESTS 宏中声明顺序）。
 - 前缀匹配逻辑在 `for (j = 0; entries[j].name; ++j)` 循环中。
 - `@` 前缀使匹配在第一个命中后停止（`only` 模式）。
 - 测试单次运行，无重复框架（非 xUnit 模式）。
+
+> **新版变更**：旧版 main() 已替换为 `LC_TEST_MAIN(banner)` 宏（定义于 `tests/lc_tests.h`）。宏自动生成条目表、运行循环、`@` 前缀精确匹配，省略上述样板代码。
 
 ---
 
