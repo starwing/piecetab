@@ -3,17 +3,17 @@
 CC := "gcc"
 CFLAGS := "-Wall -Wextra -Werror -pedantic -std=c89 -Wno-variadic-macros"
 
-test *tests='':
-    {{ CC }} {{ CFLAGS }} -O2 -o linecache_test linecache_test.c && ./linecache_test {{ tests }}
-
-debug *tests='':
+dbg *tests='':
     {{ CC }} {{ CFLAGS }} -Wno-variadic-macros -g -O0 -fsanitize=address,undefined -o linecache_test linecache_test.c && ./linecache_test {{ tests }}
 
-lc:
-    {{ CC }} {{ CFLAGS }} -O2 -o linecache_test linecache_test.c && ./linecache_test
+# large fanout tests (LC_LEAF_FANOUT=8, LC_FANOUT=8)
+dbg_lc8 *tests='':
+    {{ CC }} {{ CFLAGS }} -g -O0 -fsanitize=address,undefined -o linecache_test_large linecache_test_large.c && ./linecache_test_large {{ tests }}
 
-lc-cov: clean-gcda
-    {{ CC }} {{ CFLAGS }} --coverage -O0 -o linecache_test linecache_test.c && ./linecache_test
+cov_run src:
+    {{ CC }} {{ CFLAGS }} --coverage -O0 -o {{ src }} {{ src }}.c && ./{{ src }}
+
+lc-cov: clean-gcda (cov_run "linecache_test") (cov_run "linecache_test_large")
     lcov --capture --directory . --output-file coverage.info --no-external --ignore-errors unsupported
     lcov --extract coverage.info '*/linecache.h' --output-file lcov.info
     @echo ""
@@ -34,6 +34,7 @@ lc-lines:
 cov: lc-cov lc-uncovered lc-lines
 
 clean-gcda:
-    rm -f linecache_test ./*.gcda ./*.gcno ./*.info
+    rm -f ./*.gcda ./*.gcno ./*.info
 
 clean: clean-gcda
+    rm -f linecache_test linecache_test_large

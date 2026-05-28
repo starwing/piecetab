@@ -306,6 +306,8 @@ LC_API void lc_deltree(lc_State *S, lc_Cache *c) {
 #define lcK_idx(C, p, l) ((int)((C)->paths[(l)] - (p)->children))
 #define lcK_leaf(C)      (*(lc_Leaf **)(C)->paths[lcK_levels(C)])
 
+#define lcN_tx(p, d, s, x) (p) = &(d)->children[((p) - (s)->children) + (x)]
+
 /* utils */
 
 /* clang-format off */
@@ -747,9 +749,9 @@ static int lcD_foldnode(lc_Cursor *C, int l) {
     p->breaks[i] += ds[1], p->breaks[i + 1] -= ds[1];
     dn = cl - ((cl + cr + 1) / 2);
     if (dn < 0 && *ns != o && C->paths[l + 1] - ns[1]->children < -dn)
-        C->paths[l + 1] += cl + (ns[0] - ns[1]), C->paths[l] = ns;
+        lcN_tx(C->paths[l + 1], ns[0], ns[1], cl), C->paths[l] = ns;
     else if (dn > 0 && *ns == o && C->paths[l + 1] - ns[0]->children >= cl - dn)
-        C->paths[l + 1] -= cl + (ns[0] - ns[1]) - dn, C->paths[l] = ns + 1;
+        lcN_tx(C->paths[l + 1], ns[1], ns[0], dn - cl), C->paths[l] = ns + 1;
     else if (*ns != o)
         C->paths[l + 1] += dn;
     return 0;
@@ -1256,46 +1258,44 @@ static int lcB_applyfirst(lcB_Ctx *x, unsigned br, int e) {
     return LC_OK;
 }
 
+static int lcB_skipinsert(lc_Cursor *C, int e) {
+    lc_Node *p = lcK_parent(C, lcK_levels(C));
+    if (e > 0 && C->lidx < (int)p->breaks[lcK_idx(C, p, lcK_levels(C))])
+        lcK_leaf(C)->bytes[C->lidx] += (unsigned)e,
+                lcM_up(C, lcK_levels(C), (lc_Diff)e, 0);
+    C->col += (unsigned)e;
+    return LC_OK;
+}
+
 LC_API int lc_insert(lc_Cursor *C, int e, lc_Scanner *scanner, void *ud) {
     lcB_Ctx   x;
     lc_Cache *c;
     unsigned  br;
     size_t    old_off, old_bytes;
-    int       r, i, lv, trailing;
-    if (C == NULL || C->tree == NULL || scanner == NULL) return LC_ERRPARAM;
-    c = C->tree, old_off = lc_offset(C), old_bytes = c->bytes;
+    int       r = 0, lv, trailing, i;
+    if (C == NULL || (c = C->tree) == NULL || scanner == NULL)
+        return LC_ERRPARAM;
+    old_off = lc_offset(C), old_bytes = c->bytes;
     trailing = (old_off >= old_bytes || c->root.child_count == 0);
-    if (trailing) {
-        if ((r = lcB_init(&x, c)) != LC_OK) return r;
-    } else {
-        br = scanner(ud, c->bytes);
-        if (!br) {
-            lc_Node *p = lcK_parent(C, lcK_levels(C));
-            if (e > 0 && C->lidx < (int)p->breaks[lcK_idx(C, p, lcK_levels(C))])
-                lcK_leaf(C)->bytes[C->lidx] += (unsigned)e,
-                        lcM_up(C, lcK_levels(C), (lc_Diff)e, 0);
-            return (C->col += (unsigned)e), LC_OK;
-        }
-        if ((r = lcB_initat(&x, C)) != LC_OK) return r;
-        if ((r = lcB_applyfirst(&x, br, e)) < 0) return r;
-    }
-    lv = (int)c->levels, r = lcB_fill(&x, lv, scanner, ud);
-    while (r > 0) {
+    if (!trailing && !(br = scanner(ud, c->bytes))) return lcB_skipinsert(C, e);
+    if ((r = trailing ? lcB_init(&x, c) : lcB_initat(&x, C)) != LC_OK) return r;
+    if (!trailing && (r = lcB_applyfirst(&x, br, e)) < 0) return r;
+    for (lv = (int)c->levels, r = lcB_fill(&x, lv, scanner, ud); r > 0;
+         lv = (int)c->levels, r = lcB_fill(&x, lv, scanner, ud)) {
         if ((r = lcB_checkpendroot(&x)) != LC_OK) break;
         if ((r = lcB_flush(&x, lv)) != LC_OK) break;
-        lv = (int)c->levels, r = lcB_fill(&x, lv, scanner, ud);
     }
-    if (r >= 0 && x.rt_leaf) {
-        lcB_pushrt(&x, lv);
-        if (!lcB_packleafs(&x, lv)) r = lcB_flush(&x, lv);
-    } else if (r >= 0)
-        r = lcB_flush(&x, lv);
-    if (r != LC_OK)
-        for (i = 0; i <= lv; ++i) lcN_freechildren(c->S, &x.pend[i], lv - i);
+    if (r >= 0)
+        r = x.rt_leaf ? (lcB_pushrt(&x, lv),
+                         lcB_packleafs(&x, lv) ? LC_OK : lcB_flush(&x, lv))
+                      : lcB_flush(&x, lv);
     if (x.pend_root) lc_poolfree(&c->S->nodes, x.pend_root);
-    if (r >= 0) lc_seek(C, c, old_off + (c->bytes - old_bytes));
-    if (trailing && r >= 0) C->col += (unsigned)e;
-    return r;
+    if (r != LC_OK) {
+        for (i = 0; i <= lv; ++i) lcN_freechildren(c->S, &x.pend[i], lv - i);
+        return r;
+    }
+    lc_seek(C, c, old_off + (c->bytes - old_bytes));
+    return (trailing ? (C->col += (unsigned)e) : 0), LC_OK;
 }
 
 LC_NS_END

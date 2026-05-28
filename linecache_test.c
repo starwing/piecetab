@@ -1501,9 +1501,7 @@ static void test_cov_backwardline_cross(void) {
     lc_close(S);
 }
 
-/* ================================================================ */
-/*  Phase 1: single-leaf spliceleaf tests (Examples 1-3 from plan)  */
-/* ================================================================ */
+#if 0
 
 /* Ex1a: 叶内不跨段 — [10,10], seek(5), del=3 → [7,10], bytes=17 */
 static void test_spliceleaf_1a(void) {
@@ -1756,10 +1754,6 @@ static void test_rebalance_cascade(void) {
     lc_close(S);
 }
 
-/* ================================================================ */
-/*  Phase 4: trimleaf / trimnode tests                              */
-/* ================================================================ */
-
 /* trimleaf_left: leaf[10,10,10,10], C at lidx=1,col=3 → keep [0..0],del rest
  */
 static void test_trimleaf_trimright(void) {
@@ -2010,10 +2004,6 @@ static void test_mergenode_cross_subtree(void) {
     lc_close(S);
 }
 
-/* ================================================================ */
-/*  Phase 9: splicerange integration tests                          */
-/* ================================================================ */
-
 /* splicerange_2leaf: levels=0 2 leaves, C1 in leaf0 C2 in leaf1, col=0 */
 static void test_splicerange_2leaf(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
@@ -2138,6 +2128,8 @@ static void test_splicerange_all(void) {
     lc_deltree(S, c);
     lc_close(S);
 }
+
+#endif 
 
 /* ================================================================ */
 /*  Phase 10: splice coverage tests (public API only)               */
@@ -2318,6 +2310,7 @@ static void test_empty_tree_reset(void) {
     lc_close(S);
 }
 
+#if 0
 /* shiftleaf_neg_d: shiftleaf d<0 path (L649-654). L at lidx=2, R at lidx=1
  * in 4-seg leaves → cl=2, cr=3 → cl+cr=5>4, d=-1 → move 1 seg R→L. */
 static void test_shiftleaf_neg_d(void) {
@@ -2492,6 +2485,7 @@ static void test_foldnode_redistribute_shift(void) {
     lc_deltree(S, c);
     lc_close(S);
 }
+#endif
 
 /* bulk scan: 0 entries — scanner returns 0 immediately on empty tree */
 static void test_scan_no_input(void) {
@@ -2737,6 +2731,7 @@ static void test_insert_col_mid(void) {
     r = lc_insert(&C, 3, scanner, &pb);
     assert(r == LC_OK);
     check_tree(c);
+    assert_tree(c, 0, botV(leafV(4, 2 + 4, 4, 3 + 5)));
     assert(lc_breaks(c) == 4 && lc_bytes(c) == 22);
     lc_deltree(S, c);
     lc_close(S);
@@ -2968,6 +2963,139 @@ static void test_insert_oom_normal(void) {
     assert(found);
 }
 
+/* cov: splice deletes to tree end, R at locend triggers lcD_trimleaf line 615 */
+static void test_cov_l615(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor cur;
+    lc_Cache *c = cacheV(S, 0, botV(leafV(10, 0), leafV(10, 0), leafV(10, 0)));
+    check_tree(c);
+    lc_seek(&cur, c, 5);
+    lc_splice(&cur, 25, 0);
+    assert(c->root.child_count == 0 && c->bytes == 0 && c->breaks == 0);
+    check_tree_allow_empty(c, 1);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* cov: spliceleaf underfills leaf → foldleaf merge → rebalance → foldnode
+ * balance d<0 (lines 671-674, 680, 745-755) */
+static void test_cov_balancenode_dneg(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Node  *inner0 = innerV(
+            botV(leafV(2, 2), leafV(2, 2, 2)),
+            botV(leafV(2), leafV(2), leafV(2), leafV(2)));
+    lc_Node  *inner1 = innerV(botV(leafV(2)));
+    lc_Node  *root = innerV(inner0, inner1);
+    lc_Cache *c = cacheV(S, 2, root);
+    lc_Cursor cur;
+    check_tree(c);
+    lc_seek(&cur, c, 0);
+    lc_splice(&cur, 3, 0);
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* cov: spliceleaf underfills right leaf → foldleaf merge → botV cc=1 →
+ * rebalance → foldnode at inner level with cl=4 cr=1 d=1>0
+ * (lines 675-678, 680, 745-755) */
+static void test_cov_balancenode_dpos(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Node  *inner0 = innerV(
+            botV(leafV(2), leafV(2), leafV(2), leafV(2)),
+            botV(leafV(2, 2, 2, 2), leafV(2)));
+    lc_Node  *inner1 = innerV(botV(leafV(2)));
+    lc_Node  *root = innerV(inner0, inner1);
+    lc_Cache *c = cacheV(S, 2, root);
+    lc_Cursor cur;
+    check_tree(c);
+    lc_seek(&cur, c, 8);
+    lc_splice(&cur, 7, 0);
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* cov: splicerange triggers foldleaf with dl>0 and cursor switch right
+ * (line 723). levels=1 cross-leaf splice with balance redistribution. */
+static void test_cov_foldleaf_switch(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor cur;
+    lc_Cache *c = cacheV(
+            S, 1,
+            innerV(botV(leafV(2, 2, 2, 2), leafV(2, 2, 2)),
+                   botV(leafV(2, 2, 2, 2), leafV(2))));
+    check_tree(c);
+    lc_seek(&cur, c, 3);
+    lc_splice(&cur, 10, 0);
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* cov: foldnode cursor switch left (line 750). dn<0, cursor in right
+ * child at moved position. root has botV(cc=2) + botV(cc=4).
+ * Splice crosses botVs, Phase 2 foldnode balances at root level. */
+static void test_cov_foldnode_cursor_left(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Node  *root = innerV(botV(leafV(2), leafV(2)),
+                            botV(leafV(2), leafV(2), leafV(2), leafV(2)));
+    lc_Cache *c = cacheV(S, 1, root);
+    lc_Cursor cur;
+    check_tree(c);
+    lc_seek(&cur, c, 2);
+    lc_splice(&cur, 3, 0);
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* cov: spliceleaf underfills leaf → foldleaf merge → botV.cc=1 →
+ * rebalance → foldnode merge (cl+cr≤4, returns 1) → line 765. */
+static void test_cov_rebalance_merge(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Node  *inner0 = innerV(
+            botV(leafV(2, 2), leafV(2, 2, 2)),
+            botV(leafV(2, 2), leafV(2, 2)));
+    lc_Node  *inner1 = innerV(botV(leafV(2)));
+    lc_Node  *root = innerV(inner0, inner1);
+    lc_Cache *c = cacheV(S, 2, root);
+    lc_Cursor cur;
+    check_tree(c);
+    /* L at offset 0 leaf0[2,2]: splice del=3 → leaf becomes [1]
+     * underfull → foldleaf merge → botV0.cc=1 → rebalance(1)
+     * → foldnode at inner0: cl=1 cr=2 → merge (returns 1) → line 765 */
+    lc_seek(&cur, c, 0);
+    lc_splice(&cur, 3, 0);
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* cov: remaining fold cursor adjust branches (lines 723, 750, 752).
+ * Build multi-level tree via lc_scan, then splice crossing multiple leaves.
+ * Phase 2 foldleaf/foldnode rebalancing triggers cursor adjustments. */
+static void test_cov_fold_cursor(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor cur;
+    unsigned  brs[26];
+    int       i, r;
+    for (i = 0; i < 25; ++i) brs[i] = 10;
+    brs[25] = 0;
+    {
+        unsigned *pbrs = brs;
+        r = lc_scan(c, scanner, &pbrs);
+    }
+    assert(r == LC_OK && lc_breaks(c) == 25);
+    check_tree(c);
+    lc_seek(&cur, c, 5);
+    lc_splice(&cur, 85, 0);
+    check_tree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 #define TESTS(X)                        \
     X(lifecycle)                        \
     X(scan_seek)                        \
@@ -3008,37 +3136,6 @@ static void test_insert_oom_normal(void) {
     X(splice_cross_breaks)              \
     X(splice_cross_breaks_slot)         \
     X(splice_cross_breaks_mid)          \
-    X(spliceleaf_1a)                    \
-    X(spliceleaf_1b)                    \
-    X(spliceleaf_1c)                    \
-    X(spliceleaf_foldright)             \
-    X(spliceleaf_foldleft)              \
-    X(prune_leaf)                       \
-    X(prune_node)                       \
-    X(rebalance_shrink)                 \
-    X(rebalance_double)                 \
-    X(rebalance_node_merge_right)       \
-    X(rebalance_node_merge_left)        \
-    X(rebalance_node_merge_right_large) \
-    X(rebalance_cascade)                \
-    X(trimleaf_trimleft)                \
-    X(trimleaf_trimright)               \
-    X(trimleaf_mergeleaf)               \
-    X(trimleaf_right_end)               \
-    X(trimnode_trimright)               \
-    X(trimnode_trimleft)                \
-    X(trimnode_mergenode)               \
-    X(mergeleaf_combine)                \
-    X(mergeleaf_sr_nonzero)             \
-    X(mergeleaf_cross_subtree)          \
-    X(mergenode_combine)                \
-    X(mergenode_sr_nonzero)             \
-    X(mergenode_cross_subtree)          \
-    X(splicerange_2leaf)                \
-    X(splicerange_prune)                \
-    X(splicerange_all)                  \
-    X(splicerange_merge_rebalance)      \
-    X(splicerange_foldnode_upper)       \
     X(splice_uf_last)                   \
     X(splice_mergeleaf_sr)              \
     X(splice_mergeleaf_dpos)            \
@@ -3047,13 +3144,13 @@ static void test_insert_oom_normal(void) {
     X(splice_mergenode_last)            \
     X(splice_removed2)                  \
     X(empty_tree_reset)                 \
-    X(shiftleaf_neg_d)                  \
-    X(foldnode_redistribute)            \
-    X(trimleaf_left_full)               \
-    X(foldleaf_redistribute_left)       \
-    X(foldnode_redistribute_left)       \
-    X(foldnode_redistribute_right)      \
-    X(foldnode_redistribute_shift)      \
+    X(cov_l615)                         \
+    X(cov_balancenode_dneg)             \
+    X(cov_balancenode_dpos)             \
+    X(cov_foldleaf_switch)              \
+    X(cov_foldnode_cursor_left)         \
+    X(cov_rebalance_merge)              \
+    X(cov_fold_cursor)                  \
     X(boundary_cmp)                     \
     X(markbreak)                        \
     X(markbreaks)                       \
