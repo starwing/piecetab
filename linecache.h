@@ -108,7 +108,6 @@ LC_API unsigned lc_col(const lc_Cursor *C);
 
 /* mutation breaks */
 LC_API int lc_markbreak(lc_Cursor *C, unsigned br);
-LC_API int lc_markbreaks(lc_Cursor *C, lc_Scanner *scanner, void *ud);
 LC_API int lc_clearbreaks(lc_Cursor *C, size_t len);
 
 /* insert texts */
@@ -1137,14 +1136,6 @@ static int lcB_fillflush(lcB_Ctx *x, lc_Scanner *sc, void *ud, int lv) {
     if (r != LC_OK)
         for (i = 0; i <= lv; ++i) lcN_freechildren(c->S, &x->pend[i], lv - i);
     return r;
-}
-
-LC_API int lc_markbreaks(lc_Cursor *C, lc_Scanner *scanner, void *ud) {
-    unsigned br;
-    int      r;
-    while ((br = scanner(ud, C->tree->bytes)) > 0)
-        if ((r = lc_markbreak(C, br)) < 0) return r;
-    return LC_OK;
 }
 
 LC_API int lc_scan(lc_Cache *c, lc_Scanner *scanner, void *ud) {

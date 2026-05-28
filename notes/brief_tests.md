@@ -105,7 +105,9 @@
     X(markbreak_root_split)             \
     X(markbreak_split_right)            \
     X(markbreak_root_split_on_add)      \
-    X(markbreak_crossleaf)
+    X(markbreak_crossleaf)              \
+    X(insert_oom_col0)                  \
+    X(insert_param_null)
 ```
 
 **注册机制**：main() 将 TESTS 宏展开为函数指针表 (2758-2768 行)：
@@ -675,6 +677,7 @@ int main(int argc, char *argv[]) {
 | `lc_clearbreaks(&cur, len)` | 清除光标后的换行符 |
 | `lc_splice(&cur, del, ins)` | 从光标处删除 del 字节，插入 ins 虚拟字节 |
 | `lcD_splicerange(&C1, &C2)` | 删除 C1→C2 之间的全部内容（两个 cursor 之间） |
+| `lc_insert(&cur, e, scanner, ud)` | 在光标处插入文本（scanner 提供换行位置，e 为续行字节） |
 | `lc_bytes(c)` | 树的字节总数 |
 | `lc_breaks(c)` | 树的换行符总数 |
 | `lc_offset(&cur)` | 光标的字节偏移 |
@@ -682,3 +685,42 @@ int main(int argc, char *argv[]) {
 | `lc_col(&cur)` | 光标在当前行中的列偏移 |
 | `lc_linelen(&cur)` | 光标所在行的长度 |
 | `lc_reset(s)` | 重置 lc_State 的内存池 |
+
+---
+
+## 九、lc_insert 及其 OOM 测试
+
+### 9.1 lc_insert 流程
+
+```
+lc_insert(C, e, scanner, ud):
+  1. 参数校验: C==NULL || C->tree==NULL || scanner==NULL → LC_ERRPARAM
+  2. 判断 trailing (光标在树尾)
+  3. 若非 trailing 且 scanner 返回 0 → lcB_skipinsert (仅增加 col)
+  4. 初始化 lcB_Ctx (trailing → lcB_init, 否则 → lcB_initat)
+  5. 若非 trailing → lcB_applyfirst (切开叶+处理首个 br)
+  6. while 循环: lcB_fill → lcB_checkpendroot → lcB_flush
+  7. 推入 rt_leaf + flush 剩余 pend
+  8. 错误清理 (lcN_freechildren)
+```
+
+### 9.2 lcB_applyfirst 中 OOM 的白盒测试技巧
+
+`lcB_applyfirst` 的 `else` 分支（`C->col == 0`）触发 `lc_poolalloc` 分配新叶。然池分配器仅在空闲链表为空时方调用底层 allocf 分配新页，常规 insert 不触发分配器调用。
+
+为覆盖此 OOM 路径，需用白盒手法：
+
+1. 以 `test_alloc` 构建树并初始化状态（池空闲链已填充）
+2. 遍历 `S->leaves.freed` 单链表，将其截断为仅剩 1 个空闲对象
+3. 将 `S->allocf` 换为 `oom_alloc`，`oom_cnt = 1`
+4. `lc_insert` 中 `lcB_splitleafat` 取走最后 1 个空闲叶 → `lcB_applyfirst` 之 else 分支再分配 → 空闲链空 → 触发新页分配 → oom_alloc 返回 NULL → LC_ERRMEM
+
+### 9.3 新增测试
+
+**`test_insert_oom_col0`**：覆盖 `lcB_applyfirst` 中 `C->col == 0` 分支的 OOM（`linecache.h:1247`）。
+
+**`test_insert_param_null`**：覆盖 `lc_insert` 入参校验（`linecache.h:1274`），测试 C==NULL、C->tree==NULL、scanner==NULL 三种情况。
+
+### 9.4 死码说明
+
+`lcB_rootpush` 中原 L1079 (`x->c.paths[1] = &nr->children[i - (int)nl->child_count]`) 经路径分析确认为死码。`lcB_merge` 始终将 `paths[0]` 更新至有效位置，`i < nl->child_count` 恒成立，else 分支不可达。已删除此行。

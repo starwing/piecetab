@@ -15,6 +15,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "linecache.h"
+
 /* ================================================================ */
 /*  allocators                                                       */
 /* ================================================================ */
@@ -22,7 +24,10 @@
 LC_STATIC void *test_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
     (void)ud;
     (void)osize;
-    if (nsize == 0) { free(ptr); return NULL; }
+    if (nsize == 0) {
+        free(ptr);
+        return NULL;
+    }
     return realloc(ptr, nsize);
 }
 
@@ -31,7 +36,10 @@ LC_STATIC int oom_cnt;
 LC_STATIC void *oom_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
     (void)ud;
     (void)osize;
-    if (nsize == 0) { free(ptr); return NULL; }
+    if (nsize == 0) {
+        free(ptr);
+        return NULL;
+    }
     if (--oom_cnt == 0) return NULL;
     return realloc(ptr, nsize);
 }
@@ -71,9 +79,7 @@ LC_STATIC void lc_checktree_allow_empty(const lc_Cache *c, int allow_empty) {
     assert(c->breaks == lcN_sumbreaks(&c->root, 0, c->root.child_count));
 }
 
-LC_STATIC void check_tree(const lc_Cache *c) {
-    lc_checktree_allow_empty(c, 0);
-}
+LC_STATIC void check_tree(const lc_Cache *c) { lc_checktree_allow_empty(c, 0); }
 
 /* ================================================================ */
 /*  tree dump                                                        */
@@ -90,8 +96,8 @@ LC_STATIC void lc_dumpnode(const lc_Node *n, int l, int levels) {
         for (i = 0; i < cc; ++i) {
             lc_Leaf *leaf = (lc_Leaf *)n->children[i];
             unsigned s, sc = (unsigned)n->breaks[i];
-            fprintf(stderr, "%*sL%u leaf[%u]=%p segs=%u bytes:",
-                    (l + 1) * 2, "", l + 1, i, (void *)leaf, sc);
+            fprintf(stderr, "%*sL%u leaf[%u]=%p segs=%u bytes:", (l + 1) * 2,
+                    "", l + 1, i, (void *)leaf, sc);
             for (s = 0; s < sc; ++s) fprintf(stderr, " %u", leaf->bytes[s]);
             fprintf(stderr, "\n");
         }
@@ -102,7 +108,8 @@ LC_STATIC void lc_dumpnode(const lc_Node *n, int l, int levels) {
 
 LC_STATIC void lc_dumptree(const lc_Cache *c, const char *tag) {
     fprintf(stderr,
-            "=== lc_dumptree %s: levels=%u root.cc=%u bytes=%zu breaks=%zu ===\n",
+            "=== lc_dumptree %s: levels=%u root.cc=%u bytes=%zu breaks=%zu "
+            "===\n",
             tag, c->levels, c->root.child_count, c->bytes, c->breaks);
     lc_dumpnode(&c->root, 0, c->levels);
 }
@@ -124,8 +131,8 @@ LC_STATIC int lc_comparenode(
             unsigned       j, sc = (unsigned)a->breaks[i];
             for (j = 0; j < sc; ++j)
                 if (la->bytes[j] != lb->bytes[j]) return 0;
-        } else if (!lc_comparenode(
-                           a->children[i], b->children[i], l + 1, levels))
+        } else if (
+                !lc_comparenode(a->children[i], b->children[i], l + 1, levels))
             return 0;
     }
     return 1;
@@ -216,7 +223,8 @@ LC_STATIC lc_Cache *cacheV(lc_State *S, unsigned levels, lc_Node *root) {
     c->levels = levels;
     c->root = *root;
     lc_poolfree(&S->nodes, root);
-    c->bytes = 0; c->breaks = 0;
+    c->bytes = 0;
+    c->breaks = 0;
     for (i = 0; i < c->root.child_count; i++)
         c->bytes += c->root.bytes[i], c->breaks += c->root.breaks[i];
     lc_checktree_allow_empty(c, 1);
@@ -246,7 +254,10 @@ LC_STATIC lc_Cache *cacheV(lc_State *S, unsigned levels, lc_Node *root) {
 /*  scanner utilities                                                */
 /* ================================================================ */
 
-typedef struct { int cnt; unsigned val; } sscan_t;
+typedef struct {
+    int      cnt;
+    unsigned val;
+} sscan_t;
 
 LC_STATIC unsigned sscan(void *ud, size_t prev) {
     sscan_t *s = (sscan_t *)ud;
@@ -257,9 +268,9 @@ LC_STATIC unsigned sscan(void *ud, size_t prev) {
 }
 
 typedef struct {
-    int       cnt[4];
-    unsigned  val[4];
-    int       phase;
+    int      cnt[4];
+    unsigned val[4];
+    int      phase;
 } rscan_t;
 
 LC_STATIC unsigned rscan(void *ud, size_t prev) {
@@ -285,10 +296,14 @@ LC_STATIC unsigned rscan(void *ud, size_t prev) {
  *
  * LC_TEST_MAIN constructs the entries table and the main function.  */
 
-typedef struct { const char *name; void (*fn)(void); } lc_test_entry;
+typedef struct {
+    const char *name;
+    void (*fn)(void);
+} lc_test_entry;
 
-LC_STATIC int lc_test_main(const char *banner, const lc_test_entry *entries,
-                            int argc, char *argv[]) {
+LC_STATIC int lc_test_main(
+        const char *banner, const lc_test_entry *entries, int argc,
+        char *argv[]) {
     int i, j;
     printf("=== %s ===\n", banner);
     if (argc == 1) {
@@ -317,19 +332,20 @@ LC_STATIC int lc_test_main(const char *banner, const lc_test_entry *entries,
                 if (only) break;
             }
         }
-        if (!found) { fprintf(stderr, "Unknown test: %s\n", name); return 1; }
+        if (!found) {
+            fprintf(stderr, "Unknown test: %s\n", name);
+            return 1;
+        }
     }
     return 0;
 }
 
-#define LC_TEST_MAIN(banner)                                  \
-    static const lc_test_entry _test_entries[] = {            \
-        TESTS(X)                                              \
-        {NULL, NULL},                                         \
-    };                                                        \
-    int main(int argc, char *argv[]) {                        \
-        (void)&innerV_;                                       \
-        return lc_test_main(banner, _test_entries, argc, argv);\
+#define LC_TEST_MAIN(banner)                                    \
+    int main(int argc, char *argv[]) {                          \
+        static const lc_test_entry _test_entries[] = {          \
+                TESTS(X){NULL, NULL},                           \
+        };                                                      \
+        return lc_test_main(banner, _test_entries, argc, argv); \
     }
 
 #endif /* LC_TESTS_H */

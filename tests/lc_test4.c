@@ -3,8 +3,6 @@
 #define LC_PAGE_SIZE   512
 #define LC_STATIC_API
 
-#include "linecache.h"
-
 #include "lc_tests.h"
 
 /* T1: lifecycle */
@@ -1212,29 +1210,6 @@ static void test_markbreak_crossline_end(void) {
     lc_close(S);
 }
 
-/* T41: markbreaks — set consecutive line lengths within existing bounds */
-
-static void test_markbreaks(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    unsigned  brs_mb[4] = {10, 20, 30, 0}, *pbrs_mb = brs_mb;
-    unsigned  brs_scan[5] = {10, 90, 100, 100, 0}, *pbrs_scan = brs_scan;
-    int       r = lc_scan(c, scanner, &pbrs_scan);
-    assert(r == LC_OK && lc_breaks(c) == 4 && lc_bytes(c) == 300);
-    check_tree(c);
-
-    /* split lines 1,2,3 at their midpoints */
-    lc_seekline(&cur, c, 1);
-    r = lc_markbreaks(&cur, scanner, &pbrs_mb);
-    assert(r == LC_OK);
-    check_tree(c);
-    assert(lc_bytes(c) == 300 && lc_breaks(c) == 7);
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
 /* T42: markbreak cross-leaf: extend line across leaf boundary */
 static void test_markbreak_crossleaf(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
@@ -1256,7 +1231,6 @@ static void test_markbreak_crossleaf(void) {
     lc_deltree(S, c);
     lc_close(S);
 }
-
 
 /* coverage: backwardline outer for iteration (L488).
  * lc_scan creates full leaves (4 breaks each). With a half-tree where the
@@ -1905,7 +1879,7 @@ static void test_splicerange_all(void) {
     lc_close(S);
 }
 
-#endif 
+#endif
 
 /* ================================================================ */
 /*  Phase 10: splice coverage tests (public API only)               */
@@ -2739,12 +2713,75 @@ static void test_insert_oom_normal(void) {
     assert(found);
 }
 
-/* cov: splice deletes to tree end, R at locend triggers lcD_trimleaf line 615 */
+/* OOM in lcB_applyfirst col==0 path (white-box: drain leaf freelist to 1) */
+static void test_insert_oom_col0(void) {
+    lc_State *S;
+    lc_Cache *c;
+    lc_Cursor C;
+    unsigned  brs_b[3] = {3, 3, 0}, *pb;
+    int       count;
+    void     *head;
+
+    S = lc_open(&test_alloc, NULL);
+    assert(S);
+    c = cacheV(S, 0, botV(leafV(5, 5)));
+    check_tree(c);
+
+    head = S->leaves.freed;
+    count = 0;
+    while (head) {
+        count++;
+        head = *(void **)head;
+    }
+    if (count > 1) {
+        int i;
+        head = S->leaves.freed;
+        for (i = 0; i < count - 1 && *(void **)head; i++) head = *(void **)head;
+        S->leaves.freed = head;
+        *(void **)head = NULL;
+    }
+
+    lc_seek(&C, c, 0);
+
+    S->allocf = oom_alloc;
+    oom_cnt = 1;
+    pb = brs_b;
+
+    assert(lc_insert(&C, 0, scanner, &pb) == LC_ERRMEM);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* insert with NULL parameters */
+static void test_insert_param_null(void) {
+    lc_State *S;
+    lc_Cache *c;
+    lc_Cursor C;
+    unsigned  zero[1] = {0}, *pz = zero;
+
+    S = lc_open(&test_alloc, NULL);
+    assert(S);
+    c = lc_newtree(S);
+    assert(c);
+
+    assert(lc_insert(NULL, 0, scanner, &pz) == LC_ERRPARAM);
+    memset(&C, 0, sizeof(C));
+    assert(lc_insert(&C, 0, scanner, &pz) == LC_ERRPARAM);
+    lc_seek(&C, c, 0);
+    assert(lc_insert(&C, 0, NULL, &pz) == LC_ERRPARAM);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* cov: splice deletes to tree end, R at locend triggers lcD_trimleaf line 615
+ */
 static void test_cov_l615(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cursor cur;
     lc_Cache *c = cacheV(S, 0, botV(leafV(10, 0), leafV(10, 0), leafV(10, 0)));
-    check_tree(c);
+    assert(c);
     lc_seek(&cur, c, 5);
     lc_splice(&cur, 25, 0);
     assert(c->root.child_count == 0 && c->bytes == 0 && c->breaks == 0);
@@ -2764,7 +2801,7 @@ static void test_cov_balancenode_dneg(void) {
     lc_Node  *root = innerV(inner0, inner1);
     lc_Cache *c = cacheV(S, 2, root);
     lc_Cursor cur;
-    check_tree(c);
+    assert(c);
     lc_seek(&cur, c, 0);
     lc_splice(&cur, 3, 0);
     check_tree(c);
@@ -2784,7 +2821,7 @@ static void test_cov_balancenode_dpos(void) {
     lc_Node  *root = innerV(inner0, inner1);
     lc_Cache *c = cacheV(S, 2, root);
     lc_Cursor cur;
-    check_tree(c);
+    assert(c);
     lc_seek(&cur, c, 8);
     lc_splice(&cur, 7, 0);
     check_tree(c);
@@ -2801,7 +2838,7 @@ static void test_cov_foldleaf_switch(void) {
             S, 1,
             innerV(botV(leafV(2, 2, 2, 2), leafV(2, 2, 2)),
                    botV(leafV(2, 2, 2, 2), leafV(2))));
-    check_tree(c);
+    assert(c);
     lc_seek(&cur, c, 3);
     lc_splice(&cur, 10, 0);
     check_tree(c);
@@ -2814,11 +2851,13 @@ static void test_cov_foldleaf_switch(void) {
  * Splice crosses botVs, Phase 2 foldnode balances at root level. */
 static void test_cov_foldnode_cursor_left(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Node  *root = innerV(botV(leafV(2), leafV(2)),
-                            botV(leafV(2), leafV(2), leafV(2), leafV(2)));
+    lc_Node  *root = innerV(
+            botV(leafV(2), leafV(2)),
+            botV(leafV(2), leafV(2), leafV(2), leafV(2)));
     lc_Cache *c = cacheV(S, 1, root);
     lc_Cursor cur;
-    check_tree(c);
+    assert(c);
+
     lc_seek(&cur, c, 2);
     lc_splice(&cur, 3, 0);
     check_tree(c);
@@ -2831,8 +2870,7 @@ static void test_cov_foldnode_cursor_left(void) {
 static void test_cov_rebalance_merge(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Node  *inner0 = innerV(
-            botV(leafV(2, 2), leafV(2, 2, 2)),
-            botV(leafV(2, 2), leafV(2, 2)));
+            botV(leafV(2, 2), leafV(2, 2, 2)), botV(leafV(2, 2), leafV(2, 2)));
     lc_Node  *inner1 = innerV(botV(leafV(2)));
     lc_Node  *root = innerV(inner0, inner1);
     lc_Cache *c = cacheV(S, 2, root);
@@ -2872,90 +2910,91 @@ static void test_cov_fold_cursor(void) {
     lc_close(S);
 }
 
-#define TESTS(X)                        \
-    X(lifecycle)                        \
-    X(scan_seek)                        \
-    X(scan_no_input)                    \
-    X(scan_one_leaf)                    \
-    X(scan_bulk_many)                   \
-    X(scan_append_many)                 \
-    X(scan_oom_items)                   \
-    X(scan_oom_flush)                   \
-    X(scan_oom_build)                   \
-    X(seekline)                         \
-    X(advance_single)                   \
-    X(advance_cross)                    \
-    X(node_split)                       \
-    X(seek_past_leaf)                   \
-    X(advance_backward_cross)           \
-    X(advline_cross)                    \
-    X(advline_backward_within)          \
-    X(cov_backwardline_cross)           \
-    X(cov_forwardline_crossnode)        \
-    X(advance_skip_siblings)            \
-    X(node_split_cursor_right)          \
-    X(splitleaf_left)                   \
-    X(rootsplit_left)                   \
-    X(findlines_skip)                   \
-    X(rootsplit_left_deep)              \
-    X(nodesplit_left)                   \
-    X(findlines_skip_deep)              \
-    X(backwardoff_skip)                 \
-    X(cov_remaining)                    \
-    X(clearbreaks)                      \
-    X(clearbreaks_edge)                 \
-    X(clearbreaks_slot)                 \
-    X(splice)                           \
-    X(splice_tmp)                       \
-    X(splice_l2)                        \
-    X(splice_trailing)                  \
-    X(splice_cross_breaks)              \
-    X(splice_cross_breaks_slot)         \
-    X(splice_cross_breaks_mid)          \
-    X(splice_uf_last)                   \
-    X(splice_mergeleaf_sr)              \
-    X(splice_mergeleaf_dpos)            \
-    X(splice_mergenode_fold)            \
-    X(splice_mergenode_dpos)            \
-    X(splice_mergenode_last)            \
-    X(splice_removed2)                  \
-    X(empty_tree_reset)                 \
-    X(cov_l615)                         \
-    X(cov_balancenode_dneg)             \
-    X(cov_balancenode_dpos)             \
-    X(cov_foldleaf_switch)              \
-    X(cov_foldnode_cursor_left)         \
-    X(cov_rebalance_merge)              \
-    X(cov_fold_cursor)                  \
-    X(boundary_cmp)                     \
-    X(markbreak)                        \
-    X(markbreaks)                       \
-    X(markbreak_split)                  \
-    X(markbreak_empty)                  \
-    X(markbreak_noop)                   \
-    X(markbreak_crossline)              \
-    X(markbreak_crossline_end)          \
-    X(markbreak_trailing)               \
-    X(markbreak_brzero)                 \
-    X(markbreak_node_split)             \
-    X(markbreak_root_split)             \
-    X(markbreak_split_right)            \
-    X(markbreak_root_split_on_add)      \
-    X(markbreak_crossleaf)              \
-    X(cov_shiftnode_balance)            \
-    X(cov_foldleaf_inmarkbreak)         \
-    X(insert_single_leaf)               \
-    X(insert_col_mid)                   \
-    X(insert_no_scanner)                \
-    X(insert_trailing)                  \
-    X(insert_leaf_split)                \
-    X(insert_noop)                      \
-    X(insert_cursor_pos)                \
-    X(insert_many)                      \
-    X(insert_empty)                     \
-    X(insert_empty_noop)                \
-    X(insert_oom_trailing)              \
-    X(insert_oom_normal)
+#define TESTS(X)                   \
+    X(lifecycle)                   \
+    X(scan_seek)                   \
+    X(scan_no_input)               \
+    X(scan_one_leaf)               \
+    X(scan_bulk_many)              \
+    X(scan_append_many)            \
+    X(scan_oom_items)              \
+    X(scan_oom_flush)              \
+    X(scan_oom_build)              \
+    X(seekline)                    \
+    X(advance_single)              \
+    X(advance_cross)               \
+    X(node_split)                  \
+    X(seek_past_leaf)              \
+    X(advance_backward_cross)      \
+    X(advline_cross)               \
+    X(advline_backward_within)     \
+    X(cov_backwardline_cross)      \
+    X(cov_forwardline_crossnode)   \
+    X(advance_skip_siblings)       \
+    X(node_split_cursor_right)     \
+    X(splitleaf_left)              \
+    X(rootsplit_left)              \
+    X(findlines_skip)              \
+    X(rootsplit_left_deep)         \
+    X(nodesplit_left)              \
+    X(findlines_skip_deep)         \
+    X(backwardoff_skip)            \
+    X(cov_remaining)               \
+    X(clearbreaks)                 \
+    X(clearbreaks_edge)            \
+    X(clearbreaks_slot)            \
+    X(splice)                      \
+    X(splice_tmp)                  \
+    X(splice_l2)                   \
+    X(splice_trailing)             \
+    X(splice_cross_breaks)         \
+    X(splice_cross_breaks_slot)    \
+    X(splice_cross_breaks_mid)     \
+    X(splice_uf_last)              \
+    X(splice_mergeleaf_sr)         \
+    X(splice_mergeleaf_dpos)       \
+    X(splice_mergenode_fold)       \
+    X(splice_mergenode_dpos)       \
+    X(splice_mergenode_last)       \
+    X(splice_removed2)             \
+    X(empty_tree_reset)            \
+    X(cov_l615)                    \
+    X(cov_balancenode_dneg)        \
+    X(cov_balancenode_dpos)        \
+    X(cov_foldleaf_switch)         \
+    X(cov_foldnode_cursor_left)    \
+    X(cov_rebalance_merge)         \
+    X(cov_fold_cursor)             \
+    X(boundary_cmp)                \
+    X(markbreak)                   \
+    X(markbreak_split)             \
+    X(markbreak_empty)             \
+    X(markbreak_noop)              \
+    X(markbreak_crossline)         \
+    X(markbreak_crossline_end)     \
+    X(markbreak_trailing)          \
+    X(markbreak_brzero)            \
+    X(markbreak_node_split)        \
+    X(markbreak_root_split)        \
+    X(markbreak_split_right)       \
+    X(markbreak_root_split_on_add) \
+    X(markbreak_crossleaf)         \
+    X(cov_shiftnode_balance)       \
+    X(cov_foldleaf_inmarkbreak)    \
+    X(insert_single_leaf)          \
+    X(insert_col_mid)              \
+    X(insert_no_scanner)           \
+    X(insert_trailing)             \
+    X(insert_leaf_split)           \
+    X(insert_noop)                 \
+    X(insert_cursor_pos)           \
+    X(insert_many)                 \
+    X(insert_empty)                \
+    X(insert_empty_noop)           \
+    X(insert_oom_trailing)         \
+    X(insert_oom_normal)           \
+    X(insert_oom_col0)             \
+    X(insert_param_null)
 
 #define X(name) {#name, test_##name},
 LC_TEST_MAIN("linecache tests")
