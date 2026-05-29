@@ -79,7 +79,9 @@ LC_STATIC void lc_checktree_allow_empty(const lc_Cache *c, int allow_empty) {
     assert(c->breaks == lcN_sumbreaks(&c->root, 0, c->root.child_count));
 }
 
-LC_STATIC void check_tree(const lc_Cache *c) { lc_checktree_allow_empty(c, 0); }
+LC_STATIC void lc_checktree(const lc_Cache *c) {
+    lc_checktree_allow_empty(c, 0);
+}
 
 /* ================================================================ */
 /*  tree dump                                                        */
@@ -254,35 +256,47 @@ LC_STATIC lc_Cache *cacheV(lc_State *S, unsigned levels, lc_Node *root) {
 /*  scanner utilities                                                */
 /* ================================================================ */
 
-typedef struct {
-    int      cnt;
-    unsigned val;
-} sscan_t;
+#define lc_scanV(c, ...)                                \
+    do {                                                \
+        unsigned brs[] = {__VA_ARGS__, 0}, *pbrs = brs; \
+        int      r = lc_scan(c, lc_scanner, &pbrs);     \
+        assert(r == LC_OK);                             \
+    } while (0)
 
-LC_STATIC unsigned sscan(void *ud, size_t prev) {
-    sscan_t *s = (sscan_t *)ud;
+#define lc_rscanV(c, ...)                               \
+    do {                                                \
+        unsigned brs[] = {__VA_ARGS__, 0}, *pbrs = brs; \
+        int      r = lc_scan(c, lc_rscanner, &pbrs);    \
+        assert(r == LC_OK);                             \
+    } while (0)
+
+/* lc_scanner: read unsigned values one by one until 0.
+ *   unsigned brs[] = {10, 15, 15, 0}, *p = brs;
+ *   lc_scan(c, lc_scanner, &p); */
+LC_STATIC unsigned lc_scanner(void *ud, size_t prev) {
+    unsigned **p = (unsigned **)ud;
     (void)prev;
-    if (s->cnt <= 0) return 0;
-    s->cnt--;
-    return s->val;
+    if (!p || !*p) return 0;
+    return *(*p)++;
 }
 
-typedef struct {
-    int      cnt[4];
-    unsigned val[4];
-    int      phase;
-} rscan_t;
-
-LC_STATIC unsigned rscan(void *ud, size_t prev) {
-    rscan_t *r = (rscan_t *)ud;
+/* lc_rscanner: read [count, value] pairs, repeat value count times.
+ * Terminates when count == 0.
+ *   unsigned brs[] = {10, 1, 0}, *p = brs;
+ *   lc_scan(c, lc_rscanner, &p);   // 10 breaks of 1 byte each
+ *
+ * Note: modifies brs[] array in-place (decrements counts). Between
+ * multiple lc_scan calls on the same array, reinitialize p or the
+ * array contents. */
+LC_STATIC unsigned lc_rscanner(void *ud, size_t prev) {
+    unsigned **p = (unsigned **)ud;
+    unsigned  *cur;
     (void)prev;
-    for (; r->phase < 4; r->phase++) {
-        if (r->cnt[r->phase] > 0) {
-            r->cnt[r->phase]--;
-            return r->val[r->phase];
-        }
-    }
-    return 0;
+    if (!p || !*p) return 0;
+    cur = *p;
+    if (cur[0] == 0) return 0;
+    if (--cur[0] == 0) *p = cur + 2;
+    return cur[1];
 }
 
 /* ================================================================ */
