@@ -17,6 +17,9 @@
 
 #include "linecache.h"
 
+LC_STATIC void lc_dumptree(const lc_Cache *c, const char *tag);
+LC_STATIC void lc_dumpcursor(const lc_Cursor *C, const char *tag);
+
 /* ================================================================ */
 /*  allocators                                                       */
 /* ================================================================ */
@@ -31,42 +34,56 @@ LC_STATIC void *test_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
     return realloc(ptr, nsize);
 }
 
-LC_STATIC int oom_cnt;
-
 LC_STATIC void *oom_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
-    (void)ud;
+    int *cnt = (int *)ud;
     (void)osize;
     if (nsize == 0) {
         free(ptr);
         return NULL;
     }
-    if (--oom_cnt == 0) return NULL;
+    if (!cnt || *cnt <= 0) return NULL;
+    (*cnt)--;
     return realloc(ptr, nsize);
+}
+
+/* lc_localfill — fill pool freelist with count objects from a local buffer.
+ *   pool->freed is set to point to the first object in buf.
+ *   buf must hold count * pool->obj_size bytes.
+ *   Caller must ensure buf outlives the pool usage. */
+LC_STATIC void lc_localfill(lc_Pool *pool, void **op, void *buf, size_t count) {
+    size_t i;
+    size_t sz = pool->obj_size;
+    char  *base = (char *)buf;
+    assert(count > 0 && sz > sizeof(void *));
+    *op = pool->freed;
+    for (i = 1; i < count; ++i)
+        *(void **)(base + (i - 1) * sz) = (void *)(base + i * sz);
+    *(void **)(base + (count - 1) * sz) = NULL;
+    pool->freed = (void *)base;
+#ifdef LC_POOL_STATS
+    pool->live_obj += count;
+#endif
 }
 
 /* ================================================================ */
 /*  tree invariant checker                                           */
 /* ================================================================ */
 
-LC_STATIC size_t lc_checknode(
-        const lc_Node *n, int l, int levels, int allow_empty) {
-    int    i;
-    size_t bsum = 0, lsum = 0;
-    assert(allow_empty || n->child_count > 0);
+LC_STATIC void lc_checknode(const lc_Node *n, int rl, int mc) {
+    int i;
+    assert(n->child_count >= mc);
     assert(n->child_count <= LC_FANOUT);
     for (i = 0; i < (int)n->child_count; ++i) {
-        if (l == levels || levels == 0) {
+        lc_Node *c = n->children[i];
+        if (rl == 0) {
             assert(n->breaks[i] <= LC_LEAF_FANOUT);
-            bsum += n->bytes[i], lsum += n->breaks[i];
+            assert(n->bytes[i] == lcL_sumbytes((lc_Leaf *)c, 0, n->breaks[i]));
         } else {
-            size_t cb = lc_checknode(
-                    n->children[i], l + 1, levels, allow_empty);
-            assert(cb == n->bytes[i]);
-            bsum += cb, lsum += n->breaks[i];
+            lc_checknode(c, rl - 1, mc ? LC_FANOUT / 2 : 0);
+            assert(n->bytes[i] == lcN_sumbytes(c, 0, c->child_count));
+            assert(n->breaks[i] == lcN_sumbreaks(c, 0, c->child_count));
         }
     }
-    (void)lsum;
-    return bsum;
 }
 
 LC_STATIC void lc_checktree_allow_empty(const lc_Cache *c, int allow_empty) {
@@ -74,7 +91,7 @@ LC_STATIC void lc_checktree_allow_empty(const lc_Cache *c, int allow_empty) {
         assert(c->bytes == 0 && c->breaks == 0);
         return;
     }
-    lc_checknode(&c->root, 0, c->levels, allow_empty);
+    lc_checknode(&c->root, c->levels, allow_empty ? 0 : 1);
     assert(c->bytes == lcN_sumbytes(&c->root, 0, c->root.child_count));
     assert(c->breaks == lcN_sumbreaks(&c->root, 0, c->root.child_count));
 }
@@ -84,15 +101,46 @@ LC_STATIC void lc_checktree(const lc_Cache *c) {
 }
 
 /* ================================================================ */
+/*  cursor invariant checker                                         */
+/* ================================================================ */
+
+LC_STATIC void lc_checkcursor(lc_Cursor *C, size_t expected_off) {
+    size_t   sum_off = 0, sum_idx = 0;
+    lc_Node *p;
+    int      l, i;
+    assert(lc_offset(C) == expected_off);
+    for (l = 0; l <= lcK_levels(C); ++l) {
+        p = lcK_parent(C, l), i = lcK_idx(C, p, l);
+        assert(i >= 0 && i < (int)p->child_count);
+        assert(C->paths[l] == &p->children[i]);
+        sum_off += lcN_sumbytes(p, 0, i);
+        sum_idx += lcN_sumbreaks(p, 0, i);
+    }
+    assert(C->off == sum_off);
+    assert(C->idx == sum_idx + C->lidx);
+    if (C->tree->root.child_count > 0) {
+        lc_Leaf *lf = lcK_leaf(C);
+        p = lcK_parent(C, lcK_levels(C)), i = lcK_idx(C, p, lcK_levels(C));
+        assert(C->loff == lcL_sumbytes(lf, 0, C->lidx));
+        assert(C->lidx <= p->breaks[i]);
+        if (C->lidx < p->breaks[i]) assert(C->col < lf->bytes[C->lidx]);
+    }
+}
+
+/* ================================================================ */
 /*  tree dump                                                        */
 /* ================================================================ */
 
-LC_STATIC void lc_dumpnode(const lc_Node *n, int l, int levels) {
+LC_STATIC void lc_dumpnode(const lc_Node *n, int idx, int l, int levels) {
     unsigned i, cc = n->child_count;
-    fprintf(stderr, "%*sL%u=%p cc=%u", l * 2, "", l, (void *)n, cc);
+    if (l == 0)
+        fprintf(stderr, "Root(%p) cc=%u", (void *)n, cc);
+    else
+        fprintf(stderr, "%*sN%u_%u(%p) cc=%u", l * 2, "", l - 1, idx, (void *)n,
+                cc);
     for (i = 0; i < cc; ++i)
         fprintf(stderr, " b[%u]=%zu l[%u]=%zu", i, n->bytes[i], i,
-                (size_t)n->breaks[i]);
+                n->breaks[i]);
     fprintf(stderr, "\n");
     if (l == levels || levels == 0) {
         for (i = 0; i < cc; ++i) {
@@ -104,16 +152,27 @@ LC_STATIC void lc_dumpnode(const lc_Node *n, int l, int levels) {
             fprintf(stderr, "\n");
         }
     } else {
-        for (i = 0; i < cc; ++i) lc_dumpnode(n->children[i], l + 1, levels);
+        for (i = 0; i < cc; ++i) lc_dumpnode(n->children[i], i, l + 1, levels);
     }
 }
 
 LC_STATIC void lc_dumptree(const lc_Cache *c, const char *tag) {
-    fprintf(stderr,
-            "=== lc_dumptree %s: levels=%u root.cc=%u bytes=%zu breaks=%zu "
-            "===\n",
+    fprintf(stderr, "[TREE]\t %s: levels=%u root.cc=%u bytes=%zu breaks=%zu\n",
             tag, c->levels, c->root.child_count, c->bytes, c->breaks);
-    lc_dumpnode(&c->root, 0, c->levels);
+    lc_dumpnode(&c->root, -1, 0, c->levels);
+}
+
+LC_STATIC void lc_dumpcursor(const lc_Cursor *C, const char *tag) {
+    int l;
+    fprintf(stderr, "[CURSOR] %s: off=%zu idx=%zu loff=%zu lidx=%hu col=%u\n",
+            tag, C->off, C->idx, C->loff, C->lidx, C->col);
+    for (l = 0; l <= lcK_levels(C); ++l) {
+        lc_Node *p = lcK_parent(C, l);
+        int      i = lcK_idx(C, p, l);
+        fprintf(stderr, "  paths[%d]=%p p(%p)[%d/%u]=%p b=%zu l=%zu\n", l,
+                (void *)C->paths[l], (void *)p, i, p->child_count,
+                (void *)*C->paths[l], p->bytes[i], p->breaks[i]);
+    }
 }
 
 /* ================================================================ */
@@ -150,6 +209,53 @@ LC_STATIC int lc_comparetree(const lc_Cache *a, const lc_Cache *b) {
 }
 
 /* ================================================================ */
+/*  leaf sequence checker                                            */
+/* ================================================================ */
+/* Verify leaf break bytes match expected rle pairs {count,value,..,0} */
+
+LC_STATIC int lc_checkleaves_rec(
+        const lc_Node *n, int l, int levels, unsigned **brs) {
+    int i;
+    if (l == levels || levels == 0) {
+        for (i = 0; i < (int)n->child_count; i++) {
+            const lc_Leaf *lf;
+            int            j;
+            lf = (const lc_Leaf *)n->children[i];
+            for (j = 0; j < (int)n->breaks[i]; j++) {
+                unsigned *p;
+                p = *brs;
+                if (p[0] == 0) return 0;
+                if (p[1] != lf->bytes[j]) return 0;
+                if (--p[0] == 0) *brs = p + 2;
+            }
+        }
+    } else {
+        for (i = 0; i < (int)n->child_count; i++)
+            if (!lc_checkleaves_rec(n->children[i], l + 1, levels, brs))
+                return 0;
+    }
+    return 1;
+}
+
+LC_STATIC int lc_checkleaves(const lc_Cache *c, unsigned **brs) {
+    if (c->root.child_count == 0) return (**brs == 0);
+    if (!lc_checkleaves_rec(&c->root, 0, (int)c->levels, brs)) return 0;
+    return (**brs == 0);
+}
+
+#define checkleavesV(c, ...)                                            \
+    do {                                                                \
+        unsigned  brs__[] = {__VA_ARGS__, 0};                           \
+        unsigned *pbrs__ = brs__;                                       \
+        if (!lc_checkleaves((c), &pbrs__)) {                            \
+            fprintf(stderr, "checkleavesV FAILED at %s:%d\n", __FILE__, \
+                    __LINE__);                                          \
+            lc_dumptree((c), "checkleavesV failed");                    \
+            assert(0 && "checkleavesV failed");                         \
+        }                                                               \
+    } while (0)
+
+/* ================================================================ */
 /*  tree construction helpers (leafV / botV / innerV / cacheV)       */
 /* ================================================================ */
 
@@ -164,7 +270,7 @@ LC_STATIC lc_Node *leafV_(lc_State *S, ...) {
     va_start(ap, S);
     while (va_arg(ap, unsigned) != 0) n++;
     va_end(ap);
-    l = (lc_Leaf *)lc_poolalloc(S, &S->leaves);
+    l = (lc_Leaf *)lcP_alloc(S, &S->leaves);
     assert(l && n <= LC_LEAF_FANOUT);
     va_start(ap, S);
     for (i = 0; i < n; i++) l->bytes[i] = va_arg(ap, unsigned);
@@ -180,7 +286,7 @@ LC_STATIC lc_Node *botV_(lc_State *S, ...) {
     va_start(ap, S);
     while (va_arg(ap, lc_Node *) != NULL) cc++;
     va_end(ap);
-    n = (lc_Node *)lc_poolalloc(S, &S->nodes);
+    n = (lc_Node *)lcP_alloc(S, &S->nodes);
     assert(n && cc <= LC_FANOUT);
     n->child_count = (unsigned short)cc;
     va_start(ap, S);
@@ -204,7 +310,7 @@ LC_STATIC lc_Node *innerV_(lc_State *S, ...) {
     va_start(ap, S);
     while (va_arg(ap, lc_Node *) != NULL) cc++;
     va_end(ap);
-    n = (lc_Node *)lc_poolalloc(S, &S->nodes);
+    n = (lc_Node *)lcP_alloc(S, &S->nodes);
     assert(n && cc <= LC_FANOUT);
     n->child_count = (unsigned short)cc;
     va_start(ap, S);
@@ -224,7 +330,7 @@ LC_STATIC lc_Cache *cacheV(lc_State *S, unsigned levels, lc_Node *root) {
     assert(c && root->child_count <= LC_FANOUT);
     c->levels = levels;
     c->root = *root;
-    lc_poolfree(&S->nodes, root);
+    lcP_free(&S->nodes, root);
     c->bytes = 0;
     c->breaks = 0;
     for (i = 0; i < c->root.child_count; i++)
@@ -234,22 +340,22 @@ LC_STATIC lc_Cache *cacheV(lc_State *S, unsigned levels, lc_Node *root) {
 }
 
 /* ================================================================ */
-/*  assert_tree — build expected tree and compare                    */
+/*  lc_asserttree — build expected tree and compare                    */
 /* ================================================================ */
 
-#define assert_tree(c, lvls, ...)                                      \
-    do {                                                               \
-        lc_Cache *__d = cacheV(S, lvls, __VA_ARGS__);                  \
-        if (!lc_comparetree((c), __d)) {                               \
-            fprintf(stderr, "assert_tree FAILED at %s:%d\n", __FILE__, \
-                    __LINE__);                                         \
-            fprintf(stderr, "Expected:\n");                            \
-            lc_dumptree(__d, "expected");                              \
-            fprintf(stderr, "Actual:\n");                              \
-            lc_dumptree((c), "actual");                                \
-            assert(0 && "assert_tree failed");                         \
-        }                                                              \
-        lc_deltree(S, __d);                                            \
+#define lc_asserttree(c, lvls, ...)                                      \
+    do {                                                                 \
+        lc_Cache *__d = cacheV(S, lvls, __VA_ARGS__);                    \
+        if (!lc_comparetree((c), __d)) {                                 \
+            fprintf(stderr, "lc_asserttree FAILED at %s:%d\n", __FILE__, \
+                    __LINE__);                                           \
+            fprintf(stderr, "Expected:\n");                              \
+            lc_dumptree(__d, "expected");                                \
+            fprintf(stderr, "Actual:\n");                                \
+            lc_dumptree((c), "actual");                                  \
+            assert(0 && "lc_asserttree failed");                         \
+        }                                                                \
+        lc_deltree(S, __d);                                              \
     } while (0)
 
 /* ================================================================ */

@@ -4,12 +4,13 @@ CC := "gcc"
 CFLAGS := "-Wall -Wextra -Werror -pedantic -std=c89 -Wno-variadic-macros"
 INCS := "-I. -Itests"
 
-dbg *tests='':
-    {{ CC }} {{ CFLAGS }} {{ INCS }} -g -O0 -fsanitize=address,undefined -o tests/lc_test4 tests/lc_test4.c && ./tests/lc_test4 {{ tests }}
+dbg_run t *tests='':
+    {{ CC }} {{ CFLAGS }} {{ INCS }} -g -O0 -fsanitize=address,undefined -o tests/{{ t }} tests/{{ t }}.c && ./tests/{{ t }} {{ tests }}
+
+dbg *tests='': (dbg_run "lc_test4" tests)
 
 # large fanout tests (LC_LEAF_FANOUT=8, LC_FANOUT=8)
-dbg_lc8 *tests='':
-    {{ CC }} {{ CFLAGS }} {{ INCS }} -g -O0 -fsanitize=address,undefined -o tests/lc_test8 tests/lc_test8.c && ./tests/lc_test8 {{ tests }}
+dbg8 *tests='': (dbg_run "lc_test8" tests)
 
 cov_run t:
     {{ CC }} {{ CFLAGS }} {{ INCS }} --coverage -O0 -o tests/{{ t }} tests/{{ t }}.c && ./tests/{{ t }}
@@ -39,3 +40,19 @@ clean-gcda:
 
 clean: clean-gcda
     rm -f tests/lc_test4 tests/lc_test8
+
+# lc_insert_demo
+demo:
+    {{ CC }} {{ CFLAGS }} {{ INCS }} -g -O0 -fsanitize=address,undefined -o lc_insert_demo lc_insert_demo.c && ./lc_insert_demo
+
+# lc_insert_demo coverage: compile, run, gen lcov.info
+insert_demo_cov *tests='':
+    rm -f *.gcda *.gcno demo_coverage.info lcov.info
+    {{ CC }} {{ CFLAGS }} -std=c99 {{ INCS }} -fsanitize=address,undefined --coverage -O0 -o lc_insert_demo lc_insert_demo.c && ./lc_insert_demo {{ tests }}
+    lcov --capture --directory . --output-file demo_coverage.info --no-external --ignore-errors unsupported
+    lcov --extract demo_coverage.info '*/lc_insert_demo.c' --output-file lcov.info
+    @echo ""
+    @echo "=== lc_insert_demo.c coverage ==="
+    @lcov --list lcov.info
+    @awk '/^DA:/ && /,0$/ {gsub(/DA:|,0/,""); print $0}' lcov.info \
+    | sort -n | while read ln; do echo "L$ln: $(sed -n ${ln}p lc_insert_demo.c)"; done
