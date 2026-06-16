@@ -13,17 +13,17 @@ dbg *tests='': (dbg_run "lc_test4" tests)
 dbg8 *tests='': (dbg_run "lc_test8" tests)
 
 cov_run t:
-    {{ CC }} {{ CFLAGS }} {{ INCS }} --coverage -O0 -o tests/{{ t }} tests/{{ t }}.c && ./tests/{{ t }}
+    {{ CC }} {{ CFLAGS }} {{ INCS }} --coverage -Wno-unused-function -O0 -o tests/{{ t }} tests/{{ t }}.c && ./tests/{{ t }}
 
 lc-cov: clean-gcda (cov_run "lc_test4") (cov_run "lc_test8")
-    lcov --capture --directory . --output-file coverage.info --no-external --ignore-errors unsupported
-    lcov --extract coverage.info '*/linecache.h' --output-file lcov.info
+    lcov --capture --directory . --rc branch_coverage=1 --output-file coverage.info --no-external --ignore-errors unsupported
+    lcov --extract coverage.info '*/linecache.h' --rc branch_coverage=1  --output-file lcov.info
     @echo ""
     @echo "=== linecache.h coverage ==="
-    lcov --list lcov.info
+    lcov --list --rc branch_coverage=1  lcov.info
 
 lc-uncovered:
-    awk '/^DA:/ && /,0$/ {gsub(/DA:|,0/,""); print $0}' lcov.info \
+    @awk '/^DA:/ && /,0$/ {gsub(/DA:|,0/,""); print $0}' lcov.info \
     | sort -n | awk \
     'NR==1{s=p=$1;c=1} $1==p+1{p=$1;c++} \
     $1>p+1{printf "%4d-%-4d (%d lines)\n",s,p,c;s=$1;p=$1;c=1} \
@@ -44,15 +44,3 @@ clean: clean-gcda
 # lc_insert_demo
 demo:
     {{ CC }} {{ CFLAGS }} {{ INCS }} -g -O0 -fsanitize=address,undefined -o lc_insert_demo lc_insert_demo.c && ./lc_insert_demo
-
-# lc_insert_demo coverage: compile, run, gen lcov.info
-insert_demo_cov *tests='':
-    rm -f *.gcda *.gcno demo_coverage.info lcov.info
-    {{ CC }} {{ CFLAGS }} -std=c99 {{ INCS }} -fsanitize=address,undefined --coverage -O0 -o lc_insert_demo lc_insert_demo.c && ./lc_insert_demo {{ tests }}
-    lcov --capture --directory . --output-file demo_coverage.info --no-external --ignore-errors unsupported
-    lcov --extract demo_coverage.info '*/lc_insert_demo.c' --output-file lcov.info
-    @echo ""
-    @echo "=== lc_insert_demo.c coverage ==="
-    @lcov --list lcov.info
-    @awk '/^DA:/ && /,0$/ {gsub(/DA:|,0/,""); print $0}' lcov.info \
-    | sort -n | while read ln; do echo "L$ln: $(sed -n ${ln}p lc_insert_demo.c)"; done

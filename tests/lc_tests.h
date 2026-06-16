@@ -107,8 +107,13 @@ LC_STATIC void lc_checktree(const lc_Cache *c) {
 LC_STATIC void lc_checkcursor(lc_Cursor *C, size_t expected_off) {
     size_t   sum_off = 0, sum_idx = 0;
     lc_Node *p;
-    int      l, i;
+    int      i, l;
     assert(lc_offset(C) == expected_off);
+    if (C->tree->root.child_count == 0) {
+        assert(C->off == 0 && C->idx == 0 && C->loff == 0 && C->lidx == 0);
+        assert(C->paths[0] == C->tree->root.children);
+        return;
+    }
     for (l = 0; l <= lcK_levels(C); ++l) {
         p = lcK_parent(C, l), i = lcK_idx(C, p, l);
         assert(i >= 0 && i < (int)p->child_count);
@@ -118,13 +123,10 @@ LC_STATIC void lc_checkcursor(lc_Cursor *C, size_t expected_off) {
     }
     assert(C->off == sum_off);
     assert(C->idx == sum_idx + C->lidx);
-    if (C->tree->root.child_count > 0) {
-        lc_Leaf *lf = lcK_leaf(C);
-        p = lcK_parent(C, lcK_levels(C)), i = lcK_idx(C, p, lcK_levels(C));
-        assert(C->loff == lcL_sumbytes(lf, 0, C->lidx));
-        assert(C->lidx <= p->breaks[i]);
-        if (C->lidx < p->breaks[i]) assert(C->col < lf->bytes[C->lidx]);
-    }
+    p = lcK_parent(C, lcK_levels(C)), i = lcK_idx(C, p, lcK_levels(C));
+    assert(C->loff == lcL_sumbytes(lcK_leaf(C), 0, C->lidx));
+    assert(C->lidx <= p->breaks[i]);
+    if (C->lidx < p->breaks[i]) assert(C->col < lcK_leaf(C)->bytes[C->lidx]);
 }
 
 /* ================================================================ */
