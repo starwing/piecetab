@@ -27,7 +27,6 @@ static void test_lifecycle(void) {
     lc_close(s);
 }
 
-/* scan: parameter validation */
 static void test_scan_params(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -40,7 +39,31 @@ static void test_scan_params(void) {
     lc_close(S);
 }
 
-/* scan & seek: basic scan then seek at various positions */
+static void test_scan_basic(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c;
+    unsigned  empty[] = {0}, full[] = {5, 10, 15, 20, 0}, *pbrs;
+
+    /* case 1: empty scanner on empty tree */
+    c = lc_newtree(S);
+    pbrs = empty;
+    assert(lc_scan(c, lc_scanner, &pbrs) == LC_OK);
+    assert(lc_breaks(c) == 0 && lc_bytes(c) == 0);
+    lc_checktree(c);
+    lc_deltree(S, c);
+
+    /* case 2: exactly one full leaf (4 breaks) */
+    c = lc_newtree(S);
+    pbrs = full;
+    assert(lc_scan(c, lc_scanner, &pbrs) == LC_OK);
+    assert(lc_breaks(c) == 4 && lc_bytes(c) == 50);
+    assert(c->levels == 0 && c->root.child_count == 1);
+    lc_checktree(c);
+    lc_deltree(S, c);
+
+    lc_close(S);
+}
+
 static void test_scan_seek(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -77,7 +100,84 @@ static void test_scan_seek(void) {
     lc_close(S);
 }
 
-/* seek: lc_seek parameter validation */
+static void test_scan_bulk(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  brs[] = {120, 1, 0}, *pbrs = brs;
+    int       r;
+
+    r = lc_scan(c, lc_rscanner, &pbrs);
+    assert(r == LC_OK && lc_breaks(c) == 120 && lc_bytes(c) == 120);
+    assert(c->levels >= 2);
+    lc_checktree(c);
+    lc_seek(&C, c, 0);
+    assert(lc_offset(&C) == 0);
+    lc_seek(&C, c, 120);
+    assert(lc_offset(&C) == 120);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_scan_append(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    unsigned  brs_a[] = {4, 10, 0}, *pa = brs_a;
+    unsigned  brs_b[] = {5, 20, 0}, *pb = brs_b;
+    int       r;
+
+    r = lc_scan(c, lc_rscanner, &pa);
+    assert(r == LC_OK && lc_breaks(c) == 4 && lc_bytes(c) == 40);
+    r = lc_scan(c, lc_rscanner, &pb);
+    assert(r == LC_OK && lc_breaks(c) == 9 && lc_bytes(c) == 140);
+    lc_checktree(c);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_scan_oom_items(void) {
+    lc_State *S;
+    lc_Cache *c;
+    unsigned  brs[] = {10, 0}, *pbrs = brs;
+    int       r, oom = 2;
+
+    S = lc_open(&oom_alloc, &oom);
+    if (!S) return;
+    c = lc_newtree(S);
+    r = lc_scan(c, lc_scanner, &pbrs);
+    assert(r == LC_ERRMEM);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_scan_oom_flush(void) {
+    lc_State *S;
+    lc_Cache *c;
+    unsigned  brs[] = {170, 10, 0}, *pbrs = brs;
+    int       r, oom = 3;
+    S = lc_open(&oom_alloc, &oom);
+    if (!S) return;
+    c = lc_newtree(S);
+    r = lc_scan(c, lc_rscanner, &pbrs);
+    assert(r == LC_ERRMEM);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_scan_oom_build(void) {
+    lc_State *S;
+    lc_Cache *c;
+    unsigned  brs[] = {170, 1, 0}, *pbrs = brs;
+    int       r, oom = 4;
+    S = lc_open(&oom_alloc, &oom);
+    if (!S) return;
+    c = lc_newtree(S);
+    r = lc_scan(c, lc_rscanner, &pbrs);
+    assert(r == LC_ERRMEM);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 static void test_seek_params(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -95,7 +195,25 @@ static void test_seek_params(void) {
     lc_close(S);
 }
 
-/* seek_line_leaf: basic seekline within one leaf */
+static void test_seek_pastleaf(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    int       r;
+
+    lc_rscanV(c, 8, 10);
+    assert(lc_breaks(c) == 8);
+    lc_checktree(c);
+
+    /* seek to offset past first leaf (first leaf has 4 breaks, 40 bytes) */
+    r = lc_seek(&C, c, 45);
+    assert(r == LC_OK && lc_offset(&C) == 45 && lc_line(&C) == 4);
+    lc_checkcursor(&C, 45);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 static void test_seek_line_leaf(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -121,7 +239,24 @@ static void test_seek_line_leaf(void) {
     lc_close(S);
 }
 
-/* seek_edge: boundary conditions (empty tree, past-end, empty seekline) */
+static void test_seek_line_pastleaf(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    int       r;
+
+    lc_rscanV(c, 6, 10);
+    assert(lc_breaks(c) == 6);
+    lc_checktree(c);
+
+    r = lc_seekline(&C, c, 4);
+    assert(r == LC_OK && lc_line(&C) == 4);
+    lc_checkcursor(&C, lc_offset(&C));
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 static void test_seek_edge(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -146,7 +281,6 @@ static void test_seek_edge(void) {
     lc_close(S);
 }
 
-/* advance: parameter validation */
 static void test_advance_params(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -161,24 +295,6 @@ static void test_advance_params(void) {
     lc_deltree(S, c);
     lc_close(S);
 }
-
-/* advline: parameter validation */
-static void test_advline_params(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-
-    assert(lc_advline(NULL, 1) == LC_ERRPARAM);
-    {
-        lc_Cursor C;
-        memset(&C, 0, sizeof(C));
-        assert(lc_advline(&C, 1) == LC_ERRPARAM);
-    }
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* T4: advance & advline within single leaf */
 
 static void test_advance_single(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
@@ -211,8 +327,6 @@ static void test_advance_single(void) {
     lc_deltree(S, c);
     lc_close(S);
 }
-
-/* T5: cross-leaf navigation (needs 2+ leaves) */
 
 static void test_advance_cross(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
@@ -254,21 +368,164 @@ static void test_advance_cross(void) {
     lc_close(S);
 }
 
-/* markbreak: parameter validation */
-static void test_markbreak_params(void) {
+static void test_advance_cov_backward_cross(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
-    lc_Cursor C;
+    lc_Cursor cur;
+    int       r;
 
-    assert(lc_markbreak(NULL, 1) == LC_ERRPARAM);
-    memset(&C, 0, sizeof(C));
-    assert(lc_markbreak(&C, 1) == LC_ERRPARAM);
+    lc_rscanV(c, 8, 10);
+    assert(lc_breaks(c) == 8);
+
+    /* seek to second leaf, move backward across boundary into first leaf */
+    lc_seek(&cur, c, 42);
+    r = lc_advance(&cur, -5);
+    assert(r == LC_OK && lc_offset(&cur) == 37);
 
     lc_deltree(S, c);
     lc_close(S);
 }
 
-/* T6: markbreak */
+static void test_advance_cov_skip_siblings(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor cur;
+    int       r;
+
+    lc_rscanV(c, 12, 10);
+    assert(lc_breaks(c) == 12);
+
+    /* advance forward from leaf 0, skipping past leaf 1 entirely */
+    lc_seek(&cur, c, 35);     /* near end of leaf 0 */
+    r = lc_advance(&cur, 55); /* skip past leaf 1 (40 bytes) into leaf 2 */
+    assert(r == LC_OK && lc_offset(&cur) == 90);
+
+    /* advance backward from leaf 2, skipping past leaf 1 entirely */
+    r = lc_advance(&cur, -55); /* skip past leaf 1 backward into leaf 0 */
+    assert(r == LC_OK && lc_offset(&cur) == 35);
+
+    /* advance lines forward, skipping past full leaf */
+    lc_seekline(&cur, c, 1); /* line 1, in leaf 0 */
+    r = lc_advline(&cur, 8); /* skip past leaf 0 rest + full leaf 1 */
+    assert(r == LC_OK && lc_line(&cur) == 9);
+
+    /* advance lines backward, skipping past full leaf */
+    r = lc_advline(&cur, -8);
+    assert(r == LC_OK && lc_line(&cur) == 1);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_advance_cov_backwardoff(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor cur;
+    int       r;
+
+    lc_rscanV(c, 80, 5);
+
+    /* seek to near-end, advance backward across many children */
+    lc_seek(&cur, c, lc_bytes(c));
+    r = lc_advance(&cur, -200);
+    assert(r == LC_OK);
+
+    r = lc_clearbreaks(&cur, 16);
+    assert(r == LC_OK);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_advline_params(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+
+    assert(lc_advline(NULL, 1) == LC_ERRPARAM);
+    {
+        lc_Cursor C;
+        memset(&C, 0, sizeof(C));
+        assert(lc_advline(&C, 1) == LC_ERRPARAM);
+    }
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_advline_cross(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor cur;
+    int       r;
+
+    lc_rscanV(c, 8, 10);
+    assert(lc_breaks(c) == 8);
+
+    /* advance lines across leaf boundary */
+    lc_seekline(&cur, c, 2); /* line 2, offset 20 */
+    r = lc_advline(&cur, 3); /* skip past leaf boundary (4 breaks in leaf 0) */
+    assert(r == LC_OK && lc_line(&cur) == 5);
+
+    /* backward across leaf boundary */
+    r = lc_advline(&cur, -4);
+    assert(r == LC_OK && lc_line(&cur) == 1);
+
+    /* forward to last line */
+    lc_seekline(&cur, c, 0);
+    r = lc_advline(&cur, 100);
+    assert(r == LC_OK && lc_line(&cur) == 8);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_advline_cov_backward_within(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor cur;
+    int       r;
+
+    lc_scanV(c, 10, 15, 15, 15);
+    assert(lc_breaks(c) == 4);
+
+    /* seek to slot=2, advance backward by 1 (d=1 < slot=2 triggers within-leaf
+     * path) */
+    lc_seek(&cur, c, 30); /* slot=2, in third gap */
+    r = lc_advline(&cur, -1);
+    assert(r == LC_OK && lc_line(&cur) == 1 && lc_offset(&cur) == 10);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_advline_cov_backward_cross(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = cacheV(
+            S, 1,
+            innerV(botV(leafV(10), leafV(10), leafV(10)), botV(leafV(10))));
+    lc_Cursor cur;
+    int       r;
+    assert(c && lc_breaks(c) == 4 && lc_bytes(c) == 40);
+    lc_seekline(&cur, c, 3);
+    r = lc_advline(&cur, -1);
+    assert(r == LC_OK && lc_line(&cur) == 2);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_advline_cov_forward_cross(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor cur;
+    int       r;
+
+    lc_rscanV(c, 33, 10);
+    lc_seekline(&cur, c, 15);
+    r = lc_advline(&cur, 1);
+    assert(r == LC_OK && lc_line(&cur) == 16);
+    lc_deltree(S, c);
+    lc_close(S);
+}
 
 static void test_markbreak(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
@@ -301,29 +558,18 @@ static void test_markbreak(void) {
     lc_close(S);
 }
 
-/* T7: leaf split via markbreak (needs full leaf) */
-
-static void test_markbreak_split(void) {
+static void test_markbreak_params(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
+    lc_Cursor C;
 
-    lc_rscanV(c, 5, 10);
-    assert(lc_breaks(c) == 5);
-    assert(c->root.child_count
-           > 1); /* leaf split: root now has 2 leaf children */
-
-    /* add break to first gap in first leaf */
-    lc_seek(&cur, c, 2);
-    r = lc_markbreak(&cur, 3);
-    assert(r == LC_OK && lc_breaks(c) == 6);
+    assert(lc_markbreak(NULL, 1) == LC_ERRPARAM);
+    memset(&C, 0, sizeof(C));
+    assert(lc_markbreak(&C, 1) == LC_ERRPARAM);
 
     lc_deltree(S, c);
     lc_close(S);
 }
-
-/* T8: markbreak on empty tree */
 
 static void test_markbreak_empty(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
@@ -342,7 +588,41 @@ static void test_markbreak_empty(void) {
     lc_close(S);
 }
 
-/* T9: markbreak within trailing gap, virtual extension tracked in col */
+static void test_markbreak_crossline(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c;
+    lc_Cursor C;
+    int       r;
+
+    /* case 1: large gap split at br=10, line1 [1..99) */
+    c = lc_newtree(S);
+    lc_scanV(c, 1, 99, 100, 100);
+    assert(lc_breaks(c) == 4);
+    lc_checktree(c);
+    lc_seekline(&C, c, 1);
+    assert(lc_offset(&C) == 1 && lc_line(&C) == 1 && lc_linelen(&C) == 99);
+    r = lc_markbreak(&C, 10);
+    assert(r == LC_OK);
+    lc_checktree(c);
+    assert(lc_breaks(c) == 5 && lc_bytes(c) == 300);
+    assert(lc_offset(&C) == 11 && lc_line(&C) == 2 && lc_linelen(&C) == 89);
+    lc_deltree(S, c);
+
+    /* case 2: gap split at br=5, line1 offset 10, len=15 */
+    c = lc_newtree(S);
+    lc_scanV(c, 10, 15, 15);
+    assert(lc_breaks(c) == 3 && lc_bytes(c) == 40);
+    lc_seekline(&C, c, 1);
+    assert(lc_offset(&C) == 10);
+    r = lc_markbreak(&C, 5);
+    assert(r == LC_OK);
+    lc_checktree(c);
+    assert(lc_bytes(c) == 40 && lc_breaks(c) == 4);
+    lc_deltree(S, c);
+
+    lc_close(S);
+}
+
 static void test_markbreak_trailing(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -368,7 +648,191 @@ static void test_markbreak_trailing(void) {
     lc_close(S);
 }
 
-/* clearbreaks: parameter validation */
+static void test_markbreak_noop(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor cur;
+    int       r;
+    lc_scanV(c, 10, 15, 15);
+    assert(lc_breaks(c) == 3);
+    lc_seek(&cur, c, 5);
+    lc_checktree(c);
+    r = lc_markbreak(&cur, 10);
+    assert(r == LC_OK && lc_breaks(c) == 3 && lc_bytes(c) == 40);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_markbreak_brzero(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor cur;
+    int       r;
+
+    lc_scanV(c, 10, 15, 15);
+    assert(lc_breaks(c) == 3);
+    lc_seek(&cur, c, 5); /* gap=5 (in first segment of 10 bytes) */
+    r = lc_markbreak(&cur, 0);
+    assert(r == LC_OK && lc_breaks(c) == 4);
+    assert(lc_offset(&cur) == 5 && lc_line(&cur) == 1);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_markbreak_crossleaf(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor cur;
+    int       r;
+
+    lc_rscanV(c, 8, 1);
+    assert(lc_breaks(c) == 8 && lc_bytes(c) == 8);
+    lc_checktree(c);
+
+    lc_seek(&cur, c, 0);
+    r = lc_markbreak(&cur, 100);
+    assert(r == LC_OK);
+    lc_checktree(c);
+    assert(lc_bytes(c) == 100 && lc_breaks(c) == 1);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_markbreak_split(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor cur;
+    int       r;
+
+    lc_rscanV(c, 5, 10);
+    assert(lc_breaks(c) == 5);
+    assert(c->root.child_count
+           > 1); /* leaf split: root now has 2 leaf children */
+
+    /* add break to first gap in first leaf */
+    lc_seek(&cur, c, 2);
+    r = lc_markbreak(&cur, 3);
+    assert(r == LC_OK && lc_breaks(c) == 6);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_markbreak_node_split(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor cur;
+    int       r;
+
+    lc_rscanV(c, 17, 10);
+    assert(lc_breaks(c) == 17);
+
+    /* internal node has 5 children (> LC_FANOUT=4), so levels >= 2 */
+    /* markbreak at offset 2: splits leaf, triggers internal node split */
+    lc_seek(&cur, c, 2);
+    r = lc_markbreak(&cur, 3);
+    assert(r == LC_OK);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_markbreak_root_split(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor cur;
+    int       r;
+
+    lc_rscanV(c, 70, 10);
+    assert(lc_breaks(c) == 70);
+
+    /* seek to first gap in first leaf, add break to trigger cascade */
+    lc_seek(&cur, c, 2);
+    r = lc_markbreak(&cur, 3);
+    assert(r == LC_OK && lc_breaks(c) == 71);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_markbreak_root_add(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor cur;
+    int       r;
+    lc_rscanV(c, 21, 10);
+    assert(lc_breaks(c) == 21);
+    lc_seek(&cur, c, 2);
+    r = lc_markbreak(&cur, 3);
+    assert(r == LC_OK);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_markbreak_cascade(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor cur;
+    int       k, r;
+
+    lc_rscanV(c, 200, 5);
+    assert(lc_breaks(c) == 200);
+
+    for (k = 0; k < 24; ++k) {
+        lc_seek(&cur, c, 2);
+        r = lc_markbreak(&cur, 2);
+        assert(r == LC_OK);
+    }
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_markbreak_cov_split_right(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor cur;
+    int       r;
+
+    lc_scanV(c, 10, 10, 10, 10);
+    assert(lc_breaks(c) == 4);
+
+    /* cursor at offset 25 generates slot=2 (>= mid=2), moves to new leaf */
+    lc_seek(&cur, c, 25);
+    r = lc_markbreak(&cur, 3);
+    assert(r == LC_OK && lc_breaks(c) == 5);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_markbreak_cov_child_right(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = cacheV(
+            S, 2,
+            innerV(innerV(botV(leafV(1, 1, 1, 1), leafV(1, 1, 1, 1),
+                               leafV(1, 1, 1, 1), leafV(1, 1, 1, 1)),
+                          botV(leafV(1, 1, 1, 1), leafV(1, 1, 1, 1),
+                               leafV(1, 1, 1, 1), leafV(1, 1, 1, 1)),
+                          botV(leafV(1, 1, 1, 1), leafV(1, 1, 1, 1),
+                               leafV(1, 1, 1, 1), leafV(1, 1, 1, 1)),
+                          botV(leafV(1, 1, 1, 1), leafV(1, 1, 1, 1),
+                               leafV(1, 1, 1, 1), leafV(1, 1, 1, 1))),
+                   innerV(botV(leafV(1, 1, 1, 1)))));
+    lc_Cursor C;
+    int       r;
+    assert(c);
+    lc_seek(&C, c, 56);
+    r = lc_markbreak(&C, 0);
+    assert(r == LC_OK);
+    lc_checktree_allow_empty(c, 1);
+    lc_deltree(S, c);
+    assert(S->nodes.live_obj == 0 && S->leaves.live_obj == 0);
+    lc_close(S);
+}
+
 static void test_clearbreaks_params(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -382,7 +846,6 @@ static void test_clearbreaks_params(void) {
     lc_close(S);
 }
 
-/* clearbreaks: basic and edge cases */
 static void test_clearbreaks(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -423,7 +886,21 @@ static void test_clearbreaks(void) {
     lc_close(S);
 }
 
-/* splice: parameter validation */
+static void test_clearbreaks_cov_slot(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor cur;
+    int       r;
+    lc_scanV(c, 10, 15, 15);
+    assert(lc_breaks(c) == 3);
+    lc_checktree(c);
+    lc_seek(&cur, c, 11);
+    r = lc_clearbreaks(&cur, 16);
+    assert(r == LC_OK && lc_breaks(c) == 2);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 static void test_splice_params(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -436,10 +913,6 @@ static void test_splice_params(void) {
     lc_deltree(S, c);
     lc_close(S);
 }
-
-
-
-/* T13: splice */
 
 static void test_splice(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
@@ -487,8 +960,6 @@ static void test_splice(void) {
     lc_close(S);
 }
 
-/* T14: splice trailing area */
-
 static void test_splice_trailing(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -511,579 +982,76 @@ static void test_splice_trailing(void) {
     lc_close(S);
 }
 
-/* T15: seek past first leaf (covers lcC_findpieces skip-child path) */
-
-static void test_seek_pastleaf(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor C;
-    int       r;
-
-    lc_rscanV(c, 8, 10);
-    assert(lc_breaks(c) == 8);
-    lc_checktree(c);
-
-    /* seek to offset past first leaf (first leaf has 4 breaks, 40 bytes) */
-    r = lc_seek(&C, c, 45);
-    assert(r == LC_OK && lc_offset(&C) == 45 && lc_line(&C) == 4);
-    lc_checkcursor(&C, 45);
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* T16: backward cross-sibling (covers lcC_backwardoff cross-sibling) */
-
-static void test_advance_cov_backward_cross(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
-
-    lc_rscanV(c, 8, 10);
-    assert(lc_breaks(c) == 8);
-
-    /* seek to second leaf, move backward across boundary into first leaf */
-    lc_seek(&cur, c, 42);
-    r = lc_advance(&cur, -5);
-    assert(r == LC_OK && lc_offset(&cur) == 37);
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* T17: line move cross-sibling (covers lcC_forwardline/backwardline cross
- * paths) */
-
-static void test_advline_cross(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
-
-    lc_rscanV(c, 8, 10);
-    assert(lc_breaks(c) == 8);
-
-    /* advance lines across leaf boundary */
-    lc_seekline(&cur, c, 2); /* line 2, offset 20 */
-    r = lc_advline(&cur, 3); /* skip past leaf boundary (4 breaks in leaf 0) */
-    assert(r == LC_OK && lc_line(&cur) == 5);
-
-    /* backward across leaf boundary */
-    r = lc_advline(&cur, -4);
-    assert(r == LC_OK && lc_line(&cur) == 1);
-
-    /* forward to last line */
-    lc_seekline(&cur, c, 0);
-    r = lc_advline(&cur, 100);
-    assert(r == LC_OK && lc_line(&cur) == 8);
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* coverage: backwardline cross-leaf sibling skip path */
-/* coverage: forwardline cross-node sibling skip path */
-static void test_advline_cov_forward_cross(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
-
-    lc_rscanV(c, 33, 10);
-    lc_seekline(&cur, c, 15);
-    r = lc_advline(&cur, 1);
-    assert(r == LC_OK && lc_line(&cur) == 16);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* T18: markbreak triggers internal node split */
-
-static void test_markbreak_node_split(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
-
-    lc_rscanV(c, 17, 10);
-    assert(lc_breaks(c) == 17);
-
-    /* internal node has 5 children (> LC_FANOUT=4), so levels >= 2 */
-    /* markbreak at offset 2: splits leaf, triggers internal node split */
-    lc_seek(&cur, c, 2);
-    r = lc_markbreak(&cur, 3);
-    assert(r == LC_OK);
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* T19: markbreak triggers root split */
-
-static void test_markbreak_root_split(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
-
-    lc_rscanV(c, 70, 10);
-    assert(lc_breaks(c) == 70);
-
-    /* seek to first gap in first leaf, add break to trigger cascade */
-    lc_seek(&cur, c, 2);
-    r = lc_markbreak(&cur, 3);
-    assert(r == LC_OK && lc_breaks(c) == 71);
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* T20: markbreak leaf split, cursor moves to new leaf */
-
-static void test_markbreak_cov_split_right(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
-
-    lc_scanV(c, 10, 10, 10, 10);
-    assert(lc_breaks(c) == 4);
-
-    /* cursor at offset 25 generates slot=2 (>= mid=2), moves to new leaf */
-    lc_seek(&cur, c, 25);
-    r = lc_markbreak(&cur, 3);
-    assert(r == LC_OK && lc_breaks(c) == 5);
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* T21: backward line within same leaf (d < C->slot) */
-
-static void test_advline_cov_backward_within(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
-
-    lc_scanV(c, 10, 15, 15, 15);
-    assert(lc_breaks(c) == 4);
-
-    /* seek to slot=2, advance backward by 1 (d=1 < slot=2 triggers within-leaf
-     * path) */
-    lc_seek(&cur, c, 30); /* slot=2, in third gap */
-    r = lc_advline(&cur, -1);
-    assert(r == LC_OK && lc_line(&cur) == 1 && lc_offset(&cur) == 10);
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-
-
-/* T25: forward/backward skipping multiple siblings */
-
-static void test_advance_cov_skip_siblings(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
-
-    lc_rscanV(c, 12, 10);
-    assert(lc_breaks(c) == 12);
-
-    /* advance forward from leaf 0, skipping past leaf 1 entirely */
-    lc_seek(&cur, c, 35);     /* near end of leaf 0 */
-    r = lc_advance(&cur, 55); /* skip past leaf 1 (40 bytes) into leaf 2 */
-    assert(r == LC_OK && lc_offset(&cur) == 90);
-
-    /* advance backward from leaf 2, skipping past leaf 1 entirely */
-    r = lc_advance(&cur, -55); /* skip past leaf 1 backward into leaf 0 */
-    assert(r == LC_OK && lc_offset(&cur) == 35);
-
-    /* advance lines forward, skipping past full leaf */
-    lc_seekline(&cur, c, 1); /* line 1, in leaf 0 */
-    r = lc_advline(&cur, 8); /* skip past leaf 0 rest + full leaf 1 */
-    assert(r == LC_OK && lc_line(&cur) == 9);
-
-    /* advance lines backward, skipping past full leaf */
-    r = lc_advline(&cur, -8);
-    assert(r == LC_OK && lc_line(&cur) == 1);
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* T28: splitleaf cursor stays in old leaf (slot < mid) */
-
-/* T30: findlines skip-child (pline > breaks[i]) */
-
-static void test_seek_line_pastleaf(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor C;
-    int       r;
-
-    lc_rscanV(c, 6, 10);
-    assert(lc_breaks(c) == 6);
-    lc_checktree(c);
-
-    r = lc_seekline(&C, c, 4);
-    assert(r == LC_OK && lc_line(&C) == 4);
-    lc_checkcursor(&C, lc_offset(&C));
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* T32: node split cursor stays in old node (paths[level+1] < mid) */
-
-/* T33: findlines skip-child in deep multi-level tree */
-
-/* T34: backwardoff skip-child in deep tree */
-
-static void test_advance_cov_backwardoff(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
-
-    lc_rscanV(c, 80, 5);
-
-    /* seek to near-end, advance backward across many children */
-    lc_seek(&cur, c, lc_bytes(c));
-    r = lc_advance(&cur, -200);
-    assert(r == LC_OK);
-
-    r = lc_clearbreaks(&cur, 16);
-    assert(r == LC_OK);
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* T36: comprehensive deep tree operations to cover remaining split paths */
-
-static void test_markbreak_cascade(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       k, r;
-
-    lc_rscanV(c, 200, 5);
-    assert(lc_breaks(c) == 200);
-
-    for (k = 0; k < 24; ++k) {
-        lc_seek(&cur, c, 2);
-        r = lc_markbreak(&cur, 2);
-        assert(r == LC_OK);
-    }
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* T38: markbreak br=0 — break at cursor position */
-static void test_markbreak_brzero(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
-
-    lc_scanV(c, 10, 15, 15);
-    assert(lc_breaks(c) == 3);
-    lc_seek(&cur, c, 5); /* gap=5 (in first segment of 10 bytes) */
-    r = lc_markbreak(&cur, 0);
-    assert(r == LC_OK && lc_breaks(c) == 4);
-    assert(lc_offset(&cur) == 5 && lc_line(&cur) == 1);
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* markbreak cross-line: split a line mid-content (two scenarios) */
-static void test_markbreak_crossline(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c;
-    lc_Cursor C;
-    int       r;
-
-    /* case 1: large gap split at br=10, line1 [1..99) */
-    c = lc_newtree(S);
-    lc_scanV(c, 1, 99, 100, 100);
-    assert(lc_breaks(c) == 4);
-    lc_checktree(c);
-    lc_seekline(&C, c, 1);
-    assert(lc_offset(&C) == 1 && lc_line(&C) == 1 && lc_linelen(&C) == 99);
-    r = lc_markbreak(&C, 10);
-    assert(r == LC_OK);
-    lc_checktree(c);
-    assert(lc_breaks(c) == 5 && lc_bytes(c) == 300);
-    assert(lc_offset(&C) == 11 && lc_line(&C) == 2 && lc_linelen(&C) == 89);
-    lc_deltree(S, c);
-
-    /* case 2: gap split at br=5, line1 offset 10, len=15 */
-    c = lc_newtree(S);
-    lc_scanV(c, 10, 15, 15);
-    assert(lc_breaks(c) == 3 && lc_bytes(c) == 40);
-    lc_seekline(&C, c, 1);
-    assert(lc_offset(&C) == 10);
-    r = lc_markbreak(&C, 5);
-    assert(r == LC_OK);
-    lc_checktree(c);
-    assert(lc_bytes(c) == 40 && lc_breaks(c) == 4);
-    lc_deltree(S, c);
-
-    lc_close(S);
-}
-
-/* T42: markbreak cross-leaf: extend line across leaf boundary */
-static void test_markbreak_crossleaf(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
-
-    lc_rscanV(c, 8, 1);
-    assert(lc_breaks(c) == 8 && lc_bytes(c) == 8);
-    lc_checktree(c);
-
-    lc_seek(&cur, c, 0);
-    r = lc_markbreak(&cur, 100);
-    assert(r == LC_OK);
-    lc_checktree(c);
-    assert(lc_bytes(c) == 100 && lc_breaks(c) == 1);
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* splitchild cursor in right half. levels=2,
- * innerV[0] has 4 full botV children (full at FANOUT=4).
- * cursor at botV[3] (right half) → makeroom → splitchild right branch. */
-static void test_markbreak_cov_child_right(void) {
+static void test_splice_cov_rebalance(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(
             S, 2,
-            innerV(innerV(botV(leafV(1, 1, 1, 1), leafV(1, 1, 1, 1),
-                               leafV(1, 1, 1, 1), leafV(1, 1, 1, 1)),
-                          botV(leafV(1, 1, 1, 1), leafV(1, 1, 1, 1),
-                               leafV(1, 1, 1, 1), leafV(1, 1, 1, 1)),
-                          botV(leafV(1, 1, 1, 1), leafV(1, 1, 1, 1),
-                               leafV(1, 1, 1, 1), leafV(1, 1, 1, 1)),
-                          botV(leafV(1, 1, 1, 1), leafV(1, 1, 1, 1),
-                               leafV(1, 1, 1, 1), leafV(1, 1, 1, 1))),
-                   innerV(botV(leafV(1, 1, 1, 1)))));
+            innerV(innerV(botV(leafV(2, 2), leafV(2, 2, 2)),
+                          botV(leafV(2, 2), leafV(2, 2))),
+                   innerV(botV(leafV(2)))));
     lc_Cursor C;
-    int       r;
     assert(c);
-    lc_seek(&C, c, 56);
-    r = lc_markbreak(&C, 0);
-    assert(r == LC_OK);
+    /* L at offset 0 leaf0[2,2]: splice del=3 → leaf becomes [1]
+     * underfull → foldleaf merge → botV0.cc=1 → rebalance(1)
+     * → foldnode at inner0: cl=1 cr=2 → merge (returns 1) */
+    lc_seek(&C, c, 0);
+    lc_splice(&C, 3, 0);
+    lc_asserttree(
+            c, 2,
+            innerV(innerV(botV(leafV(1, 2, 2, 2), leafV(2, 2), leafV(2, 2))),
+                   innerV(botV(leafV(2)))));
     lc_checktree_allow_empty(c, 1);
+    lc_checkcursor(&C, 0);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_splice_cov_foldleaf_lr(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cursor C;
+    lc_Cache *c = cacheV(S, 0, botV(leafV(2, 2, 2, 2), leafV(2, 2)));
+    assert(c);
+    lc_seek(&C, c, 6); /* leaf0 lidx=3 col=0, off=0 loff=6 */
+    lc_checktree(c);
+    lcD_foldleaf(&C);
+    C.loff = lcL_sumbytes(lcK_leaf(&C), 0, C.lidx);
+    lc_asserttree(c, 0, botV(leafV(2, 2, 2), leafV(2, 2, 2)));
+    lc_checktree(c);
+    lc_checkcursor(&C, 6);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_splice_cov_shiftnode_bal0(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = cacheV(
+            S, 1,
+            innerV(botV(leafV(10), leafV(10), leafV(10), leafV(10)),
+                   botV(leafV(10), leafV(10), leafV(10))));
+    lc_Cursor C;
+    assert(c);
+    lc_seek(&C, c, 25);
+    lc_splice(&C, 16, 0);
+    lc_checktree(c);
+    lc_checkcursor(&C, 25);
     lc_deltree(S, c);
     assert(S->nodes.live_obj == 0 && S->leaves.live_obj == 0);
     lc_close(S);
 }
 
-/* coverage: backwardline outer loop when deepest parent has single child.
- * lc_scan creates full leaves (4 breaks each). With a half-tree where the
- * deepest-level parent has only 1 child, the inner for loop is empty and
- * the outer for continues to the next level. */
-static void test_advline_cov_backward_cross(void) {
+static void test_splice_cov_trimleaf(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = cacheV(
-            S, 1,
-            innerV(botV(leafV(10), leafV(10), leafV(10)), botV(leafV(10))));
     lc_Cursor cur;
-    int       r;
-    assert(c && lc_breaks(c) == 4 && lc_bytes(c) == 40);
-    lc_seekline(&cur, c, 3);
-    r = lc_advline(&cur, -1);
-    assert(r == LC_OK && lc_line(&cur) == 2);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* markbreak: br == gap (no-op) */
-static void test_markbreak_noop(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
-    lc_scanV(c, 10, 15, 15);
-    assert(lc_breaks(c) == 3);
+    lc_Cache *c = cacheV(S, 0, botV(leafV(10, 0), leafV(10, 0), leafV(10, 0)));
+    assert(c);
     lc_seek(&cur, c, 5);
-    lc_checktree(c);
-    r = lc_markbreak(&cur, 10);
-    assert(r == LC_OK && lc_breaks(c) == 3 && lc_bytes(c) == 40);
+    lc_splice(&cur, 25, 0);
+    assert(c->root.child_count == 0 && c->bytes == 0 && c->breaks == 0);
+    lc_checktree_allow_empty(c, 1);
     lc_deltree(S, c);
     lc_close(S);
 }
 
-/* markbreak root split on add (deep tree) */
-static void test_markbreak_root_add(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
-    lc_rscanV(c, 21, 10);
-    assert(lc_breaks(c) == 21);
-    lc_seek(&cur, c, 2);
-    r = lc_markbreak(&cur, 3);
-    assert(r == LC_OK);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* clearbreaks: slot > last with clamping */
-static void test_clearbreaks_cov_slot(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
-    lc_scanV(c, 10, 15, 15);
-    assert(lc_breaks(c) == 3);
-    lc_checktree(c);
-    lc_seek(&cur, c, 11);
-    r = lc_clearbreaks(&cur, 16);
-    assert(r == LC_OK && lc_breaks(c) == 2);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* ================================================================ */
-/*  Phase 10: splice coverage tests (public API only)               */
-/* ================================================================ */
-
-
-
-
-
-
-
-
-
-
-
-
-
-/* scan basic: empty input and single-full-leaf scenarios */
-static void test_scan_basic(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c;
-    unsigned  empty[] = {0}, full[] = {5, 10, 15, 20, 0}, *pbrs;
-
-    /* case 1: empty scanner on empty tree */
-    c = lc_newtree(S);
-    pbrs = empty;
-    assert(lc_scan(c, lc_scanner, &pbrs) == LC_OK);
-    assert(lc_breaks(c) == 0 && lc_bytes(c) == 0);
-    lc_checktree(c);
-    lc_deltree(S, c);
-
-    /* case 2: exactly one full leaf (4 breaks) */
-    c = lc_newtree(S);
-    pbrs = full;
-    assert(lc_scan(c, lc_scanner, &pbrs) == LC_OK);
-    assert(lc_breaks(c) == 4 && lc_bytes(c) == 50);
-    assert(c->levels == 0 && c->root.child_count == 1);
-    lc_checktree(c);
-    lc_deltree(S, c);
-
-    lc_close(S);
-}
-
-/* bulk scan: 120 entries → multi-level tree */
-static void test_scan_bulk(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor C;
-    unsigned  brs[] = {120, 1, 0}, *pbrs = brs;
-    int       r;
-
-    r = lc_scan(c, lc_rscanner, &pbrs);
-    assert(r == LC_OK && lc_breaks(c) == 120 && lc_bytes(c) == 120);
-    assert(c->levels >= 2);
-    lc_checktree(c);
-    lc_seek(&C, c, 0);
-    assert(lc_offset(&C) == 0);
-    lc_seek(&C, c, 120);
-    assert(lc_offset(&C) == 120);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* scan append: 2nd scan into non-empty tree */
-static void test_scan_append(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    unsigned  brs_a[] = {4, 10, 0}, *pa = brs_a;
-    unsigned  brs_b[] = {5, 20, 0}, *pb = brs_b;
-    int       r;
-
-    r = lc_scan(c, lc_rscanner, &pa);
-    assert(r == LC_OK && lc_breaks(c) == 4 && lc_bytes(c) == 40);
-    r = lc_scan(c, lc_rscanner, &pb);
-    assert(r == LC_OK && lc_breaks(c) == 9 && lc_bytes(c) == 140);
-    lc_checktree(c);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* scan OOM: fail allocating pend_root node page during lcB_checkpendroot */
-static void test_scan_oom_items(void) {
-    lc_State *S;
-    lc_Cache *c;
-    unsigned  brs[] = {10, 0}, *pbrs = brs;
-    int       r, oom = 2;
-
-    S = lc_open(&oom_alloc, &oom);
-    if (!S) return;
-    c = lc_newtree(S);
-    r = lc_scan(c, lc_scanner, &pbrs);
-    assert(r == LC_ERRMEM);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* scan OOM: fail during flush cascade when pend has internal nodes.
- * With 170 segments the cascade exhausts node page (4 nodes/page).
- * Exercises lcB_disposepend freeing internal-node children via
- * lcN_freechildren. */
-static void test_scan_oom_flush(void) {
-    lc_State *S;
-    lc_Cache *c;
-    unsigned  brs[] = {170, 10, 0}, *pbrs = brs;
-    int       r, oom = 3;
-    S = lc_open(&oom_alloc, &oom);
-    if (!S) return;
-    c = lc_newtree(S);
-    r = lc_scan(c, lc_rscanner, &pbrs);
-    assert(r == LC_ERRMEM);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* scan OOM: fail allocating leaf page during lcB_fill */
-static void test_scan_oom_build(void) {
-    lc_State *S;
-    lc_Cache *c;
-    unsigned  brs[] = {170, 1, 0}, *pbrs = brs;
-    int       r, oom = 4;
-    S = lc_open(&oom_alloc, &oom);
-    if (!S) return;
-    c = lc_newtree(S);
-    r = lc_scan(c, lc_rscanner, &pbrs);
-    assert(r == LC_ERRMEM);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* boundary comparison: verify < vs <= at child traversal edges.
- * forward traversals must use < so boundary values land in next child;
- * backward traversals correctly use <= so boundary values stay in current. */
 static void test_boundary_cmp(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cursor cur;
@@ -1110,9 +1078,27 @@ static void test_boundary_cmp(void) {
     lc_close(S);
 }
 
-/* main */
+static void test_insert_params(void) {
+    lc_State *S;
+    lc_Cache *c;
+    lc_Cursor C;
+    unsigned  zero[] = {0}, *pz = zero;
 
-/* insert into non-empty tree: single leaf, middle insert */
+    S = lc_open(&test_alloc, NULL);
+    assert(S);
+    c = lc_newtree(S);
+    assert(c);
+
+    assert(lc_insert(NULL, 0, lc_scanner, &pz) == LC_ERRPARAM);
+    memset(&C, 0, sizeof(C));
+    assert(lc_insert(&C, 0, lc_scanner, &pz) == LC_ERRPARAM);
+    lc_seek(&C, c, 0);
+    assert(lc_insert(&C, 0, NULL, &pz) == LC_ERRPARAM);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 static void test_insert_leaf(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -1133,7 +1119,6 @@ static void test_insert_leaf(void) {
     lc_close(S);
 }
 
-/* insert col>0: split current line, merge first br, prepend e */
 static void test_insert_col(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -1156,7 +1141,6 @@ static void test_insert_col(void) {
     lc_close(S);
 }
 
-/* br==0, e>0: add e to current line */
 static void test_insert_append(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -1177,71 +1161,6 @@ static void test_insert_append(void) {
     lc_close(S);
 }
 
-/* trailing area insert */
-static void test_insert_trailing(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor C;
-    unsigned  brs[] = {5, 5, 0}, *pb = brs;
-    int       r;
-    assert(c);
-
-    lc_scanV(c, 10, 10);
-    assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
-
-    lc_seek(&C, c, 25);
-    assert(lc_offset(&C) == 25 && C.col == 5);
-    r = lc_insert(&C, 7, lc_scanner, &pb);
-    assert(r == LC_OK);
-    lc_checktree(c);
-    lc_asserttree(c, 0, botV(leafV(10, 10, 10, 5)));
-    lc_checkcursor(&C, 35 + 7);
-    assert(lc_breaks(c) == 4 && lc_bytes(c) == 35);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* insert causing leaf split */
-static void test_insert_leaf_split(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor C;
-    unsigned  brs_b[] = {3, 3, 3, 0}, *pb = brs_b;
-    int       r;
-
-    lc_scanV(c, 5, 5, 5);
-    assert(lc_breaks(c) == 3 && lc_bytes(c) == 15);
-
-    lc_seek(&C, c, 5);
-    r = lc_insert(&C, 2, lc_scanner, &pb);
-    assert(r == LC_OK);
-    lc_checktree(c);
-    assert(lc_breaks(c) == 6 && lc_bytes(c) == 26);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* br==0, e==0: no-op */
-static void test_insert_noop(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor C;
-    unsigned  zero[] = {0}, *pz = zero;
-    int       r;
-
-    lc_scanV(c, 10, 10);
-    assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
-
-    lc_seek(&C, c, 5);
-    r = lc_insert(&C, 0, lc_scanner, &pz);
-    assert(r == LC_OK);
-    lc_checktree(c);
-    assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* insert enough data to trigger driverun while-loop (fill->flush->refill) */
 static void test_insert_many(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -1261,7 +1180,6 @@ static void test_insert_many(void) {
     lc_close(S);
 }
 
-/* empty tree insert: with breaks and with noop */
 static void test_insert_empty(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
@@ -1291,244 +1209,6 @@ static void test_insert_empty(void) {
     lc_close(S);
 }
 
-/* OOM in driverun for trailing path */
-static void test_insert_oom_trailing(void) {
-    lc_State *S;
-    lc_Cache *c;
-    lc_Cursor C;
-    unsigned  brs[] = {2, 0}, *pbrs = brs;
-    int       found = 0, k;
-    for (k = 2; k <= 10; ++k) {
-        int oom = k;
-        S = lc_open(&oom_alloc, &oom);
-        if (!S) continue;
-        c = lc_newtree(S);
-        if (!c) {
-            lc_close(S);
-            continue;
-        }
-        {
-            size_t slb = S->leaves.live_obj, snb = S->nodes.live_obj;
-            lc_seek(&C, c, 0);
-            pbrs = brs;
-            if (lc_insert(&C, 0, lc_scanner, &pbrs) == LC_ERRMEM) {
-                assert(S->leaves.live_obj == slb);
-                assert(S->nodes.live_obj == snb);
-                found = 1;
-            }
-        }
-        lc_deltree(S, c);
-        lc_close(S);
-        if (found) break;
-    }
-    assert(found);
-}
-
-/* OOM in driverun for normal path */
-static void test_insert_oom_normal(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c;
-    lc_Cursor C;
-    unsigned  brs_b[] = {17, 1, 0}, *pb;
-    lc_Leaf   lfdum;
-    int       oom = 0;
-    void     *lf;
-
-    assert(S);
-    c = cacheV(S, 0, botV(leafV(5, 5)));
-    lc_checktree(c);
-
-    S->leaves.freed = NULL;
-    S->leaves.pages = NULL;
-    S->nodes.freed = NULL;
-    S->nodes.pages = NULL;
-    lc_localfill(&S->leaves, &lf, &lfdum, 1);
-
-    {
-        size_t slb = S->leaves.live_obj, snb = S->nodes.live_obj;
-        S->allocf = oom_alloc;
-        S->alloc_ud = &oom;
-        lc_seek(&C, c, 3);
-        pb = brs_b;
-        assert(lc_insert(&C, 0, lc_rscanner, &pb) == LC_ERRMEM);
-        assert(S->leaves.live_obj == slb);
-        assert(S->nodes.live_obj == snb);
-    }
-
-    S->leaves.freed = lf;
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* OOM in lcB_applyfirst col==0 path (white-box: drain leaf freelist to 1) */
-static void test_insert_oom_col0(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c;
-    lc_Cursor C;
-    unsigned  brs_b[] = {1, 1, 1, 1, 1, 0}, *pb;
-    int       count, oom = 0;
-    void     *head;
-
-    assert(S);
-    c = cacheV(S, 0, botV(leafV(5, 5)));
-    lc_checktree(c);
-
-    head = S->leaves.freed;
-    count = 0;
-    while (head) {
-        count++;
-        head = *(void **)head;
-    }
-    if (count > 1) {
-        int i;
-        head = S->leaves.freed;
-        for (i = 0; i < count - 1 && *(void **)head; i++) head = *(void **)head;
-        S->leaves.freed = head;
-        *(void **)head = NULL;
-    }
-
-    lc_seek(&C, c, 0);
-    {
-        size_t slb = S->leaves.live_obj, snb = S->nodes.live_obj;
-        S->allocf = oom_alloc;
-        S->alloc_ud = &oom;
-        pb = brs_b;
-        assert(lc_insert(&C, 0, lc_scanner, &pb) == LC_ERRMEM);
-        assert(S->leaves.live_obj == slb);
-        assert(S->nodes.live_obj == snb);
-    }
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* insert with NULL parameters */
-static void test_insert_params(void) {
-    lc_State *S;
-    lc_Cache *c;
-    lc_Cursor C;
-    unsigned  zero[] = {0}, *pz = zero;
-
-    S = lc_open(&test_alloc, NULL);
-    assert(S);
-    c = lc_newtree(S);
-    assert(c);
-
-    assert(lc_insert(NULL, 0, lc_scanner, &pz) == LC_ERRPARAM);
-    memset(&C, 0, sizeof(C));
-    assert(lc_insert(&C, 0, lc_scanner, &pz) == LC_ERRPARAM);
-    lc_seek(&C, c, 0);
-    assert(lc_insert(&C, 0, NULL, &pz) == LC_ERRPARAM);
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* cov: splice deletes to tree end, R at locend triggers lcD_trimleaf leaf-end
- * path.
- */
-static void test_splice_cov_trimleaf(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cursor cur;
-    lc_Cache *c = cacheV(S, 0, botV(leafV(10, 0), leafV(10, 0), leafV(10, 0)));
-    assert(c);
-    lc_seek(&cur, c, 5);
-    lc_splice(&cur, 25, 0);
-    assert(c->root.child_count == 0 && c->bytes == 0 && c->breaks == 0);
-    lc_checktree_allow_empty(c, 1);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-
-
-
-
-
-
-
-
-/* cov: spliceleaf underfills leaf → foldleaf merge → botV.cc=1 →
- * rebalance → foldnode merge (cl+cr≤FANOUT, merge succeeds). */
-static void test_splice_cov_rebalance(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = cacheV(
-            S, 2,
-            innerV(innerV(botV(leafV(2, 2), leafV(2, 2, 2)),
-                          botV(leafV(2, 2), leafV(2, 2))),
-                   innerV(botV(leafV(2)))));
-    lc_Cursor C;
-    assert(c);
-    /* L at offset 0 leaf0[2,2]: splice del=3 → leaf becomes [1]
-     * underfull → foldleaf merge → botV0.cc=1 → rebalance(1)
-     * → foldnode at inner0: cl=1 cr=2 → merge (returns 1) */
-    lc_seek(&C, c, 0);
-    lc_splice(&C, 3, 0);
-    lc_asserttree(
-            c, 2,
-            innerV(innerV(botV(leafV(1, 2, 2, 2), leafV(2, 2), leafV(2, 2))),
-                   innerV(botV(leafV(2)))));
-    lc_checktree_allow_empty(c, 1);
-    lc_checkcursor(&C, 0);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-
-
-/* foldleaf dl>0 *ls==o lidx>=cl-dl: cursor in left leaf, data moves
- * left->right, cursor among moved segments → switches to right leaf. */
-static void test_splice_cov_foldleaf_lr(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cursor C;
-    lc_Cache *c = cacheV(S, 0, botV(leafV(2, 2, 2, 2), leafV(2, 2)));
-    assert(c);
-    lc_seek(&C, c, 6); /* leaf0 lidx=3 col=0, off=0 loff=6 */
-    lc_checktree(c);
-    lcD_foldleaf(&C);
-    C.loff = lcL_sumbytes(lcK_leaf(&C), 0, C.lidx);
-    lc_asserttree(c, 0, botV(leafV(2, 2, 2), leafV(2, 2, 2)));
-    lc_checktree(c);
-    lc_checkcursor(&C, 6);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-
-
-
-
-
-
-
-
-
-
-/* shiftnode balancenode returns 0. levels=1, botV[0] has 4 leaves,
- * botV[1] has 3 leaves. splice crosses botV boundary → shiftnode
- * → cl=3 cr=3 → d=0 → lcN_move path. */
-static void test_splice_cov_shiftnode_bal0(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = cacheV(
-            S, 1,
-            innerV(botV(leafV(10), leafV(10), leafV(10), leafV(10)),
-                   botV(leafV(10), leafV(10), leafV(10))));
-    lc_Cursor C;
-    assert(c);
-    lc_seek(&C, c, 25);
-    lc_splice(&C, 16, 0);
-    lc_checktree(c);
-    lc_checkcursor(&C, 25);
-    lc_deltree(S, c);
-    assert(S->nodes.live_obj == 0 && S->leaves.live_obj == 0);
-    lc_close(S);
-}
-
-/* ================================================================ */
-/*  insert coverage: multi-leaf, shiftup, stitch, fixcursor         */
-/* ================================================================ */
-
-/* insert where right side spans multiple leaves → lcB_cutleaf cnt>0 */
 static void test_insert_sib(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(
@@ -1542,181 +1222,6 @@ static void test_insert_sib(void) {
     lc_close(S);
 }
 
-/* insert triggers stitch→shiftup (parent full during stitch) */
-static void test_insert_stitch_shiftup(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = cacheV(S, 0, botV(leafV(1), leafV(1), leafV(1), leafV(1)));
-    lc_Cursor C;
-    unsigned  brs[] = {0}, *p = brs;
-    lc_seek(&C, c, 1);
-    assert(lc_insert(&C, 0, lc_scanner, &p) == LC_OK);
-    lc_asserttree(c, 0, botV(leafV(1), leafV(1, 1), leafV(1)));
-    lc_checkcursor(&C, 1);
-    lc_checktree_allow_empty(c, 1);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* insert OOM in lcB_fillrt → lcB_oom path */
-static void test_insert_oom_shiftup(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c;
-    lc_Cursor C;
-    lc_Leaf   lfdum;
-    int       oom = 0;
-    void     *lf;
-
-    assert(S);
-    c = cacheV(
-            S, 0,
-            botV(leafV(1, 0), leafV(2, 0), leafV(3, 0), leafV(4, 0), NULL));
-    lc_checktree(c);
-
-    S->leaves.freed = NULL;
-    S->leaves.pages = NULL;
-    S->nodes.freed = NULL;
-    S->nodes.pages = NULL;
-    lc_localfill(&S->leaves, &lf, &lfdum, 1);
-
-    {
-        unsigned brs[] = {1, 1, 1, 1, 1, 0}, *p = brs;
-        size_t   slb = S->leaves.live_obj, snb = S->nodes.live_obj;
-        S->allocf = oom_alloc;
-        S->alloc_ud = &oom;
-        lc_seek(&C, c, 1);
-        assert(lc_insert(&C, 0, lc_scanner, &p) == LC_ERRMEM);
-        assert(S->leaves.live_obj == slb);
-        assert(S->nodes.live_obj == snb);
-    }
-
-    S->leaves.freed = lf;
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* insert triggers stitch→rootpush → fixcursor diff>0 */
-static void test_insert_rootpush(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = cacheV(S, 0, botV(leafV(1), leafV(1), leafV(1), leafV(1)));
-    lc_Cursor C;
-    unsigned  brs[] = {2, 2, 2, 2, 2, 0}, *p = brs;
-    lc_seek(&C, c, 1);
-    assert(lc_insert(&C, 0, lc_scanner, &p) == LC_OK);
-    lc_checktree_allow_empty(c, 1);
-    lc_checkcursor(&C, 11);
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* insert into 2-level tree: root→bottom→leaf, trigger fillrt in append */
-static void test_insert_oom_rootpush(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c;
-    lc_Cursor C;
-    lc_Node  *b[4];
-    int       oom = 0, i;
-    void     *nf;
-
-    assert(S);
-    for (i = 0; i < 4; i++) b[i] = botV(leafV(1), leafV(1), leafV(1), leafV(1));
-    c = cacheV(S, 1, innerV(b[0], b[1], b[2], b[3]));
-    lc_checktree(c);
-
-    nf = S->nodes.freed;
-    S->nodes.freed = NULL;
-    S->nodes.pages = NULL;
-
-    {
-        unsigned bs[49], *p = (unsigned *)bs;
-        size_t   snb = S->nodes.live_obj;
-        for (i = 0; i < 48; i++) bs[i] = 1;
-        bs[48] = 0;
-        S->allocf = oom_alloc;
-        S->alloc_ud = &oom;
-        lc_seek(&C, c, 1);
-        assert(lc_insert(&C, 0, lc_scanner, &p) == LC_ERRMEM);
-        assert(S->nodes.live_obj == snb);
-    }
-
-    S->nodes.freed = nf;
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* OOM after rootpush: deroot loop during flush cascade */
-static void test_insert_oom_deroot(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c;
-    lc_Cursor C;
-    int       oom = 0;
-
-    assert(S);
-    c = cacheV(
-            S, 0,
-            botV(leafV(1, 0), leafV(1, 0), leafV(1, 0), leafV(1, 0), NULL));
-    lc_checktree(c);
-    {
-        void *head = S->nodes.freed;
-        int   count = 0;
-        while (head) {
-            count++;
-            head = *(void **)head;
-        }
-        if (count > 1) {
-            int i;
-            head = S->nodes.freed;
-            for (i = 0; i < count - 1 && *(void **)head; i++)
-                head = *(void **)head;
-            S->nodes.freed = head;
-            *(void **)head = NULL;
-        }
-    }
-    S->nodes.pages = NULL;
-
-    {
-        unsigned brs[] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0}, *p = brs;
-        size_t   snb = S->nodes.live_obj;
-        S->allocf = oom_alloc;
-        S->alloc_ud = &oom;
-        lc_seek(&C, c, 1);
-        assert(lc_insert(&C, 0, lc_scanner, &p) == LC_ERRMEM);
-        assert(S->nodes.live_obj == snb);
-    }
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* rollback level reduction. Full-root tree with full leaves;
- * cutleaf + first append + fillrt (rootpush → levels=1) succeeds,
- * second append OOM → rollback reduces levels. */
-static void test_insert_oom_rollback(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c;
-    lc_Cursor C;
-
-    assert(S);
-    c = cacheV(S, 0, botV(leafV(1, 0), leafV(1, 0), leafV(1, 0), leafV(1, 0)));
-    assert(c);
-
-    S->nodes.freed = NULL;
-    S->nodes.pages = NULL;
-
-    {
-        unsigned bs[] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0}, *p = bs;
-        int      oom = 1, r;
-        S->allocf = oom_alloc;
-        S->alloc_ud = &oom;
-        lc_seek(&C, c, 1);
-        p = bs;
-        r = lc_insert(&C, 0, lc_scanner, &p);
-        assert(r < 0);
-    }
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-/* deep chain: mid full, root not → fillrt fl=0 dl=2 → chain loop enters */
 static void test_insert_deep(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
@@ -1739,13 +1244,52 @@ static void test_insert_deep(void) {
     lc_close(S);
 }
 
-/*
- * fillrt findlevel bug: root has 4 children (full), insert through idx=1
- * (not the last child).  After demotion fills inner2 to 4 children,
- * stitch calls fillrt.  The old findlevel checks child_count < FANOUT,
- * sees root is full, and rootpushes -- when moving right siblings
- * (inner3, inner4) would suffice, preserving the original structural order.
- */
+static void test_insert_leaf_split(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  brs_b[] = {3, 3, 3, 0}, *pb = brs_b;
+    int       r;
+
+    lc_scanV(c, 5, 5, 5);
+    assert(lc_breaks(c) == 3 && lc_bytes(c) == 15);
+
+    lc_seek(&C, c, 5);
+    r = lc_insert(&C, 2, lc_scanner, &pb);
+    assert(r == LC_OK);
+    lc_checktree(c);
+    assert(lc_breaks(c) == 6 && lc_bytes(c) == 26);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_insert_stitch_shiftup(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = cacheV(S, 0, botV(leafV(1), leafV(1), leafV(1), leafV(1)));
+    lc_Cursor C;
+    unsigned  brs[] = {0}, *p = brs;
+    lc_seek(&C, c, 1);
+    assert(lc_insert(&C, 0, lc_scanner, &p) == LC_OK);
+    lc_asserttree(c, 0, botV(leafV(1), leafV(1, 1), leafV(1)));
+    lc_checkcursor(&C, 1);
+    lc_checktree_allow_empty(c, 1);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_insert_rootpush(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = cacheV(S, 0, botV(leafV(1), leafV(1), leafV(1), leafV(1)));
+    lc_Cursor C;
+    unsigned  brs[] = {2, 2, 2, 2, 2, 0}, *p = brs;
+    lc_seek(&C, c, 1);
+    assert(lc_insert(&C, 0, lc_scanner, &p) == LC_OK);
+    lc_checktree_allow_empty(c, 1);
+    lc_checkcursor(&C, 11);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 static void test_insert_fillrt_findlevel(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
@@ -1769,7 +1313,48 @@ static void test_insert_fillrt_findlevel(void) {
     lc_close(S);
 }
 
-/* insert brute: full tree (>=3 layers), insert 10 breaks at all positions */
+static void test_insert_noop(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  zero[] = {0}, *pz = zero;
+    int       r;
+
+    lc_scanV(c, 10, 10);
+    assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
+
+    lc_seek(&C, c, 5);
+    r = lc_insert(&C, 0, lc_scanner, &pz);
+    assert(r == LC_OK);
+    lc_checktree(c);
+    assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_insert_trailing(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  brs[] = {5, 5, 0}, *pb = brs;
+    int       r;
+    assert(c);
+
+    lc_scanV(c, 10, 10);
+    assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
+
+    lc_seek(&C, c, 25);
+    assert(lc_offset(&C) == 25 && C.col == 5);
+    r = lc_insert(&C, 7, lc_scanner, &pb);
+    assert(r == LC_OK);
+    lc_checktree(c);
+    lc_asserttree(c, 0, botV(leafV(10, 10, 10, 5)));
+    lc_checkcursor(&C, 35 + 7);
+    assert(lc_breaks(c) == 4 && lc_bytes(c) == 35);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 static void test_insert_brute(void) {
     lc_State *S;
     lc_Cache *c;
@@ -1813,6 +1398,255 @@ static void test_insert_brute(void) {
 
     lc_close(S);
 }
+
+static void test_insert_oom_trailing(void) {
+    lc_State *S;
+    lc_Cache *c;
+    lc_Cursor C;
+    unsigned  brs[] = {2, 0}, *pbrs = brs;
+    int       found = 0, k;
+    for (k = 2; k <= 10; ++k) {
+        int oom = k;
+        S = lc_open(&oom_alloc, &oom);
+        if (!S) continue;
+        c = lc_newtree(S);
+        if (!c) {
+            lc_close(S);
+            continue;
+        }
+        {
+            size_t slb = S->leaves.live_obj, snb = S->nodes.live_obj;
+            lc_seek(&C, c, 0);
+            pbrs = brs;
+            if (lc_insert(&C, 0, lc_scanner, &pbrs) == LC_ERRMEM) {
+                assert(S->leaves.live_obj == slb);
+                assert(S->nodes.live_obj == snb);
+                found = 1;
+            }
+        }
+        lc_deltree(S, c);
+        lc_close(S);
+        if (found) break;
+    }
+    assert(found);
+}
+
+static void test_insert_oom_normal(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c;
+    lc_Cursor C;
+    unsigned  brs_b[] = {17, 1, 0}, *pb;
+    lc_Leaf   lfdum;
+    int       oom = 0;
+    void     *lf;
+
+    assert(S);
+    c = cacheV(S, 0, botV(leafV(5, 5)));
+    lc_checktree(c);
+
+    S->leaves.freed = NULL;
+    S->leaves.pages = NULL;
+    S->nodes.freed = NULL;
+    S->nodes.pages = NULL;
+    lc_localfill(&S->leaves, &lf, &lfdum, 1);
+
+    {
+        size_t slb = S->leaves.live_obj, snb = S->nodes.live_obj;
+        S->allocf = oom_alloc;
+        S->alloc_ud = &oom;
+        lc_seek(&C, c, 3);
+        pb = brs_b;
+        assert(lc_insert(&C, 0, lc_rscanner, &pb) == LC_ERRMEM);
+        assert(S->leaves.live_obj == slb);
+        assert(S->nodes.live_obj == snb);
+    }
+
+    S->leaves.freed = lf;
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_insert_oom_col0(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c;
+    lc_Cursor C;
+    unsigned  brs_b[] = {1, 1, 1, 1, 1, 0}, *pb;
+    int       count, oom = 0;
+    void     *head;
+
+    assert(S);
+    c = cacheV(S, 0, botV(leafV(5, 5)));
+    lc_checktree(c);
+
+    head = S->leaves.freed;
+    count = 0;
+    while (head) {
+        count++;
+        head = *(void **)head;
+    }
+    if (count > 1) {
+        int i;
+        head = S->leaves.freed;
+        for (i = 0; i < count - 1 && *(void **)head; i++) head = *(void **)head;
+        S->leaves.freed = head;
+        *(void **)head = NULL;
+    }
+
+    lc_seek(&C, c, 0);
+    {
+        size_t slb = S->leaves.live_obj, snb = S->nodes.live_obj;
+        S->allocf = oom_alloc;
+        S->alloc_ud = &oom;
+        pb = brs_b;
+        assert(lc_insert(&C, 0, lc_scanner, &pb) == LC_ERRMEM);
+        assert(S->leaves.live_obj == slb);
+        assert(S->nodes.live_obj == snb);
+    }
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_insert_oom_shiftup(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c;
+    lc_Cursor C;
+    lc_Leaf   lfdum;
+    int       oom = 0;
+    void     *lf;
+
+    assert(S);
+    c = cacheV(
+            S, 0,
+            botV(leafV(1, 0), leafV(2, 0), leafV(3, 0), leafV(4, 0), NULL));
+    lc_checktree(c);
+
+    S->leaves.freed = NULL;
+    S->leaves.pages = NULL;
+    S->nodes.freed = NULL;
+    S->nodes.pages = NULL;
+    lc_localfill(&S->leaves, &lf, &lfdum, 1);
+
+    {
+        unsigned brs[] = {1, 1, 1, 1, 1, 0}, *p = brs;
+        size_t   slb = S->leaves.live_obj, snb = S->nodes.live_obj;
+        S->allocf = oom_alloc;
+        S->alloc_ud = &oom;
+        lc_seek(&C, c, 1);
+        assert(lc_insert(&C, 0, lc_scanner, &p) == LC_ERRMEM);
+        assert(S->leaves.live_obj == slb);
+        assert(S->nodes.live_obj == snb);
+    }
+
+    S->leaves.freed = lf;
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_insert_oom_rootpush(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c;
+    lc_Cursor C;
+    lc_Node  *b[4];
+    int       oom = 0, i;
+    void     *nf;
+
+    assert(S);
+    for (i = 0; i < 4; i++) b[i] = botV(leafV(1), leafV(1), leafV(1), leafV(1));
+    c = cacheV(S, 1, innerV(b[0], b[1], b[2], b[3]));
+    lc_checktree(c);
+
+    nf = S->nodes.freed;
+    S->nodes.freed = NULL;
+    S->nodes.pages = NULL;
+
+    {
+        unsigned bs[49], *p = (unsigned *)bs;
+        size_t   snb = S->nodes.live_obj;
+        for (i = 0; i < 48; i++) bs[i] = 1;
+        bs[48] = 0;
+        S->allocf = oom_alloc;
+        S->alloc_ud = &oom;
+        lc_seek(&C, c, 1);
+        assert(lc_insert(&C, 0, lc_scanner, &p) == LC_ERRMEM);
+        assert(S->nodes.live_obj == snb);
+    }
+
+    S->nodes.freed = nf;
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_insert_oom_deroot(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c;
+    lc_Cursor C;
+    int       oom = 0;
+
+    assert(S);
+    c = cacheV(
+            S, 0,
+            botV(leafV(1, 0), leafV(1, 0), leafV(1, 0), leafV(1, 0), NULL));
+    lc_checktree(c);
+    {
+        void *head = S->nodes.freed;
+        int   count = 0;
+        while (head) {
+            count++;
+            head = *(void **)head;
+        }
+        if (count > 1) {
+            int i;
+            head = S->nodes.freed;
+            for (i = 0; i < count - 1 && *(void **)head; i++)
+                head = *(void **)head;
+            S->nodes.freed = head;
+            *(void **)head = NULL;
+        }
+    }
+    S->nodes.pages = NULL;
+
+    {
+        unsigned brs[] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0}, *p = brs;
+        size_t   snb = S->nodes.live_obj;
+        S->allocf = oom_alloc;
+        S->alloc_ud = &oom;
+        lc_seek(&C, c, 1);
+        assert(lc_insert(&C, 0, lc_scanner, &p) == LC_ERRMEM);
+        assert(S->nodes.live_obj == snb);
+    }
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_insert_oom_rollback(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c;
+    lc_Cursor C;
+
+    assert(S);
+    c = cacheV(S, 0, botV(leafV(1, 0), leafV(1, 0), leafV(1, 0), leafV(1, 0)));
+    assert(c);
+
+    S->nodes.freed = NULL;
+    S->nodes.pages = NULL;
+
+    {
+        unsigned bs[] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0}, *p = bs;
+        int      oom = 1, r;
+        S->allocf = oom_alloc;
+        S->alloc_ud = &oom;
+        lc_seek(&C, c, 1);
+        p = bs;
+        r = lc_insert(&C, 0, lc_scanner, &p);
+        assert(r < 0);
+    }
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 
 #define TESTS(X)                    \
     X(lifecycle)                    \
