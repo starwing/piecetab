@@ -818,6 +818,9 @@ static void lcD_splicerange(lc_Cursor *L, lc_Cursor *R) {
 }
 
 static void lcD_emptytree(lc_Cursor *C, size_t ins) {
+    lcN_freechildren(
+            C->tree->S, &C->tree->root, C->tree->levels, 0,
+            C->tree->root.child_count);
     memset(&C->tree->root, 0, sizeof(lc_Node));
     C->tree->levels = C->tree->bytes = C->tree->breaks = 0, C->col += ins;
 }

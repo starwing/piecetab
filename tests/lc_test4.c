@@ -917,39 +917,39 @@ static void test_splice_params(void) {
 static void test_splice(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
+    lc_Cursor C;
 
     lc_rscanV(c, 100, 10);
     assert(lc_breaks(c) == 100 && lc_bytes(c) == 1000);
 
-    lc_seek(&cur, c, 0);
-    lc_splice(&cur, 1000, 0); /* delete all */
+    lc_seek(&C, c, 0);
+    lc_splice(&C, 1000, 0); /* delete all */
     assert(lc_breaks(c) == 0 && lc_bytes(c) == 0);
     lc_checktree(c);
 
     /* second scan on cleared tree */
     lc_rscanV(c, 100, 10);
     assert(lc_breaks(c) == 100 && lc_bytes(c) == 1000);
-    lc_seek(&cur, c, 11);
-    lc_splice(&cur, 980, 0); /* delete all but first 11 + last 9 */
+    lc_seek(&C, c, 11);
+    lc_splice(&C, 980, 0); /* delete all but first 11 + last 9 */
     assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
     lc_checktree(c);
 
     lc_scanV(c, 5, 15);
 
     /* simple splice (no break crossing) */
-    lc_seek(&cur, c, 2);
-    lc_splice(&cur, 5, 3);
-    assert(lc_bytes(c) == 38 && lc_offset(&cur) == 5);
+    lc_seek(&C, c, 2);
+    lc_splice(&C, 5, 3);
+    assert(lc_bytes(c) == 38 && lc_offset(&C) == 5);
 
     /* splice crossing breaks */
-    lc_seek(&cur, c, 0);
-    lc_splice(&cur, 15, 8);
+    lc_seek(&C, c, 0);
+    lc_splice(&C, 15, 8);
     assert(lc_bytes(c) == 31); /* 38 - 15 + 8 */
     lc_checktree(c);
 
     /* splice with del=0, ins=0 (no-op) */
-    lc_splice(&cur, 0, 0);
+    lc_splice(&C, 0, 0);
     lc_checktree(c);
 
     /* null check */
@@ -963,22 +963,56 @@ static void test_splice(void) {
 static void test_splice_trailing(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
+    lc_Cursor C;
     lc_scanV(c, 10, 15, 15);
     lc_scan(c, lc_scanner, NULL);
 
     /* after last break (trailing area): slot=3 (==breaks) */
-    lc_seek(&cur, c, 40);
-    lc_splice(&cur, 0, 20); /* insert 20 bytes at end */
+    lc_seek(&C, c, 40);
+    lc_splice(&C, 0, 20); /* insert 20 bytes at end */
     lc_checktree(c);
-    assert(lc_bytes(c) == 40);     /* 40 is the last newline */
-    assert(lc_offset(&cur) == 60); /* offset == line start + col */
+    assert(lc_bytes(c) == 40);   /* 40 is the last newline */
+    assert(lc_offset(&C) == 60); /* offset == line start + col */
 
     /* verify seek within expanded trailing segment */
-    lc_seek(&cur, c, 45);
-    assert(lc_line(&cur) == 3);
+    lc_seek(&C, c, 45);
+    assert(lc_line(&C) == 3);
 
     lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* splice_brute: exhaustive pos+del enumeration on multi-level tree */
+static void test_splice_brute(void) {
+    lc_State *S;
+    lc_Cache *c;
+    lc_Cursor C;
+    int       pos, del;
+    int const n = 128;
+
+    S = lc_open(&test_alloc, NULL);
+    assert(S);
+    c = lc_newtree(S);
+    lc_rscanV(c, n, 1);
+    assert((int)c->levels >= 2);
+    lc_checktree(c);
+    lc_deltree(S, c);
+    assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
+
+    for (pos = 0; pos <= n; ++pos)
+        for (del = 0; del <= n - pos; ++del) {
+            printf("splice pos=%d del=%d\n", pos, del);
+            c = lc_newtree(S);
+            lc_rscanV(c, n, 1);
+            lc_seek(&C, c, pos);
+            lc_splice(&C, del, 0);
+            lc_checktree(c);
+            assert(lc_bytes(c) == (size_t)(n - del));
+            lc_checkcursor(&C, pos);
+            lc_deltree(S, c);
+            assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
+        }
+
     lc_close(S);
 }
 
@@ -1647,80 +1681,80 @@ static void test_insert_oom_rollback(void) {
     lc_close(S);
 }
 
-
-#define TESTS(X)                    \
-    X(lifecycle)                    \
-    X(scan_params)                  \
-    X(scan_basic)                   \
-    X(scan_seek)                    \
-    X(scan_bulk)                    \
-    X(scan_append)                  \
-    X(scan_oom_items)               \
-    X(scan_oom_flush)               \
-    X(scan_oom_build)               \
-    X(seek_params)                  \
-    X(seek_pastleaf)                \
-    X(seek_line_leaf)               \
-    X(seek_line_pastleaf)           \
-    X(seek_edge)                    \
-    X(advance_params)               \
-    X(advance_single)               \
-    X(advance_cross)                \
-    X(advance_cov_backward_cross)   \
-    X(advance_cov_skip_siblings)    \
-    X(advance_cov_backwardoff)      \
-    X(advline_params)               \
-    X(advline_cross)                \
-    X(advline_cov_backward_within)  \
-    X(advline_cov_backward_cross)   \
-    X(advline_cov_forward_cross)    \
-    X(markbreak)                    \
-    X(markbreak_params)             \
-    X(markbreak_empty)              \
-    X(markbreak_crossline)          \
-    X(markbreak_trailing)           \
-    X(markbreak_noop)               \
-    X(markbreak_brzero)             \
-    X(markbreak_crossleaf)          \
-    X(markbreak_split)              \
-    X(markbreak_node_split)         \
-    X(markbreak_root_split)         \
-    X(markbreak_root_add)           \
-    X(markbreak_cascade)            \
-    X(markbreak_cov_split_right)    \
-    X(markbreak_cov_child_right)    \
-    X(clearbreaks_params)           \
-    X(clearbreaks)                  \
-    X(clearbreaks_cov_slot)         \
-    X(splice_params)                \
-    X(splice)                       \
-    X(splice_trailing)              \
-    X(splice_cov_rebalance)         \
-    X(splice_cov_foldleaf_lr)       \
-    X(splice_cov_shiftnode_bal0)    \
-    X(splice_cov_trimleaf)          \
-    X(boundary_cmp)                 \
-    X(insert_params)                \
-    X(insert_leaf)                  \
-    X(insert_col)                   \
-    X(insert_append)                \
-    X(insert_many)                  \
-    X(insert_empty)                 \
-    X(insert_sib)                   \
-    X(insert_deep)                  \
-    X(insert_leaf_split)            \
-    X(insert_stitch_shiftup)        \
-    X(insert_rootpush)              \
-    X(insert_fillrt_findlevel)      \
-    X(insert_noop)                  \
-    X(insert_trailing)              \
-    X(insert_brute)                 \
-    X(insert_oom_trailing)          \
-    X(insert_oom_normal)            \
-    X(insert_oom_col0)              \
-    X(insert_oom_shiftup)           \
-    X(insert_oom_rootpush)          \
-    X(insert_oom_deroot)            \
+#define TESTS(X)                   \
+    X(lifecycle)                   \
+    X(scan_params)                 \
+    X(scan_basic)                  \
+    X(scan_seek)                   \
+    X(scan_bulk)                   \
+    X(scan_append)                 \
+    X(scan_oom_items)              \
+    X(scan_oom_flush)              \
+    X(scan_oom_build)              \
+    X(seek_params)                 \
+    X(seek_pastleaf)               \
+    X(seek_line_leaf)              \
+    X(seek_line_pastleaf)          \
+    X(seek_edge)                   \
+    X(advance_params)              \
+    X(advance_single)              \
+    X(advance_cross)               \
+    X(advance_cov_backward_cross)  \
+    X(advance_cov_skip_siblings)   \
+    X(advance_cov_backwardoff)     \
+    X(advline_params)              \
+    X(advline_cross)               \
+    X(advline_cov_backward_within) \
+    X(advline_cov_backward_cross)  \
+    X(advline_cov_forward_cross)   \
+    X(markbreak)                   \
+    X(markbreak_params)            \
+    X(markbreak_empty)             \
+    X(markbreak_crossline)         \
+    X(markbreak_trailing)          \
+    X(markbreak_noop)              \
+    X(markbreak_brzero)            \
+    X(markbreak_crossleaf)         \
+    X(markbreak_split)             \
+    X(markbreak_node_split)        \
+    X(markbreak_root_split)        \
+    X(markbreak_root_add)          \
+    X(markbreak_cascade)           \
+    X(markbreak_cov_split_right)   \
+    X(markbreak_cov_child_right)   \
+    X(clearbreaks_params)          \
+    X(clearbreaks)                 \
+    X(clearbreaks_cov_slot)        \
+    X(splice_params)               \
+    X(splice)                      \
+    X(splice_trailing)             \
+    X(splice_brute)                \
+    X(splice_cov_rebalance)        \
+    X(splice_cov_foldleaf_lr)      \
+    X(splice_cov_shiftnode_bal0)   \
+    X(splice_cov_trimleaf)         \
+    X(boundary_cmp)                \
+    X(insert_params)               \
+    X(insert_leaf)                 \
+    X(insert_col)                  \
+    X(insert_append)               \
+    X(insert_many)                 \
+    X(insert_empty)                \
+    X(insert_sib)                  \
+    X(insert_deep)                 \
+    X(insert_leaf_split)           \
+    X(insert_stitch_shiftup)       \
+    X(insert_rootpush)             \
+    X(insert_fillrt_findlevel)     \
+    X(insert_noop)                 \
+    X(insert_trailing)             \
+    X(insert_brute)                \
+    X(insert_oom_trailing)         \
+    X(insert_oom_normal)           \
+    X(insert_oom_col0)             \
+    X(insert_oom_shiftup)          \
+    X(insert_oom_rootpush)         \
+    X(insert_oom_deroot)           \
     X(insert_oom_rollback)
 
 #define X(name) {#name, test_##name},
