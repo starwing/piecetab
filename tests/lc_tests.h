@@ -76,12 +76,28 @@ LC_STATIC void lc_checknode(const lc_Node *n, int rl, int mc) {
     for (i = 0; i < (int)n->child_count; ++i) {
         lc_Node *c = n->children[i];
         if (rl == 0) {
-            assert(n->breaks[i] <= LC_LEAF_FANOUT);
-            assert(n->bytes[i] == lcL_sumbytes((lc_Leaf *)c, 0, n->breaks[i]));
+            {   size_t sum = lcL_sumbytes((lc_Leaf *)c, 0, n->breaks[i]);
+                (void)sum;
+                assert(n->breaks[i] <= LC_LEAF_FANOUT);
+                if (n->bytes[i] != sum) {
+                    fprintf(stderr, "[chk] BOTV rl=%d mc=%d i=%d cc=%d brk=%zu bytes=%zu sum=%zu leaf=%p\n",
+                            rl, mc, i, n->child_count,
+                            n->breaks[i], n->bytes[i], sum, (void*)c);
+                }
+                assert(n->bytes[i] == sum);
+            }
         } else {
             lc_checknode(c, rl - 1, mc ? LC_FANOUT / 2 : 0);
-            assert(n->bytes[i] == lcN_sumbytes(c, 0, c->child_count));
-            assert(n->breaks[i] == lcN_sumbreaks(c, 0, c->child_count));
+            {   size_t bsum = lcN_sumbytes(c, 0, c->child_count);
+                size_t brsum = lcN_sumbreaks(c, 0, c->child_count);
+                if (n->bytes[i] != bsum || n->breaks[i] != brsum) {
+                    fprintf(stderr, "[chk] INNER l=%d i=%d cc=%d Nbytes=%zu Cbytes=%zu Nbrk=%zu Cbrk=%zu\n",
+                            rl, i, n->child_count,
+                            n->bytes[i], bsum, n->breaks[i], brsum);
+                }
+                assert(n->bytes[i] == bsum);
+                assert(n->breaks[i] == brsum);
+            }
         }
     }
 }

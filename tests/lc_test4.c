@@ -1001,11 +1001,13 @@ static void test_splice_brute(void) {
 
     for (pos = 0; pos <= n; ++pos)
         for (del = 0; del <= n - pos; ++del) {
-            printf("splice pos=%d del=%d\n", pos, del);
             c = lc_newtree(S);
             lc_rscanV(c, n, 1);
             lc_seek(&C, c, pos);
+            fprintf(stderr, "splice pos=%d del=%d\n", pos, del);
             lc_splice(&C, del, 0);
+            lc_dumptree(c, "after slice");
+            lc_dumpcursor(&C, "after slice");
             lc_checktree(c);
             assert(lc_bytes(c) == (size_t)(n - del));
             lc_checkcursor(&C, pos);
