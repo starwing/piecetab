@@ -15,6 +15,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define lc_log(...) fprintf(stderr, __VA_ARGS__)
+
+#define lc_check(e, ...)                         \
+    do {                                         \
+        if (!(e)) return lc_log(__VA_ARGS__), 0; \
+    } while (0)
+
 #include "linecache.h"
 
 LC_STATIC void lc_dumptree(const lc_Cache *c, const char *tag);
@@ -66,13 +73,6 @@ LC_STATIC void lc_localfill(lc_Pool *pool, void **op, void *buf, size_t count) {
 /* ================================================================ */
 /*  tree invariant checker                                           */
 /* ================================================================ */
-
-#define lc_log(...) fprintf(stderr, __VA_ARGS__)
-
-#define lc_check(e, ...)                         \
-    do {                                         \
-        if (!(e)) return lc_log(__VA_ARGS__), 0; \
-    } while (0)
 
 LC_STATIC int lc_checknode(const lc_Node *n, int rl, int mc) {
     size_t bsum, lsum;
@@ -498,16 +498,16 @@ LC_STATIC int lc_test_main(
         const char *banner, const lc_test_entry *entries, int argc,
         char *argv[]) {
     int i, j;
-    printf("=== %s ===\n", banner);
+    lc_log("=== %s ===\n", banner);
     if (argc == 1) {
         const lc_test_entry *e = entries;
         while (e->name) {
-            printf("- %s\n", e->name);
+            lc_log("- %s\n", e->name);
             e->fn();
-            printf("  %s OK\n", e->name);
+            lc_log("  %s OK\n", e->name);
             ++e;
         }
-        printf("\nAll tests passed!\n");
+        lc_log("\nAll tests passed!\n");
         return 0;
     }
     for (i = 1; i < argc; ++i) {
@@ -518,15 +518,15 @@ LC_STATIC int lc_test_main(
         for (j = 0; entries[j].name; ++j) {
             if (strlen(entries[j].name) >= len
                 && strncmp(name, entries[j].name, len) == 0) {
-                printf("- %s\n", entries[j].name);
+                lc_log("- %s\n", entries[j].name);
                 entries[j].fn();
-                printf("  %s OK\n", entries[j].name);
+                lc_log("  %s OK\n", entries[j].name);
                 found = 1;
                 if (only) break;
             }
         }
         if (!found) {
-            fprintf(stderr, "Unknown test: %s\n", name);
+            lc_log("Unknown test: %s\n", name);
             return 1;
         }
     }

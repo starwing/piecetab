@@ -1005,19 +1005,23 @@ static void test_splice_brute(void) {
     lc_deltree(S, c);
     assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
 
-    for (pos = 2; pos <= n; ++pos)
-        for (del = 97; del <= n - pos; ++del) {
+    for (pos = 0; pos <= n; ++pos)
+        for (del = 0; del <= n - pos; ++del) {
             c = lc_newtree(S);
             lc_rscanV(c, n, 1);
             lc_seek(&C, c, pos);
             fprintf(stderr, "splice pos=%d del=%d\n", pos, del);
             lc_splice(&C, del, 0);
-            lc_dumptree(c, "after slice");
-            lc_dumpcursor(&C, "after slice");
-            assert(lc_checktree(c));
-            assert(lc_bytes(c) == (size_t)(n - del));
-            assert(lc_checkcursor(&C, pos));
-            ;
+            if (!lc_checktree(c) || !lc_checkcursor(&C, pos)) {
+                lc_dumptree(c, "after slice");
+                lc_dumpcursor(&C, "after slice");
+                abort();
+            }
+            if (lc_bytes(c) != (size_t)(n - del)) {
+                lc_log("splice pos=%d del=%d: bytes=%zu expected=%zu\n", pos,
+                       del, lc_bytes(c), (size_t)(n - del));
+                abort();
+            }
             lc_deltree(S, c);
             assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
         }
