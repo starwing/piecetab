@@ -159,9 +159,9 @@ LC_STATIC int lc_checkcursor(lc_Cursor *C, size_t expected_off) {
             expected_off);
     if (C->tree->root.child_count == 0) {
         lc_check(
-                C->off == 0 && C->idx == 0 && C->loff == 0 && C->lidx == 0,
-                "[chk] EMPTY off=%zu idx=%zu loff=%zu lidx=%hu\n", C->off,
-                C->idx, C->loff, C->lidx);
+                C->off == 0 && C->nu == 0 && C->loff == 0 && C->lnu == 0,
+                "[chk] EMPTY off=%zu nu=%zu loff=%zu lnu=%hu\n", C->off, C->nu,
+                C->loff, C->lnu);
         lc_check(
                 C->paths[0] == &C->tree->root.children[0],
                 "[chk] EMPTY paths[0]=%p expected=%p\n", (void *)C->paths[0],
@@ -184,21 +184,20 @@ LC_STATIC int lc_checkcursor(lc_Cursor *C, size_t expected_off) {
             C->off == bsum, "[chk] OFF mismatch off=%zu sum=%zu\n", C->off,
             bsum);
     lc_check(
-            C->idx == lsum + C->lidx, "[chk] IDX mismatch idx=%zu sum=%zu\n",
-            C->idx, lsum);
+            C->nu == lsum + C->lnu, "[chk] NU mismatch nu=%zu sum=%zu\n", C->nu,
+            lsum);
     p = lcK_parent(C, lcK_levels(C)), i = lcK_idx(C, p, lcK_levels(C));
-    bsum = lcL_sumbytes(lcK_leaf(C), 0, C->lidx);
+    bsum = lcL_sumbytes(lcK_leaf(C), 0, C->lnu);
     lc_check(
-            C->loff == bsum, "[chk] LOFF mismatch loff=%zu sum=%zu lidx=%hu\n",
-            C->loff, bsum, C->lidx);
+            C->loff == bsum, "[chk] LOFF mismatch loff=%zu sum=%zu lnu=%hu\n",
+            C->loff, bsum, C->lnu);
     lc_check(
-            C->lidx <= p->breaks[i],
-            "[chk] LIDX out of bounds lidx=%hu brs=%zu\n", C->lidx,
-            p->breaks[i]);
+            C->lnu <= p->breaks[i], "[chk] LNU out of bounds lnu=%hu brs=%zu\n",
+            C->lnu, p->breaks[i]);
     lc_check(
-            C->lidx == p->breaks[i] || C->col < lcK_leaf(C)->bytes[C->lidx],
+            C->lnu == p->breaks[i] || C->col < lcK_leaf(C)->bytes[C->lnu],
             "[chk] COL out of bounds col=%u line_bytes=%u\n", C->col,
-            lcK_leaf(C)->bytes[C->lidx]);
+            lcK_leaf(C)->bytes[C->lnu]);
     return 1;
 }
 
@@ -237,8 +236,8 @@ LC_STATIC void lc_dumptree(const lc_Cache *c, const char *tag) {
 
 LC_STATIC void lc_dumpcursor(const lc_Cursor *C, const char *tag) {
     int l;
-    lc_log("[CURSOR] %s: off=%zu idx=%zu loff=%zu lidx=%hu col=%u\n", tag,
-           C->off, C->idx, C->loff, C->lidx, C->col);
+    lc_log("[CURSOR] %s: off=%zu nu=%zu loff=%zu lnu=%hu col=%u\n", tag, C->off,
+           C->nu, C->loff, C->lnu, C->col);
     for (l = 0; l <= lcK_levels(C); ++l) {
         lc_Node *p = lcK_parent(C, l);
         int      i = lcK_idx(C, p, l);

@@ -1062,7 +1062,7 @@ static void test_splice_cov_foldleaf_lr(void) {
     lc_seek(&C, c, 6); /* leaf0 lidx=3 col=0, off=0 loff=6 */
     assert(lc_checktree(c));
     lcD_foldleaf(&C);
-    C.loff = lcL_sumbytes(lcK_leaf(&C), 0, C.lidx);
+    C.loff = lcL_sumbytes(lcK_leaf(&C), 0, C.lnu);
     lc_asserttree(c, 0, botV(leafV(2, 2, 2), leafV(2, 2, 2)));
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 6));
@@ -1111,7 +1111,7 @@ static void test_boundary_cmp(void) {
     c = cacheV(S, 0, botV(leafV(1, 1), leafV(5)));
     assert(lc_checktree(c));
     lc_seekline(&cur, c, 2);
-    assert(cur.idx == 2);
+    assert(cur.nu == 2);
     assert(lc_linelen(&cur) == 5);
     lc_deltree(S, c);
 
@@ -1121,7 +1121,7 @@ static void test_boundary_cmp(void) {
     assert(lc_checktree(c));
     lc_seek(&cur, c, 0);
     lc_advline(&cur, 4);
-    assert(cur.idx == 4);
+    assert(cur.nu == 4);
     assert(lc_linelen(&cur) == 5);
     lc_deltree(S, c);
 
@@ -1181,7 +1181,7 @@ static void test_insert_col(void) {
     assert(lc_breaks(c) == 2 && lc_bytes(c) == 11);
 
     lc_seek(&C, c, 6);
-    assert(C.lidx == 1 && C.col == 2);
+    assert(C.lnu == 1 && C.col == 2);
     r = lc_insert(&C, 3, lc_scanner, &pb);
     assert(r == LC_OK);
     assert(lc_checktree(c));
