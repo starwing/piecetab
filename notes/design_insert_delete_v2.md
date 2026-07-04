@@ -263,7 +263,7 @@ d 的语义同 stitchnode 中的 d——"真正期待的行在当前行之前多
 
 `static int lcD_foldleaf(lc_Cursor *C)`
 
-对 C 当前叶及其相邻叶执行平衡：若两叶行数之和 ≤ `LC_LEAF_FANOUT` 则合并（右并入左），否则均分。修 C 的 `paths`、`off`、`lnu` 以应对数据迁移。返回 1 表示发生了合并（父失一子，调用方须 rebalance），返回 0 表示平衡后两叶满度正常。
+对 C 当前叶及其相邻叶执行平衡：若两叶行数之和 ≤ `LC_LEAF_FANOUT` 则合并（右并入左），否则均分。修 C 的 `paths`、`off`、`lnu` 以应对数据迁移。返回 1 表示发生了合并（父失一子，调用方须 rebalance），返回 0 表示无需 rebalance。
 
 ### 前置条件
 
@@ -273,44 +273,36 @@ d 的语义同 stitchnode 中的 d——"真正期待的行在当前行之前多
 ### 行为
 
 - `i = idx(C, p, levels)`，`ls = (lc_Leaf **)&p->children[i]`，`o = *ls`（初始时 C 所在的叶）
+- **提前退出**：若 `p->breaks[i] > LC_LEAF_FANOUT / 2`（C 所在叶行数已过半满），直接返回 0。均分方向数学约束保证该叶无需折叠
 - 若 `i == p->child_count - 1`（C 在末叶）：`ls -= 1`，`i -= 1`——将待操作对改为 `(children[i], children[i+1])`，其中 `ls[1]` 为 C 原在的末叶，`o` 保存其指针
 - `cl = p->breaks[i]`、`cr = p->breaks[i+1]`、`bc = p->bytes[i]`
 - **合并路径**（`cl + cr <= LC_LEAF_FANOUT`）：
   - `memcpy(ls[0]->bytes + cl, ls[1]->bytes, cr)`：右叶行拷入左叶
   - `p->breaks[i] += cr`、`p->bytes[i] += p->bytes[i+1]`
-  - 若 `*ls != o`（C 原在右叶，已并入左叶）：`*ps = &p->children[i]`（C 移入左叶槽），`C->off -= bc`、`C->loff += bc`、`C->lnu += cl`（左叶原有行数）
+  - 若 `*ls != o`（C 原在右叶，已并入左叶）：`*ps -= 1`（C 移入左叶槽），`C->off -= bc`、`C->loff += bc`、`C->lnu += cl`（左叶原有行数）
   - `lcN_erase`：释放右叶并抹除父节点中对应槽位。父失一子，返回 1
-- **平衡路径**（`cl + cr > LC_LEAF_FANOUT`）：
-  - `dl = cl - (cl + cr + 1) / 2`（行数差量，正=左→右，负=右→左）
-  - `db = lcD_balanceleaf(ls, cl, cr, 0)`（字节差量，符号同 dl）
+- **均分路径**（`cl + cr > LC_LEAF_FANOUT`）：
+  - `db = lcD_balanceleaf(ls, cl, cr, 0)`：执行字节级均分。若 `db == 0`（两叶完全均衡无须搬移），直接返回 0
+  - `dl = cl - (cl + cr + 1) / 2`（行数差量，仅 db≠0 时计算，故 dl ≠ 0）
+  - 断言 `dl != 0 && (dl < 0) != (*ls != o)`：编码不变式——`dl < 0`（右→左搬移）当且仅当 C 原在右叶（`*ls != o`），反之亦然
   - `p->bytes[i] -= db`、`p->bytes[i+1] += db`
   - `p->breaks[i] -= dl`、`p->breaks[i+1] += dl`
-  - **游标修正**（三选一）：
-    - `dl < 0 && *ls != o && C->lnu < -dl`：数据从右移左，C 在右叶中且被移至左叶
-      → `C->off -= bc`、`C->lnu += cl`、`*ps = &p->children[i]`
-    - `dl > 0 && *ls == o && C->lnu >= cl - dl`：数据从左移右，C 在左叶中且行号 ≥ 左叶剩余行数（C 随数据移入右叶）
-      → `C->off += p->bytes[i]`、`C->lnu += dl - cl`、`*ps = &p->children[i+1]`
-    - `*ls != o`（C 在右叶，数据移入右叶前部）：C 被推后 dl 行
-      → `C->off -= db`、`C->lnu += dl`
-  - 返回 0（未合并，父不失去子节点）
+  - **游标修正**（单分支）：`if (*ls != o) C->off -= db, C->lnu += dl`
+  - 返回 0
+
+### 游标修正的不变式
+
+均分方向 `dl` 的符号与 `*ls == o` 严格绑定：
+- **`*ls == o`**（C 在原左叶）：右叶段数更多（`cr > cl`）导致 `dl < 0`，数据从右叶搬入左叶末段。C 在左叶中位置不变，无需修正
+- **`*ls != o`**（C 在原右叶）：左叶段数更多（`cl > cr`）导致 `dl > 0`，数据从左叶搬入右叶前段。C 在右叶中被推后 dl 个段
+
+`dl == 0` 时（`cl == cr+1`）`db == 0` 早退，故到达 assert 时 `dl ≠ 0` 且 `(dl < 0) != (*ls != o)` 恒真。
 
 ### 后置条件
 
 - **合并**：父节点 `child_count` 减 1，右叶已释放。C 的 `paths`/`lnu`/`off`/`loff` 均已更新至合并后叶
-- **平衡**：两叶行数平衡（`(cl+cr+1)/2` 和 `cl+cr-(cl+cr+1)/2`）。C 的 `lnu` 和 `off` 已按数据迁移量修正，`paths` 仅在游标移入对侧叶时更新
+- **均分**：两叶行数平衡。`db == 0` 时 C 不变；否则 C 的 `off` 和 `lnu` 已按数据迁移量修正
 - **不变**：节点 `p->bytes[]` 和 `p->breaks[]` 总和不变
-
-### 游标修正分支的语义
-
-三个条件分别处理三种游标位置与数据流向的组合：
-
-| 条件 | dl 方向 | C 位置 | 修正动作 |
-|------|---------|--------|----------|
-| `dl<0 && *ls!=o && lnu<-dl` | 右→左 | 右叶且被迁行覆盖 | C 移入左叶，lnu 前进 cl + lnu |
-| `dl>0 && *ls==o && lnu>=cl-dl` | 左→右 | 左叶且行号 ≥ 剩余 | C 移入右叶，lnu 变为 lnu - (cl-dl) |
-| `*ls != o` | 右→左或左→右 | 右叶（数据移入右叶前部） | C 在右叶中被推后 dl 行 |
-
-`*ls == o` 表示 C 原在左叶中（经过 `ls -= 1` 调整后 `o` 保存了原始指针）。`*ls != o && dl > 0` 即数据移入右叶、C 在右叶中——此时 C 仅被推移 dl 行，不需换叶。`*ls != o && dl < 0` 即数据移出右叶——C 可能随迁出数据一起进入左叶（若 `lnu < -dl`）或留在右叶中被前移。
 
 ## 10. lcD_foldnode — 内层折叠
 
@@ -327,28 +319,40 @@ d 的语义同 stitchnode 中的 d——"真正期待的行在当前行之前多
 ### 行为
 
 - `ns = (lc_Node **)&p->children[i]`，`o = *ns`（C 所在的原节点）
+- **提前退出**：若 `ns[0]->child_count > LC_FANOUT / 2`（C 所在节点子数已过半满），直接返回 0。与 foldleaf 同原理——均分方向数学约束保证该节点无需折叠
 - 若 `(i && left) || i == cc - 1`：`ns -= 1`，`i -= 1`——优先左探（`left=1` 时）或末位回退
 - `cl = ns[0]->child_count`、`cr = ns[1]->child_count`
 - **合并**（`cl + cr <= LC_FANOUT`）：
   - `lcN_copy(ns[0], cl, ns[1], 0, cr)`、`ns[0]->child_count += cr`
   - 父度量更新：`p->bytes[i] += p->bytes[i+1]`、`p->breaks[i] += p->breaks[i+1]`
-  - 若 `*ns != o`（C 原在右节点）：`lcN_tx(cp[l+1], ns[0], ns[1], cl)` 修正更深层路径，`cp[l] = ns` 修正本层路径
+  - 若 `*ns != o`（C 原在右节点）：`lcN_tx(cp[l+1], ns[0], ns[1], cl)` 修正更深层路径，`cp[l] -= 1` 修正本层路径
   - `lcN_erase` 释放右节点 → 父失一子 → 返回 1
 - **均分**（`cl + cr > LC_FANOUT`）：
-  - `lcD_balancenode(ns, 0, (*ns == o), ds)`：ds[0]=字节差量，ds[1]=行差量
-  - `dn = cl - (cl + cr + (*ns == o)) / 2`（子节点数差量，正=左→右）
-  - 父度量更新
-  - **路径修正**（三选一，与 foldleaf 三条件完全对称）：
-    - `dn < 0 && *ns != o && cp[l+1] 在右节点的位置 < -dn`：C 被迁入左节点 → `lcN_tx` 修正深层路径，`cp[l] = ns`
-    - `dn > 0 && *ns == o && cp[l+1] 在左节点的位置 >= cl - dn`：C 被迁入右节点 → `lcN_tx` 修正，`cp[l] = ns + 1`
-    - `*ns != o`：C 在右节点中被前推 → `cp[l+1] += dn`
+  - `lcD_balancenode(ns, 0, (*ns == o), ds)`：内部已含 `d == 0` 早退。若返回 0（无搬移），foldnode 直接返回 0
+  - `dn = cl - (cl + cr + (*ns == o)) / 2`（子节点数差量，正=左→右。仅 balancenode 成功后计算，故 `dn ≠ 0`）
+  - 断言 `dn != 0 && (dn < 0) != (*ns != o)`：与 foldleaf 同不变式——`dn < 0` iff `*ns != o`
+  - `p->bytes[i] -= ds[0]`、`p->bytes[i+1] += ds[0]`
+  - `p->breaks[i] -= ds[1]`、`p->breaks[i+1] += ds[1]`
+  - **路径修正**（单分支）：`if (*ns != o) cp[l+1] += dn`
   - 返回 0
+
+### 游标修正的不变式
+
+与 foldleaf 完全对称。`dn` 的符号与 `*ns == o` 严格绑定：
+- **`*ns == o`**（C 在原左节点）：`dn < 0`，右节点子数更多，数据从右搬入左节点尾部。C 在左节点末不受影响，无需修正
+- **`*ns != o`**（C 在原右节点）：`dn > 0`，左节点子数更多，数据从左搬入右节点头部。C 被推后 dn 位（`cp[l+1] += dn`）
+
+`dn == 0`（`cl == cr+(*ns==o)`）时 balancenode 返回 0 早退，故到达 assert 时 `dn ≠ 0` 且 `(dn < 0) != (*ns != o)` 恒真。
+
+游标跨节点跳转（原三分支的前两条 `lcN_tx` 跳对侧）不再需要——L659 提前退出保证游标所在节点仅在不足半满时才进入折叠，此时 `cl+cr < LC_FANOUT`（总会触发合并路径而非均分），或均分路径中游标恒在对侧不动。
+
+`dn` 的均分中点公式含 `(*ns == o)` 项：当 C 在原节点时，给原节点多留一个子节点（避免 C 被挤入对侧）。
 
 ### 与 foldleaf 差异
 
 - foldnode 需处理 `cp[l+1]`（更深层路径偏移），因合并/均分后子节点位置变化
 - `left` 参数：stitchnode 在缝合右单链时，用 `left=1` 保证 foldnode 优先选择左侧方向，避免将 C 路径推入已修复的右单链区域
-- `dn` 的均分中点公式含 `(*ns == o)` 项：当 C 在原节点时，给原节点多留一个子节点（避免 C 被挤入对侧）
+- 合并路径中用 `lcN_tx` 修正深层路径（而 foldleaf 仅需 `*ps -= 1`），因内层节点搬迁涉及子节点指针而非段数组
 
 ## 11. lcD_rebalance — 缩根
 
