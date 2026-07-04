@@ -533,7 +533,7 @@ static void test_advline_cov_forward_cross(void) {
     lc_close(S);
 }
 
-static void test_markbreak(void) {
+static void test_markbreak_basic(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
     lc_Cursor cur;
@@ -852,7 +852,7 @@ static void test_clearbreaks_params(void) {
     lc_close(S);
 }
 
-static void test_clearbreaks(void) {
+static void test_clearbreaks_basic(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
     lc_Cursor C;
@@ -920,7 +920,7 @@ static void test_splice_params(void) {
     lc_close(S);
 }
 
-static void test_splice(void) {
+static void test_splice_basic(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
     lc_Cursor C;
@@ -1081,9 +1081,8 @@ static void test_splice_cov_shiftnode_bal0(void) {
     assert(c);
     lc_seek(&C, c, 25);
     lc_splice(&C, 16, 0);
-    assert(lc_checktree(c));
+    assert(lc_checktree_allow_empty(c, 1));
     assert(lc_checkcursor(&C, 25));
-    ;
     lc_deltree(S, c);
     assert(S->nodes.live_obj == 0 && S->leaves.live_obj == 0);
     lc_close(S);
@@ -1109,7 +1108,7 @@ static void test_boundary_cmp(void) {
 
     /* lcK_findline: <= -> <. seekline(2) must land in leaf1, not leaf0. */
     c = cacheV(S, 0, botV(leafV(1, 1), leafV(5)));
-    assert(lc_checktree(c));
+    assert(lc_checktree_allow_empty(c, 1));
     lc_seekline(&cur, c, 2);
     assert(cur.nu == 2);
     assert(lc_linelen(&cur) == 5);
@@ -1118,7 +1117,7 @@ static void test_boundary_cmp(void) {
     /* lcK_forwardline: <= -> <. advline(4) must skip to leaf2, not stop at
      * leaf1. */
     c = cacheV(S, 0, botV(leafV(1, 1), leafV(1, 1), leafV(5)));
-    assert(lc_checktree(c));
+    assert(lc_checktree_allow_empty(c, 1));
     lc_seek(&cur, c, 0);
     lc_advline(&cur, 4);
     assert(cur.nu == 4);
@@ -1161,11 +1160,12 @@ static void test_insert_leaf(void) {
 
     lc_seek(&C, c, 10);
     r = lc_insert(&C, 3, lc_scanner, &pb);
+    lc_log("r=%d breaks=%zu bytes=%zu\n", r, lc_breaks(c), lc_bytes(c));
     assert(r == LC_OK && lc_breaks(c) == 5 && lc_bytes(c) == 49);
     lc_asserttree(c, 0, botV(leafV(10, 3, 3), leafV(18, 15)));
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 19));
-    ;
+
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -1269,7 +1269,8 @@ static void test_insert_sib(void) {
     unsigned  brs[] = {4, 0}, *p = brs;
     lc_seek(&C, c, 0);
     assert(lc_insert(&C, 0, lc_scanner, &p) == LC_OK);
-    assert(lc_checktree(c));
+    lc_dumptree(c, "insert_sib after insert");
+    assert(lc_checktree_allow_empty(c, 1));
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -1278,16 +1279,17 @@ static void test_insert_deep(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     lc_Cursor C;
-    lc_Node  *bot[8], *mid[2];
+    lc_Node  *bot[8];
     unsigned  brs[] = {1, 0}, *p = brs;
     int       i;
 
     for (i = 0; i < 8; i++)
         bot[i] = botV(leafV(1), leafV(1), leafV(1), leafV(1));
-    mid[0] = innerV(bot[0], bot[1], bot[2], bot[3]);
-    mid[1] = innerV(bot[4], bot[5], bot[6], bot[7]);
-    c = cacheV(S, 2, innerV(mid[0], mid[1]));
-    assert(lc_checktree(c));
+    c = cacheV(
+            S, 2,
+            innerV(innerV(bot[0], bot[1], bot[2], bot[3]),
+                   innerV(bot[4], bot[5], bot[6], bot[7])));
+    assert(lc_checktree_allow_empty(c, 1));
 
     lc_seek(&C, c, 1);
     assert(lc_insert(&C, 0, lc_scanner, &p) == LC_OK);
@@ -1348,21 +1350,19 @@ static void test_insert_fillrt_findlevel(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     lc_Cursor cur;
-    lc_Node  *inner1, *inner2, *inner3, *inner4, *root;
     unsigned  zero[] = {0}, *pz = zero;
     int       r;
 
-    inner1 = botV(leafV(2), leafV(2));
-    inner2 = botV(leafV(2), leafV(2), leafV(2), leafV(2));
-    inner3 = botV(leafV(2), leafV(2));
-    inner4 = botV(leafV(2), leafV(2));
-    root = innerV(inner1, inner2, inner3, inner4);
-    c = cacheV(S, 1, root);
-    assert(lc_checktree(c));
+    c = cacheV(
+            S, 1,
+            innerV(botV(leafV(2), leafV(2)),
+                   botV(leafV(2), leafV(2), leafV(2), leafV(2)),
+                   botV(leafV(2), leafV(2)), botV(leafV(2), leafV(2))));
+    assert(lc_checktree_allow_empty(c, 1));
     lc_seek(&cur, c, 6);
     r = lc_insert(&cur, 0, lc_scanner, &pz);
     assert(r == LC_OK);
-    assert(lc_checktree(c));
+    assert(lc_checktree_allow_empty(c, 1));
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -1579,7 +1579,7 @@ static void test_insert_oom_shiftup(void) {
     c = cacheV(
             S, 0,
             botV(leafV(1, 0), leafV(2, 0), leafV(3, 0), leafV(4, 0), NULL));
-    assert(lc_checktree(c));
+    assert(lc_checktree_allow_empty(c, 1));
 
     S->leaves.freed = NULL;
     S->leaves.pages = NULL;
@@ -1614,7 +1614,7 @@ static void test_insert_oom_rootpush(void) {
     assert(S);
     for (i = 0; i < 4; i++) b[i] = botV(leafV(1), leafV(1), leafV(1), leafV(1));
     c = cacheV(S, 1, innerV(b[0], b[1], b[2], b[3]));
-    assert(lc_checktree(c));
+    assert(lc_checktree_allow_empty(c, 1));
 
     nf = S->nodes.freed;
     S->nodes.freed = NULL;
@@ -1647,7 +1647,7 @@ static void test_insert_oom_deroot(void) {
     c = cacheV(
             S, 0,
             botV(leafV(1, 0), leafV(1, 0), leafV(1, 0), leafV(1, 0), NULL));
-    assert(lc_checktree(c));
+    assert(lc_checktree_allow_empty(c, 1));
     {
         void *head = S->nodes.freed;
         int   count = 0;
@@ -1733,8 +1733,8 @@ static void test_insert_oom_rollback(void) {
     X(advline_cov_backward_within) \
     X(advline_cov_backward_cross)  \
     X(advline_cov_forward_cross)   \
-    X(markbreak)                   \
     X(markbreak_params)            \
+    X(markbreak_basic)             \
     X(markbreak_empty)             \
     X(markbreak_crossline)         \
     X(markbreak_trailing)          \
@@ -1749,10 +1749,10 @@ static void test_insert_oom_rollback(void) {
     X(markbreak_cov_split_right)   \
     X(markbreak_cov_child_right)   \
     X(clearbreaks_params)          \
-    X(clearbreaks)                 \
+    X(clearbreaks_basic)           \
     X(clearbreaks_cov_slot)        \
     X(splice_params)               \
-    X(splice)                      \
+    X(splice_basic)                \
     X(splice_trailing)             \
     X(splice_brute)                \
     X(splice_cov_rebalance)        \

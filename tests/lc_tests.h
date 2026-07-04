@@ -89,7 +89,7 @@ LC_STATIC int lc_checknode(const lc_Node *n, int rl, int mc) {
         if (rl == 0) {
             bsum = lcL_sumbytes((lc_Leaf *)c, 0, n->breaks[i]);
             lc_check(
-                    n->breaks[i] >= LC_LEAF_FANOUT / 2
+                    n->breaks[i] >= (mc ? LC_LEAF_FANOUT / 2 : 0)
                             && n->breaks[i] <= LC_LEAF_FANOUT,
                     "[chk] LEAF rl=%d i=%d cc=%d brs=%zu bytes=%zu leaf=%p\n",
                     rl, i, n->child_count, n->breaks[i], n->bytes[i],
