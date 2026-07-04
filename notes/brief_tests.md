@@ -109,9 +109,9 @@ unsigned lc_rscanner(void *ud, size_t prev);
 ### 3.4 树/游标校验
 
 ```c
-void lc_checktree(const lc_Cache *c);              // 常规：不允许空子节点
-void lc_checktree_allow_empty(const lc_Cache *c, int allow_empty); // 允许空节点
-void lc_checkcursor(const lc_Cursor *C, size_t expected_offset); // 校验游标位置
+int lc_checktree(const lc_Cache *c);              // 常规：不允许空子节点
+int lc_checktree_allow_empty(const lc_Cache *c, int allow_empty); // 允许空节点
+int lc_checkcursor(const lc_Cursor *C, size_t expected_offset); // 校验游标位置
 ```
 
 `lc_checktree` 递归校验整棵树：
@@ -126,6 +126,7 @@ void lc_checkcursor(const lc_Cursor *C, size_t expected_offset); // 校验游标
 - `loff` 是否和叶内位置 `lidx` 匹配
 
 所有测试都 **必须** 在待测API调用后检查游标和树的一致性。
+使用assert调用check函数，或者使用if判断失败时打印树 dump 并 abort 都是可以的。
 
 ### 3.5 lc_asserttree — 精确断言树结构（推荐）
 

@@ -631,25 +631,21 @@ static int lcD_foldleaf(lc_Cursor *C) {
     lc_Leaf **ls = (lc_Leaf **)&p->children[i], *o = *ls;
     lc_Diff   db, dl, bc;
     if (p->child_count <= 1) return 0;
+    if (p->breaks[i] > LC_LEAF_FANOUT / 2) return 0;
     if (i == p->child_count - 1) ls -= 1, i -= 1;
     cl = (int)p->breaks[i], cr = (int)p->breaks[i + 1], bc = p->bytes[i];
     if (cl + cr <= LC_LEAF_FANOUT) {
         memcpy(ls[0]->bytes + cl, ls[1]->bytes, cr * sizeof(unsigned));
         p->breaks[i] += cr, p->bytes[i] += p->bytes[i + 1];
-        if (*ls != o)
-            *ps = &p->children[i], C->off -= bc, C->loff += bc, C->lnu += cl;
+        if (*ls != o) *ps -= 1, C->off -= bc, C->loff += bc, C->lnu += cl;
         return lcN_erase(C->tree->S, p, 0, i + 1, i + 2), 1;
     }
     dl = cl - ((cl + cr + 1) / 2);
     db = lcD_balanceleaf((lc_Leaf **)&p->children[i], cl, cr, 0);
     p->bytes[i] -= db, p->bytes[i + 1] += db;
     p->breaks[i] -= dl, p->breaks[i + 1] += dl;
-    if (dl < 0 && *ls != o && (int)C->lnu < -dl)
-        C->off -= bc, C->lnu += cl, *ps = &p->children[i];
-    else if (dl > 0 && *ls == o && (int)C->lnu >= cl - dl)
-        C->off += p->bytes[i], C->lnu += dl - cl, *ps = &p->children[i + 1];
-    else if (*ls != o)
-        C->off -= db, C->lnu += dl;
+    assert((dl < 0) != (*ls != o));
+    if (*ls != o) C->off -= db, C->lnu += dl;
     return 0;
 }
 
@@ -659,25 +655,22 @@ static int lcD_foldnode(lc_Cursor *C, int left, int l) {
     lc_Node **ns = (lc_Node **)&p->children[i], *o = *ns;
     lc_Diff   ds[2], dn;
     assert(p->child_count > 1);
+    if (ns[0]->child_count > LC_FANOUT / 2) return 0;
     if ((i && left) || i == p->child_count - 1) ns -= 1, i -= 1;
     cl = ns[0]->child_count, cr = ns[1]->child_count;
     if (cl + cr <= LC_FANOUT) {
         lcN_copy(ns[0], cl, ns[1], 0, cr);
         ns[0]->child_count += cr, ns[1]->child_count -= cr;
         p->bytes[i] += p->bytes[i + 1], p->breaks[i] += p->breaks[i + 1];
-        if (*ns != o) lcN_tx(cp[l + 1], ns[0], ns[1], cl), cp[l] = ns;
+        if (*ns != o) lcN_tx(cp[l + 1], ns[0], ns[1], cl), cp[l] -= 1;
         return lcN_erase(C->tree->S, p, lcK_levels(C) - l, i + 1, i + 2), 1;
     }
     if (!lcD_balancenode(ns, 0, (*ns == o), ds)) return 0;
     p->bytes[i] -= ds[0], p->bytes[i + 1] += ds[0];
     p->breaks[i] -= ds[1], p->breaks[i + 1] += ds[1];
     dn = cl - ((cl + cr + (*ns == o)) / 2);
-    if (dn < 0 && *ns != o && cp[l + 1] - ns[1]->children < -dn)
-        lcN_tx(cp[l + 1], ns[0], ns[1], cl), cp[l] = ns;
-    else if (dn > 0 && *ns == o && cp[l + 1] - ns[0]->children >= cl - dn)
-        lcN_tx(cp[l + 1], ns[1], ns[0], dn - cl), cp[l] = ns + 1;
-    else if (*ns != o)
-        cp[l + 1] += dn;
+    assert((dn < 0) != (*ns != o));
+    if (*ns != o) cp[l + 1] += dn;
     return 0;
 }
 

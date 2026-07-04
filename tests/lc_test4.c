@@ -1707,6 +1707,20 @@ static void test_insert_oom_rollback(void) {
     lc_close(S);
 }
 
+static void test_splice_cov_foldleaf_rl(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = cacheV(S, 0, botV(leafV(10, 10), leafV(10, 10, 10, 10)));
+    lc_Cursor C;
+    assert(c);
+    lc_seek(&C, c, 20); /* start of right leaf, lnu=0 */
+    lc_splice(&C, 10, 0); /* cl+cr=5 > 4, balance dl<0 */
+    assert(lc_checktree(c));
+    assert(lc_checkcursor(&C, 20));
+    lc_deltree(S, c);
+    assert(S->nodes.live_obj == 0 && S->leaves.live_obj == 0);
+    lc_close(S);
+}
+
 #define TESTS(X)                   \
     X(lifecycle)                   \
     X(scan_params)                 \
@@ -1756,9 +1770,9 @@ static void test_insert_oom_rollback(void) {
     X(splice_trailing)             \
     X(splice_brute)                \
     X(splice_cov_rebalance)        \
-    X(splice_cov_foldleaf_lr)      \
     X(splice_cov_shiftnode_bal0)   \
     X(splice_cov_trimleaf)         \
+    X(splice_cov_foldleaf_rl)      \
     X(boundary_cmp)                \
     X(insert_params)               \
     X(insert_leaf)                 \
