@@ -1431,13 +1431,9 @@ static void test_insert_brute(void) {
         lc_rscanV(c, 128, 1);
         lc_seek(&C, c, pos);
         pbrs = brs;
-        printf("insert pos=%d\n", pos);
+        lc_log("insert pos=%d\n", pos);
         assert(lc_insert(&C, 0, lc_scanner, &pbrs) == LC_OK);
-        if (!lc_checktree(c)) {
-            fprintf(stderr, "tree check failed after insert at pos=%d\n", pos);
-            lc_dumptree(c, "insert");
-            abort();
-        }
+        if (!lc_checktree(c)) lc_dumptree(c, "insert"), abort();
         assert(lc_breaks(c) == 138);
         assert(lc_bytes(c) == 148);
         if (pos == 0) {
@@ -1451,8 +1447,11 @@ static void test_insert_brute(void) {
             brs[0] = pos, brs[4] = 128 - pos;
             assert(lc_checkleaves(c, &pbrs));
         }
-        assert(lc_checkcursor(&C, pos + 20));
-        ;
+        if (!lc_checkcursor(&C, pos + 20)) {
+            lc_dumptree(c, "insert cursor fail");
+            lc_dumpcursor(&C, "insert cursor fail");
+            abort();
+        }
         lc_deltree(S, c);
         assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
     }
