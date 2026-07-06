@@ -440,9 +440,9 @@ static int lcK_backwardoff(lc_Cursor *C, size_t d) {
         }
         if (i >= 0) break;
     }
-    assert(l >= 0 && i >= 0);
+    assert(l >= 0 && i >= 0), d = p->bytes[i] - d;
     C->paths[l] = &p->children[i], C->loff = C->lnu = C->col = 0;
-    C->off -= p->bytes[i], C->nu -= p->breaks[i], d = p->bytes[i] - d;
+    if (l == lcK_levels(C)) C->off -= p->bytes[i], C->nu -= p->breaks[i];
     return lcK_findleaf(C, l + 1, &d), lcK_findinleaf(C, d), 1;
 }
 
@@ -476,8 +476,7 @@ static void lcK_backwardline(lc_Cursor *C, size_t d) {
     d = in ? C->lnu - d : d - C->lnu, C->loff = C->col = 0;
     if (!in) {
         for (l = lcK_levels(C); l >= 0; --l) {
-            p = lcK_parent(C, l), i = lcK_idx(C, p, l);
-            if (l == lcK_levels(C)) i -= 1;
+            p = lcK_parent(C, l), i = lcK_idx(C, p, l) - 1;
             for (; i >= 0; --i) {
                 if (d <= p->breaks[i]) break;
                 C->off -= p->bytes[i], C->nu -= p->breaks[i];

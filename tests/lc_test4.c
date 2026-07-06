@@ -77,19 +77,23 @@ static void test_scan_seek(void) {
     r = lc_seek(&C, c, 0);
     assert(r == LC_OK && lc_offset(&C) == 0 && lc_line(&C) == 0);
     assert(lc_linelen(&C) == 10);
+    assert(lc_checkcursor(&C, 0));
 
     r = lc_seek(&C, c, 15);
     assert(r == LC_OK && lc_offset(&C) == 15 && lc_line(&C) == 1);
+    assert(lc_checkcursor(&C, 15));
 
-    /* seek to exact break positions */
     r = lc_seek(&C, c, 10);
-    assert(r == LC_OK && lc_offset(&C) == 10);
-    r = lc_seek(&C, c, 25);
-    assert(r == LC_OK && lc_offset(&C) == 25);
+    assert(r == LC_OK && lc_offset(&C) == 10 && lc_line(&C) == 1);
+    assert(lc_checkcursor(&C, 10));
 
-    /* seek to end */
+    r = lc_seek(&C, c, 25);
+    assert(r == LC_OK && lc_offset(&C) == 25 && lc_line(&C) == 2);
+    assert(lc_checkcursor(&C, 25));
+
     r = lc_seek(&C, c, 40);
-    assert(r == LC_OK && lc_offset(&C) == 40);
+    assert(r == LC_OK && lc_offset(&C) == 40 && lc_line(&C) == 3);
+    assert(lc_checkcursor(&C, 40));
 
     /* re-scan: scan into already-populated tree */
     lc_scanV(c, 5, 10);
@@ -112,9 +116,12 @@ static void test_scan_bulk(void) {
     assert(c->levels >= 2);
     assert(lc_checktree(c));
     lc_seek(&C, c, 0);
-    assert(lc_offset(&C) == 0);
+    assert(lc_offset(&C) == 0 && lc_line(&C) == 0);
+    assert(lc_checkcursor(&C, 0));
+
     lc_seek(&C, c, 120);
-    assert(lc_offset(&C) == 120);
+    assert(lc_offset(&C) == 120 && lc_line(&C) == 120);
+    assert(lc_checkcursor(&C, 120));
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -227,10 +234,12 @@ static void test_seek_line_leaf(void) {
     r = lc_seekline(&C, c, 0);
     assert(r == LC_OK && lc_offset(&C) == 0 && lc_line(&C) == 0);
     assert(lc_linelen(&C) == 10);
+    assert(lc_checkcursor(&C, 0));
 
     r = lc_seekline(&C, c, 1);
     assert(r == LC_OK && lc_offset(&C) == 10 && lc_line(&C) == 1);
     assert(lc_linelen(&C) == 15);
+    assert(lc_checkcursor(&C, 10));
 
     r = lc_seekline(&C, c, 3);
     assert(r == LC_OK && lc_offset(&C) == 40 && lc_line(&C) == 3);
@@ -352,29 +361,37 @@ static void test_advance_cross(void) {
 
     /* advance forward across leaf boundary */
     lc_seek(&cur, c, 35);     /* end of first leaf's last gap */
+    assert(lc_checkcursor(&cur, 35));
     r = lc_advance(&cur, 10); /* cross into second leaf */
-    assert(r == LC_OK && lc_offset(&cur) == 45);
+    assert(r == LC_OK && lc_offset(&cur) == 45 && lc_line(&cur) == 4);
+    assert(lc_checkcursor(&cur, 45));
 
     /* advance backward across leaf boundary */
     r = lc_advance(&cur, -10);
-    assert(r == LC_OK && lc_offset(&cur) == 35);
+    assert(r == LC_OK && lc_offset(&cur) == 35 && lc_line(&cur) == 3);
+    assert(lc_checkcursor(&cur, 35));
 
     /* advline forward across leaf boundary */
     lc_seek(&cur, c, 35);    /* break 3, line 3 */
+    assert(lc_checkcursor(&cur, 35));
     r = lc_advline(&cur, 2); /* cross to line 5 (in second leaf) */
-    assert(r == LC_OK && lc_line(&cur) == 5);
+    assert(r == LC_OK && lc_line(&cur) == 5 && lc_offset(&cur) == 50);
+    assert(lc_checkcursor(&cur, 50));
 
     /* advline backward across leaf boundary */
     r = lc_advline(&cur, -2);
-    assert(r == LC_OK && lc_line(&cur) == 3);
+    assert(r == LC_OK && lc_line(&cur) == 3 && lc_offset(&cur) == 30);
+    assert(lc_checkcursor(&cur, 30));
 
     /* advline to start */
     r = lc_advline(&cur, -100);
-    assert(r == LC_OK && lc_line(&cur) == 0);
+    assert(r == LC_OK && lc_line(&cur) == 0 && lc_offset(&cur) == 0);
+    assert(lc_checkcursor(&cur, 0));
 
     /* advline to end (covers lcC_forwardline last-line path) */
     r = lc_advline(&cur, 100);
-    assert(r == LC_OK && lc_line(&cur) == 10);
+    assert(r == LC_OK && lc_line(&cur) == 10 && lc_offset(&cur) == 100);
+    assert(lc_checkcursor(&cur, 100));
 
     lc_deltree(S, c);
     lc_close(S);
@@ -391,8 +408,10 @@ static void test_advance_cov_backward_cross(void) {
 
     /* seek to second leaf, move backward across boundary into first leaf */
     lc_seek(&cur, c, 42);
+    assert(lc_checkcursor(&cur, 42));
     r = lc_advance(&cur, -5);
-    assert(r == LC_OK && lc_offset(&cur) == 37);
+    assert(r == LC_OK && lc_offset(&cur) == 37 && lc_line(&cur) == 3);
+    assert(lc_checkcursor(&cur, 37));
 
     lc_deltree(S, c);
     lc_close(S);
@@ -409,21 +428,27 @@ static void test_advance_cov_skip_siblings(void) {
 
     /* advance forward from leaf 0, skipping past leaf 1 entirely */
     lc_seek(&cur, c, 35);     /* near end of leaf 0 */
+    assert(lc_checkcursor(&cur, 35));
     r = lc_advance(&cur, 55); /* skip past leaf 1 (40 bytes) into leaf 2 */
-    assert(r == LC_OK && lc_offset(&cur) == 90);
+    assert(r == LC_OK && lc_offset(&cur) == 90 && lc_line(&cur) == 9);
+    assert(lc_checkcursor(&cur, 90));
 
     /* advance backward from leaf 2, skipping past leaf 1 entirely */
     r = lc_advance(&cur, -55); /* skip past leaf 1 backward into leaf 0 */
-    assert(r == LC_OK && lc_offset(&cur) == 35);
+    assert(r == LC_OK && lc_offset(&cur) == 35 && lc_line(&cur) == 3);
+    assert(lc_checkcursor(&cur, 35));
 
     /* advance lines forward, skipping past full leaf */
     lc_seekline(&cur, c, 1); /* line 1, in leaf 0 */
+    assert(lc_checkcursor(&cur, 10));
     r = lc_advline(&cur, 8); /* skip past leaf 0 rest + full leaf 1 */
-    assert(r == LC_OK && lc_line(&cur) == 9);
+    assert(r == LC_OK && lc_line(&cur) == 9 && lc_offset(&cur) == 90);
+    assert(lc_checkcursor(&cur, 90));
 
     /* advance lines backward, skipping past full leaf */
     r = lc_advline(&cur, -8);
-    assert(r == LC_OK && lc_line(&cur) == 1);
+    assert(r == LC_OK && lc_line(&cur) == 1 && lc_offset(&cur) == 10);
+    assert(lc_checkcursor(&cur, 10));
 
     lc_deltree(S, c);
     lc_close(S);
@@ -439,8 +464,10 @@ static void test_advance_cov_backwardoff(void) {
 
     /* seek to near-end, advance backward across many children */
     lc_seek(&cur, c, lc_bytes(c));
+    assert(lc_checkcursor(&cur, lc_offset(&cur)));
     r = lc_advance(&cur, -200);
     assert(r == LC_OK);
+    assert(lc_checkcursor(&cur, lc_offset(&cur)));
 
     r = lc_clearbreaks(&cur, 16);
     assert(r == LC_OK);
@@ -475,17 +502,22 @@ static void test_advline_cross(void) {
 
     /* advance lines across leaf boundary */
     lc_seekline(&cur, c, 2); /* line 2, offset 20 */
+    assert(lc_checkcursor(&cur, 20));
     r = lc_advline(&cur, 3); /* skip past leaf boundary (4 breaks in leaf 0) */
-    assert(r == LC_OK && lc_line(&cur) == 5);
+    assert(r == LC_OK && lc_line(&cur) == 5 && lc_offset(&cur) == 50);
+    assert(lc_checkcursor(&cur, 50));
 
     /* backward across leaf boundary */
     r = lc_advline(&cur, -4);
-    assert(r == LC_OK && lc_line(&cur) == 1);
+    assert(r == LC_OK && lc_line(&cur) == 1 && lc_offset(&cur) == 10);
+    assert(lc_checkcursor(&cur, 10));
 
     /* forward to last line */
     lc_seekline(&cur, c, 0);
+    assert(lc_checkcursor(&cur, 0));
     r = lc_advline(&cur, 100);
-    assert(r == LC_OK && lc_line(&cur) == 8);
+    assert(r == LC_OK && lc_line(&cur) == 8 && lc_offset(&cur) == 80);
+    assert(lc_checkcursor(&cur, 80));
 
     lc_deltree(S, c);
     lc_close(S);
@@ -503,8 +535,10 @@ static void test_advline_cov_backward_within(void) {
     /* seek to slot=2, advance backward by 1 (d=1 < slot=2 triggers within-leaf
      * path) */
     lc_seek(&cur, c, 30); /* slot=2, in third gap */
+    assert(lc_checkcursor(&cur, 30));
     r = lc_advline(&cur, -1);
     assert(r == LC_OK && lc_line(&cur) == 1 && lc_offset(&cur) == 10);
+    assert(lc_checkcursor(&cur, 10));
 
     lc_deltree(S, c);
     lc_close(S);
@@ -519,8 +553,10 @@ static void test_advline_cov_backward_cross(void) {
     int       r;
     assert(c && lc_breaks(c) == 4 && lc_bytes(c) == 40);
     lc_seekline(&cur, c, 3);
+    assert(lc_checkcursor(&cur, 30));
     r = lc_advline(&cur, -1);
     assert(r == LC_OK && lc_line(&cur) == 2);
+    assert(lc_checkcursor(&cur, 20));
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -533,8 +569,10 @@ static void test_advline_cov_forward_cross(void) {
 
     lc_rscanV(c, 33, 10);
     lc_seekline(&cur, c, 15);
+    assert(lc_checkcursor(&cur, 150));
     r = lc_advline(&cur, 1);
     assert(r == LC_OK && lc_line(&cur) == 16);
+    assert(lc_checkcursor(&cur, 160));
     lc_deltree(S, c);
     lc_close(S);
 }
