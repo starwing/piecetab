@@ -183,9 +183,7 @@ LC_STATIC int lc_checkcursor(lc_Cursor *C, size_t expected_off) {
     lc_check(
             C->off == bsum, "[chk] OFF mismatch off=%zu sum=%zu\n", C->off,
             bsum);
-    lc_check(
-            C->nu == lsum + C->lnu, "[chk] NU mismatch nu=%zu sum=%zu\n", C->nu,
-            lsum);
+    lc_check(C->nu == lsum, "[chk] NU mismatch nu=%zu sum=%zu\n", C->nu, lsum);
     p = lcK_parent(C, lcK_levels(C)), i = lcK_idx(C, p, lcK_levels(C));
     bsum = lcL_sumbytes(lcK_leaf(C), 0, C->lnu);
     lc_check(

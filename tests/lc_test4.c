@@ -318,7 +318,6 @@ static void test_advance_single(void) {
     assert(lc_checkcursor(&C, 15));
 
     r = lc_advline(&C, 1);
-    lc_log("offset=%zu line=%zu\n", lc_offset(&C), lc_line(&C));
     assert(r == LC_OK && lc_offset(&C) == 25 && lc_line(&C) == 2);
     assert(lc_checkcursor(&C, 25));
 
