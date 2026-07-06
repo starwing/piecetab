@@ -314,21 +314,28 @@ static void test_advance_single(void) {
     r = lc_seek(&C, c, 5);
     assert(r == LC_OK);
     r = lc_advance(&C, 10);
-    assert(r == LC_OK && lc_offset(&C) == 15);
+    assert(r == LC_OK && lc_offset(&C) == 15 && lc_line(&C) == 1);
+    assert(lc_checkcursor(&C, 15));
+
     r = lc_advline(&C, 1);
-    assert(r == LC_OK && lc_line(&C) == 2);
+    lc_log("offset=%zu line=%zu\n", lc_offset(&C), lc_line(&C));
+    assert(r == LC_OK && lc_offset(&C) == 25 && lc_line(&C) == 2);
+    assert(lc_checkcursor(&C, 25));
 
     /* backward within leaf */
     r = lc_advance(&C, -8);
-    assert(r == LC_OK && lc_offset(&C) == 17);
+    assert(r == LC_OK && lc_offset(&C) == 17 && lc_line(&C) == 1);
+    assert(lc_checkcursor(&C, 17));
 
     /* clamp past end */
     r = lc_advance(&C, 100);
     assert(r == LC_OK && lc_offset(&C) == 117);
+    assert(lc_checkcursor(&C, 117));
 
     /* clamp before start */
     r = lc_advance(&C, -200);
     assert(r == LC_OK && lc_offset(&C) == 0);
+    assert(lc_checkcursor(&C, 0));
 
     lc_deltree(S, c);
     lc_close(S);

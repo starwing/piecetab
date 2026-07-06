@@ -316,9 +316,6 @@ static size_t lcN_sumbytes(const lc_Node *n, int i, int end)
 
 static size_t lcN_sumbreaks(const lc_Node *n, int i, int end)
 { size_t s = 0; for (; i < end; ++i) s += n->breaks[i]; return s; }
-
-static size_t lcK_locoff(const lc_Cursor *C)
-{ return lcL_sumbytes(lcK_leaf(C), 0, C->lnu) + C->col; }
 /* clang-format on */
 
 static void lcN_makespace(lc_Node *d, int i, int n) {
@@ -409,7 +406,7 @@ static void lcK_locend(lc_Cursor *C) {
 static int lcK_forwardoff(lc_Cursor *C, size_t d) {
     lc_Node *p = lcK_parent(C, lcK_levels(C));
     int      l, i = lcK_idx(C, p, lcK_levels(C));
-    size_t   lc = lcK_locoff(C), in = p->bytes[i] - lc;
+    size_t   in = p->bytes[i] - (C->loff + C->col);
     if (d < in) return lcK_findinleaf(C, d), 0;
     d -= in, C->off += p->bytes[i], C->nu += p->breaks[i] - C->lnu;
     for (l = lcK_levels(C); l >= 0; --l) {
@@ -429,10 +426,12 @@ static int lcK_forwardoff(lc_Cursor *C, size_t d) {
 static int lcK_backwardoff(lc_Cursor *C, size_t d) {
     lc_Node *p = lcK_parent(C, lcK_levels(C));
     int      l, i = lcK_idx(C, p, lcK_levels(C));
-    size_t   lc = lcK_locoff(C);
-    if (d <= lc)
-        return C->loff = C->lnu = C->col = 0, lcK_findinleaf(C, lc - d), 0;
-    d -= lc, C->nu -= C->lnu, C->loff = 0, C->col = 0;
+    size_t   in = C->loff + C->col;
+    if (d <= in) {
+        C->nu -= C->lnu, C->loff = C->lnu = C->col = 0;
+        return lcK_findinleaf(C, in - d), 0;
+    }
+    d -= in, C->nu -= C->lnu, C->loff = 0, C->col = 0;
     for (l = lcK_levels(C); l >= 0; --l) {
         p = lcK_parent(C, l), i = lcK_idx(C, p, l);
         if (l == lcK_levels(C)) --i;
@@ -454,7 +453,7 @@ static void lcK_forwardline(lc_Cursor *C, size_t d) {
     int      l, i = lcK_idx(C, p, lcK_levels(C));
     size_t   in = p->breaks[i] - C->lnu;
     if (d >= in) {
-        C->loff += lcL_sumbytes(lcK_leaf(C), C->lnu, C->lnu + in) - C->col;
+        C->loff += lcL_sumbytes(lcK_leaf(C), C->lnu, C->lnu + in);
         d -= in, C->off += p->bytes[i], C->nu += in, C->col = 0;
         for (l = lcK_levels(C); l >= 0; --l) {
             p = lcK_parent(C, l), i = lcK_idx(C, p, l) + 1;
@@ -468,7 +467,7 @@ static void lcK_forwardline(lc_Cursor *C, size_t d) {
         assert(l >= 0), C->paths[l] = &p->children[i], C->loff = C->lnu = 0;
         lcK_findline(C, l + 1, &d);
     }
-    C->loff += lcL_sumbytes(lcK_leaf(C), C->lnu, C->lnu + d) - C->col;
+    C->loff += lcL_sumbytes(lcK_leaf(C), C->lnu, C->lnu + d);
     C->lnu += d, C->nu += d, C->col = 0;
 }
 
