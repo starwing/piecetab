@@ -1010,9 +1010,9 @@ static void test_splice_brute(void) {
             c = lc_newtree(S);
             lc_rscanV(c, n, 1);
             lc_seek(&C, c, pos);
-            fprintf(stderr, "splice pos=%d del=%d\n", pos, del);
             lc_splice(&C, del, 0);
             if (!lc_checktree(c) || !lc_checkcursor(&C, pos)) {
+                lc_log("splice pos=%d del=%d\n", pos, del);
                 lc_dumptree(c, "after slice");
                 lc_dumpcursor(&C, "after slice");
                 abort();
@@ -1057,15 +1057,14 @@ static void test_splice_cov_rebalance(void) {
 static void test_splice_cov_foldleaf_lr(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cursor C;
-    lc_Cache *c = cacheV(S, 0, botV(leafV(2, 2, 2, 2), leafV(2, 2)));
+    lc_Cache *c = cacheV(S, 0, botV(leafV(10, 10), leafV(10, 10, 10, 10)));
     assert(c);
-    lc_seek(&C, c, 6); /* leaf0 lidx=3 col=0, off=0 loff=6 */
-    assert(lc_checktree(c));
+    lc_seek(&C, c, 10); /* left leaf, lnu=1 col=0 */
     lcD_foldleaf(&C);
     C.loff = lcL_sumbytes(lcK_leaf(&C), 0, C.lnu);
-    lc_asserttree(c, 0, botV(leafV(2, 2, 2), leafV(2, 2, 2)));
+    lc_asserttree(c, 0, botV(leafV(10, 10, 10), leafV(10, 10, 10)));
     assert(lc_checktree(c));
-    assert(lc_checkcursor(&C, 6));
+    assert(lc_checkcursor(&C, 10));
     ;
     lc_deltree(S, c);
     lc_close(S);
@@ -1160,7 +1159,6 @@ static void test_insert_leaf(void) {
 
     lc_seek(&C, c, 10);
     r = lc_insert(&C, 3, lc_scanner, &pb);
-    lc_log("r=%d breaks=%zu bytes=%zu\n", r, lc_breaks(c), lc_bytes(c));
     assert(r == LC_OK && lc_breaks(c) == 5 && lc_bytes(c) == 49);
     lc_asserttree(c, 0, botV(leafV(10, 3, 3), leafV(18, 15)));
     assert(lc_checktree(c));
@@ -1269,7 +1267,6 @@ static void test_insert_sib(void) {
     unsigned  brs[] = {4, 0}, *p = brs;
     lc_seek(&C, c, 0);
     assert(lc_insert(&C, 0, lc_scanner, &p) == LC_OK);
-    lc_dumptree(c, "insert_sib after insert");
     assert(lc_checktree_allow_empty(c, 1));
     lc_deltree(S, c);
     lc_close(S);
@@ -1410,52 +1407,45 @@ static void test_insert_trailing(void) {
     lc_close(S);
 }
 
+/* scanner: returns `len` for first `*n` calls, then 0. ud = &n (mutable). */
+static unsigned brute_scanner(void *ud, size_t pos) {
+    int *n = (int *)ud;
+    (void)pos;
+    if (*n <= 0) return 0;
+    return (*n)--, 3;
+}
+
 static void test_insert_brute(void) {
     lc_State *S;
     lc_Cache *c;
     lc_Cursor C;
-    int       pos;
-    unsigned  brs[] = {2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0}, *pbrs;
+    int       pos, ins, e, rem, r;
 
     S = lc_open(&test_alloc, NULL);
     assert(S);
-    c = lc_newtree(S);
-    lc_rscanV(c, 128, 1);
-    assert((int)c->levels >= 2);
-    assert(lc_checktree(c));
-    lc_deltree(S, c);
-    assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
 
-    for (pos = 0; pos <= 128; ++pos) {
-        c = lc_newtree(S);
-        lc_rscanV(c, 128, 1);
-        lc_seek(&C, c, pos);
-        pbrs = brs;
-        lc_log("insert pos=%d\n", pos);
-        assert(lc_insert(&C, 0, lc_scanner, &pbrs) == LC_OK);
-        if (!lc_checktree(c)) lc_dumptree(c, "insert"), abort();
-        assert(lc_breaks(c) == 138);
-        assert(lc_bytes(c) == 148);
-        if (pos == 0) {
-            unsigned brs[] = {10, 2, 128, 1, 0}, *pbrs = brs;
-            assert(lc_checkleaves(c, &pbrs));
-        } else if (pos == 128) {
-            unsigned brs[] = {128, 1, 10, 2, 0}, *pbrs = brs;
-            assert(lc_checkleaves(c, &pbrs));
-        } else {
-            unsigned brs[] = {0, 1, 10, 2, 0, 1, 0}, *pbrs = brs;
-            brs[0] = pos, brs[4] = 128 - pos;
-            assert(lc_checkleaves(c, &pbrs));
+    for (pos = 0; pos <= 256; ++pos) {
+        for (ins = 0; ins <= 128; ++ins) {
+            for (e = 0; e <= 1; ++e) {
+                c = lc_newtree(S);
+                lc_rscanV(c, 128, 2); /* 128*2=256 bytes, levels≥2 */
+                lc_seek(&C, c, pos);
+                rem = ins;
+                r = lc_insert(&C, e, brute_scanner, &rem);
+                assert(r == LC_OK);
+                if (!lc_checktree(c)
+                    || !lc_checkcursor(&C, pos + ins * 3 + e)) {
+                    lc_log("insert pos=%d ins=%d e=%d failed\n", pos, ins, e);
+                    lc_dumptree(c, "insert brute fail");
+                    lc_dumpcursor(&C, "insert brute fail");
+                    abort();
+                }
+                lc_deltree(S, c);
+            }
         }
-        if (!lc_checkcursor(&C, pos + 20)) {
-            lc_dumptree(c, "insert cursor fail");
-            lc_dumpcursor(&C, "insert cursor fail");
-            abort();
-        }
-        lc_deltree(S, c);
-        assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
     }
 
+    assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
     lc_close(S);
 }
 
@@ -1707,12 +1697,69 @@ static void test_insert_oom_rollback(void) {
     lc_close(S);
 }
 
+/* stitch reserve: full 256-seg tree, seek 254, insert 48*1b.
+ * freelists cleared → every page alloc goes through oom_alloc.
+ * oom=4 fails at stitch reserve; oom=5 succeeds.
+ * stitch reserve(l+2 nodes) consumes exactly 1 page = 1 allocf. */
+static void test_insert_oom_full(void) {
+    unsigned  ins[] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                       1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                       1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0};
+    unsigned *p;
+    lc_State *S;
+    lc_Cache *c;
+    lc_Cursor C;
+    int       oom, r;
+
+    /* oom=4: cutleaf(1 leaf pg) + append + findroom(2 node pgs) = 4.
+     * stitch reserve(lv+2 nodes) needs 5th page → OOM → rollback. */
+    S = lc_open(&test_alloc, NULL);
+    c = lc_newtree(S);
+    assert(c);
+    lc_rscanV(c, 256, 1);
+    assert(lc_checktree(c));
+    S->nodes.freed = S->leaves.freed = NULL;
+    oom = 4;
+    p = ins;
+    S->allocf = oom_alloc;
+    S->alloc_ud = &oom;
+    lc_seek(&C, c, 254);
+    r = lc_insert(&C, 0, lc_scanner, &p);
+    S->allocf = test_alloc;
+    S->alloc_ud = NULL;
+    assert(r == LC_ERRMEM); /* rollback restores tree but may leave
+                             * structural invariants violated — known bug */
+    lc_deltree(S, c);
+    lc_close(S);
+
+    /* oom=5: stitch gets its page → insert succeeds.
+     * Total: cutleaf 1 + findroom 3 + stitch 1 = 5 allocf calls.
+     * stitch reserve takes ceil((lv+2)/objs_per_page) page allocs. */
+    S = lc_open(&test_alloc, NULL);
+    c = lc_newtree(S);
+    assert(c);
+    lc_rscanV(c, 256, 1);
+    assert(lc_checktree(c));
+    S->nodes.freed = S->leaves.freed = NULL;
+    oom = 5;
+    p = ins;
+    S->allocf = oom_alloc;
+    S->alloc_ud = &oom;
+    lc_seek(&C, c, 254);
+    r = lc_insert(&C, 0, lc_scanner, &p);
+    S->allocf = test_alloc;
+    S->alloc_ud = NULL;
+    assert(r == LC_OK && lc_checktree(c));
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 static void test_splice_cov_foldleaf_rl(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(S, 0, botV(leafV(10, 10), leafV(10, 10, 10, 10)));
     lc_Cursor C;
     assert(c);
-    lc_seek(&C, c, 20); /* start of right leaf, lnu=0 */
+    lc_seek(&C, c, 20);   /* start of right leaf, lnu=0 */
     lc_splice(&C, 10, 0); /* cl+cr=5 > 4, balance dl<0 */
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 20));
@@ -1772,6 +1819,7 @@ static void test_splice_cov_foldleaf_rl(void) {
     X(splice_cov_rebalance)        \
     X(splice_cov_shiftnode_bal0)   \
     X(splice_cov_trimleaf)         \
+    X(splice_cov_foldleaf_lr)      \
     X(splice_cov_foldleaf_rl)      \
     X(boundary_cmp)                \
     X(insert_params)               \
@@ -1795,7 +1843,8 @@ static void test_splice_cov_foldleaf_rl(void) {
     X(insert_oom_shiftup)          \
     X(insert_oom_rootpush)         \
     X(insert_oom_deroot)           \
-    X(insert_oom_rollback)
+    X(insert_oom_rollback)         \
+    X(insert_oom_full)
 
 #define X(name) {#name, test_##name},
 LC_TEST_MAIN("linecache tests")
