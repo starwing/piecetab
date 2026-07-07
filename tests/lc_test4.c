@@ -196,6 +196,7 @@ static void test_seek_params(void) {
     assert(lc_seekline(NULL, c, 0) == LC_ERRPARAM);
     assert(lc_seekline(&C, NULL, 0) == LC_ERRPARAM);
     lc_seek(&C2, c, 0);
+    assert(lc_checkcursor(&C2, 0));
     assert(lc_seekline(&C2, c, 1) == LC_ERRPARAM);
 
     lc_deltree(S, c);
@@ -360,7 +361,7 @@ static void test_advance_cross(void) {
     assert(lc_checktree(c));
 
     /* advance forward across leaf boundary */
-    lc_seek(&cur, c, 35);     /* end of first leaf's last gap */
+    lc_seek(&cur, c, 35); /* end of first leaf's last gap */
     assert(lc_checkcursor(&cur, 35));
     r = lc_advance(&cur, 10); /* cross into second leaf */
     assert(r == LC_OK && lc_offset(&cur) == 45 && lc_line(&cur) == 4);
@@ -372,7 +373,7 @@ static void test_advance_cross(void) {
     assert(lc_checkcursor(&cur, 35));
 
     /* advline forward across leaf boundary */
-    lc_seek(&cur, c, 35);    /* break 3, line 3 */
+    lc_seek(&cur, c, 35); /* break 3, line 3 */
     assert(lc_checkcursor(&cur, 35));
     r = lc_advline(&cur, 2); /* cross to line 5 (in second leaf) */
     assert(r == LC_OK && lc_line(&cur) == 5 && lc_offset(&cur) == 50);
@@ -427,7 +428,7 @@ static void test_advance_cov_skip_siblings(void) {
     assert(lc_breaks(c) == 12);
 
     /* advance forward from leaf 0, skipping past leaf 1 entirely */
-    lc_seek(&cur, c, 35);     /* near end of leaf 0 */
+    lc_seek(&cur, c, 35); /* near end of leaf 0 */
     assert(lc_checkcursor(&cur, 35));
     r = lc_advance(&cur, 55); /* skip past leaf 1 (40 bytes) into leaf 2 */
     assert(r == LC_OK && lc_offset(&cur) == 90 && lc_line(&cur) == 9);
@@ -590,15 +591,19 @@ static void test_markbreak_basic(void) {
     r = lc_markbreak(&cur, 5);
     assert(r == LC_OK && lc_breaks(c) == 3);
     assert(lc_offset(&cur) == 5 && lc_line(&cur) == 1);
+    assert(lc_checkcursor(&cur, 5));
 
     /* verify by seeking past new break */
     lc_seek(&cur, c, 6);
+    assert(lc_checkcursor(&cur, 6));
     assert(lc_line(&cur) == 1);
 
     /* extend line past next break (br > gap): set line length to 100 */
     lc_seek(&cur, c, 2);
+    assert(lc_checkcursor(&cur, 2));
     r = lc_markbreak(&cur, 100);
     assert(r == LC_OK); /* cross-break extension: no error */
+    assert(lc_checkcursor(&cur, 102));
 
     /* null check */
     r = lc_markbreak(NULL, 1);
@@ -629,9 +634,11 @@ static void test_markbreak_empty(void) {
 
     r = lc_seek(&cur, c, 0);
     assert(r == LC_OK);
+    assert(lc_checkcursor(&cur, 0));
     r = lc_markbreak(&cur, 10);
     assert(r == LC_OK && lc_breaks(c) == 1 && lc_bytes(c) == 10);
     assert(lc_offset(&cur) == 10 && lc_line(&cur) == 1);
+    assert(lc_checkcursor(&cur, 10));
     assert(lc_linelen(&cur) == 0); /* at break boundary, gap=0 */
 
     lc_deltree(S, c);
@@ -651,11 +658,13 @@ static void test_markbreak_crossline(void) {
     assert(lc_checktree(c));
     lc_seekline(&C, c, 1);
     assert(lc_offset(&C) == 1 && lc_line(&C) == 1 && lc_linelen(&C) == 99);
+    assert(lc_checkcursor(&C, 1));
     r = lc_markbreak(&C, 10);
     assert(r == LC_OK);
     assert(lc_checktree(c));
     assert(lc_breaks(c) == 5 && lc_bytes(c) == 300);
     assert(lc_offset(&C) == 11 && lc_line(&C) == 2 && lc_linelen(&C) == 89);
+    assert(lc_checkcursor(&C, 11));
     lc_deltree(S, c);
 
     /* case 2: gap split at br=5, line1 offset 10, len=15 */
@@ -664,10 +673,12 @@ static void test_markbreak_crossline(void) {
     assert(lc_breaks(c) == 3 && lc_bytes(c) == 40);
     lc_seekline(&C, c, 1);
     assert(lc_offset(&C) == 10);
+    assert(lc_checkcursor(&C, 10));
     r = lc_markbreak(&C, 5);
     assert(r == LC_OK);
     assert(lc_checktree(c));
     assert(lc_bytes(c) == 40 && lc_breaks(c) == 4);
+    assert(lc_checkcursor(&C, 15));
     lc_deltree(S, c);
 
     lc_close(S);
@@ -684,14 +695,16 @@ static void test_markbreak_trailing(void) {
 
     /* trailing gap: splice at end adds virtual bytes, lc_bytes unchanged */
     lc_seek(&cur, c, 40);
+    assert(lc_checkcursor(&cur, 40));
     lc_splice(&cur, 0, 20);
-    assert(lc_bytes(c) == 40);
     assert(lc_offset(&cur) == 60); /* 40 real + 20 virtual in col */
-    assert(lc_line(&cur) == 3);
+    assert(lc_checkcursor(&cur, 60));
+    assert(lc_bytes(c) == 40 && lc_line(&cur) == 3);
 
     r = lc_markbreak(&cur, 5);
     assert(r == LC_OK && lc_breaks(c) == 4);
     assert(lc_offset(&cur) == 65 && lc_line(&cur) == 4);
+    assert(lc_checkcursor(&cur, 65));
     assert(lc_linelen(&cur) == 0);
 
     lc_deltree(S, c);
@@ -706,9 +719,11 @@ static void test_markbreak_noop(void) {
     lc_scanV(c, 10, 15, 15);
     assert(lc_breaks(c) == 3);
     lc_seek(&cur, c, 5);
+    assert(lc_checkcursor(&cur, 5));
     assert(lc_checktree(c));
     r = lc_markbreak(&cur, 10);
     assert(r == LC_OK && lc_breaks(c) == 3 && lc_bytes(c) == 40);
+    assert(lc_checkcursor(&cur, 15));
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -722,9 +737,11 @@ static void test_markbreak_brzero(void) {
     lc_scanV(c, 10, 15, 15);
     assert(lc_breaks(c) == 3);
     lc_seek(&cur, c, 5); /* gap=5 (in first segment of 10 bytes) */
+    assert(lc_checkcursor(&cur, 5));
     r = lc_markbreak(&cur, 0);
     assert(r == LC_OK && lc_breaks(c) == 4);
     assert(lc_offset(&cur) == 5 && lc_line(&cur) == 1);
+    assert(lc_checkcursor(&cur, 5));
 
     lc_deltree(S, c);
     lc_close(S);
@@ -741,10 +758,12 @@ static void test_markbreak_crossleaf(void) {
     assert(lc_checktree(c));
 
     lc_seek(&cur, c, 0);
+    assert(lc_checkcursor(&cur, 0));
     r = lc_markbreak(&cur, 100);
     assert(r == LC_OK);
     assert(lc_checktree(c));
     assert(lc_bytes(c) == 100 && lc_breaks(c) == 1);
+    assert(lc_checkcursor(&cur, 100));
 
     lc_deltree(S, c);
     lc_close(S);
@@ -763,8 +782,10 @@ static void test_markbreak_split(void) {
 
     /* add break to first gap in first leaf */
     lc_seek(&cur, c, 2);
+    assert(lc_checkcursor(&cur, 2));
     r = lc_markbreak(&cur, 3);
     assert(r == LC_OK && lc_breaks(c) == 6);
+    assert(lc_checkcursor(&cur, 5));
 
     lc_deltree(S, c);
     lc_close(S);
@@ -782,8 +803,10 @@ static void test_markbreak_node_split(void) {
     /* internal node has 5 children (> LC_FANOUT=4), so levels >= 2 */
     /* markbreak at offset 2: splits leaf, triggers internal node split */
     lc_seek(&cur, c, 2);
+    assert(lc_checkcursor(&cur, 2));
     r = lc_markbreak(&cur, 3);
     assert(r == LC_OK);
+    assert(lc_checkcursor(&cur, 5));
 
     lc_deltree(S, c);
     lc_close(S);
@@ -800,8 +823,10 @@ static void test_markbreak_root_split(void) {
 
     /* seek to first gap in first leaf, add break to trigger cascade */
     lc_seek(&cur, c, 2);
+    assert(lc_checkcursor(&cur, 2));
     r = lc_markbreak(&cur, 3);
     assert(r == LC_OK && lc_breaks(c) == 71);
+    assert(lc_checkcursor(&cur, 5));
 
     lc_deltree(S, c);
     lc_close(S);
@@ -815,8 +840,10 @@ static void test_markbreak_root_add(void) {
     lc_rscanV(c, 21, 10);
     assert(lc_breaks(c) == 21);
     lc_seek(&cur, c, 2);
+    assert(lc_checkcursor(&cur, 2));
     r = lc_markbreak(&cur, 3);
     assert(r == LC_OK);
+    assert(lc_checkcursor(&cur, 5));
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -832,8 +859,10 @@ static void test_markbreak_cascade(void) {
 
     for (k = 0; k < 24; ++k) {
         lc_seek(&cur, c, 2);
+        assert(lc_checkcursor(&cur, 2));
         r = lc_markbreak(&cur, 2);
         assert(r == LC_OK);
+        if (k == 0) assert(lc_checkcursor(&cur, 4));
     }
 
     lc_deltree(S, c);
@@ -851,8 +880,10 @@ static void test_markbreak_cov_split_right(void) {
 
     /* cursor at offset 25 generates slot=2 (>= mid=2), moves to new leaf */
     lc_seek(&cur, c, 25);
+    assert(lc_checkcursor(&cur, 25));
     r = lc_markbreak(&cur, 3);
     assert(r == LC_OK && lc_breaks(c) == 5);
+    assert(lc_checkcursor(&cur, 28));
 
     lc_deltree(S, c);
     lc_close(S);
@@ -875,11 +906,53 @@ static void test_markbreak_cov_child_right(void) {
     int       r;
     assert(c);
     lc_seek(&C, c, 56);
+    assert(lc_checkcursor(&C, 56));
     r = lc_markbreak(&C, 0);
     assert(r == LC_OK);
+    assert(lc_checkcursor(&C, 56));
     assert(lc_checktree_allow_empty(c, 1));
     lc_deltree(S, c);
     assert(S->nodes.live_obj == 0 && S->leaves.live_obj == 0);
+    lc_close(S);
+}
+
+static void test_markbreak_fullleaf_pastend(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    int       r;
+
+    lc_scanV(c, 10, 10, 10, 10);
+    assert(lc_breaks(c) == 4);
+    lc_seek(&C, c, 40);
+    assert(C.lnu == 4 && C.col == 0);
+    r = lc_markbreak(&C, 3);
+    assert(r == LC_OK);
+    assert(c->root.breaks[0] <= LC_LEAF_FANOUT);
+    assert(lc_breaks(c) == 5);
+    assert(lc_bytes(c) == 43);
+    assert(lc_checktree(c));
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_markbreak_fullleaf_brgt(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    int       r;
+
+    lc_scanV(c, 10, 10, 10, 10, 10, 10, 10, 10);
+    assert(lc_breaks(c) == 8);
+    lc_seek(&C, c, 25);
+    assert(C.lnu == 2 && C.col == 5);
+    r = lc_markbreak(&C, 8);
+    assert(r == LC_OK);
+    assert(lc_breaks(c) == 8);
+    lc_asserttree(c, 0,
+                  botV(leafV(10, 10, 13, 7),
+                       leafV(10, 10, 10, 10)));
+    lc_deltree(S, c);
     lc_close(S);
 }
 
@@ -911,12 +984,14 @@ static void test_clearbreaks_basic(void) {
     r = lc_clearbreaks(&C, 0);
     assert(r == LC_OK && lc_breaks(c) == 4 && lc_linelen(&C) == 10);
     assert(lc_checktree(c));
+    assert(lc_checkcursor(&C, 5));
 
     /* clear exactly one break at break boundary */
     lc_seek(&C, c, 9);
     r = lc_clearbreaks(&C, 5);
     assert(r == LC_OK && lc_breaks(c) == 3 && lc_linelen(&C) == 25);
     assert(lc_checktree(c));
+    assert(lc_checkcursor(&C, 14));
 
     /* past end: del clamped, no breaks crossed */
     lc_seek(&C, c, 50);
@@ -924,6 +999,7 @@ static void test_clearbreaks_basic(void) {
     assert(r == LC_OK && lc_breaks(c) == 2 && lc_linelen(&C) == 30);
     assert(lc_bytes(c) == 40);
     assert(lc_checktree(c));
+    assert(lc_checkcursor(&C, 70));
 
     /* clear all remaining breaks */
     lc_seek(&C, c, 5);
@@ -931,6 +1007,7 @@ static void test_clearbreaks_basic(void) {
     assert(r == LC_OK && lc_breaks(c) == 0 && lc_linelen(&C) == 45);
     assert(lc_bytes(c) == 0);
     assert(lc_checktree(c));
+    assert(lc_checkcursor(&C, 45));
 
     lc_deltree(S, c);
     lc_close(S);
@@ -945,8 +1022,10 @@ static void test_clearbreaks_cov_slot(void) {
     assert(lc_breaks(c) == 3);
     assert(lc_checktree(c));
     lc_seek(&cur, c, 11);
+    assert(lc_checkcursor(&cur, 11));
     r = lc_clearbreaks(&cur, 16);
     assert(r == LC_OK && lc_breaks(c) == 2);
+    assert(lc_checkcursor(&cur, 27));
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -976,6 +1055,7 @@ static void test_splice_basic(void) {
     lc_splice(&C, 1000, 0); /* delete all */
     assert(lc_breaks(c) == 0 && lc_bytes(c) == 0);
     assert(lc_checktree(c));
+    assert(lc_checkcursor(&C, 0));
 
     /* second scan on cleared tree */
     lc_rscanV(c, 100, 10);
@@ -984,6 +1064,7 @@ static void test_splice_basic(void) {
     lc_splice(&C, 980, 0); /* delete all but first 11 + last 9 */
     assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
     assert(lc_checktree(c));
+    assert(lc_checkcursor(&C, 11));
 
     lc_scanV(c, 5, 15);
 
@@ -991,12 +1072,14 @@ static void test_splice_basic(void) {
     lc_seek(&C, c, 2);
     lc_splice(&C, 5, 3);
     assert(lc_bytes(c) == 38 && lc_offset(&C) == 5);
+    assert(lc_checkcursor(&C, 5));
 
     /* splice crossing breaks */
     lc_seek(&C, c, 0);
     lc_splice(&C, 15, 8);
     assert(lc_bytes(c) == 31); /* 38 - 15 + 8 */
     assert(lc_checktree(c));
+    assert(lc_checkcursor(&C, 8));
 
     /* splice with del=0, ins=0 (no-op) */
     lc_splice(&C, 0, 0);
@@ -1019,16 +1102,38 @@ static void test_splice_trailing(void) {
 
     /* after last break (trailing area): slot=3 (==breaks) */
     lc_seek(&C, c, 40);
+    assert(lc_checkcursor(&C, 40));
     lc_splice(&C, 0, 20); /* insert 20 bytes at end */
     assert(lc_checktree(c));
     assert(lc_bytes(c) == 40);   /* 40 is the last newline */
     assert(lc_offset(&C) == 60); /* offset == line start + col */
+    assert(lc_checkcursor(&C, 60));
 
     /* verify seek within expanded trailing segment */
     lc_seek(&C, c, 45);
+    assert(lc_checkcursor(&C, 45));
     assert(lc_line(&C) == 3);
 
     lc_deltree(S, c);
+
+    /* past-end: delete in trailing area should not move col */
+    c = lc_newtree(S);
+    lc_scanV(c, 10, 15, 15);
+    lc_seek(&C, c, 40);
+    lc_splice(&C, 5, 0); /* delete 5 past end */
+    assert(lc_offset(&C) == 40);
+    assert(lc_checkcursor(&C, 40));
+    lc_deltree(S, c);
+
+    /* past-end: del+ins, only ins affects col */
+    c = lc_newtree(S);
+    lc_scanV(c, 10, 15, 15);
+    lc_seek(&C, c, 40);
+    lc_splice(&C, 5, 10); /* del=5 ins=10 past end */
+    assert(lc_offset(&C) == 50);
+    assert(lc_checkcursor(&C, 50));
+    lc_deltree(S, c);
+
     lc_close(S);
 }
 
@@ -1140,6 +1245,7 @@ static void test_splice_cov_trimleaf(void) {
     lc_splice(&cur, 25, 0);
     assert(c->root.child_count == 0 && c->bytes == 0 && c->breaks == 0);
     assert(lc_checktree_allow_empty(c, 1));
+    assert(lc_checkcursor(&cur, 5));
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -1155,6 +1261,7 @@ static void test_boundary_cmp(void) {
     lc_seekline(&cur, c, 2);
     assert(cur.nu == 2);
     assert(lc_linelen(&cur) == 5);
+    assert(lc_checkcursor(&cur, 2));
     lc_deltree(S, c);
 
     /* lcK_forwardline: <= -> <. advline(4) must skip to leaf2, not stop at
@@ -1162,9 +1269,11 @@ static void test_boundary_cmp(void) {
     c = cacheV(S, 0, botV(leafV(1, 1), leafV(1, 1), leafV(5)));
     assert(lc_checktree_allow_empty(c, 1));
     lc_seek(&cur, c, 0);
+    assert(lc_checkcursor(&cur, 0));
     lc_advline(&cur, 4);
     assert(cur.nu == 4);
     assert(lc_linelen(&cur) == 5);
+    assert(lc_checkcursor(&cur, 4));
     lc_deltree(S, c);
 
     lc_close(S);
@@ -1251,6 +1360,7 @@ static void test_insert_append(void) {
     assert(lc_checktree(c));
     assert(lc_breaks(c) == 2 && lc_bytes(c) == 27);
     assert(lc_linelen(&C) == 17);
+    assert(lc_checkcursor(&C, 12));
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -1270,6 +1380,7 @@ static void test_insert_many(void) {
     assert(r == LC_OK);
     assert(lc_breaks(c) == 20 && lc_bytes(c) == 47);
     assert(lc_checktree(c));
+    assert(lc_checkcursor(&C, 22));
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -1289,6 +1400,7 @@ static void test_insert_empty(void) {
     assert(r == LC_OK);
     assert(lc_checktree(c));
     assert(lc_breaks(c) == 3 && lc_bytes(c) == 30);
+    assert(lc_checkcursor(&C, 35));
     lc_deltree(S, c);
 
     /* case 2: empty tree, e=0, scanner returns 0 (no-op) */
@@ -1298,6 +1410,7 @@ static void test_insert_empty(void) {
     r = lc_insert(&C, 0, lc_scanner, &pbrs);
     assert(r == LC_OK);
     assert(lc_breaks(c) == 0 && lc_bytes(c) == 0);
+    assert(lc_checkcursor(&C, 0));
     lc_deltree(S, c);
 
     lc_close(S);
@@ -1312,6 +1425,7 @@ static void test_insert_sib(void) {
     lc_seek(&C, c, 0);
     assert(lc_insert(&C, 0, lc_scanner, &p) == LC_OK);
     assert(lc_checktree_allow_empty(c, 1));
+    assert(lc_checkcursor(&C, 4));
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -1335,6 +1449,7 @@ static void test_insert_deep(void) {
     lc_seek(&C, c, 1);
     assert(lc_insert(&C, 0, lc_scanner, &p) == LC_OK);
     assert(lc_checktree_allow_empty(c, 1));
+    assert(lc_checkcursor(&C, 2));
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -1354,6 +1469,7 @@ static void test_insert_leaf_split(void) {
     assert(r == LC_OK);
     assert(lc_checktree(c));
     assert(lc_breaks(c) == 6 && lc_bytes(c) == 26);
+    assert(lc_checkcursor(&C, 16));
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -1404,6 +1520,7 @@ static void test_insert_fillrt_findlevel(void) {
     r = lc_insert(&cur, 0, lc_scanner, &pz);
     assert(r == LC_OK);
     assert(lc_checktree_allow_empty(c, 1));
+    assert(lc_checkcursor(&cur, 6));
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -1423,6 +1540,7 @@ static void test_insert_noop(void) {
     assert(r == LC_OK);
     assert(lc_checktree(c));
     assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
+    assert(lc_checkcursor(&C, 5));
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -1853,6 +1971,8 @@ static void test_splice_cov_foldleaf_rl(void) {
     X(markbreak_cascade)           \
     X(markbreak_cov_split_right)   \
     X(markbreak_cov_child_right)   \
+    X(markbreak_fullleaf_pastend)  \
+    X(markbreak_fullleaf_brgt)     \
     X(clearbreaks_params)          \
     X(clearbreaks_basic)           \
     X(clearbreaks_cov_slot)        \

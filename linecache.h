@@ -717,7 +717,7 @@ static int lcD_makechain(lc_Cursor *C, int from, int to, int nofail) {
     if (assert(from < to), from < 0) {
         nn = (lc_Node *)lcP_alloc(NULL, &C->tree->S->nodes), assert(nn);
         p = &C->tree->root, *nn = *p;
-        p->bytes[0] = C->tree->bytes, p->breaks[0] = C->tree->breaks;
+        p->bytes[0] = lcK_bytes(C), p->breaks[0] = lcK_breaks(C);
         p->children[0] = nn, p->child_count = 1;
         memmove(C->paths + to + 2, C->paths + to + 1,
                 (lcK_levels(C) - to) * sizeof(lc_Node **));
@@ -755,8 +755,8 @@ static int lcD_mergeleaf(lc_Cursor *C, lc_Node *rt) {
     int      d = 0, l = lcK_levels(C);
     lc_Node *p = lcK_parent(C, l);
     int      cc = p->child_count;
-    int      bc = p->breaks[cc - 1], rtbc = rt[0].breaks[0];
-    lc_Leaf *ll = lcL_idx(p, cc - 1), *lr = lcL_idx(&rt[0], 0);
+    int      bc = cc ? p->breaks[cc - 1] : 0, rtbc = rt[0].breaks[0];
+    lc_Leaf *ll = cc ? lcL_idx(p, cc - 1) : NULL, *lr = lcL_idx(&rt[0], 0);
     lc_Diff  db = 0, dl = lc_min(rtbc, LC_LEAF_FANOUT - bc);
     if (!cc || !rt[0].child_count || bc == LC_LEAF_FANOUT) return 0;
     memcpy(ll->bytes + bc, lr->bytes, dl * sizeof(unsigned));
@@ -892,10 +892,9 @@ LC_API void lc_splice(lc_Cursor *C, size_t del, size_t ins) {
     int      li;
     if (C == NULL || C->tree == NULL || (del == 0 && ins == 0)) return;
     if (lcK_levels(C) == 0 && C->tree->root.child_count == 0) return;
-    if (lc_offset(C) >= C->tree->bytes) lc_return(C->col += (ins - del));
-    del = lc_min(del, C->tree->bytes - lc_offset(C));
-    if (lc_offset(C) == 0 && del >= C->tree->bytes)
-        lc_return(lcD_reset(C, ins));
+    if (lc_offset(C) >= lcK_bytes(C)) lc_return(C->col += ins);
+    del = lc_min(del, lcK_bytes(C) - lc_offset(C));
+    if (lc_offset(C) == 0 && del >= lcK_bytes(C)) lc_return(lcD_reset(C, ins));
     if (del > 0) {
         lc_Cursor R = *C;
         lc_advance(&R, (lc_Diff)del);
@@ -905,8 +904,7 @@ LC_API void lc_splice(lc_Cursor *C, size_t del, size_t ins) {
             lcD_spliceleaf(C, del);
     }
     C->loff = lcL_sumbytes(lcK_leaf(C), 0, C->lnu);
-    if (C->tree->bytes == 0 && C->tree->breaks == 0)
-        lc_return(lcD_reset(C, ins));
+    if (lcK_bytes(C) == 0 && lcK_breaks(C) == 0) lc_return(lcD_reset(C, ins));
     if (ins == 0) return;
     p = lcK_parent(C, lcK_levels(C)), li = (int)lcK_idx(C, p, lcK_levels(C));
     if (C->lnu < p->breaks[li]) {
@@ -923,7 +921,7 @@ LC_API int lc_clearbreaks(lc_Cursor *C, size_t len) {
 
 /* insertion */
 
-static int lcB_initempty(lc_Cursor *C, unsigned br) {
+static int lcB_oneline(lc_Cursor *C, unsigned br) {
     lc_Cache *c = C->tree;
     lc_Leaf  *lf = lcL_new(c->S);
     if (!lf) return LC_ERRMEM;
@@ -931,7 +929,7 @@ static int lcB_initempty(lc_Cursor *C, unsigned br) {
     c->root.children[0] = (lc_Node *)lf;
     c->root.bytes[0] = br, c->root.breaks[0] = 1;
     c->root.child_count = 1, c->breaks = 1, c->bytes = br;
-    C->off = 0, C->loff = br, C->nu = 0, C->lnu = 1, C->col = 0, C->tree = c;
+    C->off = 0, C->loff = br, C->nu = 0, C->lnu = 1, C->tree = c, C->col = 0;
     return (C->paths[0] = &c->root.children[0]), LC_OK;
 }
 
@@ -987,7 +985,8 @@ static void lcB_splitleaf(lc_Cursor *C, lc_Leaf *nl) {
     p->breaks[i] = mid, p->breaks[i + 1] = n;
     if (C->lnu >= mid) {
         C->lnu -= mid;
-        C->paths[lcK_levels(C)] = &p->children[i + 1];
+        C->off += p->bytes[i], C->nu += p->breaks[i];
+        C->loff = 0, C->paths[lcK_levels(C)] = &p->children[i + 1];
     }
 }
 
@@ -1016,41 +1015,36 @@ static int lcB_makeroom(lc_Cursor *C) {
 static void lcB_putbreak(lc_Cursor *C, unsigned br) {
     lc_Node *p = lcK_parent(C, lcK_levels(C));
     int      i = lcK_idx(C, p, lcK_levels(C));
-    lc_Leaf *lf = lcL_idx(p, i);
-    size_t   count = p->breaks[i];
-    unsigned len = lf->bytes[C->lnu], split = C->col + br;
-    assert(C->lnu < count && split < len);
-    memmove(&lf->bytes[C->lnu + 2], &lf->bytes[C->lnu + 1],
-            (count - C->lnu - 1) * sizeof(unsigned));
-    lf->bytes[C->lnu] = split;
-    lf->bytes[C->lnu + 1] = len - split;
+    unsigned split = C->col + br, *bs = &lcL_idx(p, i)->bytes[C->lnu];
+    size_t   cnt = p->breaks[i];
+    if (C->lnu >= cnt) {
+        assert(C->lnu < LC_LEAF_FANOUT);
+        bs[0] = split, lcM_up(C, lcK_levels(C), split, 1);
+        return;
+    }
+    assert(split < bs[0]);
+    memmove(bs + 2, bs + 1, (cnt - C->lnu - 1) * sizeof(unsigned));
+    bs[1] = bs[0] - split, bs[0] = split;
     lcM_up(C, lcK_levels(C), 0, 1);
 }
 
 LC_API int lc_markbreak(lc_Cursor *C, unsigned br) {
-    lc_Node *p;
     int      r, i;
-    size_t   remain, need = lc_offset(C) + br;
-    if (C == NULL || C->tree == NULL) return LC_ERRPARAM;
-    if (C->tree->root.child_count == 0) return lcB_initempty(C, br);
-    if (br == (remain = lc_linelen(C) - C->col)) return LC_OK;
-    if (br > remain) {
-        lc_splice(C, br, br);
-        if (C->tree->root.child_count == 0) return lcB_initempty(C, br);
-        if (need > C->tree->bytes) {
-            lc_Diff ext = (lc_Diff)(need - C->tree->bytes);
-            lc_Diff oldlen = lcK_leaf(C)->bytes[C->lnu - 1];
-            C->lnu -= 1, C->loff -= oldlen, C->col = oldlen;
-            lcK_leaf(C)->bytes[C->lnu] += (unsigned)ext;
-            lcM_up(C, lcK_levels(C), ext, 0);
-        }
-        lcB_putbreak(C, 0), C->loff += C->col + lcK_leaf(C)->bytes[C->lnu + 1];
-        return (C->lnu += 2, C->col = 0), LC_OK;
-    }
+    unsigned rm;
+    lc_Node *p;
+    if (!C || !C->tree) return LC_ERRPARAM;
+    if (C->tree->root.child_count == 0) return lcB_oneline(C, br), LC_OK;
+    if (br == (rm = lc_linelen(C) - C->col)) return LC_OK;
     p = lcK_parent(C, lcK_levels(C)), i = lcK_idx(C, p, lcK_levels(C));
+    if (br > rm) {
+        lc_splice(C, br, br);
+        if (C->tree->root.child_count == 0)
+            return lcB_oneline(C, C->col), LC_OK;
+        br = 0;
+    }
     if (p->breaks[i] >= LC_LEAF_FANOUT && (r = lcB_makeroom(C)) < 0) return r;
-    lcB_putbreak(C, br), C->loff += C->col + br;
-    return (C->lnu += 1, C->col = 0), LC_OK;
+    lcB_putbreak(C, br);
+    return C->lnu += 1, C->loff += C->col + br, C->col = 0, LC_OK;
 }
 
 /*  bulk insert & scan  */
