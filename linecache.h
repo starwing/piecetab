@@ -43,7 +43,6 @@
 #define LC_OK       (0)
 #define LC_ERRPARAM (-1)
 #define LC_ERRMEM   (-2)
-#define LC_ERREMPTY (-3)
 
 LC_NS_BEGIN
 
@@ -445,7 +444,7 @@ static void lcK_forwardline(lc_Cursor *C, size_t d) {
             if (i < cc) break;
         }
         assert(l >= 0), C->paths[l] = &p->children[i], C->lnu = C->loff = 0;
-        lcK_findline(C, l + 1, &d);
+        lcK_findline(C, l + 1, &d); /* C->lnu = 0 is in findline */
     }
     C->col = 0, C->loff += lcL_sumbytes(lcK_leaf(C), C->lnu, C->lnu + d),
     C->lnu += d;
