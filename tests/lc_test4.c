@@ -721,6 +721,8 @@ static void test_markbreak_params(void) {
     assert(lc_markbreak(NULL, 1) == LC_ERRPARAM);
     memset(&C, 0, sizeof(C));
     assert(lc_markbreak(&C, 1) == LC_ERRPARAM);
+    lc_seek(&C, c, 0);
+    assert(lc_markbreak(&C, 0) == LC_ERRPARAM);
 
     lc_deltree(S, c);
     lc_close(S);
@@ -832,15 +834,12 @@ static void test_markbreak_brzero(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
     lc_Cursor cur;
-    int       r;
 
     lc_scanV(c, 10, 15, 15);
     assert(lc_breaks(c) == 3);
-    lc_seek(&cur, c, 5); /* gap=5 (in first segment of 10 bytes) */
-    assert(lc_checkcursor(&cur, 5));
-    r = lc_markbreak(&cur, 0);
-    assert(r == LC_OK && lc_breaks(c) == 4);
-    assert(lc_offset(&cur) == 5 && lc_line(&cur) == 1);
+    lc_seek(&cur, c, 5);
+    assert(lc_markbreak(&cur, 0) == LC_ERRPARAM);
+    assert(lc_breaks(c) == 3);
     assert(lc_checkcursor(&cur, 5));
 
     lc_deltree(S, c);
@@ -993,23 +992,23 @@ static void test_markbreak_cov_child_right(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(
             S, 2,
-            innerV(innerV(botV(leafV(1, 1, 1, 1), leafV(1, 1, 1, 1),
-                               leafV(1, 1, 1, 1), leafV(1, 1, 1, 1)),
-                          botV(leafV(1, 1, 1, 1), leafV(1, 1, 1, 1),
-                               leafV(1, 1, 1, 1), leafV(1, 1, 1, 1)),
-                          botV(leafV(1, 1, 1, 1), leafV(1, 1, 1, 1),
-                               leafV(1, 1, 1, 1), leafV(1, 1, 1, 1)),
-                          botV(leafV(1, 1, 1, 1), leafV(1, 1, 1, 1),
-                               leafV(1, 1, 1, 1), leafV(1, 1, 1, 1))),
-                   innerV(botV(leafV(1, 1, 1, 1)))));
+            innerV(innerV(botV(leafV(3, 3, 3, 3), leafV(3, 3, 3, 3),
+                               leafV(3, 3, 3, 3), leafV(3, 3, 3, 3)),
+                          botV(leafV(3, 3, 3, 3), leafV(3, 3, 3, 3),
+                               leafV(3, 3, 3, 3), leafV(3, 3, 3, 3)),
+                          botV(leafV(3, 3, 3, 3), leafV(3, 3, 3, 3),
+                               leafV(3, 3, 3, 3), leafV(3, 3, 3, 3)),
+                          botV(leafV(3, 3, 3, 3), leafV(3, 3, 3, 3),
+                               leafV(3, 3, 3, 3), leafV(3, 3, 3, 3))),
+                   innerV(botV(leafV(3, 3, 3, 3)))));
     lc_Cursor C;
     int       r;
     assert(c);
-    lc_seek(&C, c, 56);
-    assert(lc_checkcursor(&C, 56));
-    r = lc_markbreak(&C, 0);
+    lc_seek(&C, c, 168);
+    assert(lc_checkcursor(&C, 168));
+    r = lc_markbreak(&C, 1);
     assert(r == LC_OK);
-    assert(lc_checkcursor(&C, 56));
+    assert(lc_checkcursor(&C, 169));
     assert(lc_checktree_allow_empty(c, 1));
     lc_deltree(S, c);
     assert(S->nodes.live_obj == 0 && S->leaves.live_obj == 0);
@@ -2121,16 +2120,16 @@ static void test_markbreak_oom_oneline(void) {
  * Tree with one full leaf, leaves pool drained, markbreak triggers makeroom. */
 static void test_markbreak_oom_makeroom(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = cacheV(S, 0, botV(leafV(1, 1, 1, 1)));
+    lc_Cache *c = cacheV(S, 0, botV(leafV(3, 3, 3, 3)));
     lc_Cursor C;
     int       r, oom = 0;
     assert(c && c->breaks == 4);
     S->leaves.freed = NULL;
     S->leaves.pages = NULL;
-    lc_seek(&C, c, 2);
+    lc_seek(&C, c, 0);
     S->allocf = oom_alloc;
     S->alloc_ud = &oom;
-    r = lc_markbreak(&C, 0);
+    r = lc_markbreak(&C, 1);
     S->allocf = test_alloc;
     S->alloc_ud = NULL;
     assert(r == LC_ERRMEM);

@@ -142,7 +142,7 @@ grep '^static' linecache.h
 
 ## 七、lc_scan 流程概要
 
-`lc_scan`（行1068）从树尾定位游标，循环调用 `lcB_append` 逐叶填充 scanner 输出（一叶填满后跨兄弟叶继续，非逐行插入）。
+`lc_scan` 从树尾定位游标，循环调用 `lcB_append` 逐叶填充 scanner 输出（一叶填满后跨兄弟叶继续，非逐行插入）。
 
 当 append 填满父节点且当前叶也满时返回 >0，触发扩容：
 1. 自底向上寻首个非满层
@@ -155,7 +155,7 @@ grep '^static' linecache.h
 
 ## 八、lcB_makeroom 流程概要
 
-`lcB_makeroom`（行985）在 markbreak 叶满时调用，确保插入行断前有空间：
+`lcB_makeroom` 在 markbreak 叶满时调用，确保插入行断前有空间：
 
 1. 自底向上遍历，计数需裂层数 `c`
 2. `lcP_reserve(S, nodes, c)` 一次预分配全部所需节点

@@ -144,14 +144,11 @@ LC_NS_END
 # define LC_PAGE_SIZE 65536
 #endif
 
-#define LC_MAX_LINELEN (~(unsigned)0)
-
 LC_NS_BEGIN
 
-/* clang-format off */
-#define lc_return(expr) do { expr; return; } while (0)
-#define lc_min(a,b)     ((a) < (b) ? (a) : (b))
-/* clang-format on */
+#define LC_MAX_LINELEN (~(unsigned)0)
+
+#define lc_min(a, b) ((a) < (b) ? (a) : (b))
 
 /* internal types */
 
@@ -674,8 +671,7 @@ static void lcD_spliceleaf(lc_Cursor *C, size_t del) {
     lc_Leaf *lf = lcL_idx(p, li);
     int      end = C->lnu, bc = (int)p->breaks[li];
     lc_Diff  removed;
-    if (end == bc) return;
-    if (del < lf->bytes[end] - C->col) {
+    if (assert(end < bc), del < lf->bytes[end] - C->col) {
         lf->bytes[end] -= del, lcM_up(C, lcK_levels(C), -(lc_Diff)del, 0);
         return;
     }
@@ -821,16 +817,12 @@ static void lcD_stitch(lc_Cursor *C, lc_Node *rt) {
     C->lnu -= d, C->loff = lcL_sumbytes(lcK_leaf(C), 0, C->lnu);
 }
 
-static void lcD_splicerange(lc_Cursor *L, lc_Cursor *R) {
-    lc_State *S = (assert(L->tree->S == R->tree->S), L->tree->S);
-    lc_Node  *p, rt[LC_MAX_LEVEL];
-    int       i, l, k, kl, cc;
+static void lcD_cutrange(lc_Cursor *L, lc_Cursor *R, lc_Node *rt, int fl) {
+    lc_State *S = L->tree->S;
+    int       i, k, kl, cc;
     lc_Diff   db, dl;
-    for (l = 0; l < LC_MAX_LEVEL; ++l) rt[l].child_count = 0;
-    for (l = 0; l <= lcK_levels(L); ++l)
-        if (L->paths[l] != R->paths[l]) break;
-    lcD_trimright(L), lcD_trimleft(R);
-    for (kl = lcK_levels(L); kl > l; --kl) {
+    lc_Node  *p;
+    for (kl = lcK_levels(L); kl > fl; --kl) {
         p = lcK_parent(L, kl), i = lcK_idx(L, p, kl), cc = p->child_count;
         db = lcN_sumbytes(p, i + 1, cc), dl = lcN_sumbreaks(p, i + 1, cc);
         lcM_up(L, kl - 1, -db, -dl);
@@ -841,33 +833,45 @@ static void lcD_splicerange(lc_Cursor *L, lc_Cursor *R) {
         lcN_copy(&rt[k], 0, p, i, rt[k].child_count);
         lcN_freechildren(S, p, k, 0, i), p->child_count = 0;
     }
-    p = lcK_parent(R, l), i = lcK_idx(R, p, l);
-    cc = p->child_count, k = lcK_levels(L) - l;
+    p = lcK_parent(R, fl), i = lcK_idx(R, p, fl);
+    cc = p->child_count, k = lcK_levels(L) - fl;
     i += !(k == 0 && p->breaks[i] != 0);
     lcN_copy(&rt[k], 0, p, i, rt[k].child_count = (unsigned short)(cc - i));
-    p->child_count = i, i = lcK_idx(L, p, l);
+    p->child_count = i, i = lcK_idx(L, p, fl);
     db = lcN_sumbytes(p, i + 1, cc), dl = lcN_sumbreaks(p, i + 1, cc);
-    lcM_up(L, l - 1, -db, -dl), lcN_erase(S, p, k, i + 1, p->child_count);
-    lcD_stitch(L, rt);
-    l = lcK_levels(L), p = lcK_parent(L, l), i = lcK_idx(L, p, l);
-    if (L->lnu < (int)p->breaks[i])
-        lcK_leaf(L)->bytes[L->lnu] += R->col, lcM_up(L, l, R->col, 0);
+    lcM_up(L, fl - 1, -db, -dl), lcN_erase(S, p, k, i + 1, p->child_count);
 }
 
-static void lcD_reset(lc_Cursor *C, size_t col) {
-    lcN_freechildren(
-            C->tree->S, &C->tree->root, C->tree->levels, 0,
-            C->tree->root.child_count);
-    memset(&C->tree->root, 0, sizeof(lc_Node));
-    C->tree->levels = C->tree->bytes = C->tree->breaks = 0, C->col += col;
+static void lcD_addbytes(lc_Cursor *C, unsigned ins) {
+    int      i, l = lcK_levels(C);
+    lc_Node *p;
+    if (ins) {
+        p = lcK_parent(C, l), i = (int)lcK_idx(C, p, l);
+        if (C->lnu < (int)p->breaks[i])
+            lcK_leaf(C)->bytes[C->lnu] += ins, lcM_up(C, l, ins, 0);
+        C->col += ins;
+    }
+}
+
+static void lcD_splicerange(lc_Cursor *L, lc_Cursor *R) {
+    lc_Node rt[LC_MAX_LEVEL];
+    int     l;
+    assert(L->tree->S == R->tree->S);
+    for (l = 0; l < LC_MAX_LEVEL; ++l) rt[l].child_count = 0;
+    for (l = 0; l <= lcK_levels(L); ++l)
+        if (L->paths[l] != R->paths[l]) break;
+    lcD_trimright(L), lcD_trimleft(R);
+    lcD_cutrange(L, R, rt, l), lcD_stitch(L, rt);
+    lcD_addbytes(L, R->col), L->col -= R->col;
 }
 
 LC_API void lc_splice(lc_Cursor *C, size_t del, unsigned ins) {
-    lc_Node *p;
-    int      li;
     if (C == NULL || C->tree == NULL || (del == 0 && ins == 0)) return;
     if (lcK_levels(C) == 0 && C->tree->root.child_count == 0) return;
-    if (lc_offset(C) >= lcK_bytes(C)) lc_return(C->col += ins);
+    if (lc_offset(C) >= lcK_bytes(C)) {
+        C->col += ins;
+        return;
+    }
     if ((del = lc_min(del, lcK_bytes(C) - lc_offset(C))) > 0) {
         lc_Cursor R = *C;
         lc_advance(&R, (lc_Diff)del);
@@ -876,12 +880,14 @@ LC_API void lc_splice(lc_Cursor *C, size_t del, unsigned ins) {
         else
             lcD_spliceleaf(C, del);
     }
-    if (lcK_bytes(C) == 0 && lcK_breaks(C) == 0) lc_return(lcD_reset(C, ins));
-    if (ins == 0) return;
-    p = lcK_parent(C, lcK_levels(C)), li = (int)lcK_idx(C, p, lcK_levels(C));
-    if (C->lnu < (int)p->breaks[li])
-        lcK_leaf(C)->bytes[C->lnu] += ins, lcM_up(C, lcK_levels(C), ins, 0);
-    C->col += ins;
+    if (lcK_bytes(C) > 0)
+        lcD_addbytes(C, ins);
+    else {
+        lc_Node *root = &C->tree->root;
+        lcN_freechildren(C->tree->S, root, lcK_levels(C), 0, root->child_count);
+        memset(root, 0, sizeof(lc_Node));
+        C->tree->levels = C->tree->bytes = C->tree->breaks = 0, C->col += ins;
+    }
 }
 
 LC_API int lc_clearbreaks(lc_Cursor *C, size_t len) {
@@ -1001,7 +1007,7 @@ LC_API int lc_markbreak(lc_Cursor *C, unsigned len) {
     int      r, i;
     unsigned rm;
     lc_Node *p;
-    if (!C || !C->tree) return LC_ERRPARAM;
+    if (!C || !C->tree || len == 0) return LC_ERRPARAM;
     if (C->tree->root.child_count == 0) return lcB_oneline(C, len), LC_OK;
     if (len == (rm = lc_linelen(C) - C->col)) return LC_OK;
     if (len > rm) {
@@ -1140,11 +1146,7 @@ LC_API int lc_insert(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud) {
     }
     if (r < 0 || !lcD_checkstitch(C)) return lcB_rollback(C, rt, &sC, l);
     if (lcB_fixsource(&sC, sbc, &rt[0], l)) C->col = 0, C->off += sC.col;
-    lcD_stitch(C, rt);
-    l = lcK_levels(C), p = lcK_parent(C, l), i = lcK_idx(C, p, l);
-    if ((size_t)C->lnu < p->breaks[i])
-        lcK_leaf(C)->bytes[C->lnu] += e, lcM_up(C, l, e, 0);
-    return (C->col += e), LC_OK;
+    return lcD_stitch(C, rt), lcD_addbytes(C, e), LC_OK;
 }
 
 LC_NS_END
