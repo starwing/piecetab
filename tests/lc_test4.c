@@ -202,6 +202,19 @@ static void test_scan_oom_build(void) {
     lc_close(S);
 }
 
+/* scan beyond full tree: trigger makechain from<0 (root deepen) */
+static void test_scan_deepen_root(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+
+    lc_rscanV(c, 260, 1);
+    assert(lc_breaks(c) == 260 && lc_bytes(c) == 260);
+    assert(lc_checktree(c));
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 static void test_scan_edge_makechain_empty(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -346,6 +359,7 @@ static void test_advance_params(void) {
     assert(lc_offset(NULL) == 0);
     assert(lc_line(NULL) == 0);
     assert(lc_linelen(NULL) == 0);
+    assert(lc_col(NULL) == 0);
 
     lc_deltree(S, c);
     lc_close(S);
@@ -362,6 +376,8 @@ static void test_advance_single(void) {
 
     r = lc_seek(&C, c, 5);
     assert(r == LC_OK);
+    r = lc_advance(&C, 0);
+    assert(r == LC_OK && lc_offset(&C) == 5);
     r = lc_advance(&C, 10);
     assert(r == LC_OK && lc_offset(&C) == 15 && lc_line(&C) == 1);
     assert(lc_checkcursor(&C, 15));
@@ -516,6 +532,27 @@ static void test_advance_cov_backwardoff(void) {
     lc_close(S);
 }
 
+/* forwardoff within single leaf skipping multiple breaks */
+static void test_advance_findinleaf_skip(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor cur;
+    int       r;
+
+    lc_scanV(c, 10, 10, 10, 10);
+    assert(lc_breaks(c) == 4 && lc_bytes(c) == 40);
+    assert(lc_checktree(c));
+
+    lc_seek(&cur, c, 0);
+    assert(lc_checkcursor(&cur, 0));
+    r = lc_advance(&cur, 25);
+    assert(r == LC_OK && lc_offset(&cur) == 25 && lc_line(&cur) == 2);
+    assert(lc_checkcursor(&cur, 25));
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 static void test_advline_params(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -525,6 +562,11 @@ static void test_advline_params(void) {
         lc_Cursor C;
         memset(&C, 0, sizeof(C));
         assert(lc_advline(&C, 1) == LC_ERRPARAM);
+    }
+    {
+        lc_Cursor C;
+        lc_seek(&C, c, 0);
+        assert(lc_advline(&C, 0) == LC_OK);
     }
 
     lc_deltree(S, c);
@@ -1098,6 +1140,8 @@ static void test_splice_params(void) {
 
     lc_splice(NULL, 1, 1);
     lc_splice(&C, 1, 1);
+    lc_seek(&C, c, 0);
+    lc_splice(&C, 5, 3);
 
     lc_deltree(S, c);
     lc_close(S);
@@ -1973,6 +2017,25 @@ static void test_insert_oom_full(void) {
     lc_close(S);
 }
 
+/* splice delete all with insertion triggers lcD_reset */
+static void test_splice_reset(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+
+    lc_scanV(c, 10, 15, 15);
+    assert(lc_breaks(c) == 3 && lc_bytes(c) == 40);
+    lc_seek(&C, c, 0);
+    assert(lc_checkcursor(&C, 0));
+    lc_splice(&C, 40, 0);
+    assert(lc_breaks(c) == 0 && lc_bytes(c) == 0);
+    assert(lc_checktree(c));
+    assert(lc_checkcursor(&C, 0));
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 static void test_splice_cov_foldleaf_rl(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(S, 0, botV(leafV(10, 10), leafV(10, 10, 10, 10)));
@@ -2013,6 +2076,48 @@ static void test_rebalance_earlyexit(void) {
     lc_close(S);
 }
 
+/* markbreak at right-half of fully packed tree → root split with i>=mid */
+static void test_markbreak_cov_rootright(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    int       r;
+
+    lc_rscanV(c, 64, 10);
+    assert(lc_breaks(c) == 64);
+    assert(lc_checktree(c));
+
+    lc_seek(&C, c, 330);
+    assert(lc_checkcursor(&C, 330));
+    r = lc_markbreak(&C, 3);
+    assert(r == LC_OK);
+    assert(lc_checktree(c));
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* insert with root-deepening to exercise fixsource dl>0 */
+static void test_insert_cov_rootdeep(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  brs[] = {8, 1, 0}, *p = brs;
+    int       r;
+
+    lc_rscanV(c, 64, 10);
+    assert(lc_breaks(c) == 64 && lc_checktree(c));
+
+    lc_seek(&C, c, 330);
+    assert(lc_checkcursor(&C, 330));
+    r = lc_insert(&C, 0, lc_rscanner, &p);
+    assert(r == LC_OK);
+    assert(lc_checktree(c));
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 #define TESTS(X)                   \
     X(lifecycle)                   \
     X(scan_params)                 \
@@ -2023,6 +2128,7 @@ static void test_rebalance_earlyexit(void) {
     X(scan_oom_items)              \
     X(scan_oom_flush)              \
     X(scan_oom_build)              \
+    X(scan_deepen_root)            \
     X(scan_edge_makechain_empty)   \
     X(seek_params)                 \
     X(seek_pastleaf)               \
@@ -2035,6 +2141,7 @@ static void test_rebalance_earlyexit(void) {
     X(advance_cov_backward_cross)  \
     X(advance_cov_skip_siblings)   \
     X(advance_cov_backwardoff)     \
+    X(advance_findinleaf_skip)     \
     X(advline_params)              \
     X(advline_cross)               \
     X(advline_zero)                \
@@ -2058,6 +2165,7 @@ static void test_rebalance_earlyexit(void) {
     X(markbreak_cov_child_right)   \
     X(markbreak_fullleaf_pastend)  \
     X(markbreak_fullleaf_brgt)     \
+    X(markbreak_cov_rootright)     \
     X(clearbreaks_params)          \
     X(clearbreaks_basic)           \
     X(clearbreaks_cov_slot)        \
@@ -2070,6 +2178,7 @@ static void test_rebalance_earlyexit(void) {
     X(splice_cov_trimleaf)         \
     X(splice_cov_foldleaf_lr)      \
     X(splice_cov_foldleaf_rl)      \
+    X(splice_reset)                \
     X(rebalance_earlyexit)         \
     X(boundary_cmp)                \
     X(insert_params)               \
@@ -2094,7 +2203,8 @@ static void test_rebalance_earlyexit(void) {
     X(insert_oom_rootpush)         \
     X(insert_oom_deroot)           \
     X(insert_oom_rollback)         \
-    X(insert_oom_full)
+    X(insert_oom_full)             \
+    X(insert_cov_rootdeep)
 
 #define X(name) {#name, test_##name},
 LC_TEST_MAIN("linecache tests")
