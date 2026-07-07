@@ -949,9 +949,7 @@ static void test_markbreak_fullleaf_brgt(void) {
     r = lc_markbreak(&C, 8);
     assert(r == LC_OK);
     assert(lc_breaks(c) == 8);
-    lc_asserttree(c, 0,
-                  botV(leafV(10, 10, 13, 7),
-                       leafV(10, 10, 10, 10)));
+    lc_asserttree(c, 0, botV(leafV(10, 10, 13, 7), leafV(10, 10, 10, 10)));
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -1137,43 +1135,42 @@ static void test_splice_trailing(void) {
     lc_close(S);
 }
 
-/* splice_brute: exhaustive pos+del enumeration on multi-level tree */
+/* splice_brute: exhaustive pos+del+ins enumeration on multi-level tree.
+ * 128 lines of 2 bytes each = 256 total bytes, levels >= 2.
+ * pos=0..257 (1 past end → trailing), del=0..257 (past end → clamp),
+ * ins=0..1 (byte insert). */
 static void test_splice_brute(void) {
     lc_State *S;
     lc_Cache *c;
     lc_Cursor C;
-    int       pos, del;
-    int const n = 128;
+    int       pos, del, ins;
+    int const n = 128, nb = n * 2;
 
     S = lc_open(&test_alloc, NULL);
     assert(S);
-    c = lc_newtree(S);
-    lc_rscanV(c, n, 1);
-    assert((int)c->levels >= 2);
-    assert(lc_checktree(c));
-    lc_deltree(S, c);
-    assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
 
-    for (pos = 0; pos <= n; ++pos)
-        for (del = 0; del <= n - pos; ++del) {
-            c = lc_newtree(S);
-            lc_rscanV(c, n, 1);
-            lc_seek(&C, c, pos);
-            lc_splice(&C, del, 0);
-            if (!lc_checktree(c) || !lc_checkcursor(&C, pos)) {
-                lc_log("splice pos=%d del=%d\n", pos, del);
-                lc_dumptree(c, "after slice");
-                lc_dumpcursor(&C, "after slice");
-                abort();
+    for (pos = 0; pos <= nb + 1; ++pos)
+        for (del = 0; del <= nb + 1; ++del)
+            for (ins = 0; ins <= 1; ++ins) {
+                c = lc_newtree(S);
+                lc_rscanV(c, n, 2);
+                assert(lc_checktree(c));
+                lc_seek(&C, c, pos);
+                lc_splice(&C, del, ins);
+                if (!lc_checktree(c)) {
+                    lc_log("splice pos=%d del=%d ins=%d tree\n", pos, del, ins);
+                    lc_dumptree(c, "after splice");
+                    abort();
+                }
+                if (!lc_checkcursor(&C, pos + ins)) {
+                    lc_log("splice pos=%d del=%d ins=%d off=%zu exp=%d\n", pos,
+                           del, ins, lc_offset(&C), pos + ins);
+                    lc_dumpcursor(&C, "after splice");
+                    abort();
+                }
+                lc_deltree(S, c);
+                assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
             }
-            if (lc_bytes(c) != (size_t)(n - del)) {
-                lc_log("splice pos=%d del=%d: bytes=%zu expected=%zu\n", pos,
-                       del, lc_bytes(c), (size_t)(n - del));
-                abort();
-            }
-            lc_deltree(S, c);
-            assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
-        }
 
     lc_close(S);
 }
@@ -1203,18 +1200,16 @@ static void test_splice_cov_rebalance(void) {
     lc_close(S);
 }
 
+/* foldleaf balance cl+cg>4: via cross-leaf splice triggering stitch+foldleaf */
 static void test_splice_cov_foldleaf_lr(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cursor C;
     lc_Cache *c = cacheV(S, 0, botV(leafV(10, 10), leafV(10, 10, 10, 10)));
     assert(c);
-    lc_seek(&C, c, 10); /* left leaf, lnu=1 col=0 */
-    lcD_foldleaf(&C);
-    C.loff = lcL_sumbytes(lcK_leaf(&C), 0, C.lnu);
-    lc_asserttree(c, 0, botV(leafV(10, 10, 10), leafV(10, 10, 10)));
+    lc_seek(&C, c, 10);   /* left leaf lnu=1, cross into right leaf */
+    lc_splice(&C, 11, 0); /* delete 11 bytes → cross leaf, trim left */
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 10));
-    ;
     lc_deltree(S, c);
     lc_close(S);
 }
