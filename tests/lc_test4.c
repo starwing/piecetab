@@ -25,6 +25,23 @@ static void test_lifecycle(void) {
     lc_deltree(s, t1);
     lc_deltree(s, t2);
     lc_close(s);
+
+    lc_reset(NULL);
+    lc_close(NULL);
+
+    /* lc_open OOM */
+    {
+        int z = 0;
+        assert(lc_open(&oom_alloc, &z) == NULL);
+    }
+    /* lc_newtree OOM */
+    {
+        int one = 1;
+        lc_State *s2 = lc_open(&oom_alloc, &one);
+        assert(s2 != NULL);
+        assert(lc_newtree(s2) == NULL);
+        lc_close(s2);
+    }
 }
 
 static void test_scan_params(void) {
@@ -185,6 +202,24 @@ static void test_scan_oom_build(void) {
     lc_close(S);
 }
 
+static void test_scan_edge_makechain_empty(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    unsigned  lines[] = {
+        10, 10, 10, 10, 10, 10, 10, 10,
+        10, 10, 10, 10, 10, 10, 10, 10,
+        0
+    }, *p = lines;
+
+    assert(lc_scan(c, lc_scanner, &p) == LC_OK);
+    assert(lc_breaks(c) == 16);
+    assert(lc_bytes(c) == 160);
+    assert(lc_checktree(c));
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 static void test_seek_params(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -307,6 +342,10 @@ static void test_advance_params(void) {
         memset(&C, 0, sizeof(C));
         assert(lc_advance(&C, 1) == LC_ERRPARAM);
     }
+
+    assert(lc_offset(NULL) == 0);
+    assert(lc_line(NULL) == 0);
+    assert(lc_linelen(NULL) == 0);
 
     lc_deltree(S, c);
     lc_close(S);
@@ -520,6 +559,25 @@ static void test_advline_cross(void) {
     assert(r == LC_OK && lc_line(&cur) == 8 && lc_offset(&cur) == 80);
     assert(lc_checkcursor(&cur, 80));
 
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_advline_zero(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor cur;
+    int       r;
+
+    lc_rscanV(c, 8, 10);
+    lc_seek(&cur, c, 23); /* line 2, col=3 */
+    assert(lc_checkcursor(&cur, 23) && lc_line(&cur) == 2 && lc_col(&cur) == 3);
+    r = lc_advline(&cur, 0);
+    assert(r == LC_OK && lc_line(&cur) == 2 && lc_col(&cur) == 0);
+    lc_advance(&cur, 5);
+    assert(lc_col(&cur) == 5 && lc_line(&cur) == 2);
+    r = lc_advline(&cur, 0);
+    assert(r == LC_OK && lc_line(&cur) == 2 && lc_col(&cur) == 0);
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -1965,6 +2023,7 @@ static void test_rebalance_earlyexit(void) {
     X(scan_oom_items)              \
     X(scan_oom_flush)              \
     X(scan_oom_build)              \
+    X(scan_edge_makechain_empty)   \
     X(seek_params)                 \
     X(seek_pastleaf)               \
     X(seek_line_leaf)              \
@@ -1978,6 +2037,7 @@ static void test_rebalance_earlyexit(void) {
     X(advance_cov_backwardoff)     \
     X(advline_params)              \
     X(advline_cross)               \
+    X(advline_zero)                \
     X(advline_cov_backward_within) \
     X(advline_cov_backward_cross)  \
     X(advline_cov_forward_cross)   \

@@ -1,100 +1,99 @@
 # linecache.h 项目总览
 
-> 供后续 agent 快速了解项目全貌，无需遍览源码。
+> 供 Agent 快速了解项目全貌。可 grep 查询的信息不载此文，提供查询命令。
 
 ## 一、项目概要
 
-**linecache.h** 者，单头文件 C89 库也。以 B+ 计量树为骨，行号缓存为肉。前缀 `lc_`。
+单头文件 C89 库，前缀 `lc_`。以 B+ 计量树 (Metric B+ Tree) 维护字节偏移→行号之映射。
 
-**功用**: 于文本编辑器中，维护字节偏移→行号之映射。支持插入/删除行断点 (line breaks)，支持区间字节删除/插入 (`lc_splice`)。
+**功用**: 文本编辑器中维护行号缓存。支持行断点插入/删除 (`lc_markbreak`/`lc_clearbreaks`)、区间删除/插入 (`lc_splice`)、中部插入 (`lc_insert`)、批量加载 (`lc_scan`)。
 
-**关联项目**: `piecetab.h` (piece table 文本缓冲区，前缀 `pt_`)，linecache 为其子项目/先行实验。
+关联: `piecetab.h` (piece table, 前缀 `pt_`)，linecache 为其先行实验。
 
-## 二、文件结构
+```bash
+# 查行数
+wc -l linecache.h
 
-| 文件 | 行数 | 用途 |
-|------|------|------|
-| `linecache.h` | 1045 | 单头文件，含全部声明与实现 |
-| `tests/lc_test4.c` | -- | 单元测试 (LC_FANOUT=4)，84 测试用例 |
-| `tests/lc_test8.c` | -- | 单元测试 (LC_FANOUT=8)，6 测试用例 |
-| `tests/lc_tests.h` | -- | 共享测试辅助 (定义宏、构造器、扫描器) |
-| `justfile` | -- | 构建命令: `just dbg`, `just dbg_lc8`, `just lc-cov` |
+# 查测试用例数
+grep -c 'X(' tests/lc_test4.c
+grep -c 'X(' tests/lc_test8.c
+```
 
 编译参数（测试用）: `-DLC_LEAF_FANOUT=4 -DLC_FANOUT=4` 以极小扇出迫树分裂。
+`lc_test8` 用默认扇出 62。
 
-## 三、数据结构
+## 二、数据结构
 
-### lc_Leaf (叶子节点)
+### lc_Leaf — 叶节点
+
 ```c
 typedef struct lc_Leaf {
-    unsigned bytes[LC_LEAF_FANOUT]; /* 每行之字节长度 */
+    unsigned bytes[LC_LEAF_FANOUT];
 } lc_Leaf;
 ```
-- 无 `child_count` 字段，有效条目数由父节点 `breaks[i]` 记录
-- 测试中 `LC_LEAF_FANOUT=4`
 
-### lc_Node (内部节点 & 叶层父母)
+无 `child_count` — 有效条目数由父 `breaks[i]` 记录。
+
+### lc_Node — 内节点（兼叶层父节点）
+
 ```c
 struct lc_Node {
-    size_t   bytes[LC_FANOUT];    /* 每子之累计字节数 */
-    size_t   breaks[LC_FANOUT];   /* 每子之累计行断点数 */
+    size_t   bytes[LC_FANOUT];    /* 各子树累计字节 */
+    size_t   breaks[LC_FANOUT];   /* 各子树累计行数 */
     lc_Node *children[LC_FANOUT]; /* Leaf* 于叶层, Node* 于内层 */
-    unsigned short child_count;   /* 有效子数 (≤ LC_FANOUT) */
+    unsigned short child_count;
 };
 ```
-- 叶层时 `children[i]` 实际为 `lc_Leaf*`，须 cast
-- 无 parent 指针（与 piecetab 路径法一致）
 
+叶层 `children[i]` 实为 `lc_Leaf*`，须 cast。无 parent 指针。
 
-- 测试中 `LC_FANOUT=4`
+### lc_Cache — B+ 树
 
-### lc_Cache (B+树整体)
 ```c
 struct lc_Cache {
     lc_State      *S;
-    lc_Node        root;     /* 嵌入之根节点 */
-    size_t         breaks;   /* 总行断点数 */
+    lc_Node        root;     /* 嵌入（非指针），永不 OOM */
+    size_t         breaks;   /* 总行数 */
     size_t         bytes;    /* 总字节数 */
-    unsigned short levels;   /* 树深: 0 = root->children 为叶 */
+    unsigned short levels;   /* 0 = root->children 即叶层 */
 };
 ```
-- `root` 嵌入而非指针 — 无分配则不会 OOM
-- `levels=0` 表示 root 之子即叶层
 
-### lc_Cursor (游标)
+### lc_Cursor — 游标
+
 ```c
 struct lc_Cursor {
-    lc_Node **paths[LC_MAX_LEVEL]; /* 自根至叶之路径槽位指针 */
+    lc_Node **paths[LC_MAX_LEVEL]; /* 根→叶路径槽位指针 */
     lc_Cache  *tree;
-    size_t     off;     /* 当前叶起始字节偏移 */
-    size_t     nu;      /* 当前叶起始行号 */
-    size_t     loff;    /* 当前叶内字节偏移 */
-    unsigned   col;     /* 当前行内列偏移 */
-    unsigned short lnu;  /* 当前叶内行索引 */
+    unsigned   col;   /* 行内列偏移 */
+    int        lnu;   /* 叶内行索引 */
+    size_t     loff;  /* 叶内字节偏移 */
+    size_t     nu;    /* 叶起始行号 */
+    size_t     off;   /* 叶起始字节偏移 */
 };
 ```
-- `paths[0] == &c->root.children[...]`, `paths[levels]` 指向叶槽
+
+- `paths[0] == &c->root.children[...]`，`paths[levels]` 指向叶槽（内为 `lc_Leaf*` 需 cast）
+- 绝对偏移 = off + loff + col; 绝对行号 = nu + lnu
 - 非持久 — 由 `lc_seek`/`lc_seekline` 初始化
 
 ### lc_Pool / lc_State
-```c
-struct lc_Pool { size_t obj_size; void *freed; void *pages; };
-struct lc_State { void *alloc_ud; lc_Alloc *allocf; lc_Pool nodes; lc_Pool leaves; };
-```
-- 池分配器：每页 `LC_PAGE_SIZE=65536`，空闲链表回收
-- `nodes` 池分配 `sizeof(lc_Node)`，`leaves` 池分配 `sizeof(lc_Leaf)`
 
-## 四、关键常量 (测试模式)
+池分配器：每页 `LC_PAGE_SIZE`(65536)，freelist 回收。`nodes` 池 (`sizeof(lc_Node)`) 与 `leaves` 池 (`sizeof(lc_Leaf)`) 独立。
+`lcP_reserve(n)` 保证池中 ≥ n 个可用对象，用于事务（stitch 入口预分配防 OOM）。
 
-| 符号 | 默认 | 测试值 | 含义 |
-|------|------|--------|------|
-| `LC_FANOUT` | 62 | **4** | 内节点最大子数 |
-| `LC_LEAF_FANOUT` | 62 | **4** | 叶最大行数 |
+## 三、关键常量
+
+| 符号 | 默认 | lc_test4 值 | 含义 |
+|------|------|------------|------|
+| `LC_FANOUT` | 62 | 4 | 内节点最大子数 |
+| `LC_LEAF_FANOUT` | 62 | 4 | 叶最大行数 |
 | `LC_MAX_LEVEL` | 16 | 16 | 最大树深 |
+| `LC_PAGE_SIZE` | 65536 | 512 | 池分配器页大小 |
 
-半满阈值 = FANOUT/2 = 2，极易触发分裂/合并。
+半满阈值 = FANOUT/2 (lc_test4=2, 默认=31)。小扇出极易触发分裂/合并。
 
-## 五、核心游标宏
+## 四、核心游标宏
 
 ```c
 #define lcK_levels(C) ((C)->tree->levels)
@@ -103,106 +102,111 @@ struct lc_State { void *alloc_ud; lc_Alloc *allocf; lc_Pool nodes; lc_Pool leave
 #define lcK_leaf(C)      (*(lc_Leaf **)(C)->paths[lcK_levels(C)])
 ```
 
-## 六、公共 API
-
-| 函数 | 签名 | 功能 |
-|------|------|------|
-| `lc_open` | `lc_State *lc_open(lc_Alloc *allocf, void *ud)` | 创建状态 |
-| `lc_close` | `void lc_close(lc_State *S)` | 销毁状态 |
-| `lc_newtree` | `lc_Cache *lc_newtree(lc_State *S)` | 建新树 |
-| `lc_deltree` | `void lc_deltree(lc_State *S, lc_Cache *c)` | 删树 |
-| `lc_breaks` | `size_t lc_breaks(const lc_Cache *c)` | 总行断点数 |
-| `lc_bytes` | `size_t lc_bytes(const lc_Cache *c)` | 总字节数 |
-| `lc_scan` | `int lc_scan(lc_Cache *c, lc_Scanner *scanner, void *ud)` | 批量加载行断点到树尾 |
-| `lc_seek` | `int lc_seek(lc_Cursor *C, lc_Cache *c, size_t pos)` | 按字节偏移定位 |
-| `lc_seekline` | `int lc_seekline(lc_Cursor *C, lc_Cache *c, size_t line)` | 按行号定位 |
-| `lc_advance` | `int lc_advance(lc_Cursor *C, lc_Diff delta)` | 字节偏移移动 |
-| `lc_advline` | `int lc_advline(lc_Cursor *C, lc_Diff delta)` | 行偏移移动 |
-| `lc_offset` | `size_t lc_offset(const lc_Cursor *C)` | 游标字节偏移 |
-| `lc_line` | `size_t lc_line(const lc_Cursor *C)` | 游标行号 |
-| `lc_linelen` | `unsigned lc_linelen(const lc_Cursor *C)` | 当前行长 |
-| `lc_col` | `unsigned lc_col(const lc_Cursor *C)` | 当前列 |
-| `lc_markbreak` | `int lc_markbreak(lc_Cursor *C, unsigned br)` | 单点插行断 |
-| `lc_markbreaks` | `int lc_markbreaks(lc_Cursor *C, lc_Scanner *scanner, void *ud)` | 批量插行断 (逐调 markbreak) |
-| `lc_clearbreaks` | `int lc_clearbreaks(lc_Cursor *C, size_t len)` | 区间清行断 |
-| `lc_splice` | `void lc_splice(lc_Cursor *C, size_t del, unsigned ins)` | 区间删/插字节 |
-
-## 七、内部函数命名体系
-
-| 前缀 | 职责 | 主要函数 |
-|------|------|----------|
-| `lcK_` | 游标导航 | `findleaf`, `findline`, `findinleaf`, `locend`, `forwardoff`, `backwardoff`, `forwardline`, `backwardline` |
-| `lcB_` | 行断插入 | `initempty`, `makeroom`, `splitroot`, `splitchild`, `splitleaf`, `fitleaf`, `putbreak` |
-| `lcD_` | 区间删除 | `spliceleaf`, `splicerange`, `trimleaf`, `trimnode`, `shiftleaf`, `shiftnode`, `foldleaf`, `foldnode`, `rebalance`, `prune`, `balanceleaf`, `balancenode`, `emptytree`, `freerange` |
-| `lcM_` | 度量更新 | `up` (自底向上更新度量), `tx` (跨父度量转移) |
-| `lcN_` | 节点操作 | `makespace`, `copy`, `move`, `sumbytes`, `sumbreaks`, `freechildren` |
-| `lcL_` | 叶操作 | `sumbytes` |
-
-## 八、`lc_scan` 当前实现 (行1020-1041)
-
-```c
-LC_API int lc_scan(lc_Cache *c, lc_Scanner *scanner, void *ud) {
-    lc_Cursor C;
-    unsigned  br;
-    int       r;
-    if (c == NULL || scanner == NULL) return LC_ERRPARAM;
-    C.tree = c;
-    if (c->root.child_count == 0) {
-        if ((br = scanner(ud, c->bytes)) == 0) return LC_OK;
-        if ((r = lcB_initempty(&C, br)) < 0) return r;
-    }
-    lcK_locend(&C);
-    while ((br = scanner(ud, c->bytes)) > 0) {
-        lc_Leaf *wr_leaf;
-        unsigned wr_lidx;
-        if ((r = lcB_fitleaf(&C)) < 0) return r;
-        wr_leaf = lcK_leaf(&C), wr_lidx = C.lidx;
-        wr_leaf->bytes[wr_lidx] = br;
-        C.loff += br, C.lidx++, C.idx++, lcM_up(&C, lcK_levels(&C), br, 1);
-    }
-    C.col = 0;
-    return LC_OK;
-}
-```
-
-**问题**: 逐条插入，叶满时 `lcB_fitleaf` → `lcB_makeroom` → 裂叶取中点 (50%/50%)，左半永不动，填充率仅 ~50%。
-
-## 九、`lcB_makeroom` (自底向上被动分裂, 行937-959)
-
-六相算法: 计数需裂层数 → 预分配全部节点 → 寻首个非满祖先 → 自上向下逐层裂 → 裂叶 → 释未用节点。
-
-## 十、测试框架
+## 五、公共 API
 
 ```bash
-just dbg            # 编译 + 运行 lc_test4 (gcc -O0 -fsanitize=address,undefined)
-just dbg <test>     # 运行特定测试
-just dbg_lc8        # 编译 + 运行 lc_test8 (gcc -O0 -fsanitize=address,undefined)
-just dbg_lc8 <test> # 运行特定测试
-just lc-cov         # 覆盖率 (目标 100%)
+# 查完整 API 声明
+grep '^LC_API' linecache.h
 ```
 
-测试以 `TESTS(X)` 宏列举，`scanner(void *ud, size_t prev)` 回调从 `unsigned*` 数组顺序取换行位 (忽略 prev)。
+关键 API：
 
-## 十一、相关设计文档
+| 类别 | 函数 | 功用 |
+|------|------|------|
+| 生命周期 | `lc_open`, `lc_close`, `lc_reset` | 状态管理 |
+| 树 | `lc_newtree`, `lc_deltree` | 树生命周期 |
+| 批量 | `lc_scan` | 批量加载行断点到树尾（可叠加） |
+| 查询 | `lc_breaks`, `lc_bytes` | 树级汇总 |
+| 定位 | `lc_seek`, `lc_seekline` | 按偏移/行号定位游标 |
+| 移动 | `lc_advance`, `lc_advline` | 字节/行偏移移动（越界 clamp） |
+| 查询 | `lc_offset`, `lc_line`, `lc_linelen`, `lc_col` | 游标状态查询 |
+| 断点 | `lc_markbreak`, `lc_clearbreaks` | 单点插入/区间清除行断 |
+| 编辑 | `lc_splice`, `lc_insert` | 区间删插字节 / 中部插入文本 |
+
+## 六、内部函数命名体系
+
+```bash
+# 列出所有 static 函数名
+grep '^static' linecache.h
+```
+
+| 前缀 | 职责 | 代表函数 |
+|------|------|----------|
+| `lcK_` | 游标导航 | `findleaf`, `findline`, `findinleaf`, `locend`, `forwardoff`, `backwardoff`, `forwardline`, `backwardline` |
+| `lcB_` | 行断/插入 | `oneline`, `makeroom`, `splitroot`, `splitchild`, `splitleaf`, `putbreak`, `append`, `cutleaf`, `fixsource`, `rollback` |
+| `lcD_` | 删除/平衡 | `trimleft`, `trimright`, `balanceleaf`, `balancenode`, `foldleaf`, `foldnode`, `rebalance`, `spliceleaf`, `splicerange`, `makechain`, `findroom`, `mergeleaf`, `backwardnode`, `stitch`, `stitchnode`, `checkstitch`, `reset` |
+| `lcM_` | 度量 | `up` (自底向上传播 bytes/breaks 至根) |
+| `lcN_` | 节点操作 | `sumbytes`, `sumbreaks`, `makespace`, `copy`, `move`, `erase`, `freechildren` |
+| `lcL_` | 叶操作 | `sumbytes` (宏 `lcL_new`, `lcL_idx`) |
+| `lcP_` | 池 | `init`, `destroy`, `alloc`, `free`, `reserve` |
+
+## 七、lc_scan 流程概要
+
+`lc_scan`（行1068）从树尾定位游标，循环调用 `lcB_append` 逐叶填充 scanner 输出（一叶填满后跨兄弟叶继续，非逐行插入）。
+
+当 append 填满父节点且当前叶也满时返回 >0，触发扩容：
+1. 自底向上寻首个非满层
+2. `lcD_makechain` 建空节点链（reserve 预分配，OOM 安全返回 `LC_ERRMEM`）
+3. 下轮 append 填入新链
+
+扫完后自顶向下 foldnode→foldleaf→rebalance 平衡树。`i == cc` 状态由 foldleaf 内部消化。
+
+允许多次 `lc_scan` 叠加——后续扫描在已有数据之后追加。
+
+## 八、lcB_makeroom 流程概要
+
+`lcB_makeroom`（行985）在 markbreak 叶满时调用，确保插入行断前有空间：
+
+1. 自底向上遍历，计数需裂层数 `c`
+2. `lcP_reserve(S, nodes, c)` 一次预分配全部所需节点
+3. 自底向上寻首个非满祖先层。若全满 `l<0` → `lcB_splitroot` 加深树 → `l=1`
+4. 自上向下逐层 `lcB_splitchild`，用预分配节点
+5. `lcB_splitleaf` 裂叶
+
+`lcP_alloc(NULL, pool)` 的 NULL 参数因 reserve 已保 freelist 充足，永不为 NULL（有 assert 校验）。splitroot / splitchild / splitleaf 均根据游标位置修正 paths[]。
+
+## 九、关键设计决策
+
+1. **嵌入 root**: `lc_Cache.root` 是值非指针 — 省一次分配，免 OOM 于建树
+2. **叶无 child_count**: 行数由父 `breaks[i]` 决定，冗余由上层约束保证
+3. **度量双计**: bytes + breaks 双数组允许 O(log n) 双向导航
+4. **lc_splice void 返回**: 设计保证永不失败 — 删除路径 reserve 预分配，插入路径仅改叶内字节
+5. **stitch 事务性**: `lcD_checkstitch` 入口 reserve(levels+2 节点)，stitch 全程无 OOM
+6. **balanceleaf rounding**: `d = l - ((l + r + 1) >> 1)` 向上取整，与 foldleaf 游标修正断言强耦合（`assert((dl<0) != (*ls!=o))`）— 修改均分公式需同步改调用方
+
+## 十、测试
+
+```bash
+just dbg              # 编译运行 lc_test4 (FANOUT=4, ASAN+UBSAN)
+just dbg <prefix>     # 运行名称以 prefix 开头的测试
+just dbg8             # 编译运行 lc_test8 (FANOUT=62)
+just cov              # 全量覆盖率（编译、运行、lcov 报告、未覆盖列表）
+```
+
+测试用例以 `TESTS(X)` 宏列举，scanner 从 `unsigned*` 数组顺序取行长度。`lc_test4` 以极小扇出逼树分裂/合并/旋转变换。
+
+```bash
+# 列出全部测试名
+grep '^    X(' tests/lc_test4.c
+```
+
+## 十一、相关文档
 
 | 文档 | 内容 |
 |------|------|
-| [design_bulk_loading.md](design_bulk_loading.md) | lc_scan Bulk Loading 实现设计 |
-| [research_bulk_loading.md](research_bulk_loading.md) | B+ 树 Bulk Loading 算法理论 (Wikipedia) |
-| [design_marktree.md](design_marktree.md) | Mark Tree 设计 (B+树 + gap 编码 + 哈希映射) |
-| [design_splice.md](design_splice.md) | Splice 区间删除三段法设计 (当前实现) |
-| [history_range_delete.md](history_range_delete.md) | 区间删除算法五代演进史 |
-| [research_piecetab_insert.md](research_piecetab_insert.md) | piecetab insert 算法分析 |
-| [research_piecetab_splitpiece.md](research_piecetab_splitpiece.md) | piecetab splitpiece 源码分析 |
-| [brief_tests.md](brief_tests.md) | 测试结构笔记 |
-| [lessons_trimnode_mergenode.md](lessons_trimnode_mergenode.md) | trimnode/mergenode 重构教训 |
+| `notes/design_insert_delete_v2.md` | 当前基于stitch的批量插入/删除设计 |
+| `notes/design_bulk_loading.md` | lc_scan Bulk Loading 设计 |
+| `notes/design_splice.md` | Splice 区间删除三段法设计 |
+| `notes/history_range_delete.md` | 区间删除算法演进史 |
+| `notes/brief_tests.md` | 测试结构笔记 |
+| `notes/lessons_trimnode_mergenode.md` | trimnode/mergenode 重构教训 |
+| `notes/uncovered_branches.md` | 未覆盖分支详细映射 |
+| `linecache.md` | 面向用户的 API 参考手册 |
 
-## 十二、编码规范 (CLAUDE.md)
+## 十二、编码铁律 (AGENTS.md)
 
-- **C89 唯** — 禁 C99/C11 特性
-- **函数 25 行软限 / 30 行硬限**
-- **函数签名不逾 79 字**
-- **static helper 不设防御性参数校验** — 用断言保不变式
-- **禁删测试**
-- **先修测试后改代码** — 单测出现任何问题，放弃计划修复后再继续
-- **修改后必过 clang-format**
+- C89 唯。函数 25/30 行限。签名 ≤79 字。
+- static helper 不校验参数 — assert 保不变式。
+- 内部函数前缀 `lcX_` (如 `lcK_findleaf`)，X 为单字母分类码。
+- **禁止删测试**。先修测试后改代码。
+- 修改后必过 `clang-format`。
