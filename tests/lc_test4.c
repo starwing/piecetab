@@ -2098,6 +2098,68 @@ static void test_markbreak_cov_rootright(void) {
 }
 
 /* insert with root-deepening to exercise fixsource dl>0 */
+/* OOM in lcB_oneline: leaf allocation fails (line 898).
+ * Use oom_alloc with counter=2: lc_open+l_newtree succeed, lcL_new fails. */
+static void test_markbreak_oom_oneline(void) {
+    int       oom = 2;
+    lc_State *S = lc_open(&oom_alloc, &oom);
+    lc_Cache *c;
+    lc_Cursor C;
+    int       r;
+    if (!S) return;
+    c = lc_newtree(S);
+    if (!c) { lc_close(S); return; }
+    lc_seek(&C, c, 0);
+    r = lc_markbreak(&C, 10);
+    assert(r == LC_OK); /* oneline return discarded by comma operator */
+    assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* OOM in lcB_makeroom: leaf allocation fails (line 970).
+ * Tree with one full leaf, leaves pool drained, markbreak triggers makeroom. */
+static void test_markbreak_oom_makeroom(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = cacheV(S, 0, botV(leafV(1, 1, 1, 1)));
+    lc_Cursor C;
+    int       r, oom = 0;
+    assert(c && c->breaks == 4);
+    S->leaves.freed = NULL;
+    S->leaves.pages = NULL;
+    lc_seek(&C, c, 2);
+    S->allocf = oom_alloc;
+    S->alloc_ud = &oom;
+    r = lc_markbreak(&C, 0);
+    S->allocf = test_alloc;
+    S->alloc_ud = NULL;
+    assert(r == LC_ERRMEM);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+/* OOM in lcB_cutleaf: leaf allocation fails (line 1067).
+ * Tree with data, leaves pool drained, insert triggers cutleaf. */
+static void test_insert_oom_cutleaf(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = cacheV(S, 0, botV(leafV(10, 10)));
+    lc_Cursor C;
+    unsigned  zero[] = {0}, *pz = zero;
+    int       r, oom = 0;
+    assert(c);
+    S->leaves.freed = NULL;
+    S->leaves.pages = NULL;
+    lc_seek(&C, c, 5);
+    S->allocf = oom_alloc;
+    S->alloc_ud = &oom;
+    r = lc_insert(&C, 0, lc_scanner, &pz);
+    S->allocf = test_alloc;
+    S->alloc_ud = NULL;
+    assert(r == LC_ERRMEM);
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 static void test_insert_cov_rootdeep(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -2165,6 +2227,8 @@ static void test_insert_cov_rootdeep(void) {
     X(markbreak_cov_child_right)   \
     X(markbreak_fullleaf_pastend)  \
     X(markbreak_fullleaf_brgt)     \
+    X(markbreak_oom_oneline)       \
+    X(markbreak_oom_makeroom)      \
     X(markbreak_cov_rootright)     \
     X(clearbreaks_params)          \
     X(clearbreaks_basic)           \
@@ -2203,6 +2267,7 @@ static void test_insert_cov_rootdeep(void) {
     X(insert_oom_rootpush)         \
     X(insert_oom_deroot)           \
     X(insert_oom_rollback)         \
+    X(insert_oom_cutleaf)          \
     X(insert_oom_full)             \
     X(insert_cov_rootdeep)
 
