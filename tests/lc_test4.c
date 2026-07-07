@@ -1925,6 +1925,32 @@ static void test_splice_cov_foldleaf_rl(void) {
     lc_close(S);
 }
 
+/* rebalance early exit: foldnode returns 0 (balance, not merge).
+ * botV[0] underfull after foldleaf (1 leaf), botV[1] has 4 leaves,
+ * 1+4=5 > 4 → balance → foldnode returns 0 → rebalance returns. */
+static void test_rebalance_earlyexit(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = cacheV(
+            S, 2,
+            innerV(innerV(botV(leafV(2, 2), leafV(2)),
+                          botV(leafV(2), leafV(2), leafV(2), leafV(2))),
+                   innerV(botV(leafV(2)))));
+    lc_Cursor C;
+    assert(c);
+    lc_seek(&C, c, 0);
+    lc_splice(&C, 2, 0);
+    lc_asserttree(
+            c, 2,
+            innerV(innerV(botV(leafV(2, 2), leafV(2), leafV(2)),
+                          botV(leafV(2), leafV(2))),
+                   innerV(botV(leafV(2)))));
+    assert(lc_checktree_allow_empty(c, 1));
+    assert(lc_checkcursor(&C, 0));
+    lc_deltree(S, c);
+    assert(S->nodes.live_obj == 0 && S->leaves.live_obj == 0);
+    lc_close(S);
+}
+
 #define TESTS(X)                   \
     X(lifecycle)                   \
     X(scan_params)                 \
@@ -1980,6 +2006,7 @@ static void test_splice_cov_foldleaf_rl(void) {
     X(splice_cov_trimleaf)         \
     X(splice_cov_foldleaf_lr)      \
     X(splice_cov_foldleaf_rl)      \
+    X(rebalance_earlyexit)         \
     X(boundary_cmp)                \
     X(insert_params)               \
     X(insert_leaf)                 \

@@ -67,10 +67,10 @@ struct lc_Cursor {
     lc_Node **paths[LC_MAX_LEVEL]; /* 自根至叶之路径槽位指针 */
     lc_Cache  *tree;
     size_t     off;     /* 当前叶起始字节偏移 */
-    size_t     idx;     /* 当前行之行号索引 */
+    size_t     nu;      /* 当前叶起始行号 */
     size_t     loff;    /* 当前叶内字节偏移 */
     unsigned   col;     /* 当前行内列偏移 */
-    unsigned short lidx; /* 当前叶内行索引 */
+    unsigned short lnu;  /* 当前叶内行索引 */
 };
 ```
 - `paths[0] == &c->root.children[...]`, `paths[levels]` 指向叶槽
