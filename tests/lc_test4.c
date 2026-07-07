@@ -962,6 +962,10 @@ static void test_clearbreaks_params(void) {
 
     assert(lc_clearbreaks(NULL, 1) == LC_ERRPARAM);
     assert(lc_clearbreaks(&C, 1) == LC_ERRPARAM);
+    lc_scanV(c, 10);
+    assert(lc_breaks(c) == 1);
+    lc_seek(&C, c, 0);
+    assert(lc_clearbreaks(&C, (size_t)(~(unsigned)0) + 1) == LC_ERRPARAM);
 
     lc_deltree(S, c);
     lc_close(S);

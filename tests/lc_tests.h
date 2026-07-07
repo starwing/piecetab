@@ -159,9 +159,9 @@ LC_STATIC int lc_checkcursor(lc_Cursor *C, size_t expected_off) {
             expected_off);
     if (C->tree->root.child_count == 0) {
         lc_check(
-                C->off == 0 && C->nu == 0 && C->loff == 0 && C->lnu == 0,
-                "[chk] EMPTY off=%zu nu=%zu loff=%zu lnu=%hu\n", C->off, C->nu,
-                C->loff, C->lnu);
+                C->lnu == 0 && C->loff == 0 && C->nu == 0 && C->off == 0,
+                "[chk] EMPTY lnu=%d loff=%zu nu=%zu off=%zu\n", C->lnu, C->loff,
+                C->nu, C->off);
         lc_check(
                 C->paths[0] == &C->tree->root.children[0],
                 "[chk] EMPTY paths[0]=%p expected=%p\n", (void *)C->paths[0],
@@ -187,13 +187,14 @@ LC_STATIC int lc_checkcursor(lc_Cursor *C, size_t expected_off) {
     p = lcK_parent(C, lcK_levels(C)), i = lcK_idx(C, p, lcK_levels(C));
     bsum = lcL_sumbytes(lcK_leaf(C), 0, C->lnu);
     lc_check(
-            C->loff == bsum, "[chk] LOFF mismatch loff=%zu sum=%zu lnu=%hu\n",
+            C->loff == bsum, "[chk] LOFF mismatch loff=%zu sum=%zu lnu=%d\n",
             C->loff, bsum, C->lnu);
     lc_check(
-            C->lnu <= p->breaks[i], "[chk] LNU out of bounds lnu=%hu brs=%zu\n",
-            C->lnu, p->breaks[i]);
+            (size_t)C->lnu <= p->breaks[i],
+            "[chk] LNU out of bounds lnu=%d brs=%zu\n", C->lnu, p->breaks[i]);
     lc_check(
-            C->lnu == p->breaks[i] || C->col < lcK_leaf(C)->bytes[C->lnu],
+            (size_t)C->lnu == p->breaks[i]
+                    || C->col < lcK_leaf(C)->bytes[C->lnu],
             "[chk] COL out of bounds col=%u line_bytes=%u\n", C->col,
             lcK_leaf(C)->bytes[C->lnu]);
     return 1;
@@ -234,8 +235,8 @@ LC_STATIC void lc_dumptree(const lc_Cache *c, const char *tag) {
 
 LC_STATIC void lc_dumpcursor(const lc_Cursor *C, const char *tag) {
     int l;
-    lc_log("[CURSOR] %s: off=%zu nu=%zu loff=%zu lnu=%hu col=%u\n", tag, C->off,
-           C->nu, C->loff, C->lnu, C->col);
+    lc_log("[CURSOR] %s: col=%u lnu=%d loff=%zu nu=%zu off=%zu\n", tag, C->col,
+           C->lnu, C->loff, C->nu, C->off);
     for (l = 0; l <= lcK_levels(C); ++l) {
         lc_Node *p = lcK_parent(C, l);
         int      i = lcK_idx(C, p, l);

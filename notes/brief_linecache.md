@@ -125,7 +125,7 @@ struct lc_State { void *alloc_ud; lc_Alloc *allocf; lc_Pool nodes; lc_Pool leave
 | `lc_markbreak` | `int lc_markbreak(lc_Cursor *C, unsigned br)` | 单点插行断 |
 | `lc_markbreaks` | `int lc_markbreaks(lc_Cursor *C, lc_Scanner *scanner, void *ud)` | 批量插行断 (逐调 markbreak) |
 | `lc_clearbreaks` | `int lc_clearbreaks(lc_Cursor *C, size_t len)` | 区间清行断 |
-| `lc_splice` | `void lc_splice(lc_Cursor *C, size_t del, size_t ins)` | 区间删/插字节 |
+| `lc_splice` | `void lc_splice(lc_Cursor *C, size_t del, unsigned ins)` | 区间删/插字节 |
 
 ## 七、内部函数命名体系
 

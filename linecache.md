@@ -154,7 +154,7 @@ int lc_clearbreaks(lc_Cursor *C, size_t len);
 ### lc_splice — 区间删除/插入字节
 
 ```c
-void lc_splice(lc_Cursor *C, size_t del, size_t ins);
+void lc_splice(lc_Cursor *C, size_t del, unsigned ins);
 ```
 
 **参数校验**: 空指针、`del==0 && ins==0`、空树 (`levels==0 && root.child_count==0`) — 皆 no-op 返回。`del` 自动 clamp 至 `bytes - offset`。
