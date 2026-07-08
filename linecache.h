@@ -1128,7 +1128,8 @@ LC_API int lc_insert(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud) {
     lc_Node  *p, rt[LC_MAX_LEVEL];
     int       i, r, l, sbc;
     lc_Cursor sC;
-    if (!C || !C->tree || !sc) return LC_ERRPARAM;
+    if (!C || !C->tree) return LC_ERRPARAM;
+    if (!sc) return lcD_addbytes(C, e), LC_OK;
     for (i = 0; i < LC_MAX_LEVEL; i++) rt[i].child_count = 0;
     if ((r = lcB_cutleaf(C, rt)) != LC_OK) return r;
     l = (int)lcK_levels(C), p = lcK_parent(C, l), i = lcK_idx(C, p, l);

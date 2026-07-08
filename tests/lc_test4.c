@@ -1441,6 +1441,7 @@ static void test_insert_params(void) {
     lc_Cache *c;
     lc_Cursor C;
     unsigned  zero[] = {0}, *pz = zero;
+    int       v;
 
     S = lc_open(&test_alloc, NULL);
     assert(S);
@@ -1451,7 +1452,11 @@ static void test_insert_params(void) {
     memset(&C, 0, sizeof(C));
     assert(lc_insert(&C, 0, lc_scanner, &pz) == LC_ERRPARAM);
     lc_seek(&C, c, 0);
-    assert(lc_insert(&C, 0, NULL, &pz) == LC_ERRPARAM);
+    lc_scanV(c, 5, 10);
+    lc_seek(&C, c, 3);
+    v = lc_insert(&C, 0, NULL, NULL);
+    assert(v == LC_OK && lc_offset(&C) == 3);
+    assert(lc_bytes(c) == 15 && lc_breaks(c) == 2);
 
     lc_deltree(S, c);
     lc_close(S);
@@ -1765,6 +1770,43 @@ static void test_insert_brute(void) {
     }
 
     assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
+    lc_close(S);
+}
+
+static void test_insert_noscanner(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    size_t    bb, br;
+    assert(c);
+
+    /* empty tree: e bytes in trailing */
+    lc_seek(&C, c, 0);
+    assert(lc_insert(&C, 3, NULL, NULL) == LC_OK);
+    assert(lc_offset(&C) == 3 && lc_bytes(c) == 0 && lc_breaks(c) == 0);
+
+    /* non-empty, valid line: e bytes added to current line */
+    lc_scanV(c, 5, 10);
+    lc_seek(&C, c, 3);
+    assert(lc_insert(&C, 7, NULL, NULL) == LC_OK);
+    assert(lc_offset(&C) == 10 && lc_col(&C) == 10);
+    assert(lc_linelen(&C) == 12 && lc_bytes(c) == 22);
+
+    /* trailing region: C->col += e, tree unchanged */
+    bb = lc_bytes(c), br = lc_breaks(c);
+    lc_seek(&C, c, bb + 5);
+    assert(lc_offset(&C) == bb + 5);
+    assert(lc_insert(&C, 8, NULL, NULL) == LC_OK);
+    assert(lc_offset(&C) == bb + 5 + 8 && lc_bytes(c) == bb
+           && lc_breaks(c) == br);
+
+    /* e=0 at valid line: no-op */
+    bb = lc_bytes(c);
+    lc_seek(&C, c, 0);
+    assert(lc_insert(&C, 0, NULL, NULL) == LC_OK);
+    assert(lc_offset(&C) == 0 && lc_bytes(c) == bb);
+
+    lc_deltree(S, c);
     lc_close(S);
 }
 
@@ -2320,6 +2362,7 @@ static void test_insert_cov_rootdeep(void) {
     X(insert_noop)                 \
     X(insert_trailing)             \
     X(insert_brute)                \
+    X(insert_noscanner)            \
     X(insert_oom_trailing)         \
     X(insert_oom_normal)           \
     X(insert_oom_col0)             \

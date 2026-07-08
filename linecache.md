@@ -191,7 +191,9 @@ int lc_splice(lc_Cursor *C, size_t del, unsigned ins);
 int lc_insert(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud);
 ```
 
-**行为**: 在游标位置裂开当前行，scanner 输出追加于裂点之后，再将右侧数据缝合回树。`e` 为不完整行尾缀字节（缝合完毕后才加回），scanner 返回 0 表示结束。
+**行为**: 若 `sc == NULL`，不走裂行/插入流程——直接在游标位置追加 `e` 字节至当前行（等价于 `lcD_addbytes`），`C->col += e`，度量传播。此 fast path 用于纯字节追加，不含换行。
+
+若 `sc != NULL`，则在游标位置裂开当前行，scanner 输出追加于裂点之后，再将右侧数据缝合回树。`e` 为不完整行尾缀字节（缝合完毕后才加回），scanner 返回 0 表示结束。
 
 **两个独立概念**:
 - `scanner` 输出: 完整行（含 `\n`）。在裂点后逐行填充。

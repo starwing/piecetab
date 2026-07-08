@@ -121,7 +121,7 @@ grep '^LC_API' linecache.h
 | 移动 | `lc_advance`, `lc_advline` | 字节/行偏移移动（越界 clamp） |
 | 查询 | `lc_offset`, `lc_line`, `lc_linelen`, `lc_col`, `lc_lineoffset` | 游标状态查询（宏） |
 | 断点 | `lc_markbreak`, `lc_clearbreaks` | 单点插入 / 区间清除行断（宏） |
-| 编辑 | `lc_erase`, `lc_splice`, `lc_insert` | 区间删除 / 区间删插字节 / 中部插入文本 |
+| 编辑 | `lc_erase`, `lc_splice`, `lc_insert` | 区间删除 / 区间删插字节 / 中部插入或纯字节追加（sc=NULL） |
 
 ## 六、内部函数命名体系
 
