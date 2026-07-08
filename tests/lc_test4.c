@@ -36,7 +36,7 @@ static void test_lifecycle(void) {
     }
     /* lc_newtree OOM */
     {
-        int one = 1;
+        int       one = 1;
         lc_State *s2 = lc_open(&oom_alloc, &one);
         assert(s2 != NULL);
         assert(lc_newtree(s2) == NULL);
@@ -218,13 +218,9 @@ static void test_scan_deepen_root(void) {
 static void test_scan_edge_makechain_empty(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
-    unsigned  lines[] = {
-        10, 10, 10, 10, 10, 10, 10, 10,
-        10, 10, 10, 10, 10, 10, 10, 10,
-        0
-    }, *p = lines;
+    unsigned  lines[] = {16, 10, 0}, *p = lines;
 
-    assert(lc_scan(c, lc_scanner, &p) == LC_OK);
+    assert(lc_scan(c, lc_rscanner, &p) == LC_OK);
     assert(lc_breaks(c) == 16);
     assert(lc_bytes(c) == 160);
     assert(lc_checktree(c));
@@ -356,10 +352,7 @@ static void test_advance_params(void) {
         assert(lc_advance(&C, 1) == LC_ERRPARAM);
     }
 
-    assert(lc_offset(NULL) == 0);
-    assert(lc_line(NULL) == 0);
     assert(lc_linelen(NULL) == 0);
-    assert(lc_col(NULL) == 0);
 
     lc_deltree(S, c);
     lc_close(S);
@@ -1053,23 +1046,6 @@ static void test_markbreak_fullleaf_brgt(void) {
     lc_close(S);
 }
 
-static void test_clearbreaks_params(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor C;
-    memset(&C, 0, sizeof(C));
-
-    assert(lc_clearbreaks(NULL, 1) == LC_ERRPARAM);
-    assert(lc_clearbreaks(&C, 1) == LC_ERRPARAM);
-    lc_scanV(c, 10);
-    assert(lc_breaks(c) == 1);
-    lc_seek(&C, c, 0);
-    assert(lc_clearbreaks(&C, (size_t)(~(unsigned)0) + 1) == LC_ERRPARAM);
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
 static void test_clearbreaks_basic(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
@@ -1128,6 +1104,87 @@ static void test_clearbreaks_cov_slot(void) {
     assert(r == LC_OK && lc_breaks(c) == 2);
     assert(lc_checkcursor(&cur, 27));
     lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_erase_params(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C, R, X;
+    memset(&C, 0, sizeof(C));
+    memset(&X, 0, sizeof(X));
+
+    assert(lc_erase(NULL, &R) == LC_ERRPARAM);
+    assert(lc_erase(&C, NULL) == LC_ERRPARAM);
+    assert(lc_erase(&C, &X) == LC_ERRPARAM);
+    lc_seek(&C, c, 0);
+    lc_seek(&R, c, 0);
+    assert(lc_erase(&C, &X) == LC_ERRPARAM); /* X.tree==NULL != c */
+    assert(lc_erase(&X, &C) == LC_ERRPARAM); /* !X->tree */
+
+    /* reversed → no-op */
+    lc_scanV(c, 10, 10);
+    lc_seek(&C, c, 5);
+    lc_seek(&R, c, 2);
+    assert(lc_erase(&C, &R) == LC_OK);
+    assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
+
+    /* L in trailing region (offset >= bytes) */
+    lc_seek(&C, c, lc_bytes(c) + 3);
+    lc_seek(&R, c, lc_bytes(c) + 8);
+    assert(lc_erase(&C, &R) == LC_OK);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_erase_basic(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c;
+    lc_Cursor C, R;
+
+    /* erase all */
+    c = lc_newtree(S);
+    lc_rscanV(c, 100, 10);
+    lc_seek(&C, c, 0);
+    lc_seek(&R, c, 1000);
+    lc_erase(&C, &R);
+    assert(lc_breaks(c) == 0 && lc_bytes(c) == 0);
+    assert(lc_checktree(c));
+    assert(lc_checkcursor(&C, 0));
+    lc_deltree(S, c);
+
+    /* erase range — keep first 11 + last 9 bytes */
+    c = lc_newtree(S);
+    lc_rscanV(c, 100, 10);
+    lc_seek(&C, c, 11);
+    lc_seek(&R, c, 991);
+    lc_erase(&C, &R);
+    assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
+    assert(lc_checktree(c));
+    assert(lc_checkcursor(&C, 11));
+    lc_deltree(S, c);
+
+    /* erase within single leaf */
+    c = lc_newtree(S);
+    lc_scanV(c, 10, 15, 15, 20);
+    lc_seek(&C, c, 11);
+    lc_seek(&R, c, 26);
+    lc_erase(&C, &R);
+    assert(lc_checktree(c));
+    assert(lc_checkcursor(&C, 11));
+    lc_deltree(S, c);
+
+    /* erase across leaves */
+    c = lc_newtree(S);
+    lc_scanV(c, 5, 5, 5, 5, 5, 5, 5, 5);
+    lc_seek(&C, c, 5);
+    lc_seek(&R, c, 21);
+    lc_erase(&C, &R);
+    assert(lc_checktree(c));
+    assert(lc_checkcursor(&C, 5));
+    lc_deltree(S, c);
+
     lc_close(S);
 }
 
@@ -2107,7 +2164,10 @@ static void test_markbreak_oom_oneline(void) {
     int       r;
     if (!S) return;
     c = lc_newtree(S);
-    if (!c) { lc_close(S); return; }
+    if (!c) {
+        lc_close(S);
+        return;
+    }
     lc_seek(&C, c, 0);
     r = lc_markbreak(&C, 10);
     assert(r == LC_OK); /* oneline return discarded by comma operator */
@@ -2229,9 +2289,10 @@ static void test_insert_cov_rootdeep(void) {
     X(markbreak_oom_oneline)       \
     X(markbreak_oom_makeroom)      \
     X(markbreak_cov_rootright)     \
-    X(clearbreaks_params)          \
     X(clearbreaks_basic)           \
     X(clearbreaks_cov_slot)        \
+    X(erase_params)                \
+    X(erase_basic)                 \
     X(splice_params)               \
     X(splice_basic)                \
     X(splice_trailing)             \

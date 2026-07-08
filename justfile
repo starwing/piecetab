@@ -33,6 +33,14 @@ lc-lines:
     @awk '/^DA:/ && /,0$/ {gsub(/DA:|,0/,""); print $0}' lcov.info \
     | sort -n | while read ln; do echo "L$ln: $(sed -n ${ln}p linecache.h)"; done
 
+lc-unbranched:
+    @awk -F'[:,]' '/^BRDA:/ && $5==0 {print $2}' lcov.info \
+    | sort -n -u \
+    | while read ln; do \
+        src=$(sed -n "${ln}p" linecache.h 2>/dev/null); \
+        case "$src" in *assert*) ;; *) printf "L%-5d %s\n" "$ln" "$src";; esac; \
+    done
+
 cov: lc-cov lc-uncovered lc-lines
 
 clean-gcda:

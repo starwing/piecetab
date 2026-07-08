@@ -122,22 +122,24 @@ int lc_advline(lc_Cursor *C, lc_Diff delta);
 ### 游标查询
 
 ```c
-size_t   lc_offset(const lc_Cursor *C);
-size_t   lc_line(const lc_Cursor *C);
+#define lc_offset(C)     ((C)->off + (C)->loff + (C)->col)
+#define lc_line(C)       ((C)->nu + (C)->lnu)
+#define lc_col(C)        ((C)->col)
+#define lc_lineoffset(C) ((C)->off + (C)->loff)
 unsigned lc_linelen(const lc_Cursor *C);
-unsigned lc_col(const lc_Cursor *C);
 ```
 
-- `lc_offset`: 游标绝对字节偏移。若 `C==NULL` 返回 0。
-- `lc_line`: 游标所在行号（0-based）。若 `C==NULL` 返回 0。
+- `lc_offset`: 游标绝对字节偏移（宏，直接解引用，调用方须保证 C 非 NULL）。
+- `lc_line`: 游标所在行号（0-based，宏）。
 - `lc_linelen`: 游标当前行之字节长度。若 `C` 在 trailing 区域（`lnu == breaks[leaf]`），返回 `C->col`（虚拟行长度）。若 `C==NULL` 返回 0。
-- `lc_col`: 游标在当前行内列偏移（0-based）。若 `C==NULL` 返回 0。
+- `lc_col`: 游标在当前行内列偏移（0-based，宏）。
+- `lc_lineoffset`: 游标当前行起始字节偏移（宏，= offset - col）。
 
 ### 标记/清除行断点
 
 ```c
 int lc_markbreak(lc_Cursor *C, unsigned len);
-int lc_clearbreaks(lc_Cursor *C, size_t len);
+#define lc_clearbreaks(C, len) lc_splice((C), (len), (len))
 ```
 
 - `lc_markbreak`: 在游标位置插入一个行断点。`len` 为新行长度（含 `\n`），须 ≥ 1。
@@ -145,26 +147,43 @@ int lc_clearbreaks(lc_Cursor *C, size_t len);
   - 若 `len > 行剩余长度`: 先将 `len` 字节插入至行尾，再在 `len` 处断（见 `lc_markbreak` 的 splice 回退逻辑）
   - 空树时：直接以 `len` 建立单行树
   - 返回后 `C` 定位断后新行之首（`col=0`, `lnu+=1`, `loff`/`off/nu` 已更新）
-- `lc_clearbreaks`: 删除从游标位置起 `len` 字节内的所有行断点（各段连接为一行）。内部调用 `lc_splice(C, len, len)`。游标位于合并后行之 col 位置。
+- `lc_clearbreaks`: 删除从游标位置起 `len` 字节内的所有行断点（各段连接为一行）。等价于 `lc_splice(C, len, len)` 的宏。游标位于合并后行之 col 位置。
+  - `lc_splice` 的宏包装。参数校验委托给 `lc_splice`。
 
-**返回值**: `LC_OK`, `LC_ERRPARAM`, `LC_ERRMEM`。
+**返回值**: 同 `lc_splice` — `LC_OK`, `LC_ERRPARAM`。
+
+### lc_erase — 擦除游标间区间
+
+```c
+int lc_erase(lc_Cursor *L, lc_Cursor *R);
+```
+
+**行为**: 删除游标 L 到 R 之间所有字节（含行断），右方内容前移。L、R 须属同一树且 `lc_offset(L) < lc_offset(R)`。
+
+**参数校验**:
+- `L==NULL` 或 `R==NULL` 或 `!L->tree` 或 `L->tree != R->tree`: 返回 `LC_ERRPARAM`
+- 空区间、逆序、L 越界: 返回 `LC_OK`，no-op
+
+**返回值**: `LC_OK`（成功或 no-op），`LC_ERRPARAM`（参数非法）。操作后 R 失效（树结构已变），L 指向删除点。
+
+**实现**: 同叶调用 `lcD_eraseleaf`，跨叶调用 `lcD_eraserange`（三段法：trim→cut→stitch）。内部 `lcP_reserve` 预分配保证不 OOM。
 
 ### lc_splice — 区间删除/插入字节
 
 ```c
-void lc_splice(lc_Cursor *C, size_t del, unsigned ins);
+int lc_splice(lc_Cursor *C, size_t del, unsigned ins);
 ```
 
-**参数校验**: 空指针、`del==0 && ins==0`、空树 (`levels==0 && root.child_count==0`) — 皆 no-op 返回。`del` 自动 clamp 至 `bytes - offset`。
+**参数校验**: `C==NULL` 或 `C->tree==NULL` 返回 `LC_ERRPARAM`。`del` 自动 clamp 至 `bytes - offset`。`ins` 为 0 时跳过插入。
 
 **行为**:
-- 删空树 (`offset==0 && del >= bytes`): 重置树为初始态，`C->col = ins`（虚拟 trailing 字节）
-- 删+补字节: 先 `lc_advance(&R, del)` 定位右侧，调用 `lcD_spliceleaf`（同叶）或 `lcD_splicerange`（跨叶）删除。删除后若树已空，重置树。
+- 游标在 trailing 区域: `C->col += ins` 直接返回
+- 删+补字节: 内部 `lc_advance` + `lc_erase` 处理删除，再 `lcD_addbytes` 加回插入字节。删除后若树已空，重置树。
 - 插入字节: 若游标在有效行内，`leaf->bytes[C->lnu] += ins` 加长当前行；`C->col += ins` 移动游标。
 
-**返回值**: void（永不失败——设计确保）。操作前后游标 100% 合法。
+**返回值**: `LC_OK`（成功），`LC_ERRPARAM`（参数非法）。删除路径由 `lc_erase` 的预分配保证不 OOM。
 
-**注意**: 删除区间可跨任意叶边界。`lc_splice` 是 `lc_clearbreaks` 的基础原语，也是 `lc_markbreak` 内部 len>rem 时的回退机制。
+**注意**: 删除区间可跨任意叶边界。`lc_splice` 内部委托 `lc_erase` 处理删除——`splice(C, del, ins)` 等价于 `erase + addbytes`。`lc_clearbreaks` 是 `splice(len, len)` 的便捷宏。
 
 ### lc_insert — 在中部插入文本/行
 
@@ -259,7 +278,7 @@ stitchnode 是 linecache 最精巧的算法——洋葱序 `for (k=0; k≤levels
 
 **d 的延迟生效**: d 用于记录"待修复右侧子节点数"，当前轮末尾设值，**下一轮** backwardnode 才消耗。因 fillrt 新链建在右侧、其 underfill 需本轮的 foldnode 修复后才能将 C 回退至此位置。
 
-### 2. 三段法区间删除 (lcD_splicerange)
+### 2. 三段法区间删除 (lcD_eraserange)
 
 L/R 双游标界定删除区间，操作分三段:
 1. **求分岔+修边**: 找 `L->paths[l] != R->paths[l]` 的首层。`trimright(L)` 删 L 叶右侧、`trimleft(R)` 删 R 叶左侧。
