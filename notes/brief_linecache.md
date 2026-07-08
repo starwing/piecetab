@@ -6,7 +6,7 @@
 
 单头文件 C89 库，前缀 `lc_`。以 B+ 计量树 (Metric B+ Tree) 维护字节偏移→行号之映射。
 
-**功用**: 文本编辑器中维护行号缓存。支持行断点插入/删除 (`lc_markbreak`/`lc_clearbreaks`)、区间删除 (`lc_erase`)、区间删插字节 (`lc_splice`)、中部插入 (`lc_insert`)、批量加载 (`lc_scan`)。
+**功用**: 文本编辑器中维护行号缓存。支持行断点插入/删除 (`lc_markbreak`/`lc_clearbreaks`)、区间删除 (`lc_erase`)、区间删插字节 (`lc_splice`)、中部插入 (`lc_append`)、批量加载 (`lc_scan`)。
 
 关联: `piecetab.h` (piece table, 前缀 `pt_`)，linecache 为其先行实验。
 
@@ -84,12 +84,12 @@ struct lc_Cursor {
 
 ## 三、关键常量
 
-| 符号 | 默认 | lc_test4 值 | 含义 |
-|------|------|------------|------|
-| `LC_FANOUT` | 62 | 4 | 内节点最大子数 |
-| `LC_LEAF_FANOUT` | 62 | 4 | 叶最大行数 |
-| `LC_MAX_LEVEL` | 16 | 16 | 最大树深 |
-| `LC_PAGE_SIZE` | 65536 | 512 | 池分配器页大小 |
+| 符号             | 默认  | lc_test4 值 | 含义           |
+| ---------------- | ----- | ----------- | -------------- |
+| `LC_FANOUT`      | 62    | 4           | 内节点最大子数 |
+| `LC_LEAF_FANOUT` | 62    | 4           | 叶最大行数     |
+| `LC_MAX_LEVEL`   | 16    | 16          | 最大树深       |
+| `LC_PAGE_SIZE`   | 65536 | 512         | 池分配器页大小 |
 
 半满阈值 = FANOUT/2 (lc_test4=2, 默认=31)。小扇出极易触发分裂/合并。
 
@@ -111,17 +111,17 @@ grep '^LC_API' linecache.h
 
 关键 API：
 
-| 类别 | 函数 | 功用 |
-|------|------|------|
-| 生命周期 | `lc_open`, `lc_close`, `lc_reset` | 状态管理 |
-| 树 | `lc_newtree`, `lc_deltree` | 树生命周期 |
-| 批量 | `lc_scan` | 批量加载行断点到树尾（可叠加） |
-| 查询 | `lc_breaks`, `lc_bytes` | 树级汇总 |
-| 定位 | `lc_seek`, `lc_seekline` | 按偏移/行号定位游标 |
-| 移动 | `lc_advance`, `lc_advline` | 字节/行偏移移动（越界 clamp） |
-| 查询 | `lc_offset`, `lc_line`, `lc_linelen`, `lc_col`, `lc_lineoffset` | 游标状态查询（宏） |
-| 断点 | `lc_markbreak`, `lc_clearbreaks` | 单点插入 / 区间清除行断（宏） |
-| 编辑 | `lc_erase`, `lc_splice`, `lc_insert` | 区间删除 / 区间删插字节 / 中部插入或纯字节追加（sc=NULL） |
+| 类别     | 函数                                                            | 功用                                                      |
+| -------- | --------------------------------------------------------------- | --------------------------------------------------------- |
+| 生命周期 | `lc_open`, `lc_close`, `lc_reset`                               | 状态管理                                                  |
+| 树       | `lc_newtree`, `lc_deltree`                                      | 树生命周期                                                |
+| 批量     | `lc_scan`                                                       | 批量加载行断点到树尾（可叠加）                            |
+| 查询     | `lc_breaks`, `lc_bytes`                                         | 树级汇总                                                  |
+| 定位     | `lc_seek`, `lc_seekline`                                        | 按偏移/行号定位游标                                       |
+| 移动     | `lc_advance`, `lc_advline`                                      | 字节/行偏移移动（越界 clamp）                             |
+| 查询     | `lc_offset`, `lc_line`, `lc_linelen`, `lc_col`, `lc_lineoffset` | 游标状态查询（宏）                                        |
+| 断点     | `lc_markbreak`, `lc_clearbreaks`                                | 单点插入 / 区间清除行断（宏）                             |
+| 编辑     | `lc_erase`, `lc_splice`, `lc_append`                            | 区间删除 / 区间删插字节 / 中部插入或纯字节追加（sc=NULL） |
 
 ## 六、内部函数命名体系
 
@@ -130,15 +130,15 @@ grep '^LC_API' linecache.h
 grep '^static' linecache.h
 ```
 
-| 前缀 | 职责 | 代表函数 |
-|------|------|----------|
-| `lcK_` | 游标导航 | `findleaf`, `findline`, `findinleaf`, `locend`, `forwardoff`, `backwardoff`, `forwardline`, `backwardline` |
-| `lcB_` | 行断/插入 | `oneline`, `makeroom`, `splitroot`, `splitchild`, `splitleaf`, `putbreak`, `append`, `cutleaf`, `fixsource`, `rollback` |
+| 前缀   | 职责      | 代表函数                                                                                                                                                                                                           |
+| ------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `lcK_` | 游标导航  | `findleaf`, `findline`, `findinleaf`, `locend`, `forwardoff`, `backwardoff`, `forwardline`, `backwardline`                                                                                                         |
+| `lcB_` | 行断/插入 | `oneline`, `makeroom`, `splitroot`, `splitchild`, `splitleaf`, `putbreak`, `append`, `cutleaf`, `fixsource`, `rollback`                                                                                            |
 | `lcD_` | 删除/平衡 | `trimleft`, `trimright`, `balanceleaf`, `balancenode`, `foldleaf`, `foldnode`, `rebalance`, `eraseleaf`, `eraserange`, `makechain`, `findroom`, `mergeleaf`, `backwardnode`, `stitch`, `stitchnode`, `checkstitch` |
-| `lcM_` | 度量 | `up` (自底向上传播 bytes/breaks 至根) |
-| `lcN_` | 节点操作 | `sumbytes`, `sumbreaks`, `makespace`, `copy`, `move`, `erase`, `freechildren` |
-| `lcL_` | 叶操作 | `sumbytes` (宏 `lcL_new`, `lcL_idx`) |
-| `lcP_` | 池 | `init`, `destroy`, `alloc`, `ralloc`, `free`, `reserve` |
+| `lcM_` | 度量      | `up` (自底向上传播 bytes/breaks 至根)                                                                                                                                                                              |
+| `lcN_` | 节点操作  | `sumbytes`, `sumbreaks`, `makespace`, `copy`, `move`, `erase`, `freechildren`                                                                                                                                      |
+| `lcL_` | 叶操作    | `sumbytes` (宏 `lcL_new`, `lcL_idx`)                                                                                                                                                                               |
+| `lcP_` | 池        | `init`, `destroy`, `alloc`, `ralloc`, `free`, `reserve`                                                                                                                                                            |
 
 ## 七、lc_scan 流程概要
 
@@ -192,16 +192,16 @@ grep '^    X(' tests/lc_test4.c
 
 ## 十一、相关文档
 
-| 文档 | 内容 |
-|------|------|
-| `notes/design_insert_delete_v2.md` | 当前基于stitch的批量插入/删除设计 |
-| `notes/design_bulk_loading.md` | lc_scan Bulk Loading 设计 |
-| `notes/design_splice.md` | Splice 区间删除三段法设计 |
-| `notes/history_range_delete.md` | 区间删除算法演进史 |
-| `notes/brief_tests.md` | 测试结构笔记 |
-| `notes/lessons_trimnode_mergenode.md` | trimnode/mergenode 重构教训 |
-| `notes/uncovered_branches.md` | 未覆盖分支详细映射 |
-| `linecache.md` | 面向用户的 API 参考手册 |
+| 文档                                  | 内容                              |
+| ------------------------------------- | --------------------------------- |
+| `notes/design_insert_delete_v2.md`    | 当前基于stitch的批量插入/删除设计 |
+| `notes/design_bulk_loading.md`        | lc_scan Bulk Loading 设计         |
+| `notes/design_splice.md`              | Splice 区间删除三段法设计         |
+| `notes/history_range_delete.md`       | 区间删除算法演进史                |
+| `notes/brief_tests.md`                | 测试结构笔记                      |
+| `notes/lessons_trimnode_mergenode.md` | trimnode/mergenode 重构教训       |
+| `notes/uncovered_branches.md`         | 未覆盖分支详细映射                |
+| `linecache.md`                        | 面向用户的 API 参考手册           |
 
 ## 十二、编码铁律 (AGENTS.md)
 

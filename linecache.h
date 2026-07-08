@@ -111,8 +111,8 @@ LC_API unsigned lc_linelen(const lc_Cursor *C);
 LC_API int lc_markbreak(lc_Cursor *C, unsigned len);
 #define lc_clearbreaks(C, len) lc_splice((C), (len), (len))
 
-/* insert/remove/mutation texts */
-LC_API int lc_insert(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud);
+/* append/remove/mutation texts */
+LC_API int lc_append(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud);
 LC_API int lc_erase(lc_Cursor *L, lc_Cursor *R);
 LC_API int lc_splice(lc_Cursor *C, size_t del, unsigned ins);
 
@@ -1124,7 +1124,7 @@ static int lcB_fixsource(lc_Cursor *sC, int sbc, lc_Node *rt0, int l) {
     return 1;
 }
 
-LC_API int lc_insert(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud) {
+LC_API int lc_append(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud) {
     lc_Node  *p, rt[LC_MAX_LEVEL];
     int       i, r, l, sbc;
     lc_Cursor sC;

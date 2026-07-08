@@ -31,7 +31,7 @@
 | `clearbreaks` | `lc_clearbreaks`                      | 清除换行符                |
 | `splice`      | `lc_splice`, `lcD_splicerange`        | 拼接/删除（含 Fold 触发） |
 | `markbreak`   | `lc_markbreak`, `lc_markbreaks`       | 标记换行                  |
-| `insert`      | `lc_insert`                           | 插入文本                  |
+| `append`      | `lc_append`                           | 插入文本                  |
 
 ### 命名示例
 
@@ -43,10 +43,10 @@
 | `splice_cross_breaks`    | splice 跨多个换行符                         |
 | `splice_trimleaf_locend` | splice 删至树尾触发 trimleaf 的 locend 路径 |
 | `splice_mergeleaf_sr`    | splice 后 mergeleaf 的 sr 非零路径          |
-| `insert_single_leaf`     | 插入到单叶树                                |
-| `insert_col_mid`         | 在行中（col>0）插入                         |
-| `insert_oom_col0`        | 在行首（col==0）插入时 OOM                  |
-| `insert_brute`           | 遍历树中所有插入位置，确认插入操作正确      |
+| `append_single_leaf`     | 插入到单叶树                                |
+| `append_col_mid`         | 在行中（col>0）插入                         |
+| `append_oom_col0`        | 在行首（col==0）插入时 OOM                  |
+| `append_brute`           | 遍历树中所有插入位置，确认插入操作正确      |
 
 ---
 
