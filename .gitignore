@@ -11,4 +11,5 @@
 lc_insert_demo
 tests/lc_test4
 tests/lc_test8
+tests/pt_test4
 tmp_*

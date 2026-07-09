@@ -49,119 +49,65 @@
 
 PT_NS_BEGIN
 
+typedef struct pt_Hole   pt_Hole;
 typedef struct pt_State  pt_State;
 typedef struct pt_Cursor pt_Cursor;
 
-typedef const struct pt_Tree *pt_Snapshot;
+typedef const struct pt_Tree *pt_Blob;
 
 typedef ptrdiff_t pt_Offset;
 typedef size_t    pt_Size;
-
-typedef struct pt_LineCol {
-    pt_Offset line;
-    pt_Offset col;
-} pt_LineCol;
 
 typedef void *pt_Alloc(void *ud, void *ptr, size_t osize, size_t nsize);
 
 PT_API pt_State *pt_newstate(pt_Alloc *allocf, void *ud);
 PT_API void      pt_close(pt_State *S);
-
 PT_API pt_Alloc *pt_getallocf(pt_State *S, void **pud);
 
-/* snapshot */
+/* blob snapshot */
 
-PT_API pt_Snapshot pt_empty(pt_State *S);
-PT_API pt_Snapshot pt_from(pt_State *S, const char *s, size_t len);
-
-PT_API int  pt_version(pt_Snapshot snap);
-PT_API void pt_retain(pt_Snapshot snap);
-PT_API void pt_release(pt_Snapshot snap);
-
-PT_API size_t pt_bytes(pt_Snapshot snap);
-PT_API size_t pt_chars(pt_Snapshot snap);
-PT_API size_t pt_lines(pt_Snapshot snap);
+PT_API pt_Blob pt_empty(pt_State *S);
+PT_API pt_Blob pt_from(pt_State *S, const char *s, size_t len);
+PT_API int     pt_version(pt_Blob b);
+PT_API void    pt_retain(pt_Blob b);
+PT_API void    pt_release(pt_Blob b);
+PT_API size_t  pt_bytes(pt_Blob b);
 
 /* cursor */
 
-PT_API int pt_locate(pt_Cursor *out, pt_Snapshot snap, pt_Offset off);
-PT_API int pt_locline(pt_Cursor *out, pt_Snapshot snap, pt_LineCol linecol);
+#define pt_offset(C) ((C)->off + (C)->poff)
 
-PT_API int pt_advance(pt_Cursor *c, pt_Offset delta);
-PT_API int pt_advline(pt_Cursor *c, pt_Offset delta);
-PT_API int pt_setcol(pt_Cursor *c, pt_Size column);
+PT_API int pt_seek(pt_Cursor *C, pt_Blob b, pt_Offset off);
+PT_API int pt_advance(pt_Cursor *C, pt_Offset delta);
 
-PT_API pt_Offset  pt_bytepos(const pt_Cursor *c);
-PT_API pt_LineCol pt_linepos(const pt_Cursor *c);
-PT_API pt_Size    pt_remainbytes(const pt_Cursor *c);
+/* editing */
 
-PT_API char *pt_buffer(pt_State *S, size_t *plen);
+PT_API int pt_edit(pt_Cursor *C, size_t del, const char *s, size_t len);
+PT_API int pt_insert(pt_Cursor *C, const char *s, size_t len);
+PT_API int pt_append(pt_Cursor *C, const char *s, size_t len);
+PT_API int pt_splice(pt_Cursor *C, size_t del, const char *s, size_t len);
+PT_API int pt_remove(pt_Cursor *C, size_t len);
 
-PT_API const char *pt_peek(const pt_Cursor *c, pt_Size *len);
+/* transaction */
 
-PT_API int pt_next(pt_Cursor *c);
-PT_API int pt_prev(pt_Cursor *c);
+PT_API void    pt_rollback(pt_Cursor *C);
+PT_API pt_Blob pt_commit(pt_Cursor *C);
 
-PT_API int pt_insert(pt_Cursor *c, const char *s, size_t len);
-PT_API int pt_remove(pt_Cursor *c, pt_Cursor *end);
-PT_API int pt_replace(pt_Cursor *c, const char *s, size_t len);
+/* literal scratch buffer */
 
-PT_API void        pt_rollback(pt_Cursor *c);
-PT_API pt_Snapshot pt_commit(pt_Cursor *c);
-
-/* clang-format off */
-PT_STATIC pt_LineCol pt_linecol(pt_Offset line, pt_Offset col)
-{ pt_LineCol lc; lc.line = line; lc.col = col; return lc; }
-/* clang-format on */
-
-/* callbacks */
-
-#define PT_PIECE_MAXLINES 58    /* maximum lines in a piece */
-#define PT_PIECE_MAXSIZE  65535 /* maximum bytes in a piece */
-
-typedef unsigned short pt_PieceSize;
-typedef pt_PieceSize   pt_Ends[PT_PIECE_MAXLINES];
-
-typedef struct pt_LinesInfo {
-    pt_PieceSize chars;  /* total chars in result */
-    pt_PieceSize breaks; /* count of linebreaks in result */
-    pt_Ends     *ends;   /* offset to the linebreak+1 in result */
-} pt_LinesInfo;
-
-typedef struct pt_Slice {
-    const char  *s;
-    pt_PieceSize len;
-} pt_Slice;
-
-typedef pt_PieceSize pt_Chars(void *ud, pt_Slice s, pt_PieceSize *pcol);
-typedef pt_PieceSize pt_Lines(void *ud, pt_Slice s, pt_LinesInfo *pli);
-
-PT_API pt_Chars *pt_getcharsf(pt_State *S, void **pud);
-PT_API pt_Lines *pt_getlinesf(pt_State *S, void **pud);
-PT_API void      pt_setcharsf(pt_State *S, pt_Chars *charsf, void *ud);
-PT_API void      pt_setlinesf(pt_State *S, pt_Lines *linesf, void *ud);
+PT_API char *pt_literal(pt_State *S, size_t *plen);
+PT_API char *pt_scratch(pt_State *S, size_t *plen);
 
 /* cursor definition */
 
 #define PT_MAX_LEVEL 16
 
 struct pt_Cursor {
-    /*
-     * Each entry points to a slot inside a parent's children[] array.
-     * paths[0] == &snap->root->children[idx],
-     * paths[i] == &parent->children[idx],
-     * paths[snap->levels] is the slot of current piece for non-empty tree.
-     * Leaf slots are pt_Piece* and must be cast after a leaf check.
-     */
     struct pt_Node **paths[PT_MAX_LEVEL];
-    struct pt_Tree  *snap;    /* snapshot this cursor operates on */
-    struct pt_Tree  *oldsnap; /* committed snapshot before mutation, for rollback */
-    short            dirty;   /* non-zero if cursor has uncommitted changes */
-    unsigned short   pbr;     /* line breaks before poff in current piece */
-    unsigned short   poff;    /* byte offset within current piece */
-    pt_Offset        off;     /* absolute byte offset in the tree */
-    pt_Offset        remain;  /* bytes remaining to next line break (cached from gap) */
-    pt_LineCol       linecol; /* line and column in the tree; col may be -1 (unknown) */
+    struct pt_Tree  *tree;
+    pt_Size          poff;
+    pt_Offset        off;
+    short            dirty;
 };
 
 PT_NS_END
@@ -175,12 +121,22 @@ PT_NS_END
 #include <stdlib.h>
 #include <string.h>
 
-#ifndef PT_MAX_FANOUT
-# define PT_MAX_FANOUT 62
+#ifndef PT_FANOUT
+# define PT_FANOUT 62
 #endif
 
 #ifndef PT_PAGE_SIZE
 # define PT_PAGE_SIZE 65536
+#endif
+
+#ifndef PT_MAX_HOLESIZE
+# define PT_MAX_HOLESIZE (64 - sizeof(unsigned short))
+#endif
+
+#define PT_MASK_BITS (sizeof(pt_Mask) * CHAR_BIT)
+
+#ifndef PT_MASK_SIZE
+# define PT_MASK_SIZE ((PT_FANOUT + PT_MASK_BITS - 1) / PT_MASK_BITS)
 #endif
 
 #define pt_min(a, b) ((a) < (b) ? (a) : (b))
@@ -192,902 +148,153 @@ PT_NS_END
 
 PT_NS_BEGIN
 
-typedef struct pt_Node pt_Node;
+typedef size_t pt_Mask;
 
-typedef struct pt_Piece {
-    pt_PieceSize ends[PT_PIECE_MAXLINES]; /* offset to linebreak+1 within data */
-    unsigned     version;                 /* tree version when this piece was written */
-    const char  *data;                    /* pointer into pt_buffer's memory */
-} pt_Piece;
+typedef struct pt_Node {
+    pt_Size         bytes[PT_FANOUT];
+    pt_Mask         mask[PT_MASK_SIZE];
+    struct pt_Node *children[PT_FANOUT];
+    unsigned        version;
+    unsigned short  child_count;
+} pt_Node;
 
-PT_STATIC_ASSERT(sizeof(pt_Piece) <= 128);
-
-struct pt_Node {
-    pt_Size        bytes[PT_MAX_FANOUT];  /* total bytes in this subtree */
-    pt_Size        chars[PT_MAX_FANOUT];  /* total chars in this subtree */
-    pt_Size        breaks[PT_MAX_FANOUT]; /* total linebreaks in this subtree */
-    unsigned       version;               /* version of this node */
-    unsigned short child_count;           /* count of children */
-    pt_Node       *children[PT_MAX_FANOUT]; /* pt_Piece if it's a leaf */
+struct pt_Hole {
+    unsigned short n;
+    char           data[PT_MAX_HOLESIZE];
 };
 
-PT_STATIC_ASSERT(sizeof(pt_Node) <= 2048);
-
-typedef struct pt_Metrics {
-    pt_Size bytes;  /* total bytes in subtree */
-    pt_Size breaks; /* total line breaks */
-    pt_Size chars;  /* total characters */
-} pt_Metrics;
-
-struct pt_Tree {
-    pt_State *S; /* state this tree belongs to */
-
-    pt_Metrics metrics; /* metrics of the whole tree */
-    pt_Node    root;    /* root node of the tree */
-
-    unsigned refcount; /* reference count */
-    unsigned levels;   /* number of levels in the tree */
-    unsigned version;  /* version of this tree */
-};
-
-PT_STATIC_ASSERT(sizeof(pt_Tree) <= 2048);
+typedef struct pt_Tree {
+    pt_State       *S;
+    struct pt_Tree *from;
+    pt_Size         bytes;
+    pt_Node         root;
+    unsigned        refc;
+    unsigned        levels;
+    unsigned        version;
+} pt_Tree;
 
 typedef struct pt_Pool {
     size_t obj_size; /* size of each object in this pool */
     void  *freed;    /* freelist head */
     void  *pages;    /* linked list of allocated pages */
+#ifdef PT_POOL_STATS
+    size_t live_obj;
+#endif
 } pt_Pool;
 
-typedef struct pt_BufferPool {
-    size_t remain; /* remaining bytes in current buffer */
+typedef struct pt_Scratch {
+    size_t remain;  /* remaining bytes in current buffer */
     char  *buffer;  /* current write position */
     void  *pages;   /* linked list of allocated pages */
-} pt_BufferPool;
+    void  *reserve; /* linked list of pre-allocated pages for commit */
+} pt_Scratch;
 
 struct pt_State {
-    void         *alloc_ud;   /* user data for allocf */
-    pt_Alloc     *allocf;     /* memory allocator */
-    void         *chars_ud;   /* user data for charsf */
-    pt_Chars     *charsf;     /* character counting callback */
-    void         *lines_ud;   /* user data for linesf */
-    pt_Lines     *linesf;     /* line break scanning callback */
-    pt_BufferPool buffers;    /* pool for piece data buffers */
-    pt_Pool       trees;      /* pool for pt_Tree objects */
-    pt_Pool       nodes;      /* pool for pt_Node objects */
-    pt_Pool       pieces;     /* pool for pt_Piece objects */
-    unsigned      max_version; /* highest version assigned so far */
+    void      *alloc_ud;
+    pt_Alloc  *allocf;
+    pt_Scratch scratch;
+    pt_Pool    nodes;
+    pt_Pool    holes;
+    unsigned   max_version;
 };
 
 /* mempool */
 
-/* clang-format off */
-static void pt_poolfree(pt_Pool* pool, void* obj)
-{ *(void**)obj = pool->freed, pool->freed = obj; }
+#ifdef PT_POOL_STATS
+# define ptP_stat(stmt) stmt
+#else
+# define ptP_stat(stmt) ((void)0)
+#endif
 
-static void pt_initbuffers(pt_BufferPool* pool)
-{ memset(pool, 0, sizeof(pt_BufferPool)); }
-
-static pt_Slice pt_slice(const char *s, pt_PieceSize len)
-{ pt_Slice slice; slice.s = s, slice.len = len; return slice; }
-/* clang-format on */
-
-static void pt_initpool(pt_Pool *pool, size_t obj_size) {
-    memset(pool, 0, sizeof(pt_Pool));
-    pool->obj_size = obj_size;
+static void ptP_init(pt_Pool *pool, size_t obj_size) {
+    memset(pool, 0, sizeof(pt_Pool)), pool->obj_size = obj_size;
     assert(obj_size > sizeof(void *) && obj_size < PT_PAGE_SIZE / 4);
 }
 
-static void pt_freepool(pt_State *S, pt_Pool *pool) {
-    void *page = pool->pages;
-    while (page) {
-        void *next = *(void **)((char *)page + PT_PAGE_SIZE - sizeof(void *));
+/* clang-format off */
+PT_STATIC void ptP_free(pt_Pool *pool, void *obj)
+{ ptP_stat(pool->live_obj -= 1); *(void **)obj = pool->freed, pool->freed = obj; }
+
+static void ptP_initscratch(pt_Scratch* pool)
+{ memset(pool, 0, sizeof(pt_Scratch)); }
+/* clang-format on */
+
+static void ptP_destroy(pt_State *S, pt_Pool *pool) {
+    void *next, *page = pool->pages;
+    for (; page; page = next) {
+        next = *(void **)((char *)page + PT_PAGE_SIZE - sizeof(void *));
         S->allocf(S->alloc_ud, page, PT_PAGE_SIZE, 0);
-        page = next;
     }
-    pt_initpool(pool, pool->obj_size);
+    ptP_stat(pool->live_obj = 0), ptP_init(pool, pool->obj_size);
 }
 
-static void *pt_poolalloc(pt_State *S, pt_Pool *pool) {
-    void *obj = pool->freed;
-    if (obj == NULL) {
-        size_t objsize = pool->obj_size, offset;
-        void  *newpage = S->allocf(S->alloc_ud, NULL, 0, PT_PAGE_SIZE);
-        if (newpage == NULL) return NULL;
-        offset = ((PT_PAGE_SIZE - sizeof(void *)) / objsize - 1) * objsize;
-        for (; offset > 0; offset -= objsize) {
-            void **entry = (void **)((char *)newpage + offset);
-            *entry = pool->freed, pool->freed = (void *)entry;
-        }
-        *(void **)((char *)newpage + PT_PAGE_SIZE
-                   - sizeof(void *)) = pool->pages;
-        pool->pages = newpage;
-        return newpage;
-    }
-    pool->freed = *(void **)obj;
-    return obj;
+PT_STATIC void *ptP_ralloc(pt_Pool *pool) {
+    char *obj = pool->freed;
+    assert(obj), ptP_stat(pool->live_obj += 1);
+    return (pool->freed = *(void **)obj), (void *)obj;
 }
 
-static void pt_freebuffers(pt_State *S, pt_BufferPool *pool) {
+PT_STATIC void *ptP_alloc(pt_State *S, pt_Pool *pool) {
+    size_t sz = pool->obj_size;
+    char  *p, *end, *obj = pool->freed;
+    if (obj) return ptP_ralloc(pool);
+    p = (char *)S->allocf(S->alloc_ud, NULL, 0, PT_PAGE_SIZE);
+    if (p == NULL) return NULL;
+    end = &p[PT_PAGE_SIZE - sizeof(void *)], *(void **)end = pool->pages;
+    pool->pages = (void *)(obj = p), p += sz, end -= sz;
+    while ((p += sz) < end) *(void **)(p - sz) = p;
+    *(void **)(p - sz) = NULL, ptP_stat(pool->live_obj += 1);
+    return (pool->freed = (void *)(obj + sz)), (void *)obj;
+}
+
+PT_STATIC int ptP_reserve(pt_State *S, pt_Pool *pool, size_t n) {
+    void  *freed = pool->freed, **t = &freed;
+    size_t c;
+    for (c = 0; c < n && *t; ++c) t = (void **)*t;
+    if (c >= n) return 1;
+    for (pool->freed = NULL; c < n; ++c) {
+        void *obj = ptP_alloc(S, pool);
+        if (obj == NULL) return 0;
+        ptP_stat(pool->live_obj -= 1);
+        *t = obj, t = (void **)obj;
+    }
+    return *t = NULL, (pool->freed = freed), 1;
+}
+
+static void ptP_freescratch(pt_State *S, pt_Scratch *pool) {
     void *page = pool->pages;
     while (page) {
         void *next = *(void **)page;
         S->allocf(S->alloc_ud, page, PT_PAGE_SIZE, 0);
         page = next;
     }
-    pt_initbuffers(pool);
-}
-
-/* locate */
-
-#define ptC_levels(c) ((c)->snap->levels)
-#define ptC_breaks(c) ((c)->snap->metrics.breaks)
-#define ptC_chars(c)  ((c)->snap->metrics.chars)
-#define ptC_bytes(c)  ((c)->snap->metrics.bytes)
-
-#define ptC_leaf(c)      (*(pt_Piece **)(c)->paths[ptC_levels(c)])
-#define ptC_parent(c, l) ((l) ? *(c)->paths[(l) - 1] : &c->snap->root)
-#define ptC_idx(c, p, l) ((c)->paths[(l)] - (p)->children)
-
-#define ptP_start(p, b)  ((b) > 0 ? (p)->ends[(b) - 1] : 0)
-#define ptP_end(p, b, n) ((b) < (n)->breaks[i] ? (p)->ends[b] : (n)->bytes[i])
-
-PT_API pt_Size pt_remainbytes(const pt_Cursor *c) {
-    pt_Cursor start;
-    if (c == NULL || c->snap == NULL) return 0;
-    if (c->remain >= 0) return c->remain;
-    if (c->linecol.line == ptC_breaks(c))
-        start.off = ptC_bytes(c);
-    else {
-        int r = pt_advline((start = *c, &start), 1);
-        (void)r, assert(r == PT_OK);
+    page = pool->reserve;
+    while (page) {
+        void *next = *(void **)page;
+        S->allocf(S->alloc_ud, page, PT_PAGE_SIZE, 0);
+        page = next;
     }
-    return ((pt_Cursor *)c)->remain = start.off - c->off;
+    ptP_initscratch(pool);
 }
 
-static void ptC_locend(pt_Cursor *c) {
-    pt_Node *parent, *n = (pt_Node *)&c->snap->root;
-    int      l, i;
-    if (n->child_count == 0) return;
-    c->linecol.line = ptC_breaks(c);
-    for (l = 0; l <= ptC_levels(c); n = *c->paths[l++])
-        c->paths[l] = &n->children[n->child_count - 1];
-    parent = ptC_parent(c, ptC_levels(c)), i = parent->child_count - 1;
-    c->pbr = parent->breaks[i], c->poff = parent->bytes[i];
-    c->off = ptC_bytes(c), c->linecol.line = ptC_breaks(c);
-    c->remain = 0, c->linecol.col = -1;
+/* mask */
+
+static void ptM_sethole(pt_Node *n, int i, int ishole) {
+    pt_Mask *m = &n->mask[i / PT_MASK_BITS];
+    *m ^= (-!!ishole ^ *m) & ((pt_Mask)1 << (i % PT_MASK_BITS));
 }
 
-static void ptC_findpieces(pt_Cursor *c, int l, pt_Offset *poff) {
-    int i;
-    for (; l <= ptC_levels(c); ++l) {
-        pt_Node *parent = ptC_parent(c, l);
-        for (i = 0; i < parent->child_count; ++i) {
-            if (*poff <= parent->bytes[i]) break;
-            c->off += parent->bytes[i], c->linecol.line += parent->breaks[i];
-            *poff -= parent->bytes[i];
-        }
-        c->paths[l] = &parent->children[i];
-    }
+static int ptM_ishole(const pt_Node *n, int i) {
+    const pt_Mask m = n->mask[i / PT_MASK_BITS];
+    return (m & ((pt_Mask)1 << (i % PT_MASK_BITS))) != 0;
 }
-
-static void ptC_locinpiece(pt_Cursor *c, pt_Offset off) {
-    pt_Node  *parent = ptC_parent(c, ptC_levels(c));
-    int       l, i = ptC_idx(c, parent, ptC_levels(c));
-    pt_Piece *p = (pt_Piece *)parent->children[i];
-    c->linecol.line -= c->pbr, c->off -= c->poff;
-    for (l = 0; l < parent->breaks[i] && off >= p->ends[l]; ++l) continue;
-    c->off += off;
-    c->pbr = l, c->poff = off;
-    c->linecol.line += l, c->remain = -1;
-    c->linecol.col = c->off == 0 || (l > 0 && off == p->ends[l - 1]) ? 0 : -1;
-}
-
-PT_API int pt_locate(pt_Cursor *out, pt_Snapshot snap, pt_Offset off) {
-    if (out == NULL || snap == NULL) return PT_ERRPARAM;
-    off = pt_min(pt_max(0, off), snap->metrics.bytes);
-    memset(out, 0, sizeof(pt_Cursor));
-    out->snap = (pt_Tree *)snap;
-    if (off == ptC_bytes(out)) return ptC_locend(out), PT_OK;
-    return ptC_findpieces(out, 0, &off), ptC_locinpiece(out, off), PT_OK;
-}
-
-PT_API int pt_locline(pt_Cursor *out, pt_Snapshot snap, pt_LineCol linecol) {
-    pt_Node *parent;
-    int      l, i;
-    if (out == NULL || snap == NULL) return PT_ERRPARAM;
-    if (linecol.line > snap->metrics.breaks) return PT_ERRPARAM;
-    if (linecol.line < 0 || linecol.col < 0) return PT_ERRPARAM;
-    memset(out, 0, sizeof(pt_Cursor));
-    out->snap = (pt_Tree *)snap, out->linecol.line = linecol.line;
-    if (ptC_bytes(out) == 0) return PT_OK;
-    assert(ptC_levels(out) < PT_MAX_LEVEL);
-    for (l = 0; l <= ptC_levels(out); ++l) {
-        parent = ptC_parent(out, l);
-        for (i = 0; i < parent->child_count; ++i) {
-            if (linecol.line <= parent->breaks[i]) break;
-            out->off += parent->bytes[i], linecol.line -= parent->breaks[i];
-        }
-        out->paths[l] = &parent->children[assert(i < parent->child_count), i];
-    }
-    out->pbr = (assert(linecol.line <= parent->breaks[i]), linecol.line);
-    if (linecol.line) out->poff = ptC_leaf(out)->ends[linecol.line - 1];
-    out->linecol.col = -1, out->remain = -1;
-    return pt_setcol(out, linecol.col);
-}
-
-/* navigation */
-
-PT_API const char *pt_peek(const pt_Cursor *c, pt_Size *plen) {
-    if (c && c->paths[ptC_levels(c)]) {
-        pt_Node  *parent = ptC_parent(c, ptC_levels(c));
-        int       i = ptC_idx(c, parent, ptC_levels(c)), end;
-        pt_Piece *p = (pt_Piece *)parent->children[i];
-        assert(p && c->poff <= parent->bytes[i] && c->pbr <= parent->breaks[i]);
-        if ((end = ptP_end(p, c->pbr, parent)) > c->poff) {
-            if (plen) *plen = end - c->poff;
-            return ptC_leaf(c)->data + c->poff;
-        }
-    }
-    if (plen) *plen = 0;
-    return NULL;
-}
-
-static int ptC_nextpiece(pt_Cursor *c) {
-    int      l = ptC_levels(c), i;
-    pt_Node *parent = ptC_parent(c, l);
-    i = ptC_idx(c, parent, l);
-    c->off += parent->bytes[i] - c->poff;
-    c->linecol.line += parent->breaks[i] - c->pbr;
-    while (i + 1 >= parent->child_count && --l >= 0)
-        parent = ptC_parent(c, l), i = ptC_idx(c, parent, l);
-    if (l < 0) return PT_ERREMPTY; /* last piece */
-    c->paths[l] = &parent->children[i + 1];
-    for (; l < ptC_levels(c); ++l)
-        c->paths[l + 1] = &(*c->paths[l])->children[0];
-    c->poff = 0, c->pbr = 0;
-    c->linecol.col = -1, c->remain = -1;
-    return PT_OK;
-}
-
-PT_API int pt_next(pt_Cursor *c) {
-    pt_Node  *parent;
-    pt_Piece *p;
-    int       l = ptC_levels(c), i, end;
-    if (c == NULL || c->snap == NULL) return PT_ERRPARAM;
-    if (c->paths[l] == NULL) return PT_ERREMPTY;
-    parent = ptC_parent(c, l), i = ptC_idx(c, parent, l);
-    p = (pt_Piece *)parent->children[i];
-    if ((end = ptP_end(p, c->pbr, parent)) > c->poff) {
-        c->off += end - c->poff;
-        c->poff = (unsigned short)end;
-        if (c->pbr < parent->breaks[i]) ++c->linecol.line, ++c->pbr;
-    }
-    if (c->pbr == parent->breaks[i]) return ptC_nextpiece(c);
-    c->linecol.col = 0, c->remain = -1;
-    return PT_OK;
-}
-
-static int ptC_prevpiece(pt_Cursor *c) {
-    int      l = ptC_levels(c), i;
-    pt_Node *parent = ptC_parent(c, l);
-    i = ptC_idx(c, parent, l);
-    while (i == 0 && --l >= 0)
-        parent = ptC_parent(c, l), i = ptC_idx(c, parent, l);
-    if (l < 0) return PT_ERREMPTY; /* first piece */
-    c->paths[l] = &parent->children[i - 1];
-    for (; l < ptC_levels(c); ++l) {
-        parent = *c->paths[l];
-        c->paths[l + 1] = &parent->children[i = parent->child_count - 1];
-    }
-    c->off -= c->poff + parent->bytes[i];
-    c->linecol.line -= c->pbr + parent->breaks[i];
-    c->poff = 0, c->pbr = 0;
-    c->linecol.col = -1, c->remain = -1;
-    return PT_OK;
-}
-
-PT_API int pt_prev(pt_Cursor *c) {
-    int start, i;
-    if (c == NULL || c->snap == NULL) return PT_ERRPARAM;
-    if (c->paths[ptC_levels(c)] == NULL) return PT_ERREMPTY;
-    start = ptP_start(ptC_leaf(c), c->pbr);
-    if (c->poff > start) /* in middle line */
-        c->off -= c->poff - start, c->poff = start;
-    else if (c->pbr > 0) { /* has previous line in current piece */
-        pt_Piece *p = ptC_leaf(c);
-        size_t    prev = ptP_start(p, c->pbr - 1);
-        c->off -= c->poff - prev, c->poff = prev, --c->pbr, --c->linecol.line;
-    } else {
-        pt_Node *parent;
-        if (ptC_prevpiece(c) != PT_OK) return PT_ERREMPTY;
-        parent = ptC_parent(c, ptC_levels(c));
-        i = ptC_idx(c, parent, ptC_levels(c));
-        if (parent->breaks[i] > 0) {
-            c->pbr = parent->breaks[i];
-            c->poff = ptC_leaf(c)->ends[parent->breaks[i] - 1];
-            c->off += c->poff, c->linecol.line += c->pbr;
-        }
-        return c->linecol.col = -1, c->remain = -1, PT_OK;
-    }
-    return c->linecol.col = 0, c->remain = -1, PT_OK;
-}
-
-static void ptC_forwardoff(pt_Cursor *c, pt_Offset d) {
-    int      l = ptC_levels(c), i, in;
-    pt_Node *parent = ptC_parent(c, l);
-    i = ptC_idx(c, parent, l), in = parent->bytes[i] - c->poff;
-    if (d < in) return ptC_locinpiece(c, c->poff + d);
-    d -= in, c->off += in, c->linecol.line += parent->breaks[i] - c->pbr;
-    for (; l >= 0; --l) {
-        parent = ptC_parent(c, l), i = ptC_idx(c, parent, l);
-        if (l == ptC_levels(c)) ++i;
-        for (; i < parent->child_count; ++i) {
-            if (d < parent->bytes[i]) break;
-            c->off += parent->bytes[i], c->linecol.line += parent->breaks[i];
-            d -= parent->bytes[i];
-        }
-        if (i < parent->child_count) break;
-    }
-    c->paths[assert(l >= 0 && l <= ptC_levels(c)), l] = &parent->children[i];
-    ptC_findpieces(c, l + 1, &d);
-    c->pbr = 0, ptC_locinpiece(c, d);
-}
-
-static void ptC_backwardoff(pt_Cursor *c, pt_Offset d) {
-    int      l, i;
-    pt_Node *parent = ptC_parent(c, ptC_levels(c));
-    i = ptC_idx(c, parent, ptC_levels(c));
-    if (d <= c->poff) return ptC_locinpiece(c, c->poff - d);
-    d -= c->poff, c->off -= c->poff, c->linecol.line -= c->pbr;
-    for (l = ptC_levels(c); l >= 0; --l) {
-        parent = ptC_parent(c, l), i = ptC_idx(c, parent, l);
-        if (l == ptC_levels(c)) --i;
-        for (; i >= 0; --i) {
-            if (d <= parent->bytes[i]) break;
-            c->off -= parent->bytes[i], c->linecol.line -= parent->breaks[i];
-            d -= parent->bytes[i];
-        }
-        if (i >= 0) break;
-    }
-    c->paths[assert(l >= 0 && l <= ptC_levels(c)), l] = &parent->children[i];
-    c->off -= parent->bytes[i], c->linecol.line -= parent->breaks[i];
-    d = parent->bytes[i] - d, ptC_findpieces(c, l + 1, &d);
-    c->pbr = 0, ptC_locinpiece(c, d);
-}
-
-PT_API int pt_advance(pt_Cursor *c, pt_Offset delta) {
-    pt_Offset n;
-    if (c == NULL || c->snap == NULL) return PT_ERRPARAM;
-    if (delta == 0 || ptC_bytes(c) == 0) return PT_OK;
-    n = c->off + delta;
-    /* clang-format off */
-    if (n < 0) ptC_backwardoff(c, (pt_Size)-c->off);
-    else if (n >= ptC_bytes(c)) ptC_locend(c);
-    else if (delta < 0) ptC_backwardoff(c, -delta);
-    else ptC_forwardoff(c, delta);
-    return PT_OK; /* clang-format on */
-}
-
-static void ptC_findlines(pt_Cursor *c, int l, pt_Offset *poff) {
-    int i;
-    for (; l <= ptC_levels(c); ++l) {
-        pt_Node *parent = ptC_parent(c, l);
-        for (i = 0; i < parent->child_count; ++i) {
-            if (*poff <= parent->breaks[i]) break;
-            c->off += parent->bytes[i], c->linecol.line += parent->breaks[i];
-            *poff -= parent->breaks[i];
-        }
-        c->paths[l] = &parent->children[i];
-    }
-}
-
-static void ptC_forwardline(pt_Cursor *c, pt_Offset d) {
-    int      l = ptC_levels(c), start = c->poff, i, in;
-    pt_Node *parent = ptC_parent(c, l);
-    i = ptC_idx(c, parent, l), in = parent->breaks[i] - c->pbr;
-    if ((assert(d > 0), d) < in) {
-        pt_Piece *p = (pt_Piece *)parent->children[i];
-        return ptC_locinpiece(c, p->ends[c->pbr + d - 1]);
-    }
-    d -= in, c->off += parent->bytes[i] - start, c->linecol.line += in;
-    for (; l >= 0; --l) {
-        parent = ptC_parent(c, l), i = ptC_idx(c, parent, l);
-        if (l == ptC_levels(c)) i += 1;
-        for (; i < parent->child_count; ++i) {
-            if (d <= parent->breaks[i]) break;
-            c->off += parent->bytes[i], c->linecol.line += parent->breaks[i];
-            d -= parent->breaks[i];
-        }
-        if (i < parent->child_count) break;
-    }
-    c->paths[assert(l >= 0), l] = &parent->children[i];
-    ptC_findlines(c, l + 1, &d);
-    c->pbr = 0, ptC_locinpiece(c, ptP_start(ptC_leaf(c), d));
-}
-
-static int ptC_islinehead(const pt_Cursor *c) {
-    pt_Node  *parent = ptC_parent(c, ptC_levels(c));
-    int       i = ptC_idx(c, parent, ptC_levels(c));
-    pt_Piece *p = (pt_Piece *)parent->children[i];
-    return c->off == 0 || (c->pbr > 0 && c->poff == p->ends[c->pbr - 1]);
-}
-
-static void ptC_backwardline(pt_Cursor *c, pt_Offset d) {
-    int      l = ptC_levels(c), i;
-    pt_Node *parent = ptC_parent(c, l);
-    i = ptC_idx(c, parent, l);
-    if (d == 0 && ptC_islinehead(c)) return (void)(c->linecol.col = 0);
-    if (d < c->pbr) {
-        pt_Piece *p = (pt_Piece *)parent->children[i];
-        return ptC_locinpiece(c, p->ends[c->pbr - d - 1]);
-    }
-    d -= c->pbr, c->off -= c->poff, c->linecol.line -= c->pbr;
-    for (; l >= 0; --l) {
-        parent = ptC_parent(c, l), i = ptC_idx(c, parent, l);
-        if (l == ptC_levels(c)) i -= 1;
-        for (; i >= 0; --i) {
-            if (d < parent->breaks[i]) break;
-            c->off -= parent->bytes[i], c->linecol.line -= parent->breaks[i];
-            d -= parent->breaks[i];
-        }
-        if (i >= 0) break;
-    }
-    l = pt_max(0, l), i = pt_max(0, i); /* first line */
-    c->paths[l] = &parent->children[i];
-    c->off -= parent->bytes[i], c->linecol.line -= parent->breaks[i];
-    d = parent->breaks[i] - d, ptC_findlines(c, l + 1, &d);
-    c->pbr = 0, ptC_locinpiece(c, ptP_start(ptC_leaf(c), d));
-}
-
-PT_API int pt_advline(pt_Cursor *c, pt_Offset delta) {
-    pt_Offset n, line = c ? c->linecol.line : 0;
-    if (c == NULL || c->snap == NULL) return PT_ERRPARAM;
-    if (ptC_bytes(c) == 0) return PT_OK;
-    n = pt_min(pt_max(0, line + delta), ptC_breaks(c));
-    if (n == line) return ptC_backwardline(c, 0), PT_OK;
-    /* clang-format off */
-    if (n == 0) ptC_backwardline(c, line);
-    else if (n == ptC_breaks(c)) ptC_forwardline(c, ptC_breaks(c) - line);
-    else if (delta < 0) ptC_backwardline(c, -delta);
-    else ptC_forwardline(c, delta);
-    return PT_OK; /* clang-format on */
-}
-
-static void ptC_findcol(pt_Cursor *c, int l, pt_Size *pcol) {
-    int i;
-    for (; l <= ptC_levels(c); ++l) {
-        pt_Node *parent = ptC_parent(c, l);
-        for (i = 0; i < parent->child_count; ++i) {
-            if (*pcol < parent->chars[i] || parent->breaks[i] > 0) break;
-            *pcol -= parent->chars[i], c->linecol.col += parent->chars[i];
-            c->off += parent->bytes[i];
-        }
-        c->paths[l] = &parent->children[pt_min(i, parent->child_count - 1)];
-    }
-}
-
-static int ptC_callchars(pt_Cursor *c, pt_Size *pcol) {
-    pt_Node  *parent = ptC_parent(c, ptC_levels(c));
-    int       i = ptC_idx(c, parent, ptC_levels(c));
-    pt_Piece *p = (pt_Piece *)parent->children[i];
-
-    pt_PieceSize start = ptP_start(p, c->pbr), end = ptP_end(p, c->pbr, parent);
-    pt_Slice     s = pt_slice(p->data + start, end - start);
-    pt_PieceSize col = pt_min(*pcol, s.len), old = col;
-    pt_PieceSize len = c->snap->S->charsf(c->snap->S->chars_ud, s, &col);
-    assert(len <= s.len && col <= s.len);
-    if (len > s.len) len = s.len;
-    c->poff += (unsigned short)len, c->off += len;
-    col = old - col, c->linecol.col += col, *pcol -= col;
-    return c->pbr < parent->breaks[i] || *pcol == 0;
-}
-
-PT_API int pt_setcol(pt_Cursor *c, pt_Size column) {
-    pt_Node *parent;
-    int      l, i, r;
-    if (c == NULL || c->snap == NULL) return PT_ERRPARAM;
-    ptC_backwardline(c, 0); /* move to line head */
-    assert(c->linecol.col == 0);
-    if (column == 0) return PT_OK;
-    for (l = ptC_levels(c); l >= 0; --l) {
-        parent = ptC_parent(c, l), i = ptC_idx(c, parent, l);
-        if (l == ptC_levels(c)) {
-            if (ptC_callchars(c, &column)) return PT_OK;
-            i += 1;
-        }
-        for (; i < parent->child_count; ++i) {
-            if (column < parent->chars[i] || parent->breaks[i] > 0) break;
-            column -= parent->chars[i], c->linecol.col += parent->chars[i];
-            c->off += parent->bytes[i];
-        }
-        if (i < parent->child_count) break;
-    }
-    c->paths[assert(l >= 0 && l <= ptC_levels(c)), l] = &parent->children[i];
-    ptC_findcol(c, l + 1, &column);
-    c->pbr = 0, c->poff = 0;
-    return (void)ptC_callchars(c, &column), PT_OK;
-}
-
-static void ptC_charsforpiece(pt_Cursor *c, int l, pt_Offset *pd) {
-    int i;
-    for (; l <= ptC_levels(c); ++l) {
-        pt_Node *parent = ptC_parent(c, l);
-        for (i = 0; i < parent->child_count; ++i) {
-            if (*pd < parent->bytes[i]) break;
-            *pd -= parent->bytes[i], c->linecol.col += parent->chars[i];
-        }
-        c->paths[l] = &parent->children[i];
-    }
-}
-
-static pt_Size ptC_measure(pt_Cursor *c, pt_PieceSize off, pt_PieceSize len) {
-    pt_PieceSize col = len;
-    pt_Slice     s = pt_slice(ptC_leaf(c)->data + off, len);
-    c->snap->S->charsf(c->snap->S->chars_ud, s, &col);
-    return len - col;
-}
-
-static void ptC_charsfromdelta(pt_Cursor *c, pt_Offset d) {
-    int      l = ptC_levels(c), i;
-    pt_Node *parent;
-    for (; l >= 0; --l) {
-        parent = ptC_parent(c, l), i = ptC_idx(c, parent, l);
-        if (l == ptC_levels(c)) {
-            pt_Offset end = parent->bytes[i] - c->poff;
-            c->linecol.col += ptC_measure(c, c->poff, pt_min(d, end));
-            if (d <= end) return;
-            i += 1, d -= end;
-        }
-        for (; i < parent->child_count; ++i) {
-            if (d < parent->bytes[i]) break;
-            d -= parent->bytes[i], c->linecol.col += parent->chars[i];
-        }
-        if (i < parent->child_count) break;
-    }
-    assert(l >= 0 && l <= ptC_levels(c));
-    c->paths[l] = &parent->children[i];
-    ptC_charsforpiece(c, l + 1, &d);
-    c->linecol.col += ptC_measure(c, 0, d);
-}
-
-PT_API pt_LineCol pt_linepos(const pt_Cursor *c) {
-    pt_Cursor start;
-    pt_Offset col;
-    if (c == NULL || c->snap == NULL) return pt_linecol(0, 0);
-    if (c->linecol.col >= 0) return c->linecol;
-    start = *c, ptC_backwardline(&start, 0);
-    ptC_charsfromdelta(&start, c->off - start.off);
-    ((pt_Cursor *)c)->linecol.col = start.linecol.col;
-    return c->linecol;
-}
-
-/* insert */
-
-typedef struct pt_Insert {
-    pt_Cursor  *c;   /* cursor for the insertion */
-    const char *s;   /* string to insert */
-    size_t      len; /* length of the string to insert */
-
-    pt_Node *parents[PT_MAX_LEVEL]; /* parents for c->paths */
-    pt_Node  pend[PT_MAX_LEVEL];    /* pending nodes/pieces */
-    pt_Node *pend_root;             /* pending unused node for splitroot */
-} pt_Insert;
-
-/* clang-format off */
-static void ptN_setmetrics(pt_Node *n, int i, pt_Metrics m)
-{ n->bytes[i] = m.bytes, n->breaks[i] = m.breaks, n->chars[i] = m.chars; }
-
-static void ptN_addmetrics(pt_Node *n, int i, pt_Metrics m)
-{ n->bytes[i] += m.bytes, n->breaks[i] += m.breaks, n->chars[i] += m.chars; }
-
-static void ptN_submetrics(pt_Node *n, int i, pt_Metrics m)
-{ n->bytes[i] -= m.bytes, n->breaks[i] -= m.breaks, n->chars[i] -= m.chars; }
-
-static void ptM_addmetrics(pt_Metrics *d, pt_Metrics m)
-{ d->bytes += m.bytes, d->breaks += m.breaks, d->chars += m.chars; }
-/* clang-format on */
-
-static int ptI_fill(pt_Insert *ctx, pt_Node *n) {
-    pt_State *S = ctx->c->snap->S;
-    int       i;
-    for (i = n->child_count; i < PT_MAX_FANOUT && ctx->len > 0; ++i) {
-        pt_LinesInfo li = {0, 0, NULL};
-        pt_Slice     sl = pt_slice(ctx->s, pt_min(ctx->len, PT_PIECE_MAXSIZE));
-        short        cur = n->child_count;
-        pt_Piece    *p;
-        if (!(p = (pt_Piece *)pt_poolalloc(S, &S->pieces))) return PT_ERRMEM;
-        li.ends = &p->ends, n->bytes[cur] = S->linesf(S->lines_ud, sl, &li);
-        assert(n->bytes[cur] > 0 && n->bytes[cur] <= sl.len);
-        assert(li.chars <= n->bytes[cur] && li.breaks <= PT_PIECE_MAXLINES);
-        n->breaks[cur] = li.breaks, n->chars[cur] = li.chars;
-        p->version = ctx->c->snap->root.version, p->data = sl.s;
-        n->children[n->child_count++] = (pt_Node *)p;
-        ctx->s += n->bytes[cur], ctx->len -= n->bytes[cur];
-    }
-    return PT_OK;
-}
-
-static pt_Metrics ptI_sumrange(const pt_Node *n, int start, int count) {
-    pt_Metrics m = {0, 0, 0};
-    int        i;
-    for (i = 0; i < count; ++i) {
-        m.bytes += n->bytes[start + i];
-        m.breaks += n->breaks[start + i];
-        m.chars += n->chars[start + i];
-    }
-    return m;
-}
-
-static int ptI_fillroot(pt_Insert *x) {
-    pt_Tree   *snap = x->c->snap;
-    pt_Metrics m;
-    int        r = ptI_fill(x, &snap->root);
-    if (r != PT_OK) return r;
-    m = ptI_sumrange(&snap->root, 0, snap->root.child_count);
-    ptC_locend(x->c);
-    return PT_OK;
-}
-
-static int ptI_splitpiece(pt_Insert *x) {
-    pt_State *S = x->c->snap->S;
-    pt_Node  *pend = &x->pend[ptC_levels(x->c)];
-    pt_Node  *parent = ptC_parent(x->c, ptC_levels(x->c));
-    int       pi, i = ptC_idx(x->c, parent, ptC_levels(x->c));
-    pt_Piece *r, *l = (pt_Piece *)parent->children[i];
-    pt_Size   breaks = parent->breaks[i], size = parent->bytes[i];
-    if (x->c->poff == 0 || x->c->poff == size) return PT_OK;
-    if (!(r = (pt_Piece *)pt_poolalloc(S, &S->pieces))) return PT_ERRMEM;
-    if (breaks > 0) {
-        for (pi = x->c->pbr; pi < breaks; ++pi)
-            r->ends[pi - x->c->pbr] = l->ends[pi] - x->c->poff;
-        parent->breaks[i] = x->c->pbr, pend->breaks[0] = (breaks -= x->c->pbr);
-    }
-    if (breaks == 0 || x->c->pbr == 0) {
-        pt_Size chars = parent->chars[i], remain = size - x->c->poff;
-        parent->chars[i] = ptC_measure(x->c, 0, x->c->poff);
-        pend->chars[0] = chars ? chars - parent->chars[i]
-                               : ptC_measure(x->c, x->c->poff, remain);
-    }
-    parent->bytes[i] = x->c->poff, pend->bytes[0] = size - x->c->poff;
-    r->version = x->c->snap->version, r->data = l->data + x->c->poff;
-    pend->children[0] = (pt_Node *)r, pend->child_count = 1;
-    return PT_OK;
-}
-
-static int ptI_init(pt_Insert *x, pt_Cursor *c, const char *s, size_t len) {
-    pt_Tree  *snap = c->snap;
-    pt_State *S = snap->S;
-    int       l, i, tc, r;
-    x->c = c, x->s = s, x->len = len, x->pend_root = NULL;
-    if (!c->dirty) { /* make a new tree */
-        if (!(snap = (pt_Tree *)pt_poolalloc(S, &S->trees))) return PT_ERRMEM;
-        *snap = *c->snap, c->oldsnap = c->snap, c->snap = snap, c->dirty = 1;
-        snap->version = ++snap->S->max_version;
-        snap->root.version = snap->version;
-    }
-    if (ptC_bytes(c) == 0 && (r = ptI_fillroot(x)) != PT_OK) return r;
-    for (l = 0; l <= ptC_levels(c); ++l) {
-        pt_Node *n, *parent = ptC_parent(c, l), **cs = parent->children;
-        i = ptC_idx(c, parent, l), tc = parent->child_count;
-        x->parents[l] = parent, x->pend[l].child_count = 0;
-        if (l < ptC_levels(c) && i < tc && cs[i]->version != snap->version) {
-            if (!(n = (pt_Node *)pt_poolalloc(S, &S->nodes))) return PT_ERRMEM;
-            c->paths[l + 1] = &n->children[c->paths[l + 1] - cs[i]->children];
-            *n = *cs[i], cs[i] = n, n->version = snap->version;
-        }
-    }
-    return ptI_splitpiece(x);
-}
-
-static int ptI_checkpendroot(pt_Insert *ctx) {
-    pt_State *S = ctx->c->snap->S;
-    if (ctx->pend_root) return PT_OK;
-    ctx->pend_root = (pt_Node *)pt_poolalloc(S, &S->nodes);
-    return ctx->pend_root ? PT_OK : PT_ERRMEM;
-}
-
-static void ptI_makespace(pt_Node *d, int i, int n) {
-    int moved = d->child_count - i;
-    assert(d->child_count + n <= PT_MAX_FANOUT && i <= d->child_count);
-    memmove(&d->children[i + n], &d->children[i], moved * sizeof(pt_Node *));
-    memmove(&d->bytes[i + n], &d->bytes[i], moved * sizeof(pt_Size));
-    memmove(&d->breaks[i + n], &d->breaks[i], moved * sizeof(pt_Size));
-    memmove(&d->chars[i + n], &d->chars[i], moved * sizeof(pt_Size));
-}
-
-static void ptI_move(pt_Node *d, int di, const pt_Node *s, int si, int c) {
-    memcpy(&d->children[di], &s->children[si], c * sizeof(pt_Node *));
-    memcpy(&d->bytes[di], &s->bytes[si], c * sizeof(pt_Size));
-    memcpy(&d->breaks[di], &s->breaks[si], c * sizeof(pt_Size));
-    memcpy(&d->chars[di], &s->chars[si], c * sizeof(pt_Size));
-    d->child_count += c;
-}
-
-static void ptI_freenodes(pt_State *S, pt_Node *n, int rl) {
-    int i;
-    if (rl == 0) {
-        for (i = 0; i < n->child_count; ++i)
-            pt_poolfree(&S->pieces, n->children[i]);
-    } else {
-        for (i = 0; i < n->child_count; ++i) {
-            ptI_freenodes(S, (pt_Node *)n->children[i], rl - 1);
-            pt_poolfree(&S->nodes, n->children[i]);
-        }
-    }
-}
-
-static void ptI_adddelta(pt_Insert *x, int l, pt_Metrics m) {
-    while (--l >= 0) {
-        pt_Node *parent = x->parents[l];
-        ptN_addmetrics(parent, ptC_idx(x->c, parent, l), m);
-    }
-}
-
-static void ptI_subdelta(pt_Insert *x, int l, pt_Metrics m) {
-    while (--l >= 0) {
-        pt_Node *parent = x->parents[l];
-        ptN_submetrics(parent, ptC_idx(x->c, parent, l), m);
-    }
-}
-
-static void ptI_takegapright(pt_Insert *x, int l, pt_Node *suffix) {
-    pt_Node *parent = x->parents[l];
-    int      i = ptC_idx(x->c, parent, l);
-    suffix->child_count = 0;
-    if (i + 1 == parent->child_count) return; /* no gap right */
-    ptI_move(suffix, 0, parent, i + 1, parent->child_count - i - 1);
-    ptI_subdelta(x, l, ptI_sumrange(suffix, 0, suffix->child_count));
-    parent->child_count = i + 1;
-}
-
-static pt_Node *ptI_packright(pt_Insert *x, int l, int start, pt_Node *suffix) {
-    pt_State *S = x->c->snap->S;
-    pt_Node  *n;
-    if (!(n = (pt_Node *)pt_poolalloc(S, &S->nodes))) return NULL;
-    memset(n, 0, sizeof(pt_Node));
-    n->version = x->c->snap->version;
-    ptI_move(n, 0, &x->pend[l], start, x->pend[l].child_count - start);
-    ptI_move(n, n->child_count, suffix, 0, suffix->child_count);
-    x->pend[l].child_count = 0, suffix->child_count = 0;
-    return n;
-}
-
-static int ptI_splitroot(pt_Insert *x, pt_Node *r) {
-    pt_Tree *snap = x->c->snap;
-    pt_Node *l, ***paths = x->c->paths;
-    int      i = paths[0] - x->parents[0]->children;
-    if (snap->levels + 1 >= PT_MAX_LEVEL) return PT_ERRFULL;
-    l = x->pend_root, x->pend_root = NULL;
-    *l = snap->root;
-    snap->root.children[0] = l;
-    snap->root.children[1] = r;
-    snap->root.child_count = 2;
-    ptN_setmetrics(&snap->root, 0, ptI_sumrange(l, 0, l->child_count));
-    ptN_setmetrics(&snap->root, 1, ptI_sumrange(r, 0, r->child_count));
-    memmove(paths + 1, paths, (snap->levels + 1) * sizeof(pt_Node **));
-    paths[0] = &snap->root.children[x->parents[0] == r];
-    memmove(x->parents + 1, x->parents, (snap->levels + 1) * sizeof(pt_Node *));
-    x->parents[0] = &snap->root;
-    if (x->parents[1] != r) paths[1] = &l->children[i], x->parents[1] = l;
-    snap->levels += 1, x->pend[snap->levels].child_count = 0;
-    return PT_OK;
-}
-
-static int ptI_simple(pt_Insert *x, int l, int movegap) {
-    pt_Metrics m;
-    pt_Node   *parent = x->parents[l], *pend = &x->pend[l];
-    int        i = ptC_idx(x->c, parent, l);
-    if (pend->child_count + parent->child_count > PT_MAX_FANOUT) return 0;
-    m = ptI_sumrange(pend, 0, pend->child_count);
-    ptI_makespace(parent, i + 1, pend->child_count);
-    ptI_move(parent, i + 1, pend, 0, pend->child_count);
-    ptI_adddelta(x, l, m);
-    if (l == ptC_levels(x->c)) ptM_addmetrics(&x->c->snap->metrics, m);
-    if (movegap) x->c->paths[l] = &parent->children[i + pend->child_count];
-    pend->child_count = 0;
-    return 1;
-}
-
-static void ptI_splitinsert(pt_Insert *x, int l, pt_Node *next) {
-    pt_Node suffix, *n, *parent, *pend;
-    parent = x->parents[l], pend = &x->pend[l];
-    int r, i = ptC_idx(x->c, parent, l), space, pmove, smove;
-    assert(parent->child_count + pend->child_count > PT_MAX_FANOUT);
-    ptI_takegapright(x, l, &suffix);
-    space = PT_MAX_FANOUT - parent->child_count;
-    if ((pmove = pt_min(space, pend->child_count)) > 0) {
-        pt_Metrics m = ptI_sumrange(pend, 0, pmove);
-        ptI_move(parent, i + 1, pend, 0, pmove);
-        ptI_adddelta(x, l, m);
-        if (l == ptC_levels(x->c)) ptM_addmetrics(&x->c->snap->metrics, m);
-        space -= pmove;
-    }
-    if ((smove = pt_min(space, suffix.child_count)) > 0) {
-        ptI_move(parent, i + 1 + pmove, &suffix, 0, smove);
-        ptI_adddelta(x, l, ptI_sumrange(&suffix, 0, smove));
-    }
-    if (pmove < pend->child_count)
-        ptI_move(next, 0, pend, pmove, pend->child_count - pmove);
-    if (smove < suffix.child_count)
-        ptI_move(
-                next, next->child_count, &suffix, smove,
-                suffix.child_count - smove);
-    pend->child_count = 0;
-}
-
-static int ptI_flush(pt_Insert *x, int l, int movegap) {
-    pt_State *S = x->c->snap->S;
-    pt_Node   suffix, *n, *parent, *pend;
-    int       r, i, space, pc, pleft, sleft;
-    for (; l >= 0; --l) {
-        if (ptI_simple(x, l, movegap)) return PT_OK;
-        n = (pt_Node *)pt_poolalloc(S, &S->nodes);
-        if (n == NULL) return PT_ERRMEM;
-        ptI_splitinsert(x, l, n);
-        if (l == 0) return ptI_splitroot(x, n);
-        x->pend[l - 1].children[x->pend[l - 1].child_count++] = n;
-    }
-    return PT_OK;
-}
-
-static void ptI_disposepend(pt_Insert *x, int l) {
-    pt_State *S = x->c->snap->S;
-    int       i;
-    for (i = 0; i < x->pend[l].child_count; ++i) {
-        if (l == 0)
-            pt_poolfree(&S->pieces, x->pend[l].children[i]);
-        else {
-            ptI_freenodes(S, (pt_Node *)x->pend[l].children[i], l - 1);
-            pt_poolfree(&S->nodes, x->pend[l].children[i]);
-        }
-    }
-}
-
-PT_API int pt_insert(pt_Cursor *c, const char *s, size_t len) {
-    pt_Insert x;
-    int       r, l, i;
-    if (len == 0) return PT_OK;
-    if (c == NULL || c->snap == NULL || s == NULL) return PT_ERRPARAM;
-    if ((r = ptI_init(&x, c, s, len)) != PT_OK) return r;
-    l = ptC_levels(c), assert(l < PT_MAX_LEVEL);
-    while (x.len > 0) {
-        if ((r = ptI_checkpendroot(&x)) != PT_OK) break;
-        if ((r = ptI_fill(&x, &x.pend[l])) != PT_OK) break;
-        if ((r = ptI_flush(&x, l, 1)) != PT_OK) break;
-        l = ptC_levels(c);
-    }
-    if (r != PT_OK)
-        for (l = 0; l <= ptC_levels(c); ++l) ptI_disposepend(&x, l);
-    if (x.pend_root) pt_poolfree(&c->snap->S->nodes, x.pend_root);
-    return r;
-}
-
-/* remove */
-
-PT_API int pt_remove(pt_Cursor *c, pt_Cursor *end);
-PT_API int pt_replace(pt_Cursor *c, const char *s, size_t len);
 
 /* API */
 
-/* clang-format off */
-PT_API int pt_version(pt_Snapshot snap)
-{ return snap ? snap->version : 0; }
-
-PT_API void pt_retain(pt_Snapshot snap)
-{ if (snap) ((pt_Tree*)snap)->refcount++; }
-
-PT_API pt_Offset pt_bytepos(const pt_Cursor* c)
-{ return c ? c->off : 0; }
-
-PT_API size_t pt_bytes(pt_Snapshot snap)
-{ return snap ? snap->metrics.bytes : 0; }
-
-PT_API size_t pt_chars(pt_Snapshot snap)
-{ return snap ? snap->metrics.chars : 0; }
-
-PT_API size_t pt_lines(pt_Snapshot snap)
-{ return snap ? snap->metrics.breaks + 1 : 0; }
-/* clang-format on */
+PT_API int  pt_version(pt_Blob b) { return b ? b->version : 0; }
+PT_API void pt_retain(pt_Blob b) {
+    if (b) ((pt_Tree *)b)->refc++;
+}
 
 static void *ptS_defallocf(void *ud, void *ptr, size_t osize, size_t nsize) {
     void *newptr;
@@ -1098,26 +305,6 @@ static void *ptS_defallocf(void *ud, void *ptr, size_t osize, size_t nsize) {
     return newptr;
 }
 
-static pt_PieceSize ptS_defcharsf(void *ud, pt_Slice s, pt_PieceSize *pcol) {
-    (void)ud;
-    if (*pcol >= s.len) return (*pcol -= s.len), s.len;
-    s.len = *pcol, *pcol = 0;
-    return s.len;
-}
-
-static pt_PieceSize ptS_deflinesf(void *ud, pt_Slice s, pt_LinesInfo *p) {
-    pt_PieceSize i;
-    (void)ud;
-    for (i = 0; i < s.len; ++i) {
-        if (s.s[i] == '\n') {
-            if (p->breaks == PT_PIECE_MAXLINES) break;
-            (*p->ends)[p->breaks++] = i + 1;
-        }
-        p->chars += 1;
-    }
-    return i;
-}
-
 PT_API pt_State *pt_newstate(pt_Alloc *allocf, void *ud) {
     pt_State *S;
     if (allocf == NULL) allocf = &ptS_defallocf;
@@ -1126,113 +313,283 @@ PT_API pt_State *pt_newstate(pt_Alloc *allocf, void *ud) {
     memset(S, 0, sizeof(pt_State));
     S->alloc_ud = ud;
     S->allocf = allocf;
-    S->charsf = &ptS_defcharsf;
-    S->linesf = &ptS_deflinesf;
-    pt_initpool(&S->trees, sizeof(pt_Tree));
-    pt_initpool(&S->nodes, sizeof(pt_Node));
-    pt_initpool(&S->pieces, sizeof(pt_Piece));
-    pt_initbuffers(&S->buffers);
+    ptP_init(&S->nodes, sizeof(pt_Node));
+    ptP_init(&S->holes, sizeof(pt_Hole));
+    ptP_initscratch(&S->scratch);
     S->max_version = 0;
     return S;
 }
 
 PT_API void pt_close(pt_State *S) {
     if (S == NULL) return;
-    pt_freepool(S, &S->trees);
-    pt_freepool(S, &S->nodes);
-    pt_freepool(S, &S->pieces);
-    pt_freebuffers(S, &S->buffers);
+    ptP_destroy(S, &S->nodes);
+    ptP_destroy(S, &S->holes);
+    ptP_freescratch(S, &S->scratch);
     S->allocf(S->alloc_ud, S, sizeof(pt_State), 0);
 }
 
-PT_API pt_Snapshot pt_empty(pt_State *S) {
-    pt_Tree *snap = S ? (pt_Tree *)pt_poolalloc(S, &S->trees) : NULL;
-    if (snap == NULL) return NULL;
-    memset(snap, 0, sizeof(pt_Tree));
-    snap->S = S;
-    snap->version = 0;
-    snap->refcount = 1;
-    return snap;
+PT_API pt_Blob pt_empty(pt_State *S) {
+    pt_Tree *b = S ? (pt_Tree *)S->allocf(S->alloc_ud, NULL, 0, sizeof(pt_Tree))
+                   : NULL;
+    if (b == NULL) return NULL;
+    memset(b, 0, sizeof(pt_Tree));
+    b->S = S;
+    b->version = 0;
+    b->refc = 1;
+    return b;
 }
 
-PT_API pt_Snapshot pt_from(pt_State *S, const char *s, size_t len) {
-    pt_Snapshot snap = pt_empty(S), r = NULL;
-    pt_Cursor   c;
-    if (snap == NULL) return NULL;
-    if (pt_locate(&c, snap, 0) == PT_OK && pt_insert(&c, s, len) == PT_OK)
-        r = pt_commit(&c);
-    return pt_release(snap), r;
+PT_API pt_Blob pt_from(pt_State *S, const char *s, size_t len) {
+    pt_Tree *b;
+    if (!S || (!s && len > 0)) return NULL;
+    b = (pt_Tree *)S->allocf(S->alloc_ud, NULL, 0, sizeof(pt_Tree));
+    if (!b) return NULL;
+    memset(b, 0, sizeof(pt_Tree));
+    b->S = S;
+    b->refc = 1;
+    if (len > 0) {
+        b->root.children[0] = (pt_Node *)s;
+        b->root.bytes[0] = len;
+        b->root.child_count = 1;
+        b->bytes = len;
+    }
+    return b;
 }
 
-PT_API char *pt_buffer(pt_State *S, size_t *plen) {
+/* pop a page from reserve (or allocf if empty), set as current write page.
+   returns 1 on success, 0 on OOM. */
+static int ptP_scratchpage(pt_State *S) {
+    void *newpage;
+    if (S->scratch.reserve) {
+        newpage = S->scratch.reserve;
+        S->scratch.reserve = *(void **)newpage;
+    } else {
+        newpage = S->allocf(S->alloc_ud, NULL, 0, PT_PAGE_SIZE);
+        if (newpage == NULL) return 0;
+    }
+    *(void **)newpage = S->scratch.pages;
+    S->scratch.pages = newpage;
+    S->scratch.buffer = (char *)newpage + sizeof(void *);
+    S->scratch.remain = PT_PAGE_SIZE - sizeof(void *);
+    return 1;
+}
+
+PT_API char *pt_literal(pt_State *S, size_t *plen) {
     if (S == NULL || plen == NULL || *plen == 0) return NULL;
-    if (S->buffers.remain == 0) {
-        void *newpage = S->allocf(S->alloc_ud, NULL, 0, PT_PAGE_SIZE);
-        if (newpage == NULL) return NULL;
-        *(void **)newpage = S->buffers.pages;
-        S->buffers.pages = newpage;
-        S->buffers.buffer = (char *)newpage + sizeof(void *);
-        S->buffers.remain = PT_PAGE_SIZE - sizeof(void *);
-    }
-    if (*plen > S->buffers.remain) *plen = S->buffers.remain;
-    S->buffers.remain -= *plen;
-    S->buffers.buffer += *plen;
-    return (char *)S->buffers.buffer - *plen;
+    if (S->scratch.remain == 0 && !ptP_scratchpage(S)) return NULL;
+    if (*plen > S->scratch.remain) *plen = S->scratch.remain;
+    S->scratch.remain -= *plen;
+    S->scratch.buffer += *plen;
+    return (char *)S->scratch.buffer - *plen;
 }
 
-static void ptC_freepieces(pt_Cursor *c, pt_Node *n) {
+PT_API char *pt_scratch(pt_State *S, size_t *plen) {
+    if (S == NULL || plen == NULL) return NULL;
+    if (S->scratch.remain == 0 && !ptP_scratchpage(S)) return NULL;
+    *plen = S->scratch.remain;
+    return S->scratch.buffer;
+}
+
+static void ptR_freechildren(pt_State *S, pt_Node *n, int rl, unsigned ver) {
     int i;
-    for (i = 0; i < n->child_count; ++i) {
-        pt_Piece *child = (pt_Piece *)n->children[i];
-        if (child->version == c->snap->version)
-            pt_poolfree(&c->snap->S->pieces, child);
-    }
-}
-
-static void ptC_free(pt_Cursor *c) {
-    pt_Node *parent = &c->snap->root;
-    int      l = 0, i = -1;
-    if (ptC_levels(c) == 0) return ptC_freepieces(c, &c->snap->root);
-    while (l >= 0) {
-        c->paths[l] = &parent->children[i + 1];
-        while (++l < ptC_levels(c))
-            parent = ptC_parent(c, l), c->paths[l] = &parent->children[0];
-        parent = ptC_parent(c, l);
-        ptC_freepieces(c, parent);
-        if (parent->version == c->snap->version)
-            pt_poolfree(&c->snap->S->nodes, parent);
-        while (--l >= 0) {
-            parent = ptC_parent(c, l), i = ptC_idx(c, parent, l);
-            if (i + 1 < parent->child_count) break;
-            if (l > 0 && parent->version == c->snap->version)
-                pt_poolfree(&c->snap->S->nodes, parent);
+    if (rl == 0) {
+        for (i = 0; i < n->child_count; ++i)
+            if (ptM_ishole(n, i)) ptP_free(&S->holes, (void *)n->children[i]);
+    } else {
+        for (i = 0; i < n->child_count; ++i) {
+            pt_Node *c = n->children[i];
+            if (c->version != ver)
+                continue; /* shared node owned by older ver */
+            ptR_freechildren(S, c, rl - 1, ver);
+            ptP_free(&S->nodes, c);
         }
     }
 }
 
-PT_API void pt_release(pt_Snapshot snap) {
-    if (snap == NULL) return;
-    if (snap->refcount > 1) return (void)(((pt_Tree *)snap)->refcount -= 1);
-    if (snap->levels > 0 || snap->root.child_count > 0) {
-        pt_Cursor c;
-        memset(&c, 0, sizeof(pt_Cursor));
-        c.snap = (pt_Tree *)snap;
-        ptC_free(&c);
+PT_API void pt_release(pt_Blob b) {
+    pt_State *S;
+    pt_Tree  *from;
+    if (b == NULL) return;
+    if (b->refc > 1) {
+        --((pt_Tree *)b)->refc;
+        return;
     }
-    return pt_poolfree(&((pt_Tree *)snap)->S->trees, (void *)snap);
+    S = b->S, from = b->from;
+    if (b->levels > 0)
+        ptR_freechildren(S, &((pt_Tree *)b)->root, (int)b->levels, b->version);
+    else if (b->root.child_count > 0)
+        ptR_freechildren(S, &((pt_Tree *)b)->root, 0, b->version);
+    S->allocf(S->alloc_ud, (void *)b, sizeof(pt_Tree), 0);
+    if (from) pt_release(from);
 }
 
-PT_API pt_Snapshot pt_commit(pt_Cursor *c) {
-    if (c == NULL || c->snap == NULL) return NULL;
-    if (!c->dirty) return pt_retain(c->snap), c->snap;
-    c->oldsnap = NULL, c->dirty = 0;
-    return c->snap;
+/* commit helpers — ptC_* hole→literal freeze */
+
+PT_STATIC void ptH_free(pt_State *S, pt_Hole *h);
+
+static size_t ptC_leafbytes(const pt_Node *cont) {
+    size_t s = 0;
+    int    i;
+    for (i = 0; i < (int)cont->child_count; ++i)
+        if (ptM_ishole(cont, i)) s += ((pt_Hole *)cont->children[i])->n;
+    return s;
+}
+
+static size_t ptC_holebytes(const pt_Tree *tree) {
+    pt_Node *stk[PT_MAX_LEVEL], *p, *cont;
+    int      ix[PT_MAX_LEVEL];
+    int      k, l;
+    size_t   total;
+    if (tree->levels == 0) return ptC_leafbytes(&tree->root);
+    stk[0] = (pt_Node *)&tree->root;
+    ix[0] = 0;
+    l = 0;
+    total = 0;
+    while (l >= 0) {
+        p = stk[l];
+        if (ix[l] >= (int)p->child_count) {
+            --l;
+            continue;
+        }
+        k = ix[l]++;
+        if (!ptM_ishole(p, k)) continue;
+        if (l == (int)tree->levels - 1) {
+            cont = p->children[k];
+            total += ptC_leafbytes(cont);
+        } else {
+            stk[++l] = p->children[k];
+            ix[l] = 0;
+        }
+    }
+    return total;
+}
+
+/* reserve enough scratch pages so freeze never calls allocf (全或无). */
+static int ptC_reservescratch(pt_State *S, size_t total) {
+    size_t usable = PT_PAGE_SIZE - sizeof(void *);
+    size_t need, pages;
+    void  *page, *head, *tail, *tmp;
+    if (total == 0) return 1;
+    need = (total > S->scratch.remain) ? total - S->scratch.remain : 0;
+    if (need == 0) return 1;
+    pages = need / (usable - PT_MAX_HOLESIZE) + 1;
+    head = NULL;
+    tail = NULL;
+    while (pages--) {
+        page = S->allocf(S->alloc_ud, NULL, 0, PT_PAGE_SIZE);
+        if (page == NULL) {
+            while (head) {
+                tmp = *(void **)head;
+                S->allocf(S->alloc_ud, head, PT_PAGE_SIZE, 0);
+                head = tmp;
+            }
+            return 0;
+        }
+        *(void **)page = NULL;
+        if (tail) {
+            *(void **)tail = page;
+            tail = page;
+        } else {
+            head = page;
+            tail = page;
+        }
+    }
+    if (head) {
+        *(void **)tail = S->scratch.reserve;
+        S->scratch.reserve = head;
+    }
+    return 1;
+}
+
+/* E7: copy hole data into scratch, switching pages when remain < n */
+static char *ptC_freshscratch(pt_State *S, const char *s, size_t n) {
+    char *p;
+    if (S->scratch.remain < n) {
+        void *page = S->scratch.reserve;
+        assert(page != NULL);
+        S->scratch.reserve = *(void **)page;
+        *(void **)page = S->scratch.pages;
+        S->scratch.pages = page;
+        S->scratch.buffer = (char *)page + sizeof(void *);
+        S->scratch.remain = PT_PAGE_SIZE - sizeof(void *);
+    }
+    p = S->scratch.buffer;
+    S->scratch.buffer += n;
+    S->scratch.remain -= n;
+    memcpy(p, s, n);
+    return p;
+}
+
+/* E11: 1:1 pointer swap, no literal merge, no child_count/bytes change */
+static void ptC_freezeleaf(pt_State *S, pt_Node *cont) {
+    int i;
+    for (i = 0; i < (int)cont->child_count; ++i) {
+        if (ptM_ishole(cont, i)) {
+            pt_Hole *h = (pt_Hole *)cont->children[i];
+            char    *lit = ptC_freshscratch(S, h->data, (size_t)h->n);
+            cont->children[i] = (pt_Node *)lit;
+            ptH_free(S, h);
+        }
+    }
+    memset(cont->mask, 0, sizeof(cont->mask));
+}
+
+/* non-recursive mask-guided walk (仿 advance 上升下降). */
+static void ptC_freeze(pt_State *S, pt_Tree *tree) {
+    pt_Node *stk[PT_MAX_LEVEL], *p, *cont;
+    int      ix[PT_MAX_LEVEL];
+    int      k, l;
+    if (tree->levels == 0) {
+        ptC_freezeleaf(S, &tree->root);
+        return;
+    }
+    stk[0] = &tree->root;
+    ix[0] = 0;
+    l = 0;
+    while (l >= 0) {
+        p = stk[l];
+        if (ix[l] >= (int)p->child_count) {
+            --l;
+            continue;
+        }
+        k = ix[l]++;
+        if (!ptM_ishole(p, k)) continue;
+        if (l == (int)tree->levels - 1) {
+            cont = p->children[k];
+            ptC_freezeleaf(S, cont);
+            ptM_sethole(p, k, 0);
+        } else {
+            ptM_sethole(p, k, 0);
+            stk[++l] = p->children[k];
+            ix[l] = 0;
+        }
+    }
+}
+
+PT_API pt_Blob pt_commit(pt_Cursor *c) {
+    pt_State *S;
+    size_t    total;
+    if (c == NULL || c->tree == NULL) return NULL;
+    if (!c->dirty) {
+        pt_retain(c->tree);
+        return c->tree;
+    }
+    S = c->tree->S;
+    total = ptC_holebytes(c->tree);                 /* 相0 测量 */
+    if (total > 0 && !ptC_reservescratch(S, total)) /* 相1 全或无闸门 */
+        return NULL;
+    ptC_freeze(S, c->tree); /* 相2 冻结（不可失败） */
+    c->dirty = 0;
+    return c->tree;
 }
 
 PT_API void pt_rollback(pt_Cursor *c) {
-    if (c == NULL || c->snap == NULL || !c->dirty) return;
-    c->dirty = 0, pt_release(c->snap);
-    c->snap = c->oldsnap, c->oldsnap = NULL;
+    pt_Tree *from;
+    if (c == NULL || c->tree == NULL || !c->dirty) return;
+    if ((from = c->tree->from) != NULL && from->refc == 1)
+        from = NULL; /* source dies with transient -> invalidate cursor */
+    pt_release(c->tree);
+    c->tree = from, c->dirty = 0; /* return to source, or NULL if it died */
 }
 
 PT_API pt_Alloc *pt_getallocf(pt_State *S, void **pud) {
@@ -1241,28 +598,1105 @@ PT_API pt_Alloc *pt_getallocf(pt_State *S, void **pud) {
     return S->allocf;
 }
 
-PT_API pt_Chars *pt_getcharsf(pt_State *S, void **pud) {
-    if (S == NULL) return NULL;
-    if (pud) *pud = S->chars_ud;
-    return S->charsf;
+PT_API size_t pt_bytes(pt_Blob b) { return b ? b->bytes : 0; }
+
+/* locate */
+
+#define ptK_levels(C) ((int)(C)->tree->levels)
+#define ptK_bytes(C)  ((C)->tree->bytes)
+
+#define ptK_parent(C, l) ((l) > 0 ? *(C)->paths[(l) - 1] : &(C)->tree->root)
+#define ptK_idx(C, p, l) ((int)((C)->paths[(l)] - (p)->children))
+
+static void ptK_findleaf(pt_Cursor *C, int l, size_t *poff) {
+    for (; l <= ptK_levels(C); ++l) {
+        pt_Node *p = ptK_parent(C, l);
+        int      i;
+        for (i = 0; i < (int)p->child_count && *poff >= p->bytes[i]; ++i)
+            *poff -= p->bytes[i], C->off += p->bytes[i];
+        C->paths[l] = &p->children[i];
+    }
 }
 
-PT_API pt_Lines *pt_getlinesf(pt_State *S, void **pud) {
-    if (S == NULL) return NULL;
-    if (pud) *pud = S->lines_ud;
-    return S->linesf;
+static void ptK_locend(pt_Cursor *C) {
+    pt_Node *n = &C->tree->root;
+    int      l, last;
+    for (l = 0; l < ptK_levels(C); ++l)
+        n = *(C->paths[l] = &n->children[n->child_count - 1]);
+    if (n->child_count == 0) {
+        C->paths[0] = n->children, C->off = 0, C->poff = 0;
+        return;
+    }
+    last = n->child_count - 1, C->paths[l] = &n->children[last];
+    C->poff = n->bytes[last], C->off = ptK_bytes(C) - C->poff;
 }
 
-PT_API void pt_setcharsf(pt_State *S, pt_Chars *charsf, void *ud) {
-    if (S == NULL) return;
-    if (charsf == NULL) charsf = &ptS_defcharsf;
-    S->charsf = charsf, S->chars_ud = ud;
+PT_API int pt_seek(pt_Cursor *C, pt_Blob b, pt_Offset off) {
+    size_t n;
+    if (C == NULL || b == NULL) return PT_ERRPARAM;
+    n = (size_t)pt_min(pt_max(0, off), (pt_Offset)b->bytes);
+    memset(C, 0, sizeof(pt_Cursor)), C->tree = (pt_Tree *)b;
+    if (n >= b->bytes) return ptK_locend(C), PT_OK;
+    return ptK_findleaf(C, 0, &n), (C->poff = (pt_Size)n), PT_OK;
 }
 
-PT_API void pt_setlinesf(pt_State *S, pt_Lines *linesf, void *ud) {
-    if (S == NULL) return;
-    if (linesf == NULL) linesf = &ptS_deflinesf;
-    S->linesf = linesf, S->lines_ud = ud;
+static int ptK_forwardoff(pt_Cursor *C, size_t d) {
+    pt_Node *p = ptK_parent(C, ptK_levels(C));
+    int      l, i = ptK_idx(C, p, ptK_levels(C));
+    size_t   in = p->bytes[i] - C->poff;
+    if (d < in) return C->poff += d, 0;
+    d -= in, C->off += p->bytes[i], C->poff = 0;
+    for (l = ptK_levels(C); l >= 0; --l) {
+        p = ptK_parent(C, l), i = ptK_idx(C, p, l) + 1;
+        for (; i < (int)p->child_count && d >= p->bytes[i]; ++i)
+            d -= p->bytes[i], C->off += p->bytes[i];
+        if (i < (int)p->child_count) break;
+    }
+    assert(l >= 0 && i < (int)p->child_count);
+    C->paths[l] = &p->children[i];
+    return ptK_findleaf(C, l + 1, &d), C->poff = (pt_Size)d, 1;
+}
+
+static int ptK_backwardoff(pt_Cursor *C, size_t d) {
+    pt_Node *p;
+    int      l, i;
+    if (d <= C->poff) return C->poff -= d, 0;
+    d -= C->poff, C->poff = 0;
+    for (l = ptK_levels(C); l >= 0; --l) {
+        p = ptK_parent(C, l), i = ptK_idx(C, p, l) - 1;
+        for (; i >= 0 && d > p->bytes[i]; --i)
+            d -= p->bytes[i], C->off -= p->bytes[i];
+        if (i >= 0) break;
+    }
+    assert(l >= 0 && i >= 0), d = p->bytes[i] - d, C->off -= p->bytes[i];
+    C->paths[l] = &p->children[i];
+    return ptK_findleaf(C, l + 1, &d), C->poff = (pt_Size)d, 1;
+}
+
+PT_API int pt_advance(pt_Cursor *C, pt_Offset delta) {
+    pt_Offset n;
+    if (C == NULL || C->tree == NULL) return PT_ERRPARAM;
+    if (delta == 0 || ptK_bytes(C) == 0) return PT_OK;
+    n = (pt_Offset)(C->off + C->poff) + delta;
+    if (n <= 0) return ptK_backwardoff(C, C->off + C->poff), PT_OK;
+    if ((size_t)n >= ptK_bytes(C)) return ptK_locend(C), PT_OK;
+    if (delta < 0) return ptK_backwardoff(C, (size_t)(-delta)), PT_OK;
+    return ptK_forwardoff(C, (size_t)delta), PT_OK;
+}
+
+/* editing helpers */
+
+typedef ptrdiff_t pt_Diff;
+
+/* makeroom needs at most 2 free slots; a split of a full node leaves
+ * FANOUT/2 free in the cursor's half, so require FANOUT >= 4. */
+PT_STATIC_ASSERT(PT_FANOUT >= 4);
+
+PT_STATIC size_t ptN_sumbytes(const pt_Node *n, int i, int end) {
+    size_t s = 0;
+    for (; i < end; ++i) s += n->bytes[i];
+    return s;
+}
+
+static void ptM_upbytes(pt_Cursor *C, int l, pt_Diff db) {
+    if (db == 0) return;
+    for (; l >= 0; --l) {
+        pt_Node *p = ptK_parent(C, l);
+        int      i = ptK_idx(C, p, l);
+        p->bytes[i] += (size_t)db;
+    }
+    C->tree->bytes += (size_t)db;
+}
+
+static void ptN_makespace(pt_Node *p, int i, int n) {
+    int moved = p->child_count - i, j;
+    assert(p->child_count + n <= PT_FANOUT && i <= p->child_count);
+    memmove(&p->children[i + n], &p->children[i], moved * sizeof(pt_Node *));
+    memmove(&p->bytes[i + n], &p->bytes[i], moved * sizeof(pt_Size));
+    for (j = moved - 1; j >= 0; --j) {
+        if (ptM_ishole(p, i + j))
+            ptM_sethole(p, i + j + n, 1), ptM_sethole(p, i + j, 0);
+    }
+    p->child_count += (unsigned short)n;
+}
+
+static void ptN_delslot(pt_Node *p, int k) {
+    int moved = p->child_count - k - 1, j;
+    memmove(&p->children[k], &p->children[k + 1], moved * sizeof(pt_Node *));
+    memmove(&p->bytes[k], &p->bytes[k + 1], moved * sizeof(pt_Size));
+    for (j = 0; j < moved; ++j) ptM_sethole(p, k + j, ptM_ishole(p, k + j + 1));
+    p->child_count -= 1;
+}
+
+PT_STATIC void ptN_copy(pt_Node *d, int di, const pt_Node *s, int si, int n) {
+    int j;
+    memcpy(&d->children[di], &s->children[si], (size_t)n * sizeof(pt_Node *));
+    memcpy(&d->bytes[di], &s->bytes[si], (size_t)n * sizeof(pt_Size));
+    for (j = 0; j < n; ++j) ptM_sethole(d, di + j, ptM_ishole(s, si + j));
+}
+
+PT_STATIC void ptN_delrange(pt_Node *p, int s, int e) {
+    int moved = p->child_count - e, j;
+    assert(s <= e && e <= (int)p->child_count);
+    memmove(&p->children[s], &p->children[e],
+            (size_t)moved * sizeof(pt_Node *));
+    memmove(&p->bytes[s], &p->bytes[e], (size_t)moved * sizeof(pt_Size));
+    for (j = 0; j < moved; ++j) ptM_sethole(p, s + j, ptM_ishole(p, e + j));
+    p->child_count -= (unsigned short)(e - s);
+}
+
+PT_STATIC void ptH_free(pt_State *S, pt_Hole *h) { ptP_free(&S->holes, h); }
+
+PT_STATIC void ptH_trimhead(pt_Hole *h, size_t cut) {
+    size_t remain = (size_t)h->n - cut;
+    memmove(h->data, h->data + cut, remain);
+    h->n = (unsigned short)remain;
+}
+
+PT_STATIC void ptH_trimtail(pt_Hole *h, size_t keep) {
+    h->n = (unsigned short)keep;
+}
+
+PT_STATIC void ptH_append(pt_Hole *h, const char *s, size_t len) {
+    assert((size_t)h->n + len <= PT_MAX_HOLESIZE);
+    memcpy(h->data + h->n, s, len);
+    h->n = (unsigned short)((size_t)h->n + len);
+}
+
+PT_STATIC void ptH_insmid(pt_Hole *h, size_t poff, const char *s, size_t len) {
+    assert(poff <= (size_t)h->n && (size_t)h->n + len <= PT_MAX_HOLESIZE);
+    memmove(h->data + poff + len, h->data + poff, (size_t)h->n - poff);
+    memcpy(h->data + poff, s, len);
+    h->n = (unsigned short)((size_t)h->n + len);
+}
+
+PT_STATIC pt_Hole *ptH_new(pt_State *S, const char *s, size_t len) {
+    pt_Hole *h = (pt_Hole *)ptP_alloc(S, &S->holes);
+    assert(h && len <= PT_MAX_HOLESIZE);
+    h->n = (unsigned short)len;
+    memcpy(h->data, s, len);
+    return h;
+}
+
+PT_STATIC void ptH_delmid(pt_Hole *h, size_t a, size_t b) {
+    size_t nbytes = (size_t)h->n - b;
+    size_t remain = (size_t)h->n - (b - a);
+    memmove(h->data + a, h->data + b, nbytes);
+    h->n = (unsigned short)remain;
+}
+
+static int ptK_fork(pt_Cursor *C) {
+    pt_State *S = C->tree->S;
+    pt_Tree  *old = C->tree, *nb;
+    int       i;
+    if (C->dirty) return PT_OK;
+    nb = (pt_Tree *)S->allocf(S->alloc_ud, NULL, 0, sizeof(pt_Tree));
+    if (!nb) return PT_ERRMEM;
+    *nb = *old; /* copy root; children shared until cowpath */
+    nb->version = ++S->max_version;
+    nb->root.version = nb->version;
+    nb->refc = 1;
+    nb->from = old, pt_retain(old); /* keep source alive: COW lifetime */
+    /* deep-copy holes in root so each tree owns its copies (levels==0) */
+    if (nb->levels == 0)
+        for (i = 0; i < (int)nb->root.child_count; ++i)
+            if (ptM_ishole(&old->root, i)) {
+                pt_Hole *nh = (pt_Hole *)ptP_alloc(S, &S->holes);
+                *nh = *(pt_Hole *)old->root.children[i];
+                nb->root.children[i] = (pt_Node *)nh;
+            }
+    C->paths[0] = nb->root.children + (C->paths[0] - old->root.children);
+    C->tree = nb, C->dirty = 1;
+    return PT_OK; /* paths[1..levels] rebased later by cowpath */
+}
+
+static pt_Node *ptK_cownode(
+        pt_Cursor *C, pt_Node **slot, pt_Node **old, int rl) {
+    pt_State *S = C->tree->S;
+    pt_Node  *child = *slot, *nw;
+    int       i;
+    *old = child;
+    if (child->version == C->tree->version) return child;
+    nw = (pt_Node *)ptP_ralloc(&S->nodes);
+    *nw = *child, nw->version = C->tree->version;
+    /* deep-copy holes in leaf data (rl==0: children are leaf data) */
+    if (rl == 0)
+        for (i = 0; i < (int)nw->child_count; ++i)
+            if (ptM_ishole(nw, i)) {
+                pt_Hole *nh = (pt_Hole *)ptP_alloc(S, &S->holes);
+                *nh = *(pt_Hole *)child->children[i];
+                nw->children[i] = (pt_Node *)nh;
+            }
+    return (*slot = nw);
+}
+
+static void ptK_cowpath(pt_Cursor *C) {
+    int l;
+    for (l = 0; l < ptK_levels(C); ++l) {
+        int      rl = ptK_levels(C) - 1 - l;
+        pt_Node *old, *nw = ptK_cownode(C, C->paths[l], &old, rl);
+        if (nw != old)
+            C->paths[l + 1] = nw->children + (C->paths[l + 1] - old->children);
+    }
+}
+
+PT_STATIC int ptK_cowedit(pt_Cursor *C, pt_Cursor *R) {
+    int l, levels = ptK_levels(C);
+    int fl;
+    for (l = 0; l < levels && C->paths[l] == R->paths[l]; ++l) {
+        int      rl = levels - 1 - l;
+        pt_Node *old, *nw = ptK_cownode(C, C->paths[l], &old, rl);
+        if (nw != old) {
+            C->paths[l + 1] = nw->children + (C->paths[l + 1] - old->children);
+            R->paths[l + 1] = nw->children + (R->paths[l + 1] - old->children);
+        }
+    }
+    fl = l;
+    for (l = fl; l < levels; ++l) {
+        int      rl = levels - 1 - l;
+        pt_Node *old, *nw = ptK_cownode(C, C->paths[l], &old, rl);
+        if (nw != old)
+            C->paths[l + 1] = nw->children + (C->paths[l + 1] - old->children);
+    }
+    for (l = fl; l < levels; ++l) {
+        int      rl = levels - 1 - l;
+        pt_Node *old, *nw = ptK_cownode(R, R->paths[l], &old, rl);
+        if (nw != old)
+            R->paths[l + 1] = nw->children + (R->paths[l + 1] - old->children);
+    }
+    return fl;
+}
+
+static void ptM_movebits(pt_Node *dst, pt_Node *src, int from, int n) {
+    int j;
+    for (j = 0; j < n; ++j) ptM_sethole(dst, j, ptM_ishole(src, from + j));
+}
+
+static void ptM_setsubmask(pt_Node *p, int i, const pt_Node *child) {
+    size_t w;
+    for (w = 0; w < PT_MASK_SIZE; ++w)
+        if (child->mask[w]) {
+            ptM_sethole(p, i, 1);
+            return;
+        }
+    ptM_sethole(p, i, 0);
+}
+
+static void ptM_upmask(pt_Cursor *C) {
+    int l;
+    for (l = ptK_levels(C) - 1; l >= 0; --l) {
+        pt_Node *p = ptK_parent(C, l);
+        pt_Node *c = ptK_parent(C, l + 1);
+        ptM_setsubmask(p, ptK_idx(C, p, l), c);
+    }
+}
+
+static void ptI_splitnode(pt_Cursor *C, int l) {
+    pt_State *S = C->tree->S;
+    int       rl = ptK_levels(C) - 1 - l;
+    pt_Node  *o, *nw, *nd = ptK_cownode(C, C->paths[l], &o, rl), *p;
+    int       i, cs, mid = nd->child_count / 2, nc = nd->child_count - mid;
+    if (nd != o)
+        C->paths[l + 1] = nd->children + (C->paths[l + 1] - o->children);
+    p = ptK_parent(C, l), i = ptK_idx(C, p, l);
+    nw = (pt_Node *)ptP_ralloc(&S->nodes), nw->version = C->tree->version;
+    memset(nw->mask, 0, sizeof(nw->mask));
+    memcpy(nw->children, &nd->children[mid], (size_t)nc * sizeof(pt_Node *));
+    memcpy(nw->bytes, &nd->bytes[mid], (size_t)nc * sizeof(pt_Size));
+    ptM_movebits(nw, nd, mid, nc);
+    nw->child_count = (unsigned short)nc, nd->child_count = (unsigned short)mid;
+    ptN_makespace(p, i + 1, 1), p->children[i + 1] = nw;
+    p->bytes[i] = ptN_sumbytes(nd, 0, mid);
+    p->bytes[i + 1] = ptN_sumbytes(nw, 0, nc);
+    ptM_setsubmask(p, i, nd), ptM_setsubmask(p, i + 1, nw);
+    cs = (int)(C->paths[l + 1] - nd->children);
+    if (cs >= mid)
+        C->paths[l] = &p->children[i + 1],
+        C->paths[l + 1] = &nw->children[cs - mid];
+}
+
+static void ptI_splitroot(pt_Cursor *C) {
+    pt_State *S = C->tree->S;
+    pt_Node  *root = &C->tree->root, save = *root;
+    pt_Node  *pp = (pt_Node *)ptP_ralloc(&S->nodes);
+    pt_Node  *nw = (pt_Node *)ptP_ralloc(&S->nodes);
+    int       i = ptK_idx(C, root, 0), mid = save.child_count / 2;
+    int       nc = save.child_count - mid;
+    *pp = save, pp->child_count = (unsigned short)mid;
+    for (nc = mid; nc < (int)save.child_count; ++nc) ptM_sethole(pp, nc, 0);
+    nc = save.child_count - mid;
+    memset(nw->mask, 0, sizeof(nw->mask));
+    memcpy(nw->children, &save.children[mid], (size_t)nc * sizeof(pt_Node *));
+    memcpy(nw->bytes, &save.bytes[mid], (size_t)nc * sizeof(pt_Size));
+    ptM_movebits(nw, &save, mid, nc);
+    nw->child_count = (unsigned short)nc;
+    pp->version = nw->version = C->tree->version;
+    root->children[0] = pp, root->children[1] = nw, root->child_count = 2;
+    root->bytes[0] = ptN_sumbytes(pp, 0, mid);
+    root->bytes[1] = C->tree->bytes - root->bytes[0];
+    ptM_setsubmask(root, 0, pp), ptM_setsubmask(root, 1, nw);
+    C->tree->levels++;
+    memmove(C->paths + 1, C->paths, C->tree->levels * sizeof(pt_Node **));
+    C->paths[0] = &root->children[i >= mid];
+    C->paths[1] = &(*C->paths[0])->children[i < mid ? i : i - mid];
+}
+
+/* Ensure the cursor's leaf node has `need` free slots, splitting full
+ * ancestors down the path (or growing the root). The loop's last pass
+ * (l=levels-1) splits the leaf node too (a pt_Node); pieces are atomic. */
+static void ptI_makeroom(pt_Cursor *C, int need) {
+    int l;
+    for (l = ptK_levels(C); l >= 0; --l)
+        if ((int)ptK_parent(C, l)->child_count + need <= PT_FANOUT) break;
+    if (l < 0) {
+        ptI_splitroot(C);
+        l = 1;
+    }
+    for (; l < ptK_levels(C); ++l) ptI_splitnode(C, l);
+}
+
+static void ptI_onepiece(pt_Cursor *C, const char *s, size_t len) {
+    pt_Node *root = &C->tree->root;
+    root->children[0] = (pt_Node *)s, root->bytes[0] = (pt_Size)len;
+    root->child_count = 1, ptM_sethole(root, 0, 0);
+    C->tree->bytes = (pt_Size)len;
+    C->paths[0] = &root->children[0], C->off = 0, C->poff = 0;
+}
+
+/* split the cursor's leaf piece i into [0,poff) at i and [poff,len) at i+1,
+ * returning the index i+1 where a new literal is to be inserted between. */
+static int ptI_midsplit(pt_Cursor *C, pt_Node *p, int i) {
+    ptN_makespace(p, i + 1, 1);
+    p->bytes[i + 1] = p->bytes[i] - C->poff, p->bytes[i] = C->poff;
+    p->children[i + 1] = (pt_Node *)((char *)p->children[i] + C->poff);
+    return ptM_sethole(p, i + 1, 0), i + 1;
+}
+
+/* insert first hole into an empty tree */
+static void ptH_onepiece(pt_Cursor *C, const char *s, size_t len) {
+    pt_State *S = C->tree->S;
+    pt_Node  *root = &C->tree->root;
+    pt_Hole  *h = ptH_new(S, s, len);
+    root->children[0] = (pt_Node *)h;
+    root->bytes[0] = (pt_Size)len;
+    root->child_count = 1;
+    ptM_sethole(root, 0, 1);
+    C->tree->bytes = (pt_Size)len;
+    C->paths[0] = &root->children[0];
+    C->off = 0;
+    C->poff = (pt_Size)len;
+}
+
+/* insert a fresh hole slot at cursor position, reusing ptI machine.
+   pre: tree non-empty, C->dirty, reserves already held */
+static void ptH_putslot(pt_Cursor *C, const char *s, size_t len) {
+    pt_State *S = C->tree->S;
+    pt_Node  *p;
+    int       l, i, ins, mid;
+    pt_Offset off0 = (pt_Offset)(C->off + C->poff);
+    l = ptK_levels(C);
+    p = ptK_parent(C, l);
+    i = ptK_idx(C, p, l);
+    mid = (C->poff > 0 && C->poff < p->bytes[i]);
+    assert(!mid || !ptM_ishole(p, i)); /* 开放点1: midsplit 对 hole 不成立 */
+    ptI_makeroom(C, mid ? 2 : 1);
+    l = ptK_levels(C);
+    p = ptK_parent(C, l);
+    i = ptK_idx(C, p, l);
+    ins = mid ? ptI_midsplit(C, p, i) : i + (C->poff > 0);
+    ptN_makespace(p, ins, 1);
+    {
+        pt_Hole *h = ptH_new(S, s, len);
+        p->children[ins] = (pt_Node *)h;
+        p->bytes[ins] = (pt_Size)len;
+        ptM_sethole(p, ins, 1);
+    }
+    C->paths[l] = &p->children[ins];
+    ptM_upbytes(C, l - 1, (pt_Diff)len);
+    ptM_upmask(C); /* 开放点2: 插 hole 后必须传播 mask */
+    C->off = off0;
+    C->poff = (pt_Size)len;
+}
+
+/* split hole at cursor when n+len > CAP: left-orig + fresh + right, net +2
+   slots. pre: cursor in hole middle (0<poff<n), C->dirty, reserves held */
+static void ptH_splitins(pt_Cursor *C, const char *s, size_t len) {
+    pt_State *S = C->tree->S;
+    pt_Node  *p;
+    pt_Hole  *h, *rh, *nh;
+    size_t    poff, n;
+    int       l, i;
+    pt_Offset off0 = (pt_Offset)(C->off + C->poff);
+    l = ptK_levels(C);
+    p = ptK_parent(C, l);
+    i = ptK_idx(C, p, l);
+    h = (pt_Hole *)p->children[i];
+    n = (size_t)h->n;
+    poff = C->poff;
+    rh = ptH_new(S, h->data + poff, n - poff); /* right half */
+    h->n = (unsigned short)poff;               /* left half shrunk */
+    p->bytes[i] = (pt_Size)poff;
+    ptI_makeroom(C, 2);
+    l = ptK_levels(C);
+    p = ptK_parent(C, l);
+    i = ptK_idx(C, p, l);
+    ptN_makespace(p, i + 1, 2);
+    nh = ptH_new(S, s, len); /* fresh middle */
+    p->children[i + 1] = (pt_Node *)nh;
+    p->bytes[i + 1] = (pt_Size)len;
+    ptM_sethole(p, i + 1, 1);
+    p->children[i + 2] = (pt_Node *)rh;
+    p->bytes[i + 2] = (pt_Size)(n - poff);
+    ptM_sethole(p, i + 2, 1);
+    C->paths[l] = &p->children[i + 1];
+    ptM_upbytes(C, l - 1, (pt_Diff)len);
+    ptM_upmask(C);
+    C->off = off0;
+    C->poff = (pt_Size)len;
+}
+
+/* hole insert dispatcher: 4 branches A/B/C/D.
+   pre: C->dirty, reserves already held, tree non-empty.
+   post: cursor at insertion end (off+poff increased by len). */
+static void ptH_insert(pt_Cursor *C, const char *s, size_t len) {
+    pt_Node *p;
+    int      l, i;
+    size_t   n;
+    assert(C->dirty);
+    if (C->tree->root.child_count == 0) {
+        ptH_onepiece(C, s, len);
+        return;
+    }
+    l = ptK_levels(C);
+    p = ptK_parent(C, l);
+    i = ptK_idx(C, p, l);
+    /* A: current piece is a hole, cursor at tail, fits */
+    if (ptM_ishole(p, i) && C->poff == p->bytes[i]) {
+        pt_Hole *h = (pt_Hole *)p->children[i];
+        if ((size_t)h->n + len <= PT_MAX_HOLESIZE) {
+            ptH_append(h, s, len);
+            p->bytes[i] = h->n;
+            C->poff += (pt_Size)len;
+            ptM_upbytes(C, l - 1, (pt_Diff)len);
+            ptM_upmask(C);
+            return;
+        }
+        /* hole full -> fall through to D (fresh slot) */
+    }
+    /* B: cursor in hole middle */
+    if (ptM_ishole(p, i) && C->poff > 0 && C->poff < p->bytes[i]) {
+        pt_Hole *h = (pt_Hole *)p->children[i];
+        n = (size_t)h->n;
+        if (n + len <= PT_MAX_HOLESIZE) {
+            ptH_insmid(h, C->poff, s, len);
+            p->bytes[i] = h->n;
+            C->poff += (pt_Size)len;
+            ptM_upbytes(C, l - 1, (pt_Diff)len);
+            ptM_upmask(C);
+            return;
+        }
+        ptH_splitins(C, s, len);
+        return;
+    }
+    /* C: poff==0 and previous piece is a hole that fits */
+    if (C->poff == 0 && i > 0 && ptM_ishole(p, i - 1)) {
+        pt_Hole *prev = (pt_Hole *)p->children[i - 1];
+        if ((size_t)prev->n + len <= PT_MAX_HOLESIZE) {
+            ptH_append(prev, s, len);
+            p->bytes[i - 1] = prev->n;
+            C->paths[l] = &p->children[i - 1];
+            C->poff = prev->n;
+            C->off -= p->bytes[i - 1] - (pt_Size)len;
+            ptM_upbytes(C, l - 1, (pt_Diff)len);
+            ptM_upmask(C);
+            return;
+        }
+        /* prev hole full -> fall through to D */
+    }
+    /* D: fresh hole slot */
+    ptH_putslot(C, s, len);
+}
+
+static int ptK_beginedit(pt_Cursor *C, size_t need) {
+    int r;
+    if (!ptP_reserve(C->tree->S, &C->tree->S->nodes, need)) return PT_ERRMEM;
+    if ((r = ptK_fork(C)) != PT_OK) return r;
+    return ptK_cowpath(C), PT_OK;
+}
+
+static void ptR_cutpiece(
+        pt_Cursor *C, pt_Node *p, int i, size_t lo, size_t hi) {
+    pt_State *S = C->tree->S;
+    size_t    len = p->bytes[i];
+    if (ptM_ishole(p, i)) {
+        pt_Hole *h = (pt_Hole *)p->children[i];
+        ptH_delmid(h, lo, hi);
+        p->bytes[i] = h->n;
+        if (h->n == 0) {
+            ptH_free(S, h);
+            ptN_delslot(p, i);
+            if (ptK_idx(C, p, ptK_levels(C)) > i) C->paths[ptK_levels(C)] -= 1;
+        }
+        return;
+    }
+    if (lo == 0 && hi == len) {
+        ptN_delslot(p, i);
+        if (ptK_idx(C, p, ptK_levels(C)) > i) C->paths[ptK_levels(C)] -= 1;
+    } else if (lo == 0) {
+        p->children[i] = (pt_Node *)((char *)p->children[i] + hi);
+        p->bytes[i] = len - hi;
+    } else if (hi == len) {
+        p->bytes[i] = lo;
+    } else {
+        ptN_makespace(p, i + 1, 1);
+        p->bytes[i] = lo;
+        p->children[i + 1] = (pt_Node *)((char *)p->children[i] + hi);
+        p->bytes[i + 1] = len - hi;
+        ptM_sethole(p, i + 1, 0);
+    }
+}
+
+static void ptR_rebalance(pt_Cursor *C, int l);
+
+static void ptR_eraseleaf(pt_Cursor *C, pt_Cursor *R) {
+    pt_State *S = C->tree->S;
+    int       l = ptK_levels(C), dF, dE, j;
+    pt_Node  *p = ptK_parent(C, l);
+    int       iL = ptK_idx(C, p, l), iR = ptK_idx(R, p, l);
+    size_t    pL = C->poff, pR = R->poff;
+    size_t    de = (size_t)(pt_offset(R) - pt_offset(C));
+    if (iL == iR) {
+        ptR_cutpiece(C, p, iL, pL, pR);
+        if (p->child_count == 0) {
+            C->paths[l] = &p->children[0];
+            C->off = 0;
+            C->poff = 0;
+        }
+        ptM_upbytes(C, l - 1, -(pt_Diff)de);
+        return;
+    }
+    if (pL > 0) {
+        if (ptM_ishole(p, iL))
+            ((pt_Hole *)p->children[iL])->n = (unsigned short)pL;
+        p->bytes[iL] = pL;
+        dF = iL + 1;
+    } else {
+        if (ptM_ishole(p, iL)) ptH_free(S, (pt_Hole *)p->children[iL]);
+        dF = iL;
+    }
+    for (j = iL + 1; j < iR; ++j)
+        if (ptM_ishole(p, j)) ptH_free(S, (pt_Hole *)p->children[j]);
+    if (pR > 0 && pR < p->bytes[iR]) {
+        if (ptM_ishole(p, iR))
+            ptH_trimhead((pt_Hole *)p->children[iR], pR);
+        else
+            p->children[iR] = (pt_Node *)((char *)p->children[iR] + pR);
+        p->bytes[iR] -= pR;
+        dE = iR;
+    } else if (pR == p->bytes[iR]) {
+        if (ptM_ishole(p, iR)) ptH_free(S, (pt_Hole *)p->children[iR]);
+        dE = iR + 1;
+    } else {
+        dE = iR;
+    }
+    ptN_delrange(p, dF, dE);
+    ptM_upbytes(C, l - 1, -(pt_Diff)de);
+    if (p->child_count == 0) {
+        C->paths[l] = &p->children[0];
+        C->off = 0;
+        C->poff = 0;
+    } else if (pL == 0) {
+        if (dF >= (int)p->child_count)
+            ptK_locend(C);
+        else {
+            C->paths[l] = &p->children[dF];
+            C->poff = 0;
+        }
+    } else {
+        C->poff = pL;
+    }
+    if (l > 0) {
+        ptR_rebalance(C, l - 1);
+        ptM_upmask(C);
+    }
+}
+
+/* === cross-leaf container deletion helpers === */
+
+static void ptR_erasechildren(
+        pt_State *S, pt_Node *p, int rl, int s, int e, unsigned ver) {
+    int j;
+    if (rl == 0) {
+        for (j = s; j < e; ++j)
+            if (ptM_ishole(p, j)) ptP_free(&S->holes, (void *)p->children[j]);
+    } else {
+        for (j = s; j < e; ++j) {
+            pt_Node *c = (pt_Node *)p->children[j];
+            if (c->version == ver) {
+                ptR_freechildren(S, c, rl - 1, ver);
+                ptP_free(&S->nodes, c);
+            }
+        }
+    }
+    ptN_delrange(p, s, e);
+}
+
+static void ptR_trimright(pt_Cursor *L, int l) {
+    pt_State *S = L->tree->S;
+    pt_Node  *p = ptK_parent(L, l);
+    int       i = ptK_idx(L, p, l);
+    size_t    poff = L->poff;
+    int       cc = (int)p->child_count;
+    int       keep = i + (poff > 0 ? 1 : 0);
+    int       j;
+    size_t    db = ptN_sumbytes(p, i, cc) - poff;
+
+    if (poff > 0) {
+        if (ptM_ishole(p, i))
+            ((pt_Hole *)p->children[i])->n = (unsigned short)poff;
+        p->bytes[i] = poff;
+    }
+    /* when poff==0: loop below frees holes from index keep(=i) onward */
+    for (j = keep; j < cc; ++j)
+        if (ptM_ishole(p, j)) ptH_free(S, (pt_Hole *)p->children[j]);
+    p->child_count = (unsigned short)keep;
+    ptM_upbytes(L, l - 1, -(pt_Diff)db);
+}
+
+static void ptR_trimleft(pt_Cursor *R, int l) {
+    pt_State *S = R->tree->S;
+    pt_Node  *p = ptK_parent(R, l);
+    int       i = ptK_idx(R, p, l);
+    size_t    poff = R->poff;
+    int       delStart;
+    int       j;
+    size_t    db;
+
+    if (poff > 0 && poff < p->bytes[i]) {
+        if (ptM_ishole(p, i))
+            ptH_trimhead((pt_Hole *)p->children[i], poff);
+        else
+            p->children[i] = (pt_Node *)((char *)p->children[i] + poff);
+        p->bytes[i] -= poff;
+        delStart = i;
+        db = ptN_sumbytes(p, 0, i) + poff;
+    } else if (poff == p->bytes[i]) {
+        if (ptM_ishole(p, i)) ptH_free(S, (pt_Hole *)p->children[i]);
+        delStart = i + 1;
+        db = ptN_sumbytes(p, 0, i + 1);
+    } else {
+        delStart = i;
+        db = ptN_sumbytes(p, 0, i);
+    }
+    for (j = 0; j < delStart; ++j)
+        if (ptM_ishole(p, j)) ptH_free(S, (pt_Hole *)p->children[j]);
+    if (delStart > 0) ptN_delrange(p, 0, delStart);
+    ptM_upbytes(R, l - 1, -(pt_Diff)db);
+}
+
+static void ptR_cutrange(pt_Cursor *L, pt_Cursor *R, pt_Node *rt, int fl) {
+    pt_State *S = L->tree->S;
+    int       lvls = ptK_levels(L);
+    unsigned  ver = L->tree->version;
+    int       kl, k;
+
+    for (kl = lvls - 1; kl > fl; --kl) {
+        pt_Node *p;
+        int      i, cc;
+        size_t   db;
+
+        p = ptK_parent(L, kl), i = ptK_idx(L, p, kl), cc = (int)p->child_count;
+        db = ptN_sumbytes(p, i + 1, cc);
+        ptM_upbytes(L, kl - 1, -(pt_Diff)db);
+        ptR_erasechildren(S, p, lvls - kl, i + 1, cc, ver);
+
+        k = (lvls - 1) - kl;
+        p = ptK_parent(R, kl), i = ptK_idx(R, p, kl), cc = (int)p->child_count;
+        rt[k].child_count = (unsigned short)(cc - i);
+        ptN_copy(&rt[k], 0, p, i, (int)rt[k].child_count);
+        ptR_erasechildren(S, p, lvls - kl, 0, i, ver);
+        memset(p->bytes, 0, (size_t)cc * sizeof(pt_Size));
+        p->child_count = 0;
+    }
+    /* divergence level fl */
+    {
+        pt_Node *p = ptK_parent(R, fl);
+        int      i = ptK_idx(R, p, fl);
+        int      cc = (int)p->child_count;
+        int      rl = lvls - fl;
+        pt_Size  occ = (pt_Size)cc;
+        size_t   db;
+
+        k = (lvls - 1) - fl;
+        rt[k].child_count = (unsigned short)(cc - i);
+        ptN_copy(&rt[k], 0, p, i, (int)rt[k].child_count);
+        /* correct rt bytes: children may have been emptied by loops above */
+        {
+            int _j;
+            for (_j = 0; _j < (int)rt[k].child_count; ++_j) {
+                pt_Node *_ch = (pt_Node *)rt[k].children[_j];
+                rt[k].bytes[_j] = ptN_sumbytes(_ch, 0, (int)_ch->child_count);
+            }
+        }
+        p->child_count = (unsigned short)i;
+        /* L side at fl: delete middle [iL+1..i) */
+
+        i = ptK_idx(L, p, fl);
+        cc = (int)p->child_count;
+        db = ptN_sumbytes(p, i + 1, (int)occ);
+        ptM_upbytes(L, fl - 1, -(pt_Diff)db);
+        ptR_erasechildren(S, p, rl, i + 1, cc, ver);
+    }
+}
+
+static int ptR_makechain(pt_Cursor *C, int from, int to) {
+    pt_Node *p, *nn;
+    int      l, r = 0;
+    if (from < 0) {
+        nn = (pt_Node *)ptP_ralloc(&C->tree->S->nodes);
+        p = &C->tree->root, *nn = *p;
+        p->bytes[0] = C->tree->bytes;
+        memset(p->mask, 0, sizeof(p->mask));
+        p->children[0] = nn, p->child_count = 1;
+        memmove(C->paths + to + 2, C->paths + to + 1,
+                (size_t)(ptK_levels(C) - to) * sizeof(pt_Node **));
+        C->tree->levels += 1, from = 0, to += 1, r = 1;
+    }
+    for (l = from; l < to; ++l) {
+        nn = (pt_Node *)ptP_ralloc(&C->tree->S->nodes);
+        p = ptK_parent(C, l), nn->child_count = 0;
+        nn->version = C->tree->version;
+        memset(nn->mask, 0, sizeof(nn->mask));
+        p->bytes[p->child_count] = 0;
+        p->children[p->child_count] = nn, p->child_count++;
+        C->paths[l] = &p->children[p->child_count - 1];
+    }
+    C->paths[to] = &nn->children[0];
+    return r;
+}
+
+static int ptR_findroom(pt_Cursor *C, pt_Node *rt, int l) {
+    int      i, fl, c;
+    pt_Node *p;
+    for (fl = l - 1; fl >= 0; --fl) {
+        p = ptK_parent(C, fl), i = ptK_idx(C, p, fl);
+        if (i < PT_FANOUT - 1) break;
+    }
+    if (fl >= 0 && (c = (int)p->child_count - i - 1) > 0) {
+        int    k = ptK_levels(C) - fl;
+        size_t db = ptN_sumbytes(p, i + 1, p->child_count);
+        ptM_upbytes(C, fl - 1, -(pt_Diff)db);
+        rt[k].child_count = 0;
+        ptN_copy(&rt[k], 0, p, i + 1, c);
+        p->child_count = (unsigned short)(i + 1);
+        rt[k].child_count = (unsigned short)c;
+    }
+    return ptR_makechain(C, fl, l);
+}
+
+static void ptR_backwardnode(pt_Cursor *C, int d, int l) {
+    pt_Node *p = ptK_parent(C, l);
+    int      dl, i = ptK_idx(C, p, l);
+    if (d > i) {
+        d -= i + 1, dl = l;
+        while (--dl >= 0 && ptK_idx(C, ptK_parent(C, dl), dl) == 0) continue;
+        assert(dl >= 0);
+        C->paths[dl] -= 1;
+        while (++dl <= l) {
+            p = ptK_parent(C, dl);
+            C->paths[dl] = &p->children[p->child_count - 1];
+        }
+    }
+    C->paths[l] -= d;
+}
+
+static void ptR_mergeleaf(pt_Cursor *L, pt_Node *rt) {
+    pt_State *S = L->tree->S;
+    int       lvls = ptK_levels(L);
+    pt_Node  *PL = ptK_parent(L, lvls);
+    pt_Node  *PR;
+    int       m;
+
+    if (rt[0].child_count == 0) return;
+    PR = (pt_Node *)rt[0].children[0];
+    if (PR->child_count == 0) return;
+    m = (int)pt_min(
+            (size_t)PR->child_count, (size_t)(PT_FANOUT - PL->child_count));
+    if (m > 0) {
+        ptN_copy(PL, (int)PL->child_count, PR, 0, m);
+        PL->child_count += (unsigned short)m;
+        ptM_upbytes(L, lvls - 1, (pt_Diff)ptN_sumbytes(PR, 0, m));
+    }
+    if (m == (int)PR->child_count) {
+        ptP_free(&S->nodes, PR);
+        ptN_delrange(&rt[0], 0, 1);
+    } else {
+        ptN_delrange(PR, 0, m);
+    }
+}
+
+static int ptR_checkstitch(pt_Cursor *C) {
+    return ptP_reserve(
+            C->tree->S, &C->tree->S->nodes, (size_t)ptK_levels(C) + 2);
+}
+
+static void ptR_stitchnode(pt_Cursor *L, pt_Node *rt) {
+    int k, d = 0, l = ptK_levels(L);
+    for (k = 0; k <= ptK_levels(L); ++k) {
+        int      kl = ptK_levels(L) - k;
+        int      rtcc = (int)rt[k].child_count;
+        int      m;
+        pt_Node *p;
+
+        rt[k].child_count = 0;
+        p = ptK_parent(L, kl);
+        m = (int)pt_min((size_t)rtcc, (size_t)(PT_FANOUT - p->child_count));
+        if (m > 0) {
+            size_t db = ptN_sumbytes(&rt[k], 0, m);
+            ptN_copy(p, (int)p->child_count, &rt[k], 0, m);
+            p->child_count += (unsigned short)m;
+            ptM_upbytes(L, kl - 1, (pt_Diff)db);
+        }
+        if (!(m < rtcc || kl == 0)) continue;
+        if (k) ptR_backwardnode(L, d, l);
+        if (!(m < rtcc)) continue;
+        {
+            int kl2 = kl;
+            d = k ? PT_FANOUT - ptK_idx(L, ptK_parent(L, kl2), kl2) : m;
+        }
+        {
+            int    r = ptR_findroom(L, rt, l = kl);
+            size_t db;
+            l += r;
+            p = ptK_parent(L, l);
+            ptN_copy(p, 0, &rt[k], m, rtcc - m);
+            p->child_count = (unsigned short)(rtcc - m);
+            db = ptN_sumbytes(&rt[k], m, rtcc);
+            ptM_upbytes(L, l - 1, (pt_Diff)db);
+        }
+    }
+}
+
+static void ptR_stitch(pt_Cursor *L, pt_Node *rt) {
+    int l = ptK_levels(L);
+    ptR_checkstitch(L);
+    ptR_mergeleaf(L, rt);
+    ptR_stitchnode(L, rt);
+    if (l > 0) ptR_rebalance(L, l - 1);
+    ptM_upmask(L);
+}
+
+static void ptR_eraserange(pt_Cursor *L, pt_Cursor *R, int fl) {
+    pt_Node rt[PT_MAX_LEVEL];
+    int     l, lvls = ptK_levels(L);
+    for (l = 0; l < PT_MAX_LEVEL; ++l) {
+        memset(&rt[l], 0, sizeof(pt_Node));
+        rt[l].version = L->tree->version;
+    }
+    ptR_trimright(L, lvls);
+    ptR_trimleft(R, lvls);
+    ptR_cutrange(L, R, rt, fl);
+    ptR_stitch(L, rt);
+}
+
+static int ptR_balancenode(pt_Node **ns, int left, pt_Diff *ds) {
+    int d, l = ns[0]->child_count, r = ns[1]->child_count;
+    int j;
+    d = l - ((l + r + (left != 0)) >> 1);
+    assert(d != 0);
+    if (d < 0) {
+        ptN_copy(ns[0], l, ns[1], 0, -d);
+        memmove(&ns[1]->children[0], &ns[1]->children[-d],
+                (size_t)(r + d) * sizeof(pt_Node *));
+        memmove(&ns[1]->bytes[0], &ns[1]->bytes[-d],
+                (size_t)(r + d) * sizeof(pt_Size));
+        for (j = 0; j < r + d; ++j)
+            ptM_sethole(ns[1], j, ptM_ishole(ns[1], j - d));
+        *ds = -(pt_Diff)ptN_sumbytes(ns[0], l, l - d);
+    } else {
+        memmove(&ns[1]->children[d], &ns[1]->children[0],
+                (size_t)r * sizeof(pt_Node *));
+        memmove(&ns[1]->bytes[d], &ns[1]->bytes[0],
+                (size_t)r * sizeof(pt_Size));
+        for (j = r - 1; j >= 0; --j)
+            ptM_sethole(ns[1], j + d, ptM_ishole(ns[1], j));
+        ptN_copy(ns[1], 0, ns[0], l - d, d);
+        *ds = (pt_Diff)ptN_sumbytes(ns[1], 0, d);
+    }
+    ns[0]->child_count = (unsigned short)(l - d);
+    ns[1]->child_count = (unsigned short)(r + d);
+    return d;
+}
+
+static int ptR_foldnode(pt_Cursor *C, int lfirst, int l) {
+    pt_Node  *p = ptK_parent(C, l);
+    int       i = ptK_idx(C, p, l);
+    pt_Node **ns = &p->children[i];
+    pt_Node  *o = *ns;
+    pt_Diff   ds;
+    int       cl, cr;
+    unsigned  w;
+    assert(p->child_count > 1);
+    if (ns[0]->child_count > PT_FANOUT / 2) return 0;
+    if ((i && lfirst) || i == (int)p->child_count - 1) ns -= 1, i -= 1;
+    cl = ns[0]->child_count, cr = ns[1]->child_count;
+    if (cl + cr <= PT_FANOUT) {
+        ptN_copy(ns[0], cl, ns[1], 0, cr);
+        ns[0]->child_count += (unsigned short)cr;
+        ns[1]->child_count -= (unsigned short)cr;
+        p->bytes[i] += p->bytes[i + 1];
+        for (w = 0; w < PT_MASK_SIZE; ++w) ns[0]->mask[w] |= ns[1]->mask[w];
+        if (C->paths[l] == &p->children[i + 1]) {
+            int childoff = (int)(C->paths[l + 1] - ns[1]->children);
+            C->paths[l] = &p->children[i];
+            C->paths[l + 1] = &ns[0]->children[cl + childoff];
+        }
+        ptP_free(&C->tree->S->nodes, ns[1]);
+        ptN_delslot(p, i + 1);
+        return 1;
+    }
+    {
+        int dn = ptR_balancenode(ns, (ns[0] == o), &ds);
+        p->bytes[i] -= ds;
+        p->bytes[i + 1] += ds;
+        if (ns[0] != o) C->paths[l + 1] += dn;
+        return 0;
+    }
+}
+
+static void ptR_rebalance(pt_Cursor *C, int l) {
+    pt_State *S = C->tree->S;
+    for (; l > 0; --l) {
+        pt_Node *p = ptK_parent(C, l);
+        pt_Node *child = p->children[ptK_idx(C, p, l)];
+        if (child->child_count >= PT_FANOUT / 2) return;
+        if (p->child_count > 1 && !ptR_foldnode(C, 0, l)) return;
+    }
+    while (ptK_levels(C) > 0 && C->tree->root.child_count == 1) {
+        pt_Node *only = ptK_parent(C, 1);
+        int      i = ptK_idx(C, only, 1);
+        C->tree->root = *only;
+        ptP_free(&S->nodes, only);
+        C->tree->levels--;
+        C->paths[0] += i;
+        memmove(C->paths + 1, C->paths + 2,
+                (size_t)ptK_levels(C) * sizeof(pt_Node **));
+    }
+}
+
+static void ptK_mergelit(pt_Cursor *C) {
+    int      l = ptK_levels(C);
+    pt_Node *p = ptK_parent(C, l);
+    int      i = ptK_idx(C, p, l);
+    if (i + 1 < (int)p->child_count && !ptM_ishole(p, i)
+        && !ptM_ishole(p, i + 1)
+        && (char *)p->children[i] + p->bytes[i] == (char *)p->children[i + 1])
+        p->bytes[i] += p->bytes[i + 1], ptN_delslot(p, i + 1);
+    if (i > 0 && !ptM_ishole(p, i - 1) && !ptM_ishole(p, i)
+        && (char *)p->children[i - 1] + p->bytes[i - 1]
+                   == (char *)p->children[i]) {
+        pt_Size g = p->bytes[i - 1];
+        p->bytes[i - 1] += p->bytes[i], ptN_delslot(p, i);
+        C->paths[l] = &p->children[i - 1], C->off -= g, C->poff += g;
+    }
+}
+
+PT_API int pt_insert(pt_Cursor *C, const char *s, size_t len) {
+    pt_Node  *p;
+    pt_Offset off;
+    int       l, i, ins, mid, r;
+    if (C == NULL || C->tree == NULL || s == NULL) return PT_ERRPARAM;
+    if (len == 0) return PT_OK;
+    if ((r = ptK_beginedit(C, 2 * (size_t)ptK_levels(C) + 3)) != PT_OK)
+        return r;
+    off = (pt_Offset)(C->off + C->poff);
+    if (C->tree->root.child_count == 0) return ptI_onepiece(C, s, len), PT_OK;
+    l = ptK_levels(C), p = ptK_parent(C, l), i = ptK_idx(C, p, l);
+    mid = (C->poff > 0 && C->poff < p->bytes[i]);
+    ptI_makeroom(C, mid ? 2 : 1);
+    l = ptK_levels(C), p = ptK_parent(C, l), i = ptK_idx(C, p, l);
+    ins = mid ? ptI_midsplit(C, p, i) : i + (C->poff > 0);
+    ptN_makespace(p, ins, 1);
+    p->children[ins] = (pt_Node *)s, p->bytes[ins] = (pt_Size)len;
+    ptM_sethole(p, ins, 0), C->paths[l] = &p->children[ins];
+    ptM_upbytes(C, l - 1, (pt_Diff)len);
+    C->off = off, C->poff = 0;
+    return ptK_mergelit(C), PT_OK;
+}
+
+PT_API int pt_append(pt_Cursor *C, const char *s, size_t len) {
+    int r = pt_insert(C, s, len);
+    if (r == PT_OK && len > 0) pt_advance(C, (pt_Offset)len);
+    return r;
+}
+
+PT_API int pt_splice(pt_Cursor *C, size_t del, const char *s, size_t len) {
+    int r, lvls;
+    if (!C || !C->tree) return PT_ERRPARAM;
+    if (del == 0 && (s == NULL || len == 0)) return PT_OK;
+    lvls = ptK_levels(C);
+    if (!ptP_reserve(C->tree->S, &C->tree->S->nodes, 6 * (size_t)lvls + 8))
+        return PT_ERRMEM;
+    r = pt_remove(C, del);
+    if (r != PT_OK) return r;
+    if (s != NULL && len > 0) r = pt_append(C, s, len);
+    return r;
+}
+
+PT_API int pt_remove(pt_Cursor *C, size_t len) {
+    pt_Cursor R;
+    pt_Tree  *old;
+    size_t    dellen;
+    int       r, lvls;
+
+    if (!C || !C->tree) return PT_ERRPARAM;
+    if (len == 0 || ptK_bytes(C) == 0) return PT_OK;
+    if ((size_t)(C->off + C->poff) + len > ptK_bytes(C))
+        len = (size_t)(ptK_bytes(C) - (C->off + C->poff));
+    R = *C, pt_advance(&R, (pt_Offset)len);
+    dellen = (size_t)(pt_offset(&R) - pt_offset(C));
+    if (dellen == 0) return PT_OK;
+    lvls = ptK_levels(C);
+    r = ptP_reserve(C->tree->S, &C->tree->S->nodes, 4 * (size_t)lvls + 5);
+    if (!r) return PT_ERRMEM;
+    old = C->tree, r = ptK_fork(C);
+    if (r != PT_OK) return r;
+    R.tree = C->tree;
+    R.paths[0] = C->tree->root.children + (R.paths[0] - old->root.children);
+    if (lvls == 0 || *C->paths[lvls - 1] == *R.paths[lvls - 1]) {
+        ptK_cowedit(C, &R);
+        ptR_eraseleaf(C, &R);
+    } else {
+        int fl = ptK_cowedit(C, &R);
+        ptR_eraserange(C, &R, fl);
+    }
+    ptK_mergelit(C);
+    return PT_OK;
+}
+
+PT_API int pt_edit(pt_Cursor *C, size_t del, const char *s, size_t len) {
+    int r, lvls;
+    if (!C || !C->tree) return PT_ERRPARAM;
+    if (len > PT_MAX_HOLESIZE) return PT_ERRPARAM;
+    if (s == NULL && len > 0) return PT_ERRPARAM;
+    if (del == 0 && len == 0) return PT_OK;
+    lvls = ptK_levels(C);
+    if (!ptP_reserve(C->tree->S, &C->tree->S->nodes, 6 * (size_t)lvls + 8))
+        return PT_ERRMEM;
+    if (len > 0 && !ptP_reserve(C->tree->S, &C->tree->S->holes, 2))
+        return PT_ERRMEM;
+    if (del > 0) {
+        r = pt_remove(C, del);
+        if (r != PT_OK) return r;
+    }
+    if (len > 0) {
+        if (!C->dirty) {
+            r = ptK_beginedit(C, 2 * (size_t)lvls + 3);
+            if (r != PT_OK) return r;
+        }
+        ptH_insert(C, s, len);
+    }
+    return PT_OK;
 }
 
 PT_NS_END

@@ -48,13 +48,13 @@ This is a header-only library. Include `piecetab.h` in your project:
 - `PT_ERREMPTY` — empty tree or no next/previous fragment.
 
 ### Snapshot & ownership model
-- `pt_Snapshot` is an immutable view of a buffer state.
-- All functions that return a `pt_Snapshot` return it with **one owned reference**. You must call `pt_release` when you no longer need it.
-- `pt_retain` increments a snapshot reference; `pt_release` decrements it.
-- A `pt_Cursor` does **not** own a snapshot reference. It only borrows the
-	snapshot passed to `pt_locate`/`pt_locline`.
-- The caller must keep the input snapshot alive while the cursor is in use.
-- The library **does not** maintain a history tree. If you want undo/redo graphs, store `pt_Snapshot` values externally and manage relationships yourself.
+- `pt_Blob` is an immutable view of a buffer state.
+- All functions that return a `pt_Blob` return it with **one owned reference**. You must call `pt_release` when you no longer need it.
+- `pt_retain` increments a blob reference; `pt_release` decrements it.
+- A `pt_Cursor` does **not** own a blob reference. It only borrows the
+	blob passed to `pt_locate`/`pt_locline`.
+- The caller must keep the input blob alive while the cursor is in use.
+- The library **does not** maintain a history tree. If you want undo/redo graphs, store `pt_Blob` values externally and manage relationships yourself.
 
 ### Navigation
 - `pt_peek(c, &len)` returns a pointer to the current readable fragment and its
@@ -98,16 +98,16 @@ Navigation calls (`pt_next`, `pt_prev`, `pt_advance`, `pt_advline`, `pt_setcol`)
 invalidate these caches by setting them back to `-1`.
 
 ### Zero-copy content model
-- `pt_insert` **does not copy** the input bytes. It only records the pointer/length. The caller must ensure the input memory remains valid for as long as any snapshot referencing it is alive.
-- `pt_buffer` returns writable memory owned by the library for building content in-place.
+- `pt_insert` **does not copy** the input bytes. It only records the pointer/length. The caller must ensure the input memory remains valid for as long as any blob referencing it is alive.
+- `pt_literal` returns writable memory owned by the library for building content in-place.
 	It may return fewer bytes than requested by updating `*plen` to the
 	actual size granted.
-- `pt_replace` replaces current piece content with new content. It may split current piece if necessary. It **does not** copy the input bytes. It only replace the current place pointer and length with the new one. The caller must ensure the input memory remains valid for as long as any snapshot referencing it is alive.
+- `pt_replace` replaces current piece content with new content. It may split current piece if necessary. It **does not** copy the input bytes. It only replace the current place pointer and length with the new one. The caller must ensure the input memory remains valid for as long as any blob referencing it is alive.
 
 ### Cursor editing state
-- A cursor is positioned by `pt_locate` or `pt_locline` against a snapshot.
-- The first `pt_insert`/`pt_remove`/`pt_replace` on a cursor automatically creates a **new internal snapshot** and advances its version.
-- Subsequent edits on the same cursor continue to modify that internal snapshot until `pt_commit` or `pt_rollback` is called.
+- A cursor is positioned by `pt_locate` or `pt_locline` against a blob.
+- The first `pt_insert`/`pt_remove`/`pt_replace` on a cursor automatically creates a **new internal blob** and advances its version.
+- Subsequent edits on the same cursor continue to modify that internal blob until `pt_commit` or `pt_rollback` is called.
 
 ### Edit failure semantics (non-atomic)
 - Edit operations are **not atomic** under memory pressure.
@@ -116,26 +116,26 @@ invalidate these caches by setting them back to `-1`.
 
 ### Commit / rollback semantics
 - If the cursor **has no pending edits**:
-	- `pt_commit` returns the current snapshot (owned reference).
+	- `pt_commit` returns the current blob (owned reference).
 	- Internally this means `pt_commit` must retain once before returning,
-	  even when no new snapshot is created.
+	  even when no new blob is created.
 	- `pt_rollback` is a no-op.
 - If the cursor **has pending edits**:
-	- `pt_commit` returns the internal new snapshot (owned reference), then clears the pending state and sets the cursor’s current snapshot to the committed one.
-	- `pt_rollback` discards the internal new snapshot and restores the cursor to the pre-edit snapshot.
+	- `pt_commit` returns the internal new blob (owned reference), then clears the pending state and sets the cursor’s current blob to the committed one.
+	- `pt_rollback` discards the internal new blob and restores the cursor to the pre-edit blob.
 - Ownership rule after `pt_commit`:
-	- The returned snapshot is already owned by the caller (no extra
+	- The returned blob is already owned by the caller (no extra
 	  `pt_retain` needed).
-	- If you passed an existing snapshot into the cursor, release that previous
-	  snapshot when it is replaced by the committed one.
+	- If you passed an existing blob into the cursor, release that previous
+	  blob when it is replaced by the committed one.
 
 ### Versioning
-- `pt_version(snap)` returns the snapshot version number.
-- The internal auto-snapshot created by the first edit on a cursor increments the version (typically parent version + 1).
+- `pt_version(b)` returns the blob version number.
+- The internal auto-blob created by the first edit on a cursor increments the version (typically parent version + 1).
 
 ### Initialization helpers
-- `pt_empty(state)` returns an empty snapshot (owned reference).
-- `pt_from(state, ptr, len)` creates a snapshot referencing external memory without copying.
+- `pt_empty(state)` returns an empty blob (owned reference).
+- `pt_from(state, ptr, len)` creates a blob referencing external memory without copying.
 
 ## License
 
