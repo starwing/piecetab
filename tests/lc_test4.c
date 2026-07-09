@@ -2225,6 +2225,221 @@ static void test_append_cov_rootdeep(void) {
     lc_close(S);
 }
 
+/* lc_insert — wrapper around lc_append that restores cursor */
+
+static void test_insert_params(void) {
+    lc_State *S;
+    lc_Cache *c;
+    lc_Cursor C;
+    unsigned  zero[] = {0}, *pz = zero;
+
+    S = lc_open(&test_alloc, NULL);
+    assert(S);
+    c = lc_newtree(S);
+    assert(c);
+
+    assert(lc_insert(NULL, 0, lc_scanner, &pz) == LC_ERRPARAM);
+    memset(&C, 0, sizeof(C));
+    assert(lc_insert(&C, 0, lc_scanner, &pz) == LC_ERRPARAM);
+    lc_seek(&C, c, 0);
+    assert(lc_insert(&C, 0, lc_scanner, &pz) == LC_OK);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_insert_basic(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  zero[] = {0}, *pz = zero;
+    int       r;
+
+    lc_scanV(c, 10, 10);
+    assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
+
+    lc_seek(&C, c, 5);
+    r = lc_insert(&C, 7, lc_scanner, &pz);
+    assert(r == LC_OK);
+    assert(lc_checktree(c));
+    assert(lc_breaks(c) == 2 && lc_bytes(c) == 27);
+    assert(lc_linelen(&C) == 17);
+    assert(lc_checkcursor(&C, 5));
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_insert_leaf(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  brs[] = {3, 3, 0}, *pb = brs;
+    int       r;
+
+    lc_scanV(c, 10, 15, 15);
+    assert(lc_breaks(c) == 3 && lc_bytes(c) == 40);
+
+    lc_seek(&C, c, 10);
+    r = lc_insert(&C, 3, lc_scanner, &pb);
+    assert(r == LC_OK);
+    assert(lc_breaks(c) == 5 && lc_bytes(c) == 49);
+    assert(lc_checktree(c));
+    assert(lc_checkcursor(&C, 10));
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_insert_col(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  brs_b[] = {4, 4, 0}, *pb = brs_b;
+    int       r;
+
+    lc_scanV(c, 4, 7);
+    assert(lc_breaks(c) == 2 && lc_bytes(c) == 11);
+
+    lc_seek(&C, c, 6);
+    assert(C.lnu == 1 && C.col == 2);
+    r = lc_insert(&C, 3, lc_scanner, &pb);
+    assert(r == LC_OK);
+    assert(lc_checktree(c));
+    assert(lc_breaks(c) == 4 && lc_bytes(c) == 22);
+    assert(lc_checkcursor(&C, 6));
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_insert_empty(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c;
+    lc_Cursor C;
+    unsigned  brs[] = {10, 10, 10, 0}, zero[] = {0}, *pbrs;
+    int       r;
+
+    c = lc_newtree(S);
+    assert(c);
+
+    pbrs = brs;
+    lc_seek(&C, c, 0);
+    r = lc_insert(&C, 5, lc_scanner, &pbrs);
+    assert(r == LC_OK);
+    assert(lc_checktree(c));
+    assert(lc_breaks(c) == 3 && lc_bytes(c) == 30);
+    assert(lc_checkcursor(&C, 0));
+    lc_deltree(S, c);
+
+    c = lc_newtree(S);
+    pbrs = zero;
+    lc_seek(&C, c, 0);
+    r = lc_insert(&C, 0, lc_scanner, &pbrs);
+    assert(r == LC_OK);
+    assert(lc_breaks(c) == 0 && lc_bytes(c) == 0);
+    assert(lc_checkcursor(&C, 0));
+    lc_deltree(S, c);
+
+    lc_close(S);
+}
+
+static void test_insert_trailing(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  brs[] = {5, 5, 0}, *pb = brs;
+    int       r;
+
+    lc_scanV(c, 10, 10);
+    assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
+
+    lc_seek(&C, c, 25);
+    assert(lc_offset(&C) == 25 && C.col == 5);
+    r = lc_insert(&C, 7, lc_scanner, &pb);
+    assert(r == LC_OK);
+    assert(lc_checktree(c));
+    assert(lc_breaks(c) == 4 && lc_bytes(c) == 35);
+    assert(lc_checkcursor(&C, 25));
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_insert_noop(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  zero[] = {0}, *pz = zero;
+    int       r;
+
+    lc_scanV(c, 10, 10);
+    assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
+
+    lc_seek(&C, c, 5);
+    r = lc_insert(&C, 0, lc_scanner, &pz);
+    assert(r == LC_OK);
+    assert(lc_checktree(c));
+    assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
+    assert(lc_checkcursor(&C, 5));
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_insert_many(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    unsigned  brs_b[] = {17, 1, 0}, *pb = brs_b;
+    int       r;
+
+    lc_scanV(c, 10, 10, 10);
+    assert(lc_breaks(c) == 3 && lc_bytes(c) == 30);
+
+    lc_seek(&C, c, 5);
+    r = lc_insert(&C, 0, lc_rscanner, &pb);
+    assert(r == LC_OK);
+    assert(lc_breaks(c) == 20 && lc_bytes(c) == 47);
+    assert(lc_checktree(c));
+    assert(lc_checkcursor(&C, 5));
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_insert_noscanner(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    size_t    bb, br;
+    int       v;
+
+    assert(c);
+
+    lc_seek(&C, c, 0);
+    assert(lc_insert(&C, 3, NULL, NULL) == LC_OK);
+    assert(lc_offset(&C) == 0 && lc_bytes(c) == 0 && lc_breaks(c) == 0);
+
+    lc_scanV(c, 5, 10);
+    lc_seek(&C, c, 3);
+    v = lc_insert(&C, 7, NULL, NULL);
+    assert(v == LC_OK && lc_offset(&C) == 3);
+    assert(lc_linelen(&C) == 12 && lc_bytes(c) == 22);
+
+    bb = lc_bytes(c), br = lc_breaks(c);
+    lc_seek(&C, c, bb + 5);
+    assert(lc_offset(&C) == bb + 5);
+    assert(lc_insert(&C, 8, NULL, NULL) == LC_OK);
+    assert(lc_offset(&C) == bb + 5 && lc_bytes(c) == bb && lc_breaks(c) == br);
+
+    bb = lc_bytes(c);
+    lc_seek(&C, c, 0);
+    assert(lc_insert(&C, 0, NULL, NULL) == LC_OK);
+    assert(lc_offset(&C) == 0 && lc_bytes(c) == bb);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 #define TESTS(X)                  \
     X(lifecycle)                  \
     X(scan_params)                \
@@ -2312,7 +2527,16 @@ static void test_append_cov_rootdeep(void) {
     X(append_oom_rollback)        \
     X(append_oom_cutleaf)         \
     X(append_oom_full)            \
-    X(append_cov_rootdeep)
+    X(append_cov_rootdeep)        \
+    X(insert_params)              \
+    X(insert_basic)               \
+    X(insert_leaf)                \
+    X(insert_col)                 \
+    X(insert_empty)               \
+    X(insert_trailing)            \
+    X(insert_noop)                \
+    X(insert_many)                \
+    X(insert_noscanner)
 
 #define X(name) {#name, test_##name},
 LC_TEST_MAIN("linecache tests")

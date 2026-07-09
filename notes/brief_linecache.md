@@ -6,7 +6,7 @@
 
 单头文件 C89 库，前缀 `lc_`。以 B+ 计量树 (Metric B+ Tree) 维护字节偏移→行号之映射。
 
-**功用**: 文本编辑器中维护行号缓存。支持行断点插入/删除 (`lc_markbreak`/`lc_clearbreaks`)、区间删除 (`lc_erase`)、区间删插字节 (`lc_splice`)、中部插入 (`lc_append`)、批量加载 (`lc_scan`)。
+**功用**: 文本编辑器中维护行号缓存。支持行断点插入/删除 (`lc_markbreak`/`lc_clearbreaks`)、区间删除 (`lc_erase`)、区间删插字节 (`lc_splice`)、中部插入 (`lc_append`/`lc_insert`)、批量加载 (`lc_scan`)。
 
 关联: `piecetab.h` (piece table, 前缀 `pt_`)，linecache 为其先行实验。
 
@@ -121,7 +121,7 @@ grep '^LC_API' linecache.h
 | 移动     | `lc_advance`, `lc_advline`                                      | 字节/行偏移移动（越界 clamp）                             |
 | 查询     | `lc_offset`, `lc_line`, `lc_linelen`, `lc_col`, `lc_lineoffset` | 游标状态查询（宏）                                        |
 | 断点     | `lc_markbreak`, `lc_clearbreaks`                                | 单点插入 / 区间清除行断（宏）                             |
-| 编辑     | `lc_erase`, `lc_splice`, `lc_append`                            | 区间删除 / 区间删插字节 / 中部插入或纯字节追加（sc=NULL） |
+| 编辑     | `lc_erase`, `lc_splice`, `lc_append`, `lc_insert`               | 区间删除 / 区间删插字节 / 中部插入或纯字节追加（sc=NULL） / 插入游标处（不动） |
 
 ## 六、内部函数命名体系
 

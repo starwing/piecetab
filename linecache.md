@@ -205,6 +205,18 @@ int lc_append(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud);
 
 **约束**: 树无数据 (`root.child_count == 0` 且 `levels == 0`) 时 `lc_append` 等价于首次填充——scanner 行为与 `lc_scan` 等同，`e` 仍需最后加回。
 
+### lc_insert — 在游标位置插入文本/行（游标不动）
+
+```c
+int lc_insert(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud);
+```
+
+**行为**: 与 `lc_append` 相同流程（cutleaf → append → stitch → addbytes），但插入完成后将游标恢复到原始位置。即插入内容在游标处（原位置后推），游标保持在插入内容之前。
+
+**等价于**: `lc_append(C, e, sc, ud)` + `lc_advance(C, -(新文本总字节数))`。
+
+**返回值**: 同 `lc_append` — `LC_OK`, `LC_ERRPARAM`, `LC_ERRMEM`。OOM 时通过 `lcB_rollback` 完整恢复树至 cutleaf 前状态。
+
 ---
 
 ## 三、数据结构要点

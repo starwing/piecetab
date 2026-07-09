@@ -112,6 +112,7 @@ LC_API int lc_markbreak(lc_Cursor *C, unsigned len);
 #define lc_clearbreaks(C, len) lc_splice((C), (len), (len))
 
 /* append/remove/mutation texts */
+LC_API int lc_insert(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud);
 LC_API int lc_append(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud);
 LC_API int lc_erase(lc_Cursor *L, lc_Cursor *R);
 LC_API int lc_splice(lc_Cursor *C, size_t del, unsigned ins);
@@ -511,8 +512,7 @@ LC_API int lc_advline(lc_Cursor *C, lc_Diff delta) {
     if (lcK_bytes(C) == 0) return LC_OK;
     line = (lc_Diff)C->nu + C->lnu, n = line + delta;
     if (n <= 0) return lcK_backwardline(C, (size_t)line), LC_OK;
-    if ((size_t)n >= lcK_breaks(C))
-        return lcK_locend(C), C->col = 0, LC_OK;
+    if ((size_t)n >= lcK_breaks(C)) return lcK_locend(C), C->col = 0, LC_OK;
     if (delta < 0) return lcK_backwardline(C, (size_t)(-delta)), LC_OK;
     return lcK_forwardline(C, delta), LC_OK;
 }
@@ -1141,6 +1141,12 @@ LC_API int lc_append(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud) {
     if (r < 0 || !lcD_checkstitch(C)) return lcB_rollback(C, rt, &sC, l);
     if (lcB_fixsource(&sC, sbc, &rt[0], l)) C->col = 0, C->off += sC.col;
     return lcD_stitch(C, rt), lcD_addbytes(C, e), LC_OK;
+}
+
+LC_API int lc_insert(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud) {
+    lc_Diff pos = C ? lc_offset(C) : 0;
+    int     r = lc_append(C, e, sc, ud);
+    return r != LC_OK ? r : lc_advance(C, pos - lc_offset(C));
 }
 
 LC_NS_END
