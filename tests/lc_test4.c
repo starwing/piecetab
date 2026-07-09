@@ -446,22 +446,30 @@ static void test_advance_cross(void) {
     lc_close(S);
 }
 
-static void test_advance_cov_backward_cross(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
+static void test_advance_brute(void) {
+    lc_State *S;
+    lc_Cache *c;
+    lc_Cursor C;
+    int       pos, delta, dst;
+    int const n = 128, nb = n * 2;
 
-    lc_rscanV(c, 8, 10);
-    assert(lc_breaks(c) == 8);
+    S = lc_open(&test_alloc, NULL), assert(S);
+    c = lc_newtree(S);
+    lc_rscanV(c, n, 2);
+    assert(lc_checktree(c));
 
-    /* seek to second leaf, move backward across boundary into first leaf */
-    lc_seek(&cur, c, 42);
-    assert(lc_checkcursor(&cur, 42));
-    r = lc_advance(&cur, -5);
-    assert(r == LC_OK && lc_offset(&cur) == 37 && lc_line(&cur) == 3);
-    assert(lc_checkcursor(&cur, 37));
-
+    for (pos = 0; pos <= nb + 1; ++pos)
+        for (delta = -nb - 1; delta <= nb + 1; ++delta) {
+            lc_seek(&C, c, pos);
+            lc_advance(&C, delta);
+            dst = pos + delta < 0 ? 0 : pos + delta;
+            if (!lc_checkcursor(&C, dst)) {
+                lc_log("advance pos=%d delta=%d off=%zu exp=%d\n", pos, delta,
+                       lc_offset(&C), dst);
+                lc_dumpcursor(&C, "after advance");
+                abort();
+            }
+        }
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -498,49 +506,6 @@ static void test_advance_cov_skip_siblings(void) {
     r = lc_advline(&cur, -8);
     assert(r == LC_OK && lc_line(&cur) == 1 && lc_offset(&cur) == 10);
     assert(lc_checkcursor(&cur, 10));
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-static void test_advance_cov_backwardoff(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
-
-    lc_rscanV(c, 80, 5);
-
-    /* seek to near-end, advance backward across many children */
-    lc_seek(&cur, c, lc_bytes(c));
-    assert(lc_checkcursor(&cur, lc_offset(&cur)));
-    r = lc_advance(&cur, -200);
-    assert(r == LC_OK);
-    assert(lc_checkcursor(&cur, lc_offset(&cur)));
-
-    r = lc_clearbreaks(&cur, 16);
-    assert(r == LC_OK);
-
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-/* forwardoff within single leaf skipping multiple breaks */
-static void test_advance_findinleaf_skip(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
-
-    lc_scanV(c, 10, 10, 10, 10);
-    assert(lc_breaks(c) == 4 && lc_bytes(c) == 40);
-    assert(lc_checktree(c));
-
-    lc_seek(&cur, c, 0);
-    assert(lc_checkcursor(&cur, 0));
-    r = lc_advance(&cur, 25);
-    assert(r == LC_OK && lc_offset(&cur) == 25 && lc_line(&cur) == 2);
-    assert(lc_checkcursor(&cur, 25));
 
     lc_deltree(S, c);
     lc_close(S);
@@ -617,56 +582,46 @@ static void test_advline_zero(void) {
     lc_close(S);
 }
 
-static void test_advline_cov_backward_within(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
+static void test_advline_brute(void) {
+    lc_State *S;
+    lc_Cache *c;
+    lc_Cursor C;
+    int       pos, delta, dst;
+    int const n = 128, nb = n * 2;
 
-    lc_scanV(c, 10, 15, 15, 15);
-    assert(lc_breaks(c) == 4);
+    S = lc_open(&test_alloc, NULL), assert(S);
+    c = lc_newtree(S);
+    lc_rscanV(c, n, 2);
+    assert(lc_checktree(c));
 
-    /* seek to slot=2, advance backward by 1 (d=1 < slot=2 triggers within-leaf
-     * path) */
-    lc_seek(&cur, c, 30); /* slot=2, in third gap */
-    assert(lc_checkcursor(&cur, 30));
-    r = lc_advline(&cur, -1);
-    assert(r == LC_OK && lc_line(&cur) == 1 && lc_offset(&cur) == 10);
-    assert(lc_checkcursor(&cur, 10));
-
+    for (pos = 0; pos <= nb + 1; ++pos)
+        for (delta = -nb - 1; delta <= nb + 1; ++delta) {
+            lc_seek(&C, c, pos);
+            lc_advline(&C, delta);
+            dst = (pos + delta * 2) & ~1;
+            dst = dst < 0 ? 0 : dst > n * 2 ? n * 2 : dst;
+            if (!lc_checkcursor(&C, dst)) {
+                lc_log("advance pos=%d delta=%d off=%zu failed exp=%d\n", pos,
+                       delta, lc_offset(&C), dst);
+                lc_dumpcursor(&C, "after advance");
+                abort();
+            }
+        }
     lc_deltree(S, c);
     lc_close(S);
 }
 
-static void test_advline_cov_backward_cross(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = cacheV(
-            S, 1,
-            innerV(botV(leafV(10), leafV(10), leafV(10)), botV(leafV(10))));
-    lc_Cursor cur;
-    int       r;
-    assert(c && lc_breaks(c) == 4 && lc_bytes(c) == 40);
-    lc_seekline(&cur, c, 3);
-    assert(lc_checkcursor(&cur, 30));
-    r = lc_advline(&cur, -1);
-    assert(r == LC_OK && lc_line(&cur) == 2);
-    assert(lc_checkcursor(&cur, 20));
-    lc_deltree(S, c);
-    lc_close(S);
-}
-
-static void test_advline_cov_forward_cross(void) {
+static void test_markbreak_params(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
-    lc_Cursor cur;
-    int       r;
+    lc_Cursor C;
 
-    lc_rscanV(c, 33, 10);
-    lc_seekline(&cur, c, 15);
-    assert(lc_checkcursor(&cur, 150));
-    r = lc_advline(&cur, 1);
-    assert(r == LC_OK && lc_line(&cur) == 16);
-    assert(lc_checkcursor(&cur, 160));
+    assert(lc_markbreak(NULL, 1) == LC_ERRPARAM);
+    memset(&C, 0, sizeof(C));
+    assert(lc_markbreak(&C, 1) == LC_ERRPARAM);
+    lc_seek(&C, c, 0);
+    assert(lc_markbreak(&C, 0) == LC_ERRPARAM);
+
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -706,18 +661,38 @@ static void test_markbreak_basic(void) {
     lc_close(S);
 }
 
-static void test_markbreak_params(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+static void test_markbreak_brute(void) {
+    lc_State *S;
+    lc_Cache *c;
     lc_Cursor C;
+    int       pos, ins, r;
+    int const n = 128, nb = n * 2;
 
-    assert(lc_markbreak(NULL, 1) == LC_ERRPARAM);
-    memset(&C, 0, sizeof(C));
-    assert(lc_markbreak(&C, 1) == LC_ERRPARAM);
-    lc_seek(&C, c, 0);
-    assert(lc_markbreak(&C, 0) == LC_ERRPARAM);
+    S = lc_open(&test_alloc, NULL);
+    assert(S);
 
-    lc_deltree(S, c);
+    for (pos = 0; pos <= nb + 1; ++pos)
+        for (ins = 1; ins <= n; ++ins) {
+            c = lc_newtree(S);
+            lc_rscanV(c, 128, 2); /* 128*2=256 bytes, levels≥2 */
+            lc_seek(&C, c, pos);
+            r = lc_markbreak(&C, ins);
+            assert(r == LC_OK);
+            if (!lc_checktree(c) || !lc_checkcursor(&C, pos + ins)) {
+                lc_log("insert pos=%d ins=%d failed\n", pos, ins);
+                lc_dumptree(c, "insert brute fail");
+                lc_dumpcursor(&C, "insert brute fail");
+                abort();
+            }
+            if (lc_col(&C) != 0) {
+                lc_log("insert pos=%d ins=%d col=%u\n", pos, ins, lc_col(&C));
+                lc_dumptree(c, "insert brute fail");
+                lc_dumpcursor(&C, "insert brute fail");
+                abort();
+            }
+            lc_deltree(S, c);
+            assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
+        }
     lc_close(S);
 }
 
@@ -1407,35 +1382,6 @@ static void test_splice_cov_trimleaf(void) {
     lc_close(S);
 }
 
-static void test_boundary_cmp(void) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cursor cur;
-    lc_Cache *c;
-
-    /* lcK_findline: <= -> <. seekline(2) must land in leaf1, not leaf0. */
-    c = cacheV(S, 0, botV(leafV(1, 1), leafV(5)));
-    assert(lc_checktree_allow_empty(c, 1));
-    lc_seekline(&cur, c, 2);
-    assert(cur.nu == 2);
-    assert(lc_linelen(&cur) == 5);
-    assert(lc_checkcursor(&cur, 2));
-    lc_deltree(S, c);
-
-    /* lcK_forwardline: <= -> <. advline(4) must skip to leaf2, not stop at
-     * leaf1. */
-    c = cacheV(S, 0, botV(leafV(1, 1), leafV(1, 1), leafV(5)));
-    assert(lc_checktree_allow_empty(c, 1));
-    lc_seek(&cur, c, 0);
-    assert(lc_checkcursor(&cur, 0));
-    lc_advline(&cur, 4);
-    assert(cur.nu == 4);
-    assert(lc_linelen(&cur) == 5);
-    assert(lc_checkcursor(&cur, 4));
-    lc_deltree(S, c);
-
-    lc_close(S);
-}
-
 static void test_append_params(void) {
     lc_State *S;
     lc_Cache *c;
@@ -1506,7 +1452,7 @@ static void test_append_col(void) {
     lc_close(S);
 }
 
-static void test_append_append(void) {
+static void test_append_basic(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
     lc_Cursor C;
@@ -1744,12 +1690,13 @@ static void test_append_brute(void) {
     lc_Cache *c;
     lc_Cursor C;
     int       pos, ins, e, rem, r;
+    int const n = 128, nb = n * 2;
 
     S = lc_open(&test_alloc, NULL);
     assert(S);
 
-    for (pos = 0; pos <= 256; ++pos) {
-        for (ins = 0; ins <= 128; ++ins) {
+    for (pos = 0; pos <= nb + 1; ++pos)
+        for (ins = 0; ins <= n; ++ins)
             for (e = 0; e <= 1; ++e) {
                 c = lc_newtree(S);
                 lc_rscanV(c, 128, 2); /* 128*2=256 bytes, levels≥2 */
@@ -1765,11 +1712,8 @@ static void test_append_brute(void) {
                     abort();
                 }
                 lc_deltree(S, c);
+                assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
             }
-        }
-    }
-
-    assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
     lc_close(S);
 }
 
@@ -2151,7 +2095,7 @@ static void test_splice_cov_foldleaf_rl(void) {
 /* rebalance early exit: foldnode returns 0 (balance, not merge).
  * botV[0] underfull after foldleaf (1 leaf), botV[1] has 4 leaves,
  * 1+4=5 > 4 → balance → foldnode returns 0 → rebalance returns. */
-static void test_rebalance_earlyexit(void) {
+static void test_splice_rebalance_earlyexit(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(
             S, 2,
@@ -2281,97 +2225,93 @@ static void test_append_cov_rootdeep(void) {
     lc_close(S);
 }
 
-#define TESTS(X)                   \
-    X(lifecycle)                   \
-    X(scan_params)                 \
-    X(scan_basic)                  \
-    X(scan_seek)                   \
-    X(scan_bulk)                   \
-    X(scan_append)                 \
-    X(scan_oom_items)              \
-    X(scan_oom_flush)              \
-    X(scan_oom_build)              \
-    X(scan_deepen_root)            \
-    X(scan_edge_makechain_empty)   \
-    X(seek_params)                 \
-    X(seek_pastleaf)               \
-    X(seek_line_leaf)              \
-    X(seek_line_pastleaf)          \
-    X(seek_edge)                   \
-    X(advance_params)              \
-    X(advance_single)              \
-    X(advance_cross)               \
-    X(advance_cov_backward_cross)  \
-    X(advance_cov_skip_siblings)   \
-    X(advance_cov_backwardoff)     \
-    X(advance_findinleaf_skip)     \
-    X(advline_params)              \
-    X(advline_cross)               \
-    X(advline_zero)                \
-    X(advline_cov_backward_within) \
-    X(advline_cov_backward_cross)  \
-    X(advline_cov_forward_cross)   \
-    X(markbreak_params)            \
-    X(markbreak_basic)             \
-    X(markbreak_empty)             \
-    X(markbreak_crossline)         \
-    X(markbreak_trailing)          \
-    X(markbreak_noop)              \
-    X(markbreak_brzero)            \
-    X(markbreak_crossleaf)         \
-    X(markbreak_split)             \
-    X(markbreak_node_split)        \
-    X(markbreak_root_split)        \
-    X(markbreak_root_add)          \
-    X(markbreak_cascade)           \
-    X(markbreak_cov_split_right)   \
-    X(markbreak_cov_child_right)   \
-    X(markbreak_fullleaf_pastend)  \
-    X(markbreak_fullleaf_brgt)     \
-    X(markbreak_oom_oneline)       \
-    X(markbreak_oom_makeroom)      \
-    X(markbreak_cov_rootright)     \
-    X(clearbreaks_basic)           \
-    X(clearbreaks_cov_slot)        \
-    X(erase_params)                \
-    X(erase_basic)                 \
-    X(splice_params)               \
-    X(splice_basic)                \
-    X(splice_trailing)             \
-    X(splice_brute)                \
-    X(splice_cov_rebalance)        \
-    X(splice_cov_shiftnode_bal0)   \
-    X(splice_cov_trimleaf)         \
-    X(splice_cov_foldleaf_lr)      \
-    X(splice_cov_foldleaf_rl)      \
-    X(splice_reset)                \
-    X(rebalance_earlyexit)         \
-    X(boundary_cmp)                \
-    X(append_params)               \
-    X(append_leaf)                 \
-    X(append_col)                  \
-    X(append_append)               \
-    X(append_many)                 \
-    X(append_empty)                \
-    X(append_sib)                  \
-    X(append_deep)                 \
-    X(append_leaf_split)           \
-    X(append_stitch_shiftup)       \
-    X(append_rootpush)             \
-    X(append_fillrt_findlevel)     \
-    X(append_noop)                 \
-    X(append_trailing)             \
-    X(append_brute)                \
-    X(append_noscanner)            \
-    X(append_oom_trailing)         \
-    X(append_oom_normal)           \
-    X(append_oom_col0)             \
-    X(append_oom_shiftup)          \
-    X(append_oom_rootpush)         \
-    X(append_oom_deroot)           \
-    X(append_oom_rollback)         \
-    X(append_oom_cutleaf)          \
-    X(append_oom_full)             \
+#define TESTS(X)                  \
+    X(lifecycle)                  \
+    X(scan_params)                \
+    X(scan_basic)                 \
+    X(scan_seek)                  \
+    X(scan_bulk)                  \
+    X(scan_append)                \
+    X(scan_oom_items)             \
+    X(scan_oom_flush)             \
+    X(scan_oom_build)             \
+    X(scan_deepen_root)           \
+    X(scan_edge_makechain_empty)  \
+    X(seek_params)                \
+    X(seek_pastleaf)              \
+    X(seek_line_leaf)             \
+    X(seek_line_pastleaf)         \
+    X(seek_edge)                  \
+    X(advance_params)             \
+    X(advance_single)             \
+    X(advance_cross)              \
+    X(advance_brute)              \
+    X(advance_cov_skip_siblings)  \
+    X(advline_params)             \
+    X(advline_cross)              \
+    X(advline_zero)               \
+    X(advline_brute)              \
+    X(markbreak_params)           \
+    X(markbreak_basic)            \
+    X(markbreak_empty)            \
+    X(markbreak_crossline)        \
+    X(markbreak_trailing)         \
+    X(markbreak_noop)             \
+    X(markbreak_brzero)           \
+    X(markbreak_crossleaf)        \
+    X(markbreak_split)            \
+    X(markbreak_node_split)       \
+    X(markbreak_root_split)       \
+    X(markbreak_root_add)         \
+    X(markbreak_cascade)          \
+    X(markbreak_fullleaf_pastend) \
+    X(markbreak_fullleaf_brgt)    \
+    X(markbreak_brute)            \
+    X(markbreak_cov_split_right)  \
+    X(markbreak_cov_child_right)  \
+    X(markbreak_cov_rootright)    \
+    X(markbreak_oom_oneline)      \
+    X(markbreak_oom_makeroom)     \
+    X(clearbreaks_basic)          \
+    X(clearbreaks_cov_slot)       \
+    X(erase_params)               \
+    X(erase_basic)                \
+    X(splice_params)              \
+    X(splice_basic)               \
+    X(splice_reset)               \
+    X(splice_trailing)            \
+    X(splice_brute)               \
+    X(splice_cov_rebalance)       \
+    X(splice_cov_shiftnode_bal0)  \
+    X(splice_cov_trimleaf)        \
+    X(splice_cov_foldleaf_lr)     \
+    X(splice_cov_foldleaf_rl)     \
+    X(splice_rebalance_earlyexit) \
+    X(append_params)              \
+    X(append_basic)               \
+    X(append_leaf)                \
+    X(append_col)                 \
+    X(append_many)                \
+    X(append_empty)               \
+    X(append_sib)                 \
+    X(append_deep)                \
+    X(append_leaf_split)          \
+    X(append_stitch_shiftup)      \
+    X(append_rootpush)            \
+    X(append_fillrt_findlevel)    \
+    X(append_noop)                \
+    X(append_trailing)            \
+    X(append_brute)               \
+    X(append_noscanner)           \
+    X(append_oom_trailing)        \
+    X(append_oom_normal)          \
+    X(append_oom_col0)            \
+    X(append_oom_shiftup)         \
+    X(append_oom_rootpush)        \
+    X(append_oom_deroot)          \
+    X(append_oom_rollback)        \
+    X(append_oom_cutleaf)         \
+    X(append_oom_full)            \
     X(append_cov_rootdeep)
 
 #define X(name) {#name, test_##name},

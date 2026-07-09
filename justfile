@@ -17,6 +17,7 @@ clean-gcda:
 
 clean: clean-gcda
     rm -f tests/lc_test4 tests/lc_test8 tests/pt_test4
+    rm -fr tests/*.dSYM
 
 cov-show src:
     lcov --capture --directory . --rc branch_coverage=1 --output-file coverage.info --no-external --ignore-errors unsupported
