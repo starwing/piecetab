@@ -1,5 +1,11 @@
+If:
+  PathMatch: '.*\.h'
+CompileFlags:
+  Add: [-x, c]
+---
 CompileFlags:
   Add:
+    - "-pedantic"
     - "-std=c89"
     - "-I."
     - "-Itests"

@@ -87,7 +87,7 @@ LC_STATIC int lc_checknode(const lc_Node *n, int rl, int mc) {
     for (i = 0; i < (int)n->child_count; ++i) {
         lc_Node *c = n->children[i];
         if (rl == 0) {
-            bsum = lcL_sumbytes((lc_Leaf *)c, 0, n->breaks[i]);
+            bsum = lcL_sumbytes((lc_Leaf *)c, 0, (int)n->breaks[i]);
             lc_check(
                     n->breaks[i] >= (mc ? LC_LEAF_FANOUT / 2 : 0)
                             && n->breaks[i] <= LC_LEAF_FANOUT,
@@ -126,7 +126,7 @@ LC_STATIC int lc_checktree_allow_empty(const lc_Cache *c, int allow_empty) {
         return lc_checknode(&c->root, c->levels, allow_empty ? 0 : 1);
     else {
         lc_Leaf *lf = (lc_Leaf *)c->root.children[0];
-        bsum = lcL_sumbytes(lf, 0, c->root.breaks[0]);
+        bsum = lcL_sumbytes(lf, 0, (int)c->root.breaks[0]);
         lc_check(
                 c->root.bytes[0] == bsum,
                 "[chk] SINGLE LEAF tree has breaks=%zu bytes=%zu sum=%zu\n",
@@ -399,7 +399,7 @@ LC_STATIC lc_Cache *cacheV(lc_State *S, unsigned levels, lc_Node *root) {
     lc_Cache *c = lc_newtree(S);
     unsigned  i;
     assert(c && root->child_count <= LC_FANOUT);
-    c->levels = levels;
+    c->levels = (unsigned short)levels;
     c->root = *root;
     lcP_free(&S->nodes, root);
     c->bytes = 0;
