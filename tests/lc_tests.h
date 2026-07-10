@@ -31,14 +31,13 @@ LC_STATIC void lc_dumpcursor(const lc_Cursor *C, const char *tag);
 /*  allocators                                                       */
 /* ================================================================ */
 
-LC_STATIC void *test_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
-    (void)ud;
-    (void)osize;
-    if (nsize == 0) {
-        free(ptr);
-        return NULL;
-    }
-    return realloc(ptr, nsize);
+LC_STATIC void *test_alloc(void *ud, void *p, size_t osize, size_t nsize) {
+    void *np;
+    (void)ud, (void)osize;
+    if (nsize == 0) return free(p), NULL;
+    np = realloc(p, nsize);
+    if (!np) abort();
+    return np;
 }
 
 LC_STATIC void *oom_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
@@ -407,8 +406,11 @@ LC_STATIC lc_Cache *cacheV(lc_State *S, unsigned levels, lc_Node *root) {
     for (i = 0; i < c->root.child_count; i++)
         c->bytes += c->root.bytes[i], c->breaks += c->root.breaks[i];
     lc_checktree_allow_empty(c, 1);
-    return c;
+    return assert(c), c;
 }
+
+/* fix the fxxking stupid clang-analyzer-core.UndefinedBinaryOperatorResult */
+#define lc_nonnull(x) (assert((x) != NULL), (x))
 
 /* ================================================================ */
 /*  lc_asserttree — build expected tree and compare                    */

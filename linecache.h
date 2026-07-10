@@ -624,8 +624,7 @@ static int lcD_foldnode(lc_Cursor *C, int lfirst, int l) {
     int       cl, cr, i = lcK_idx(C, p, l);
     lc_Node **ns = &p->children[i], *o = *ns;
     lc_Diff   ds[2], dn;
-    assert(lcN_cc(p) > 1);
-    if (lcN_cc(ns[0]) > LC_FANOUT / 2) return 0;
+    if (assert(lcN_cc(p) > 1), lcN_cc(ns[0]) > LC_FANOUT / 2) return 0;
     if ((i && lfirst) || i == lcN_cc(p) - 1) ns -= 1, i -= 1;
     cl = lcN_cc(ns[0]), cr = lcN_cc(ns[1]);
     if (cl + cr <= LC_FANOUT) {

@@ -42,7 +42,6 @@ static void test_foldnode_cursor_right(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
     lc_Cursor C;
-    assert(c);
     lc_rscanV(c, 768, 1);
     assert(c->levels >= 1);
     assert(lc_checktree(c));
@@ -60,7 +59,6 @@ static void test_foldnode_cursor_left(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
     lc_Cursor C;
-    assert(c);
     lc_rscanV(c, 768, 1);
     assert(c->levels >= 1);
     assert(lc_checktree(c));
@@ -84,7 +82,6 @@ static void test_foldnode_cursor_left_cacheV(void) {
                           botV(leafV(2)), botV(leafV(2)), botV(leafV(2)),
                           botV(leafV(2)), botV(leafV(2)))));
     lc_Cursor C;
-    assert(c);
     lc_seek(&C, c, 8);
     lc_splice(&C, 3, 0);
     assert(lc_checktree_allow_empty(c, 1));
@@ -104,7 +101,6 @@ static void test_foldnode_cursor_right_cacheV(void) {
                           botV(leafV(2)), botV(leafV(2))),
                    innerV(botV(leafV(2)), botV(leafV(2)))));
     lc_Cursor C;
-    assert(c);
     lc_seek(&C, c, 12);
     lc_splice(&C, 3, 0);
     assert(lc_checktree_allow_empty(c, 1));
