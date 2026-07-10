@@ -152,10 +152,10 @@ int lc_markbreak(lc_Cursor *C, unsigned len);
 
 **返回值**: 同 `lc_splice` — `LC_OK`, `LC_ERRPARAM`。
 
-### lc_erase — 擦除游标间区间
+### lc_remove — 擦除游标间区间
 
 ```c
-int lc_erase(lc_Cursor *L, lc_Cursor *R);
+int lc_remove(lc_Cursor *L, lc_Cursor *R);
 ```
 
 **行为**: 删除游标 L 到 R 之间所有字节（含行断），右方内容前移。L、R 须属同一树且 `lc_offset(L) < lc_offset(R)`。
@@ -166,7 +166,7 @@ int lc_erase(lc_Cursor *L, lc_Cursor *R);
 
 **返回值**: `LC_OK`（成功或 no-op），`LC_ERRPARAM`（参数非法）。操作后 R 失效（树结构已变），L 指向删除点。
 
-**实现**: 同叶调用 `lcD_eraseleaf`，跨叶调用 `lcD_eraserange`（三段法：trim→cut→stitch）。内部 `lcP_reserve` 预分配保证不 OOM。
+**实现**: 同叶调用 `lcD_rmleaf`，跨叶调用 `lcD_rmrange`（三段法：trim→cut→stitch）。内部 `lcP_reserve` 预分配保证不 OOM。
 
 ### lc_splice — 区间删除/插入字节
 
@@ -178,12 +178,12 @@ int lc_splice(lc_Cursor *C, size_t del, unsigned ins);
 
 **行为**:
 - 游标在 trailing 区域: `C->col += ins` 直接返回
-- 删+补字节: 内部 `lc_advance` + `lc_erase` 处理删除，再 `lcD_addbytes` 加回插入字节。删除后若树已空，重置树。
+- 删+补字节: 内部 `lc_advance` + `lc_remove` 处理删除，再 `lcD_addbytes` 加回插入字节。删除后若树已空，重置树。
 - 插入字节: 若游标在有效行内，`leaf->bytes[C->lnu] += ins` 加长当前行；`C->col += ins` 移动游标。
 
-**返回值**: `LC_OK`（成功），`LC_ERRPARAM`（参数非法）。删除路径由 `lc_erase` 的预分配保证不 OOM。
+**返回值**: `LC_OK`（成功），`LC_ERRPARAM`（参数非法）。删除路径由 `lc_remove` 的预分配保证不 OOM。
 
-**注意**: 删除区间可跨任意叶边界。`lc_splice` 内部委托 `lc_erase` 处理删除——`splice(C, del, ins)` 等价于 `erase + addbytes`。`lc_clearbreaks` 是 `splice(len, len)` 的便捷宏。
+**注意**: 删除区间可跨任意叶边界。`lc_splice` 内部委托 `lc_remove` 处理删除——`splice(C, del, ins)` 等价于 `remove + addbytes`。`lc_clearbreaks` 是 `splice(len, len)` 的便捷宏。
 
 ### lc_append — 在中部插入文本/行
 
@@ -292,7 +292,7 @@ stitchnode 是 linecache 最精巧的算法——洋葱序 `for (k=0; k≤levels
 
 **d 的延迟生效**: d 用于记录"待修复右侧子节点数"，当前轮末尾设值，**下一轮** backwardnode 才消耗。因 fillrt 新链建在右侧、其 underfill 需本轮的 foldnode 修复后才能将 C 回退至此位置。
 
-### 2. 三段法区间删除 (lcD_eraserange)
+### 2. 三段法区间删除 (lcD_rmrange)
 
 L/R 双游标界定删除区间，操作分三段:
 1. **求分岔+修边**: 找 `L->paths[l] != R->paths[l]` 的首层。`trimright(L)` 删 L 叶右侧、`trimleft(R)` 删 R 叶左侧。

@@ -1082,80 +1082,80 @@ static void test_clearbreaks_cov_slot(void) {
     lc_close(S);
 }
 
-static void test_erase_params(void) {
+static void test_remove_params(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newtree(S);
     lc_Cursor C, R, X;
     memset(&C, 0, sizeof(C));
     memset(&X, 0, sizeof(X));
 
-    assert(lc_erase(NULL, &R) == LC_ERRPARAM);
-    assert(lc_erase(&C, NULL) == LC_ERRPARAM);
-    assert(lc_erase(&C, &X) == LC_ERRPARAM);
+    assert(lc_remove(NULL, &R) == LC_ERRPARAM);
+    assert(lc_remove(&C, NULL) == LC_ERRPARAM);
+    assert(lc_remove(&C, &X) == LC_ERRPARAM);
     lc_seek(&C, c, 0);
     lc_seek(&R, c, 0);
-    assert(lc_erase(&C, &X) == LC_ERRPARAM); /* X.tree==NULL != c */
-    assert(lc_erase(&X, &C) == LC_ERRPARAM); /* !X->tree */
+    assert(lc_remove(&C, &X) == LC_ERRPARAM); /* X.tree==NULL != c */
+    assert(lc_remove(&X, &C) == LC_ERRPARAM); /* !X->tree */
 
     /* reversed → no-op */
     lc_scanV(c, 10, 10);
     lc_seek(&C, c, 5);
     lc_seek(&R, c, 2);
-    assert(lc_erase(&C, &R) == LC_OK);
+    assert(lc_remove(&C, &R) == LC_OK);
     assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
 
     /* L in trailing region (offset >= bytes) */
     lc_seek(&C, c, lc_bytes(c) + 3);
     lc_seek(&R, c, lc_bytes(c) + 8);
-    assert(lc_erase(&C, &R) == LC_OK);
+    assert(lc_remove(&C, &R) == LC_OK);
 
     lc_deltree(S, c);
     lc_close(S);
 }
 
-static void test_erase_basic(void) {
+static void test_remove_basic(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     lc_Cursor C, R;
 
-    /* erase all */
+    /* remove all */
     c = lc_newtree(S);
     lc_rscanV(c, 100, 10);
     lc_seek(&C, c, 0);
     lc_seek(&R, c, 1000);
-    lc_erase(&C, &R);
+    lc_remove(&C, &R);
     assert(lc_breaks(c) == 0 && lc_bytes(c) == 0);
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 0));
     lc_deltree(S, c);
 
-    /* erase range — keep first 11 + last 9 bytes */
+    /* remove range — keep first 11 + last 9 bytes */
     c = lc_newtree(S);
     lc_rscanV(c, 100, 10);
     lc_seek(&C, c, 11);
     lc_seek(&R, c, 991);
-    lc_erase(&C, &R);
+    lc_remove(&C, &R);
     assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 11));
     lc_deltree(S, c);
 
-    /* erase within single leaf */
+    /* remove within single leaf */
     c = lc_newtree(S);
     lc_scanV(c, 10, 15, 15, 20);
     lc_seek(&C, c, 11);
     lc_seek(&R, c, 26);
-    lc_erase(&C, &R);
+    lc_remove(&C, &R);
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 11));
     lc_deltree(S, c);
 
-    /* erase across leaves */
+    /* remove across leaves */
     c = lc_newtree(S);
     lc_scanV(c, 5, 5, 5, 5, 5, 5, 5, 5);
     lc_seek(&C, c, 5);
     lc_seek(&R, c, 21);
-    lc_erase(&C, &R);
+    lc_remove(&C, &R);
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 5));
     lc_deltree(S, c);
@@ -2489,8 +2489,8 @@ static void test_insert_noscanner(void) {
     X(markbreak_oom_makeroom)     \
     X(clearbreaks_basic)          \
     X(clearbreaks_cov_slot)       \
-    X(erase_params)               \
-    X(erase_basic)                \
+    X(remove_params)              \
+    X(remove_basic)               \
     X(splice_params)              \
     X(splice_basic)               \
     X(splice_reset)               \

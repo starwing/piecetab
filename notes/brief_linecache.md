@@ -6,7 +6,7 @@
 
 单头文件 C89 库，前缀 `lc_`。以 B+ 计量树 (Metric B+ Tree) 维护字节偏移→行号之映射。
 
-**功用**: 文本编辑器中维护行号缓存。支持行断点插入/删除 (`lc_markbreak`/`lc_clearbreaks`)、区间删除 (`lc_erase`)、区间删插字节 (`lc_splice`)、中部插入 (`lc_append`/`lc_insert`)、批量加载 (`lc_scan`)。
+**功用**: 文本编辑器中维护行号缓存。支持行断点插入/删除 (`lc_markbreak`/`lc_clearbreaks`)、区间删除 (`lc_remove`)、区间删插字节 (`lc_splice`)、中部插入 (`lc_append`/`lc_insert`)、批量加载 (`lc_scan`)。
 
 关联: `piecetab.h` (piece table, 前缀 `pt_`)，linecache 为其先行实验。
 
@@ -111,17 +111,17 @@ grep '^LC_API' linecache.h
 
 关键 API：
 
-| 类别     | 函数                                                            | 功用                                                      |
-| -------- | --------------------------------------------------------------- | --------------------------------------------------------- |
-| 生命周期 | `lc_open`, `lc_close`, `lc_reset`                               | 状态管理                                                  |
-| 树       | `lc_newtree`, `lc_deltree`                                      | 树生命周期                                                |
-| 批量     | `lc_scan`                                                       | 批量加载行断点到树尾（可叠加）                            |
-| 查询     | `lc_breaks`, `lc_bytes`                                         | 树级汇总                                                  |
-| 定位     | `lc_seek`, `lc_seekline`                                        | 按偏移/行号定位游标                                       |
-| 移动     | `lc_advance`, `lc_advline`                                      | 字节/行偏移移动（越界 clamp）                             |
-| 查询     | `lc_offset`, `lc_line`, `lc_linelen`, `lc_col`, `lc_lineoffset` | 游标状态查询（宏）                                        |
-| 断点     | `lc_markbreak`, `lc_clearbreaks`                                | 单点插入 / 区间清除行断（宏）                             |
-| 编辑     | `lc_erase`, `lc_splice`, `lc_append`, `lc_insert`               | 区间删除 / 区间删插字节 / 中部插入或纯字节追加（sc=NULL） / 插入游标处（不动） |
+| 类别     | 函数                                                            | 功用                                                                           |
+| -------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| 生命周期 | `lc_open`, `lc_close`, `lc_reset`                               | 状态管理                                                                       |
+| 树       | `lc_newtree`, `lc_deltree`                                      | 树生命周期                                                                     |
+| 批量     | `lc_scan`                                                       | 批量加载行断点到树尾（可叠加）                                                 |
+| 查询     | `lc_breaks`, `lc_bytes`                                         | 树级汇总                                                                       |
+| 定位     | `lc_seek`, `lc_seekline`                                        | 按偏移/行号定位游标                                                            |
+| 移动     | `lc_advance`, `lc_advline`                                      | 字节/行偏移移动（越界 clamp）                                                  |
+| 查询     | `lc_offset`, `lc_line`, `lc_linelen`, `lc_col`, `lc_lineoffset` | 游标状态查询（宏）                                                             |
+| 断点     | `lc_markbreak`, `lc_clearbreaks`                                | 单点插入 / 区间清除行断（宏）                                                  |
+| 编辑     | `lc_remove`, `lc_splice`, `lc_append`, `lc_insert`              | 区间删除 / 区间删插字节 / 中部插入或纯字节追加（sc=NULL） / 插入游标处（不动） |
 
 ## 六、内部函数命名体系
 
@@ -130,15 +130,15 @@ grep '^LC_API' linecache.h
 grep '^static' linecache.h
 ```
 
-| 前缀   | 职责      | 代表函数                                                                                                                                                                                                           |
-| ------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `lcK_` | 游标导航  | `findleaf`, `findline`, `findinleaf`, `locend`, `forwardoff`, `backwardoff`, `forwardline`, `backwardline`                                                                                                         |
-| `lcB_` | 行断/插入 | `oneline`, `makeroom`, `splitroot`, `splitchild`, `splitleaf`, `putbreak`, `append`, `cutleaf`, `fixsource`, `rollback`                                                                                            |
-| `lcD_` | 删除/平衡 | `trimleft`, `trimright`, `balanceleaf`, `balancenode`, `foldleaf`, `foldnode`, `rebalance`, `eraseleaf`, `eraserange`, `makechain`, `findroom`, `mergeleaf`, `backwardnode`, `stitch`, `stitchnode`, `checkstitch` |
-| `lcM_` | 度量      | `up` (自底向上传播 bytes/breaks 至根)                                                                                                                                                                              |
-| `lcN_` | 节点操作  | `sumbytes`, `sumbreaks`, `makespace`, `copy`, `move`, `erase`, `freechildren`                                                                                                                                      |
-| `lcL_` | 叶操作    | `sumbytes` (宏 `lcL_new`, `lcL_idx`)                                                                                                                                                                               |
-| `lcP_` | 池        | `init`, `destroy`, `alloc`, `ralloc`, `free`, `reserve`                                                                                                                                                            |
+| 前缀   | 职责      | 代表函数                                                                                                                                                                                                     |
+| ------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `lcK_` | 游标导航  | `findleaf`, `findline`, `findinleaf`, `locend`, `forwardoff`, `backwardoff`, `forwardline`, `backwardline`                                                                                                   |
+| `lcB_` | 行断/插入 | `oneline`, `makeroom`, `splitroot`, `splitchild`, `splitleaf`, `putbreak`, `append`, `cutleaf`, `fixsource`, `rollback`                                                                                      |
+| `lcD_` | 删除/平衡 | `trimleft`, `trimright`, `balanceleaf`, `balancenode`, `foldleaf`, `foldnode`, `rebalance`, `rmleaf`, `rmrange`, `makechain`, `findroom`, `mergeleaf`, `backwardnode`, `stitch`, `stitchnode`, `checkstitch` |
+| `lcM_` | 度量      | `up` (自底向上传播 bytes/breaks 至根)                                                                                                                                                                        |
+| `lcN_` | 节点操作  | `sumbytes`, `sumbreaks`, `makespace`, `copy`, `move`, `remove`, `freechildren`                                                                                                                               |
+| `lcL_` | 叶操作    | `sumbytes` (宏 `lcL_new`, `lcL_idx`)                                                                                                                                                                         |
+| `lcP_` | 池        | `init`, `destroy`, `alloc`, `ralloc`, `free`, `reserve`                                                                                                                                                      |
 
 ## 七、lc_scan 流程概要
 
@@ -170,7 +170,7 @@ grep '^static' linecache.h
 1. **嵌入 root**: `lc_Cache.root` 是值非指针 — 省一次分配，免 OOM 于建树
 2. **叶无 child_count**: 行数由父 `breaks[i]` 决定，冗余由上层约束保证
 3. **度量双计**: bytes + breaks 双数组允许 O(log n) 双向导航
-4. **lc_splice 事务性**: 删除路径委托 `lc_erase`，其内部 reserve 预分配保不 OOM；插入路径仅改叶内字节
+4. **lc_splice 事务性**: 删除路径委托 `lc_remove`，其内部 reserve 预分配保不 OOM；插入路径仅改叶内字节
 5. **stitch 事务性**: `lcD_checkstitch` 入口 reserve(levels+2 节点)，stitch 全程无 OOM
 6. **balanceleaf rounding**: `d = l - ((l + r + 1) >> 1)` 向上取整，与 foldleaf 游标修正断言强耦合（`assert((dl<0) != (*ls!=o))`）— 修改均分公式需同步改调用方
 

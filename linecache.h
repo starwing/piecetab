@@ -111,10 +111,10 @@ LC_API unsigned lc_linelen(const lc_Cursor *C);
 LC_API int lc_markbreak(lc_Cursor *C, unsigned len);
 #define lc_clearbreaks(C, len) lc_splice((C), (len), (len))
 
-/* append/remove/mutation texts */
+/* mutation texts */
 LC_API int lc_insert(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud);
 LC_API int lc_append(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud);
-LC_API int lc_erase(lc_Cursor *L, lc_Cursor *R);
+LC_API int lc_remove(lc_Cursor *L, lc_Cursor *R);
 LC_API int lc_splice(lc_Cursor *C, size_t del, unsigned ins);
 
 LC_NS_END
@@ -348,7 +348,7 @@ static void lcN_move(lc_Node *d, int di, int si, int n) {
     memmove(&d->breaks[di], &d->breaks[si], n * sizeof(size_t));
 }
 
-static void lcN_erase(lc_State *S, lc_Node *d, int k, int s, int e) {
+static void lcN_remove(lc_State *S, lc_Node *d, int k, int s, int e) {
     lcN_freechildren(S, d, k, s, e);
     if (e < lcN_cc(d)) lcN_move(d, s, e, lcN_cc(d) - e);
     d->child_count -= (e - s);
@@ -595,7 +595,7 @@ static int lcD_foldleaf(lc_Cursor *C) {
         p->breaks[i] += cr, p->bytes[i] += p->bytes[i + 1];
         if (*ls != o)
             --*ps, C->lnu += cl, C->loff += bc, C->nu -= cl, C->off -= bc;
-        return lcN_erase(C->tree->S, p, 0, i + 1, i + 2), 1;
+        return lcN_remove(C->tree->S, p, 0, i + 1, i + 2), 1;
     }
     dl = lcD_balanceleaf(ls, cl, cr, &db), assert(dl && (dl < 0) != (*ls != o));
     p->bytes[i] -= db, p->bytes[i + 1] += db;
@@ -634,7 +634,7 @@ static int lcD_foldnode(lc_Cursor *C, int lfirst, int l) {
         p->bytes[i] += p->bytes[i + 1], p->breaks[i] += p->breaks[i + 1];
         if (*ns != o)
             cp[1] = &ns[0]->children[cp[1] - ns[1]->children + cl], cp[0] -= 1;
-        return lcN_erase(C->tree->S, p, lcK_levels(C) - l, i + 1, i + 2), 1;
+        return lcN_remove(C->tree->S, p, lcK_levels(C) - l, i + 1, i + 2), 1;
     }
     dn = lcD_balancenode(ns, (*ns == o), ds);
     assert(dn != 0 && (dn < 0) != (*ns != o));
@@ -662,7 +662,7 @@ static void lcD_rebalance(lc_Cursor *C, int l) {
     }
 }
 
-static void lcD_eraseleaf(lc_Cursor *C, size_t del) {
+static void lcD_rmleaf(lc_Cursor *C, size_t del) {
     lc_Node *p = lcK_parent(C, lcK_levels(C));
     int      li = lcK_idx(C, p, lcK_levels(C));
     lc_Leaf *lf = lcL_idx(p, li);
@@ -822,7 +822,7 @@ static void lcD_cutrange(lc_Cursor *L, lc_Cursor *R, lc_Node *rt, int fl) {
         p = lcK_parent(L, kl), i = lcK_idx(L, p, kl), cc = lcN_cc(p);
         db = lcN_sumbytes(p, i + 1, cc), dl = lcN_sumbreaks(p, i + 1, cc);
         lcM_up(L, kl - 1, -db, -dl);
-        k = lcK_levels(R) - kl, lcN_erase(S, p, k, i + 1, cc);
+        k = lcK_levels(R) - kl, lcN_remove(S, p, k, i + 1, cc);
         p = lcK_parent(R, kl), i = lcK_idx(R, p, kl);
         i += !(k == 0 && p->breaks[i] != 0);
         lcN_setcc(&rt[k], lcN_cc(p) - i);
@@ -834,7 +834,7 @@ static void lcD_cutrange(lc_Cursor *L, lc_Cursor *R, lc_Node *rt, int fl) {
     lcN_copy(&rt[k], 0, p, i, lcN_setcc(&rt[k], cc - i));
     lcN_setcc(p, i), i = lcK_idx(L, p, fl);
     db = lcN_sumbytes(p, i + 1, cc), dl = lcN_sumbreaks(p, i + 1, cc);
-    lcM_up(L, fl - 1, -db, -dl), lcN_erase(S, p, k, i + 1, lcN_cc(p));
+    lcM_up(L, fl - 1, -db, -dl), lcN_remove(S, p, k, i + 1, lcN_cc(p));
 }
 
 static void lcD_addbytes(lc_Cursor *C, unsigned ins) {
@@ -848,7 +848,7 @@ static void lcD_addbytes(lc_Cursor *C, unsigned ins) {
     }
 }
 
-static void lcD_eraserange(lc_Cursor *L, lc_Cursor *R) {
+static void lcD_rmrange(lc_Cursor *L, lc_Cursor *R) {
     lc_Node rt[LC_MAX_LEVEL];
     int     l;
     assert(L->tree->S == R->tree->S);
@@ -860,15 +860,15 @@ static void lcD_eraserange(lc_Cursor *L, lc_Cursor *R) {
     lcD_addbytes(L, R->col), L->col -= R->col;
 }
 
-LC_API int lc_erase(lc_Cursor *L, lc_Cursor *R) {
+LC_API int lc_remove(lc_Cursor *L, lc_Cursor *R) {
     size_t loff, roff;
     if (!L || !R || !L->tree || L->tree != R->tree) return LC_ERRPARAM;
     loff = lc_offset(L), roff = lc_offset(R);
     if (loff < roff && loff < lcK_bytes(L)) {
         if (L->paths[lcK_levels(L)] != R->paths[lcK_levels(R)])
-            lcD_eraserange(L, R);
+            lcD_rmrange(L, R);
         else
-            lcD_eraseleaf(L, roff - loff);
+            lcD_rmleaf(L, roff - loff);
     }
     return LC_OK;
 }
@@ -879,7 +879,7 @@ LC_API int lc_splice(lc_Cursor *C, size_t del, unsigned ins) {
     if ((del = lc_min(del, lcK_bytes(C) - lc_offset(C))) > 0) {
         lc_Cursor R = *C;
         int       r = lc_advance(&R, (lc_Diff)del);
-        assert(r == LC_OK), r = lc_erase(C, &R), assert(r == LC_OK), (void)r;
+        assert(r == LC_OK), r = lc_remove(C, &R), assert(r == LC_OK), (void)r;
     }
     if (lcK_bytes(C) > 0)
         lcD_addbytes(C, ins);
