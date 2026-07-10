@@ -134,7 +134,7 @@ invalidate these caches by setting them back to `-1`.
 - The internal auto-blob created by the first edit on a cursor increments the version (typically parent version + 1).
 
 ### Initialization helpers
-- `pt_empty(state)` returns an empty blob (owned reference).
+- `pt_empty(state)` returns `&S->empty` (state-embedded sentinel, zero allocation, no release needed).
 - `pt_from(state, ptr, len)` creates a blob referencing external memory without copying.
 
 ## License

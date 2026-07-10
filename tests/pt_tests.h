@@ -324,18 +324,16 @@ PT_STATIC int pt_checkleaves(const pt_Blob *S, unsigned **brs) {
 
 PT_STATIC pt_Node *leafV_(pt_State *S, ...) {
     va_list     ap;
-    unsigned    cc, i;
+    unsigned    i, cc = 0;
     pt_Node    *n;
     const char *s;
     va_start(ap, S);
-    cc = 0;
     while (va_arg(ap, const char *) != NULL) cc++;
     va_end(ap);
     n = (pt_Node *)ptP_alloc(S, &S->nodes);
     assert(n && cc <= PT_FANOUT);
     (void)memset(n->mask, 0, sizeof(n->mask));
-    n->child_count = (unsigned short)cc;
-    n->version = 0;
+    n->child_count = cc, n->version = 0;
     va_start(ap, S);
     for (i = 0; i < cc; i++) {
         s = va_arg(ap, const char *);
@@ -348,39 +346,33 @@ PT_STATIC pt_Node *leafV_(pt_State *S, ...) {
 
 PT_STATIC pt_Node *innerV_(pt_State *S, ...) {
     va_list  ap;
-    unsigned cc, i;
+    unsigned i, cc = 0;
     pt_Node *n, *ch;
     int      w;
     va_start(ap, S);
-    cc = 0;
     while (va_arg(ap, pt_Node *) != NULL) cc++;
     va_end(ap);
     n = (pt_Node *)ptP_alloc(S, &S->nodes);
     assert(n && cc <= PT_FANOUT);
-    (void)memset(n->mask, 0, sizeof(n->mask));
-    n->child_count = (unsigned short)cc;
-    n->version = 0;
+    memset(n->mask, 0, sizeof(n->mask));
+    n->child_count = cc, n->version = 0;
     va_start(ap, S);
     for (i = 0; i < cc; i++) {
         ch = va_arg(ap, pt_Node *);
         n->children[i] = ch;
         n->bytes[i] = ptN_sumbytes(ch, 0, (int)ch->child_count);
-        for (w = 0; w < (int)PT_MASK_SIZE; ++w)
-            if (ch->mask[w]) {
-                ptM_sethole(n, i, 1);
-                break;
-            }
+        for (w = 0; w < PT_MASK_SIZE && !ch->mask[w]; ++w) continue;
+        ptM_sethole(n, i, w != PT_MASK_SIZE);
     }
     va_end(ap);
     return n;
 }
 
 PT_STATIC pt_Blob treeV(pt_State *S, unsigned levels, pt_Node *root) {
-    pt_Tree *t = (pt_Tree *)pt_empty(S);
+    pt_Tree *t = (pt_Tree *)pt_from(S, NULL, 0);
     unsigned i;
     assert(t && root->child_count <= PT_FANOUT);
-    t->levels = levels;
-    t->root = *root;
+    t->levels = levels, t->root = *root;
     ptP_free(&S->nodes, root);
     t->bytes = 0;
     for (i = 0; i < t->root.child_count; i++) t->bytes += t->root.bytes[i];

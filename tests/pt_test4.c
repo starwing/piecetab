@@ -36,18 +36,14 @@ static void test_lifecycle(void) {
 
 static void test_seek_empty(void) {
     pt_State *S = pt_newstate(NULL, NULL);
-    pt_Blob   b = pt_empty(S);
     pt_Cursor c;
 
-    assert(b != NULL);
-
-    pt_seek(&c, b, 0);
+    pt_seek(&c, pt_empty(S), 0);
     assert(pt_offset(&c) == 0);
 
-    pt_seek(&c, b, 100);
+    pt_seek(&c, pt_empty(S), 100);
     assert(pt_offset(&c) == 0); /* clamped */
 
-    pt_release(b);
     pt_close(S);
 }
 
@@ -284,7 +280,8 @@ static void test_insert_multiversion(void) {
             innerV(leafV(litV("aa"), litV("bb")),
                    leafV(litV("cc"), litV("dd"), litV("ee"), litV("22"))));
     pt_release(c1.tree), pt_release(c2.tree);
-    pt_release(a), pt_release(b);
+    pt_release(a);
+    pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -314,7 +311,8 @@ static void test_insert_oom_fork(void) {
     pt_Blob   b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
-    cnt = 1; /* reserve page ok, fork alloc fails */
+    cnt = 0; /* nodes reserve fails (pt_empty is sentinel, no freelist entry;
+                reserve OOM achieves fork failure) */
     assert(pt_insert(&c, "x", 1) == PT_ERRMEM);
     assert(!c.dirty && pt_bytes(c.tree) == 0);
     cnt = 1000;
@@ -726,15 +724,16 @@ static void test_edit_rollback(void) {
         assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     }
 
-    /* Path 2: source only via from → rollback invalidates cursor */
+    /* Path 2: source only via from → rollback returns to sentinel */
     {
         pt_Blob   b = pt_empty(S);
         pt_Cursor c;
         pt_seek(&c, b, 0);
         assert(pt_edit(&c, 0, "hello", 5) == PT_OK);
-        pt_release(b); /* external drops source; only from holds it */
+        pt_release(b); /* external drops source; sentinel stays alive */
         pt_rollback(&c);
-        assert(c.tree == NULL); /* cursor invalidated */
+        assert(c.tree == b); /* sentinel, not NULL */
+        assert(!c.dirty && pt_bytes(c.tree) == 0);
         assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     }
 
@@ -778,7 +777,7 @@ static size_t collect_bytes_r(
                 memcpy(buf + off, h->data, h->n);
                 off += h->n;
             } else {
-                memcpy(buf + off, n->children[i], n->bytes[i]);
+                memcpy(buf + off, (const char *)n->children[i], n->bytes[i]);
                 off += n->bytes[i];
             }
         }
@@ -857,8 +856,7 @@ static void test_edit_brute(void) {
                 for (k = 0; k < c.tree->root.child_count; ++k)
                     assert(!ptM_ishole(&c.tree->root, k));
 
-                pt_release(c.tree); /* snap == c.tree */
-                pt_release(fb);
+                pt_release(c.tree); /* snap == c.tree (from-chain frees fb) */
                 assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
             }
         }
@@ -1164,11 +1162,13 @@ static void test_remove_params(void) {
 
 static void test_remove_hole_whole(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b = treeV(S, 0, leafholeV(S, "hello", 1, NULL, 0, NULL, 0));
+    pt_Blob   b = pt_empty(S);
     pt_Cursor c;
-    assert(b && pt_bytes(b) == 5);
     pt_seek(&c, b, 0);
-    assert(pt_remove(&c, 5) == PT_OK);
+    assert(pt_edit(&c, 0, "hello", 5) == PT_OK); /* fork + hole in dirty tree */
+    assert(pt_bytes(c.tree) == 5 && c.dirty);
+    pt_locate(&c, 0);
+    assert(pt_remove(&c, 5) == PT_OK); /* remove entire hole */
     assert(pt_checktree(c.tree));
     assert(pt_bytes(c.tree) == 0);
     pt_release(c.tree), pt_release(b);
@@ -1178,15 +1178,17 @@ static void test_remove_hole_whole(void) {
 
 static void test_remove_hole_mid(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b = treeV(S, 0, leafholeV(S, "hello world", 1, NULL, 0, NULL, 0));
+    pt_Blob   b = pt_empty(S);
     pt_Cursor c;
-    assert(b && pt_bytes(b) == 11);
-    pt_seek(&c, b, 2);                 /* pos 2: 'l' in "hello world" */
-    assert(pt_remove(&c, 5) == PT_OK); /* delete [2,7): "llo w" */
+    pt_seek(&c, b, 0);
+    pt_edit(&c, 0, "hello world", 11); /* fork + hole in dirty tree */
+    assert(pt_bytes(c.tree) == 11 && c.dirty);
+    pt_locate(&c, 2);            /* pos 2: 'l' in "hello world" */
+    assert(pt_remove(&c, 5) == PT_OK); /* delete [2,7): "llo w" from hole */
     assert(pt_checktree(c.tree));
     assert(pt_checkcursor(&c, 2));
-    /* result: hole "heorld" (indices 0-1 + 7-11) = 6 bytes */
     assert(pt_bytes(c.tree) == 6);
+    /* result: hole "heorld" (indices 0-1 + 7-11) = 6 bytes */
     {
         pt_Node *r = &c.tree->root;
         assert(r->child_count == 1);
@@ -1204,15 +1206,20 @@ static void test_remove_hole_mid(void) {
 
 static void test_remove_hole_boundary(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b = treeV(S, 0, leafholeV(S, "abc", 0, "DEF", 1, "ghi", 0));
-    /* bytes: abc(3) + DEF(3) + ghi(3) = 9 */
+    pt_Blob   b = pt_empty(S);
     pt_Cursor c;
-    assert(b && pt_bytes(b) == 9);
-    pt_seek(&c, b, 2);
+    /* build dirty tree: lit("abc") + hole("DEF") + lit("ghi") = 9B */
+    pt_seek(&c, b, 0);
+    pt_insert(&c, "abc", 3);
+    pt_advance(&c, 3);
+    pt_edit(&c, 0, "DEF", 3);
+    pt_advance(&c, 3);
+    pt_insert(&c, "ghi", 3);
+    assert(pt_bytes(c.tree) == 9 && c.dirty);
     /* delete [2,6): "c" (tail of lit) + "DEF" (whole hole) */
+    pt_locate(&c, 2);
     assert(pt_remove(&c, 4) == PT_OK);
     assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 2));
     /* result: "ab"(lit) + "ghi"(lit) — no hole left */
     pt_asserttree(c.tree, 0, leafV(litV("ab"), litV("ghi")));
     pt_release(c.tree), pt_release(b);
@@ -1222,18 +1229,25 @@ static void test_remove_hole_boundary(void) {
 
 static void test_remove_hole_mixed(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b = treeV(S, 0, leafholeV(S, "abc", 0, "DEF", 1, "ghi", 0));
-    /* bytes: 3+3+3 = 9 */
+    pt_Blob   b = pt_empty(S);
     pt_Cursor c;
-    pt_seek(&c, b, 1);
+    /* build dirty tree: lit("abc") + hole("DEF") + lit("ghi") = 9B */
+    pt_seek(&c, b, 0);
+    pt_insert(&c, "abc", 3);
+    pt_advance(&c, 3);
+    pt_edit(&c, 0, "DEF", 3);
+    pt_advance(&c, 3);
+    pt_insert(&c, "ghi", 3);
+    assert(pt_bytes(c.tree) == 9 && c.dirty);
     /* delete [1,5): "bc"(2 from lit") + "DE"(2 from hole) */
+    pt_locate(&c, 1);
     assert(pt_remove(&c, 4) == PT_OK);
     assert(pt_checktree(c.tree));
     assert(pt_checkcursor(&c, 1));
     /* result: "a"(lit) + hole"F"(1) + "ghi"(lit) */
     assert(pt_bytes(c.tree) == 5);
     {
-        pt_Node *r = &c.tree->root; /* operating tree (forked from b) */
+        pt_Node *r = &c.tree->root;
         assert(r->child_count == 3);
         assert(!ptM_ishole(r, 0)); /* lit "a" */
         assert(ptM_ishole(r, 1));  /* hole "F" */
@@ -1323,7 +1337,7 @@ static void test_remove_brute(void) {
             pt_release(fresh);
             assert(pt_bytes(cc.tree) == 20);
             /* remove */
-            pt_seek(&cc, cc.tree, pos);
+            pt_locate(&cc, pos);
             assert(pt_remove(&cc, len) == PT_OK);
             if (!pt_checktree(cc.tree)) {
                 pt_log("FAIL: remove_brute pos=%zu len=%zu\n", pos, len);
@@ -1394,8 +1408,8 @@ static void test_remove_fold_balance(void) {
             innerV(leafV(litV("a")),
                    leafV(litV("x"), litV("y"), litV("z"), litV("w"))));
     pt_seek(&c, b, 0);
-    assert(pt_remove(&c, 1) == PT_OK); /* delete "a" entirely */
-    assert(pt_checktree(c.tree));
+    assert(pt_remove(&c, 3) == PT_OK);
+    assert(pt_checktree_allow_empty(c.tree, 1));
     pt_release(c.tree), pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
@@ -1529,14 +1543,19 @@ static void test_remove_trim_hole(void) {
 
 static void test_remove_hole_eraseleaf(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Node  *lf = leafholeV(S, "hole1", 1, "lit", 0, "hole2", 1);
-    pt_Blob   b = treeV(S, 0, lf);
+    pt_Blob   b = pt_empty(S);
     pt_Cursor c;
-    pt_seek(&c, b, 4);
+    pt_seek(&c, b, 0);
+    pt_edit(&c, 0, "hole1", 5); /* hole("hole1") at pos 0 */
+    pt_insert(&c, "lit", 3);    /* lit at pos 5 */
+    pt_advance(&c, 3);          /* to pos 8 */
+    pt_edit(&c, 0, "hole2", 5); /* hole("hole2") at pos 8 */
+    pt_release(b);
+    pt_locate(&c, 4);
     assert(pt_remove(&c, 3) == PT_OK);
     assert(pt_checktree(c.tree));
     assert(pt_checkcursor(&c, 4));
-    pt_release(c.tree), pt_release(b);
+    pt_release(c.tree);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -1785,9 +1804,13 @@ static void test_edit_fresh_boundary(void) {
 
 static void test_edit_append_tail(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b = treeV(S, 0, leafholeV(S, "hello", 1, NULL, 0, NULL, 0));
+    pt_Blob   b = pt_empty(S);
     pt_Cursor c;
-    pt_seek(&c, b, 5);
+    pt_seek(&c, b, 0);
+    assert(pt_edit(&c, 0, "hello", 5) == PT_OK);
+    assert(c.dirty);
+    pt_release(b);
+    pt_locate(&c, 5);
     assert(pt_edit(&c, 0, " world", 6) == PT_OK);
     assert(pt_checktree(c.tree));
     assert(pt_checkcursor(&c, 11));
@@ -1800,16 +1823,14 @@ static void test_edit_append_tail(void) {
             assert(h->n == 11 && memcmp(h->data, "hello world", 11) == 0);
         }
     }
-    pt_release(c.tree), pt_release(b);
+    pt_release(c.tree);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
 
 static void test_edit_append_full(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Hole  *h;
-    pt_Node  *lf;
-    pt_Blob   b;
+    pt_Blob   b = pt_empty(S);
     pt_Cursor c;
     int       i;
     /* hole with 60 bytes (close to PT_MAX_HOLESIZE=62), append 5 → overflow */
@@ -1817,17 +1838,11 @@ static void test_edit_append_full(void) {
         static char bigbuf[61];
         for (i = 0; i < 60; ++i) bigbuf[i] = 'a';
         bigbuf[60] = '\0';
-        h = make_hole(S, bigbuf, 60);
+        pt_seek(&c, b, 0);
+        assert(pt_edit(&c, 0, bigbuf, 60) == PT_OK);
     }
-    lf = (pt_Node *)ptP_alloc(S, &S->nodes);
-    memset(lf, 0, sizeof(pt_Node));
-    lf->version = 0;
-    lf->children[0] = (pt_Node *)h;
-    lf->bytes[0] = 60;
-    ptM_sethole(lf, 0, 1);
-    lf->child_count = 1;
-    b = treeV(S, 0, lf);
-    pt_seek(&c, b, 60);
+    pt_release(b);
+    pt_locate(&c, 60);
     assert(pt_edit(&c, 0, "bbbbb", 5) == PT_OK);
     assert(pt_checktree(c.tree));
     assert(pt_checkcursor(&c, 65));
@@ -1846,18 +1861,21 @@ static void test_edit_append_full(void) {
             assert(hb->n == 5 && memcmp(hb->data, "bbbbb", 5) == 0);
         }
     }
-    pt_release(c.tree), pt_release(b);
+    pt_release(c.tree);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
 
 static void test_edit_prev_hole(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Node  *lf = leafholeV(S, "hello", 1, "XYZ", 0, NULL, 0);
-    pt_Blob   b = treeV(S, 0, lf);
+    pt_Blob   b = pt_empty(S);
     pt_Cursor c;
+    pt_seek(&c, b, 0);
+    pt_edit(&c, 0, "hello", 5); /* hole("hello") at pos 0 */
+    pt_insert(&c, "XYZ", 3);    /* lit("XYZ") at pos 5 */
+    pt_release(b);
     /* seek to 5: boundary after hole "hello", start of lit "XYZ" */
-    pt_seek(&c, b, 5);
+    pt_locate(&c, 5);
     assert(pt_edit(&c, 0, "abc", 3) == PT_OK);
     assert(pt_checktree(c.tree));
     assert(pt_checkcursor(&c, 8));
@@ -1872,16 +1890,20 @@ static void test_edit_prev_hole(void) {
         assert(!ptM_ishole(r, 1));
         assert(r->bytes[1] == 3 && memcmp(r->children[1], "XYZ", 3) == 0);
     }
-    pt_release(c.tree), pt_release(b);
+    pt_release(c.tree);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
 
 static void test_edit_mid_fit(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b = treeV(S, 0, leafholeV(S, "hello world", 1, NULL, 0, NULL, 0));
+    pt_Blob   b = pt_empty(S);
     pt_Cursor c;
-    pt_seek(&c, b, 5);
+    pt_seek(&c, b, 0);
+    assert(pt_edit(&c, 0, "hello world", 11) == PT_OK);
+    assert(c.dirty);
+    pt_release(b);
+    pt_locate(&c, 5);
     assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
     assert(pt_checktree(c.tree));
     assert(pt_checkcursor(&c, 8));
@@ -1895,16 +1917,14 @@ static void test_edit_mid_fit(void) {
             assert(memcmp(h->data, "helloXYZ world", 14) == 0);
         }
     }
-    pt_release(c.tree), pt_release(b);
+    pt_release(c.tree);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
 
 static void test_edit_mid_split(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Hole  *h;
-    pt_Node  *lf;
-    pt_Blob   b;
+    pt_Blob   b = pt_empty(S);
     pt_Cursor c;
     int       i;
     /* hole with 60 bytes, insert 5 at middle → 65 > CAP → splitins */
@@ -1912,17 +1932,11 @@ static void test_edit_mid_split(void) {
         static char splbuf[61];
         for (i = 0; i < 60; ++i) splbuf[i] = 'a';
         splbuf[60] = '\0';
-        h = make_hole(S, splbuf, 60);
+        pt_seek(&c, b, 0);
+        assert(pt_edit(&c, 0, splbuf, 60) == PT_OK);
     }
-    lf = (pt_Node *)ptP_alloc(S, &S->nodes);
-    memset(lf, 0, sizeof(pt_Node));
-    lf->version = 0;
-    lf->children[0] = (pt_Node *)h;
-    lf->bytes[0] = 60;
-    ptM_sethole(lf, 0, 1);
-    lf->child_count = 1;
-    b = treeV(S, 0, lf);
-    pt_seek(&c, b, 30);
+    pt_release(b);
+    pt_locate(&c, 30);
     assert(pt_edit(&c, 0, "bbbbb", 5) == PT_OK);
     assert(pt_checktree(c.tree));
     assert(pt_checkcursor(&c, 35));
@@ -1947,7 +1961,7 @@ static void test_edit_mid_split(void) {
             for (i = 0; i < 30; ++i) assert(hr->data[i] == 'a');
         }
     }
-    pt_release(c.tree), pt_release(b);
+    pt_release(c.tree);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -1959,7 +1973,7 @@ static void test_edit_del_then_ins(void) {
     pt_seek(&c, b, 0);
     pt_insert(&c, "hello world", 11);
     pt_release(b);
-    pt_seek(&c, c.tree, 3);
+    pt_locate(&c, 3);
     assert(pt_edit(&c, 2, "XYZ", 3) == PT_OK);
     assert(pt_checktree(c.tree));
     assert(pt_checkcursor(&c, 6));
@@ -1989,7 +2003,7 @@ static void test_edit_del_only(void) {
     pt_seek(&c, b, 0);
     pt_insert(&c, "hello world", 11);
     pt_release(b);
-    pt_seek(&c, c.tree, 3);
+    pt_locate(&c, 3);
     assert(pt_edit(&c, 5, NULL, 0) == PT_OK);
     assert(pt_checktree(c.tree));
     assert(pt_checkcursor(&c, 3));
@@ -2038,7 +2052,7 @@ static void test_edit_split_tree(void) {
     pt_append(&c, "cc", 2);
     pt_append(&c, "dd", 2);
     pt_release(b);
-    pt_seek(&c, c.tree, 2);
+    pt_locate(&c, 2);
     assert(pt_edit(&c, 0, "ZZ", 2) == PT_OK);
     assert(pt_checktree(c.tree));
     assert(pt_checkcursor(&c, 4));
@@ -2160,18 +2174,25 @@ static void test_commit_no_merge(void) {
 
 static void test_commit_mixed(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b = treeV(S, 0, leafholeV(S, "abc", 0, "DEF", 1, "ghi", 0));
+    pt_Blob   b = pt_empty(S);
     pt_Cursor c;
     int       i;
     pt_seek(&c, b, 0);
-    assert(pt_edit(&c, 0, "x", 1) == PT_OK); /* make dirty */
+    pt_insert(&c, "abc", 3);  /* lit at pos 0 */
+    pt_advance(&c, 3);        /* to pos 3 */
+    pt_edit(&c, 0, "DEF", 3); /* hole at pos 3 */
+    pt_advance(&c, 3);        /* to pos 6 */
+    pt_insert(&c, "ghi", 3);  /* lit at pos 6 */
+    pt_release(b);
+    pt_locate(&c, 0);
+    assert(pt_edit(&c, 0, "x", 1) == PT_OK);
     assert(pt_commit(&c) != NULL);
     assert(pt_checktree(c.tree));
     {
         pt_Node *r = &c.tree->root;
         for (i = 0; i < (int)r->child_count; ++i) assert(!ptM_ishole(r, i));
     }
-    pt_release(c.tree), pt_release(b);
+    pt_release(c.tree);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -2256,13 +2277,17 @@ static void test_commit_then_reseek(void) {
 /* E11/E12: bytes/levels/child_count unchanged by freeze */
 static void test_commit_bytes_invariant(void) {
     pt_State      *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob        b = treeV(S, 0, leafholeV(S, "abc", 1, "DE", 1, NULL, 0));
+    pt_Blob        b = pt_empty(S);
     pt_Cursor      c;
     size_t         bytes_before;
     unsigned       levels_before;
     unsigned short cc_before;
     pt_seek(&c, b, 0);
-    assert(pt_edit(&c, 0, "XY", 2) == PT_OK);
+    assert(pt_edit(&c, 0, "abc", 3) == PT_OK); /* hole("abc") at pos 0 */
+    assert(pt_edit(&c, 0, "DE", 2) == PT_OK);  /* appends hole("DE") */
+    pt_release(b);
+    pt_locate(&c, 0);
+    assert(pt_edit(&c, 0, "XY", 2) == PT_OK); /* add hole("XY") at front */
     bytes_before = pt_bytes(c.tree);
     levels_before = c.tree->levels;
     cc_before = c.tree->root.child_count;
@@ -2270,7 +2295,7 @@ static void test_commit_bytes_invariant(void) {
     assert(pt_bytes(c.tree) == bytes_before);
     assert(c.tree->levels == levels_before);
     assert(c.tree->root.child_count == cc_before);
-    pt_release(c.tree), pt_release(b);
+    pt_release(c.tree);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }

@@ -91,11 +91,11 @@ struct lc_Cursor {
 typedef struct lc_Cursor lc_Cursor;
 typedef ptrdiff_t        lc_Diff;
 
-/* initialize */
+/* construction */
 LC_API int lc_seek(lc_Cursor *C, lc_Cache *c, size_t offset);
 LC_API int lc_seekline(lc_Cursor *C, lc_Cache *c, size_t line);
 
-/* move */
+/* navigate */
 LC_API int lc_advance(lc_Cursor *C, lc_Diff delta);
 LC_API int lc_advline(lc_Cursor *C, lc_Diff delta);
 
