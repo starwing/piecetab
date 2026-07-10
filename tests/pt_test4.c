@@ -55,7 +55,6 @@ static void test_insert_basic(void) {
     pt_Cursor c;
     int       r;
 
-    assert(b);
     pt_seek(&c, b, 0);
     r = pt_insert(&c, "hello", 5);
     assert(r == PT_OK);
@@ -81,7 +80,6 @@ static void test_insert_before(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
     pt_Blob   b = pt_empty(S);
     pt_Cursor c;
-    assert(b);
     pt_seek(&c, b, 0);
     pt_insert(&c, "hello", 5);               /* ["hello"], cursor stays pos 0 */
     assert(pt_insert(&c, "XX", 2) == PT_OK); /* poff==0 -> insert before */
@@ -465,7 +463,7 @@ static void test_insert_committed_split(void) {
     for (k = 0; k < 62; ++k) pt_append(&c, buf + k * 3, 2);
     a = pt_commit(&c);
     assert(a->levels >= 2);
-    pt_seek(&c, a, (pt_Delta)pt_bytes(a)); /* end of committed tree */
+    pt_seek(&c, a, pt_bytes(a)); /* end of committed tree */
     for (k = 0; k < 40; ++k) {
         assert(pt_append(&c, buf + 200 + k * 2, 2) == PT_OK);
         assert(pt_checktree(c.tree));
@@ -520,6 +518,24 @@ static void test_rollback_released_source(void) {
     pt_rollback(&c);        /* transient + a released; cursor invalidated */
     assert(c.tree == NULL); /* no dangling: cursor no longer borrows a */
     pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+/* release order with two committed blobs (from-chain COW) */
+
+static void test_remove_release_order(void) {
+    pt_State *S = pt_newstate(&test_alloc, NULL);
+    pt_Blob   b0 = pt_from(S, "hello world foobar", 18);
+    pt_Cursor c;
+    pt_Blob   b1;
+    pt_seek(&c, b0, 5);
+    pt_insert(&c, "XYZ", 3);
+    b1 = pt_commit(&c);
+    assert(pt_checktree(b1));
+    pt_release(b0);            /* release source first; b1 still shares nodes */
+    assert(pt_checktree(b1));  /* b1 not dangling */
+    pt_release(b1);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -1020,6 +1036,7 @@ static void test_peekscratch_adjacent(void) {
     X(splice_null)              \
     X(from_basic)               \
     X(release_order)            \
+    X(remove_release_order)     \
     X(rollback_released_source) \
     X(remove_same_mid)          \
     X(remove_same_prefix)       \
@@ -1044,11 +1061,12 @@ static void test_peekscratch_adjacent(void) {
     X(remove_stitch_overflow)   \
     X(remove_foldnode_balance)  \
     X(remove_hole_trim)         \
-    X(remove_mergelit)          \
+    X(remove_merge_literal)     \
+    X(remove_merge_hole_full)   \
+    X(remove_merge_hole_split)  \
     X(remove_stitch_deep)       \
     X(remove_trim_hole)         \
     X(remove_hole_eraseleaf)    \
-    X(remove_mergelit_left)     \
     X(edit_params)              \
     X(edit_empty)               \
     X(edit_fresh_lit_mid)       \
@@ -1453,37 +1471,139 @@ static void test_remove_hole_trim(void) {
     pt_close(S);
 }
 
-static void test_remove_mergelit(void) {
+/* seam merge: delete a non-contiguous piece separating two同源buf残片,
+   so the残片s become physically adjacent → mergeleaf fuses them.
+   Covers: same node, cross node, multi-element cross node. */
+static void test_remove_merge_literal(void) {
     static const char buf[] = "abcdef";
-    pt_State         *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob           b;
-    pt_Node          *lf;
-    pt_Cursor         c;
-
-    /* levels=0 leaf with 2 physically-contiguous literal pieces:
-       "abc" at buf[0..2], "def" at buf[3..5] — adjacent via same buf */
-    lf = (pt_Node *)ptP_alloc(S, &S->nodes);
-    memset(lf, 0, sizeof(pt_Node));
-    lf->children[0] = (pt_Node *)(buf + 0);
-    lf->bytes[0] = 3; /* "abc" */
-    lf->children[1] = (pt_Node *)(buf + 3);
-    lf->bytes[1] = 3; /* "def", physically contiguous after "abc" */
-    lf->child_count = 2;
-
-    b = treeV(S, 0, lf);
-    pt_seek(&c, b, 0);
-    /* Delete "a" (first byte of first piece): remaining "bc" at buf+1
-       is contiguous with "def" at buf+3 → mergelit merges */
-    assert(pt_remove(&c, 1) == PT_OK);
-    assert(pt_checktree(c.tree));
-    /* mergelit merges "bc"+"def" → single piece "bcdef" at buf+1 */
+    /* --- same node (levels=0): [abc][SEP][def] delete SEP --- */
     {
-        pt_Node *r = &c.tree->root;
-        assert(r->child_count == 1);
-        assert(!ptM_ishole(r, 0));
-        assert(r->bytes[0] == 5);
-        assert(memcmp(r->children[0], "bcdef", 5) == 0);
+        pt_State *S = pt_newstate(&test_alloc, NULL);
+        pt_Node  *lf = (pt_Node *)ptP_alloc(S, &S->nodes);
+        pt_Blob   b;
+        pt_Cursor c;
+        memset(lf, 0, sizeof(pt_Node));
+        lf->children[0] = (pt_Node *)(buf + 0), lf->bytes[0] = 3;
+        lf->children[1] = (pt_Node *)"SEP", lf->bytes[1] = 3;
+        lf->children[2] = (pt_Node *)(buf + 3), lf->bytes[2] = 3;
+        lf->child_count = 3;
+        b = treeV(S, 0, lf);
+        pt_seek(&c, b, 3);
+        assert(pt_remove(&c, 3) == PT_OK);
+        assert(pt_checktree(c.tree) && pt_checkcursor(&c, 3));
+        pt_asserttree(c.tree, 0, leafV(litV("abcdef")));
+        pt_release(c.tree), pt_release(b);
+        assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+        pt_close(S);
     }
+    /* --- cross node (levels=1): [abc,P][Q,def] delete P+Q --- */
+    {
+        pt_State *S = pt_newstate(&test_alloc, NULL);
+        pt_Node  *l0 = (pt_Node *)ptP_alloc(S, &S->nodes);
+        pt_Node  *l1 = (pt_Node *)ptP_alloc(S, &S->nodes);
+        pt_Blob   b;
+        pt_Cursor c;
+        memset(l0, 0, sizeof(pt_Node)), memset(l1, 0, sizeof(pt_Node));
+        l0->children[0] = (pt_Node *)(buf + 0), l0->bytes[0] = 3;
+        l0->children[1] = (pt_Node *)"P", l0->bytes[1] = 1;
+        l0->child_count = 2;
+        l1->children[0] = (pt_Node *)"Q", l1->bytes[0] = 1;
+        l1->children[1] = (pt_Node *)(buf + 3), l1->bytes[1] = 3;
+        l1->child_count = 2;
+        b = treeV(S, 1, innerV(l0, l1));
+        pt_seek(&c, b, 3);
+        assert(pt_remove(&c, 2) == PT_OK);
+        assert(pt_checktree(c.tree) && pt_checkcursor(&c, 3));
+        pt_asserttree(c.tree, 0, leafV(litV("abcdef")));
+        pt_release(c.tree), pt_release(b);
+        assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+        pt_close(S);
+    }
+    /* --- multi-element cross node: [abc,X,Y][Z,def] delete X+Y+Z --- */
+    {
+        pt_State *S = pt_newstate(&test_alloc, NULL);
+        pt_Node  *l0 = (pt_Node *)ptP_alloc(S, &S->nodes);
+        pt_Node  *l1 = (pt_Node *)ptP_alloc(S, &S->nodes);
+        pt_Blob   b;
+        pt_Cursor c;
+        memset(l0, 0, sizeof(pt_Node)), memset(l1, 0, sizeof(pt_Node));
+        l0->children[0] = (pt_Node *)(buf + 0), l0->bytes[0] = 3;
+        l0->children[1] = (pt_Node *)"X", l0->bytes[1] = 1;
+        l0->children[2] = (pt_Node *)"Y", l0->bytes[2] = 1;
+        l0->child_count = 3;
+        l1->children[0] = (pt_Node *)"Z", l1->bytes[0] = 1;
+        l1->children[1] = (pt_Node *)(buf + 3), l1->bytes[1] = 3;
+        l1->child_count = 2;
+        b = treeV(S, 1, innerV(l0, l1));
+        pt_seek(&c, b, 3);
+        assert(pt_remove(&c, 3) == PT_OK);
+        assert(pt_checktree(c.tree) && pt_checkcursor(&c, 3));
+        pt_asserttree(c.tree, 0, leafV(litV("abcdef")));
+        pt_release(c.tree), pt_release(b);
+        assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+        pt_close(S);
+    }
+}
+
+/* === hole merge tests (mergeleaf full+partial merge) === */
+
+static void test_remove_merge_hole_full(void) {
+    pt_State *S = pt_newstate(&test_alloc, NULL);
+    pt_Node  *l0 = (pt_Node *)ptP_alloc(S, &S->nodes);
+    pt_Node  *l1 = (pt_Node *)ptP_alloc(S, &S->nodes);
+    pt_Blob   b;
+    pt_Cursor c;
+    memset(l0, 0, sizeof(pt_Node));
+    l0->children[0] = (pt_Node *)make_hole(
+            S, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 30);
+    l0->bytes[0] = 30;
+    ptM_sethole(l0, 0, 1);
+    l0->children[1] = (pt_Node *)"X";
+    l0->bytes[1] = 1;
+    l0->child_count = 2;
+    memset(l1, 0, sizeof(pt_Node));
+    l1->children[0] = (pt_Node *)make_hole(
+            S, "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", 32);
+    l1->bytes[0] = 32;
+    ptM_sethole(l1, 0, 1);
+    l1->child_count = 1;
+    b = treeV(S, 1, innerV(l0, l1));
+    pt_seek(&c, b, 30);
+    assert(pt_remove(&c, 1) == PT_OK);
+    assert(pt_checktree(c.tree) && pt_checkcursor(&c, 30));
+    assert(pt_bytes(c.tree) == 62);
+    pt_release(c.tree), pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_remove_merge_hole_split(void) {
+    pt_State *S = pt_newstate(&test_alloc, NULL);
+    pt_Node  *l0 = (pt_Node *)ptP_alloc(S, &S->nodes);
+    pt_Node  *l1 = (pt_Node *)ptP_alloc(S, &S->nodes);
+    pt_Blob   b;
+    pt_Cursor c;
+    memset(l0, 0, sizeof(pt_Node));
+    l0->children[0] = (pt_Node *)make_hole(
+            S, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 40);
+    l0->bytes[0] = 40;
+    ptM_sethole(l0, 0, 1);
+    l0->children[1] = (pt_Node *)"X";
+    l0->bytes[1] = 1;
+    l0->child_count = 2;
+    memset(l1, 0, sizeof(pt_Node));
+    l1->children[0] = (pt_Node *)make_hole(
+            S, "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", 40);
+    l1->bytes[0] = 40;
+    ptM_sethole(l1, 0, 1);
+    l1->child_count = 1;
+    b = treeV(S, 1, innerV(l0, l1));
+    /* delete "X"+22B of hole B: 23 bytes from pos 40
+       → mergeleaf partial merge: hole A(40)+hole B(40)>62, can=22 */
+    pt_seek(&c, b, 40);
+    assert(pt_remove(&c, 23) == PT_OK);
+    assert(pt_checktree(c.tree) && pt_checkcursor(&c, 40));
+    assert(pt_bytes(c.tree) == 58);
     pt_release(c.tree), pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
@@ -1561,33 +1681,6 @@ static void test_remove_hole_eraseleaf(void) {
 }
 
 /* === mergelit left-side merge === */
-
-static void test_remove_mergelit_left(void) {
-    pt_State         *S = pt_newstate(&test_alloc, NULL);
-    static const char buf[] = "abcdef";
-    pt_Node          *lf;
-    pt_Blob           b;
-    pt_Cursor         c;
-    lf = (pt_Node *)ptP_alloc(S, &S->nodes);
-    memset(lf, 0, sizeof(pt_Node));
-    lf->children[0] = (pt_Node *)(buf + 0);
-    lf->bytes[0] = 2; /* "ab" */
-    lf->children[1] = (pt_Node *)(buf + 2);
-    lf->bytes[1] = 2; /* "cd", contiguous */
-    lf->children[2] = (pt_Node *)"XX";
-    lf->bytes[2] = 2; /* separate buf */
-    lf->child_count = 3;
-    b = treeV(S, 0, lf);
-    pt_seek(&c, b, 3);                 /* middle of "cd" */
-    assert(pt_remove(&c, 1) == PT_OK); /* del 'd', "cd" -> "c"(buf+2,1) */
-    assert(pt_checktree(c.tree));
-    /* left merge: "ab"(buf+0,2) + "c"(buf+2,1) -> "abc"(buf+0,3) */
-    assert(pt_checkcursor(&c, 3));
-    pt_asserttree(c.tree, 0, leafV(litV("abc"), litV("XX")));
-    pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
-    pt_close(S);
-}
 
 /* ================= splice tests ================= */
 

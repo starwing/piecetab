@@ -31,14 +31,11 @@ PT_STATIC void pt_dumpcursor(const pt_Cursor *C, const char *tag);
 /*  allocators                                                       */
 /* ================================================================ */
 
-PT_STATIC void *test_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
-    (void)ud;
-    (void)osize;
-    if (nsize == 0) {
-        free(ptr);
-        return NULL;
-    }
-    return realloc(ptr, nsize);
+PT_STATIC void *test_alloc(void *ud, void *p, size_t osize, size_t nsize) {
+    void *np;
+    (void)ud, (void)osize;
+    if (nsize == 0) return free(p), NULL;
+    return np = realloc(p, nsize), assert(np != NULL), np;
 }
 
 PT_STATIC void *oom_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
@@ -89,8 +86,8 @@ PT_STATIC int pt_checknode(const pt_Node *n, int rl, int mc, int *has_hole) {
                 pt_Hole *hole = (pt_Hole *)n->children[i];
                 pt_check(
                         hole->n <= PT_MAX_HOLESIZE,
-                        "[chk] HOLE rl=%d i=%d n=%d > %d\n", rl, i,
-                        hole->n, (int)PT_MAX_HOLESIZE);
+                        "[chk] HOLE rl=%d i=%d n=%d > %d\n", rl, i, hole->n,
+                        (int)PT_MAX_HOLESIZE);
                 pt_check(
                         n->bytes[i] == hole->n,
                         "[chk] HOLE rl=%d i=%d bytes=%zu n=%d\n", rl, i,
@@ -164,8 +161,8 @@ PT_STATIC int pt_checkcursor(pt_Cursor *C, size_t expected_off) {
     pt_Node *p;
     pt_check(
             pt_offset(C) == expected_off,
-            "[chk] OFFSET mismatch off=%zu expected=%zu\n",
-            pt_offset(C), expected_off);
+            "[chk] OFFSET mismatch off=%zu expected=%zu\n", pt_offset(C),
+            expected_off);
     if (C->tree->root.child_count == 0) {
         pt_check(
                 C->poff == 0 && C->off == 0, "[chk] EMPTY poff=%zu off=%zu\n",
@@ -189,14 +186,14 @@ PT_STATIC int pt_checkcursor(pt_Cursor *C, size_t expected_off) {
         bsum += ptN_sumbytes(p, 0, i);
     }
     pt_check(
-            C->off == bsum, "[chk] OFF mismatch off=%zu sum=%zu\n",
-            C->off, bsum);
+            C->off == bsum, "[chk] OFF mismatch off=%zu sum=%zu\n", C->off,
+            bsum);
     p = ptK_parent(C, ptK_levels(C));
     i = ptK_idx(C, p, ptK_levels(C));
     pt_check(
             C->poff <= p->bytes[i],
-            "[chk] POFF out of bounds poff=%zu bytes[%d]=%zu\n",
-            C->poff, i, p->bytes[i]);
+            "[chk] POFF out of bounds poff=%zu bytes[%d]=%zu\n", C->poff, i,
+            p->bytes[i]);
     return 1;
 }
 
@@ -226,8 +223,7 @@ PT_STATIC void pt_dumpnode(const pt_Node *n, int idx, int l, int levels) {
             }
         }
     } else {
-        for (i = 0; i < cc; ++i)
-            pt_dumpnode(n->children[i], i, l + 1, levels);
+        for (i = 0; i < cc; ++i) pt_dumpnode(n->children[i], i, l + 1, levels);
     }
 }
 
