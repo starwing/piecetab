@@ -83,18 +83,18 @@ PT_STATIC int pt_checknode(const pt_Node *n, int rl, int mc, int *has_hole) {
             n->child_count <= PT_FANOUT, "[chk] N[%p] rl=%d cc=%d>%d\n",
             (void *)n, rl, n->child_count, PT_FANOUT);
     *has_hole = 0;
-    for (i = 0; i < (int)n->child_count; ++i) {
+    for (i = 0; i < n->child_count; ++i) {
         if (rl == 0) {
             if (ptM_ishole(n, i)) {
                 pt_Hole *hole = (pt_Hole *)n->children[i];
                 pt_check(
                         hole->n <= PT_MAX_HOLESIZE,
                         "[chk] HOLE rl=%d i=%d n=%d > %d\n", rl, i,
-                        (int)hole->n, (int)PT_MAX_HOLESIZE);
+                        hole->n, (int)PT_MAX_HOLESIZE);
                 pt_check(
                         n->bytes[i] == hole->n,
                         "[chk] HOLE rl=%d i=%d bytes=%zu n=%d\n", rl, i,
-                        n->bytes[i], (int)hole->n);
+                        n->bytes[i], hole->n);
                 *has_hole = 1;
             } else {
                 pt_check(
@@ -132,11 +132,11 @@ PT_STATIC int pt_checktree_allow_empty(pt_Blob snap, int allow_empty) {
             pt_Hole *hole = (pt_Hole *)snap->root.children[0];
             pt_check(
                     hole->n <= PT_MAX_HOLESIZE, "[chk] SINGLE HOLE n=%d > %d\n",
-                    (int)hole->n, (int)PT_MAX_HOLESIZE);
+                    hole->n, (int)PT_MAX_HOLESIZE);
             pt_check(
                     snap->root.bytes[0] == hole->n,
                     "[chk] SINGLE HOLE bytes=%zu n=%d\n", snap->root.bytes[0],
-                    (int)hole->n);
+                    hole->n);
         } else {
             pt_check(
                     snap->root.bytes[0] > 0, "[chk] SINGLE LITERAL bytes=%zu\n",
@@ -163,13 +163,13 @@ PT_STATIC int pt_checkcursor(pt_Cursor *C, size_t expected_off) {
     int      i, l;
     pt_Node *p;
     pt_check(
-            (size_t)pt_offset(C) == expected_off,
+            pt_offset(C) == expected_off,
             "[chk] OFFSET mismatch off=%zu expected=%zu\n",
-            (size_t)pt_offset(C), expected_off);
+            pt_offset(C), expected_off);
     if (C->tree->root.child_count == 0) {
         pt_check(
                 C->poff == 0 && C->off == 0, "[chk] EMPTY poff=%zu off=%zu\n",
-                (size_t)C->poff, (size_t)C->off);
+                C->poff, C->off);
         pt_check(
                 C->paths[0] == &C->tree->root.children[0],
                 "[chk] EMPTY paths[0]=%p expected=%p\n", (void *)C->paths[0],
@@ -180,7 +180,7 @@ PT_STATIC int pt_checkcursor(pt_Cursor *C, size_t expected_off) {
         p = ptK_parent(C, l);
         i = ptK_idx(C, p, l);
         pt_check(
-                i >= 0 && i < (int)p->child_count,
+                i >= 0 && i < p->child_count,
                 "[chk] PATHS[%d] invalid idx=%d cc=%u\n", l, i, p->child_count);
         pt_check(
                 C->paths[l] == &p->children[i],
@@ -189,14 +189,14 @@ PT_STATIC int pt_checkcursor(pt_Cursor *C, size_t expected_off) {
         bsum += ptN_sumbytes(p, 0, i);
     }
     pt_check(
-            (size_t)C->off == bsum, "[chk] OFF mismatch off=%zu sum=%zu\n",
-            (size_t)C->off, bsum);
+            C->off == bsum, "[chk] OFF mismatch off=%zu sum=%zu\n",
+            C->off, bsum);
     p = ptK_parent(C, ptK_levels(C));
     i = ptK_idx(C, p, ptK_levels(C));
     pt_check(
             C->poff <= p->bytes[i],
             "[chk] POFF out of bounds poff=%zu bytes[%d]=%zu\n",
-            (size_t)C->poff, i, p->bytes[i]);
+            C->poff, i, p->bytes[i]);
     return 1;
 }
 
@@ -227,14 +227,14 @@ PT_STATIC void pt_dumpnode(const pt_Node *n, int idx, int l, int levels) {
         }
     } else {
         for (i = 0; i < cc; ++i)
-            pt_dumpnode(n->children[i], (int)i, l + 1, levels);
+            pt_dumpnode(n->children[i], i, l + 1, levels);
     }
 }
 
 PT_STATIC void pt_dumptree(pt_Blob snap, const char *tag) {
     pt_log("[TREE]\t %s: levels=%u root.cc=%u bytes=%zu\n", tag, snap->levels,
            snap->root.child_count, snap->bytes);
-    pt_dumpnode(&snap->root, -1, 0, (int)snap->levels);
+    pt_dumpnode(&snap->root, -1, 0, snap->levels);
 }
 
 PT_STATIC void pt_dumpcursor(const pt_Cursor *C, const char *tag) {
@@ -333,7 +333,7 @@ PT_STATIC pt_Node *leafV_(pt_State *S, ...) {
     n = (pt_Node *)ptP_alloc(S, &S->nodes);
     assert(n && cc <= PT_FANOUT);
     (void)memset(n->mask, 0, sizeof(n->mask));
-    n->child_count = cc, n->version = 0;
+    n->child_count = (unsigned short)cc, n->version = 0;
     va_start(ap, S);
     for (i = 0; i < cc; i++) {
         s = va_arg(ap, const char *);
@@ -355,12 +355,12 @@ PT_STATIC pt_Node *innerV_(pt_State *S, ...) {
     n = (pt_Node *)ptP_alloc(S, &S->nodes);
     assert(n && cc <= PT_FANOUT);
     memset(n->mask, 0, sizeof(n->mask));
-    n->child_count = cc, n->version = 0;
+    n->child_count = (unsigned short)cc, n->version = 0;
     va_start(ap, S);
     for (i = 0; i < cc; i++) {
         ch = va_arg(ap, pt_Node *);
         n->children[i] = ch;
-        n->bytes[i] = ptN_sumbytes(ch, 0, (int)ch->child_count);
+        n->bytes[i] = ptN_sumbytes(ch, 0, ch->child_count);
         for (w = 0; w < PT_MASK_SIZE && !ch->mask[w]; ++w) continue;
         ptM_sethole(n, i, w != PT_MASK_SIZE);
     }
@@ -372,7 +372,7 @@ PT_STATIC pt_Blob treeV(pt_State *S, unsigned levels, pt_Node *root) {
     pt_Tree *t = (pt_Tree *)pt_from(S, NULL, 0);
     unsigned i;
     assert(t && root->child_count <= PT_FANOUT);
-    t->levels = levels, t->root = *root;
+    t->levels = (unsigned short)levels, t->root = *root;
     ptP_free(&S->nodes, root);
     t->bytes = 0;
     for (i = 0; i < t->root.child_count; i++) t->bytes += t->root.bytes[i];

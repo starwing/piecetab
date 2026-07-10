@@ -1,0 +1,9 @@
+CompileFlags:
+  Add:
+    - "-std=c89"
+    - "-I."
+    - "-Itests"
+    - "-DPT_STATIC_API"
+    - "-Wno-variadic-macros"
+  Remove:
+    - "-Werror"

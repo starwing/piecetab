@@ -1,7 +1,7 @@
 # linecache test runner
 
 CC := "gcc"
-CFLAGS := "-Wall -Wextra -Werror -pedantic -std=c89 -Wno-variadic-macros"
+CFLAGS := "-Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic -std=c89 -Wno-variadic-macros"
 INCS := "-I. -Itests"
 
 cov: lc-cov cov-uncovered lc-lines

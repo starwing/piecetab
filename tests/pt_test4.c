@@ -376,7 +376,7 @@ static void test_advance_brute(void) {
     for (from = 0; from <= total; from += 3)
         for (to = 0; to <= total; to += 5) {
             pt_seek(&c, a, from);
-            pt_advance(&c, (pt_Offset)to - (pt_Offset)from);
+            pt_advance(&c, (pt_Delta)to - (pt_Delta)from);
             pt_seek(&ref, a, to);
             assert(pt_offset(&c) == pt_offset(&ref));
             assert(pt_checkcursor(&c, to));
@@ -465,7 +465,7 @@ static void test_insert_committed_split(void) {
     for (k = 0; k < 62; ++k) pt_append(&c, buf + k * 3, 2);
     a = pt_commit(&c);
     assert(a->levels >= 2);
-    pt_seek(&c, a, (pt_Offset)pt_bytes(a)); /* end of committed tree */
+    pt_seek(&c, a, (pt_Delta)pt_bytes(a)); /* end of committed tree */
     for (k = 0; k < 40; ++k) {
         assert(pt_append(&c, buf + 200 + k * 2, 2) == PT_OK);
         assert(pt_checktree(c.tree));
@@ -1183,7 +1183,7 @@ static void test_remove_hole_mid(void) {
     pt_seek(&c, b, 0);
     pt_edit(&c, 0, "hello world", 11); /* fork + hole in dirty tree */
     assert(pt_bytes(c.tree) == 11 && c.dirty);
-    pt_locate(&c, 2);            /* pos 2: 'l' in "hello world" */
+    pt_locate(&c, 2);                  /* pos 2: 'l' in "hello world" */
     assert(pt_remove(&c, 5) == PT_OK); /* delete [2,7): "llo w" from hole */
     assert(pt_checktree(c.tree));
     assert(pt_checkcursor(&c, 2));
