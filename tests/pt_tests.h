@@ -83,15 +83,10 @@ PT_STATIC int pt_checknode(const pt_Node *n, int rl, int mc, int *has_hole) {
     for (i = 0; i < n->child_count; ++i) {
         if (rl == 0) {
             if (ptM_ishole(n, i)) {
-                pt_Hole *hole = (pt_Hole *)n->children[i];
                 pt_check(
-                        hole->n <= PT_MAX_HOLESIZE,
-                        "[chk] HOLE rl=%d i=%d n=%d > %d\n", rl, i, hole->n,
-                        (int)PT_MAX_HOLESIZE);
-                pt_check(
-                        n->bytes[i] == hole->n,
-                        "[chk] HOLE rl=%d i=%d bytes=%zu n=%d\n", rl, i,
-                        n->bytes[i], hole->n);
+                        n->bytes[i] > 0 && n->bytes[i] <= PT_MAX_HOLESIZE,
+                        "[chk] HOLE rl=%d i=%d bytes=%zu > %d\n", rl, i,
+                        n->bytes[i], (int)PT_MAX_HOLESIZE);
                 *has_hole = 1;
             } else {
                 pt_check(
@@ -126,14 +121,11 @@ PT_STATIC int pt_checktree_allow_empty(pt_Blob snap, int allow_empty) {
                 &snap->root, snap->levels, allow_empty ? 0 : 1, &hh);
     else {
         if (ptM_ishole(&snap->root, 0)) {
-            pt_Hole *hole = (pt_Hole *)snap->root.children[0];
             pt_check(
-                    hole->n <= PT_MAX_HOLESIZE, "[chk] SINGLE HOLE n=%d > %d\n",
-                    hole->n, (int)PT_MAX_HOLESIZE);
-            pt_check(
-                    snap->root.bytes[0] == hole->n,
-                    "[chk] SINGLE HOLE bytes=%zu n=%d\n", snap->root.bytes[0],
-                    hole->n);
+                    snap->root.bytes[0] > 0
+                            && snap->root.bytes[0] <= PT_MAX_HOLESIZE,
+                    "[chk] SINGLE HOLE bytes=%zu > %d\n",
+                    snap->root.bytes[0], (int)PT_MAX_HOLESIZE);
         } else {
             pt_check(
                     snap->root.bytes[0] > 0, "[chk] SINGLE LITERAL bytes=%zu\n",
@@ -213,9 +205,8 @@ PT_STATIC void pt_dumpnode(const pt_Node *n, int idx, int l, int levels) {
     if ((unsigned)l == (unsigned)levels || levels == 0) {
         for (i = 0; i < cc; ++i) {
             if (ptM_ishole(n, i)) {
-                const pt_Hole *hole = (const pt_Hole *)n->children[i];
-                pt_log("%*sL%u HOLE n=%u\n", (l + 1) * 2, "", i,
-                       (unsigned)hole->n);
+                pt_log("%*sL%u HOLE bytes=%zu\n", (l + 1) * 2, "", i,
+                       n->bytes[i]);
             } else {
                 pt_log("%*sL%u LIT bytes=%zu %.*s\n", (l + 1) * 2, "", i,
                        n->bytes[i], (int)n->bytes[i],
@@ -253,8 +244,7 @@ PT_STATIC int pt_comparenode(
             if (ptM_ishole(a, i)) {
                 const pt_Hole *ha = (const pt_Hole *)a->children[i];
                 const pt_Hole *hb = (const pt_Hole *)b->children[i];
-                if (ha->n != hb->n) return 0;
-                if (memcmp(ha->data, hb->data, ha->n) != 0) return 0;
+                if (memcmp(ha->data, hb->data, a->bytes[i]) != 0) return 0;
             } else {
                 if (memcmp((const char *)a->children[i],
                            (const char *)b->children[i], a->bytes[i])
@@ -343,7 +333,6 @@ static pt_LeafValue holeV_(pt_State *S, const char *s, size_t len) {
     pt_LeafValue v;
     pt_Hole     *h = (pt_Hole *)ptP_alloc(S, &S->holes);
     assert(len <= PT_MAX_HOLESIZE);
-    h->n = (unsigned short)len;
     memcpy(h->data, s, len);
     v.data = (void *)h, v.len = len, v.is_hole = 1;
     return v;

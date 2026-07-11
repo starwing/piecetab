@@ -701,7 +701,7 @@ static void test_edit_cow(void) {
         assert(ptM_ishole(r, 1));
         {
             pt_Hole *h = (pt_Hole *)r->children[1];
-            assert(h->n == 3 && memcmp(h->data, "XYZ", 3) == 0);
+            assert(r->bytes[1] == 3 && memcmp(h->data, "XYZ", 3) == 0);
         }
         assert(!ptM_ishole(r, 2));
         assert(r->bytes[2] == 6 && memcmp(r->children[2], " world", 6) == 0);
@@ -788,8 +788,8 @@ static size_t collect_bytes_r(
         for (i = 0; i < n->child_count; ++i) {
             if (ptM_ishole(n, i)) {
                 pt_Hole *h = (pt_Hole *)n->children[i];
-                memcpy(buf + off, h->data, h->n);
-                off += h->n;
+                memcpy(buf + off, h->data, n->bytes[i]);
+                off += n->bytes[i];
             } else {
                 memcpy(buf + off, (const char *)n->children[i], n->bytes[i]);
                 off += n->bytes[i];
@@ -1150,9 +1150,8 @@ static void test_remove_hole_mid(void) {
         assert(r->child_count == 1);
         assert(ptM_ishole(r, 0));
         {
-            pt_Hole *h = (pt_Hole *)r->children[0];
-            assert(h->n == 6);
-            assert(memcmp(h->data, "heorld", 6) == 0);
+            assert(r->bytes[0] == 6);
+            assert(memcmp(((pt_Hole *)r->children[0])->data, "heorld", 6) == 0);
         }
     }
     pt_release(c.tree), pt_release(b);
@@ -1210,7 +1209,7 @@ static void test_remove_hole_mixed(void) {
         assert(!ptM_ishole(r, 2)); /* lit "ghi" */
         {
             pt_Hole *h = (pt_Hole *)r->children[1];
-            assert(h->n == 1 && h->data[0] == 'F');
+            assert(r->bytes[1] == 1 && h->data[0] == 'F');
         }
     }
     pt_release(c.tree), pt_release(b);
@@ -1642,7 +1641,7 @@ static void test_edit_empty(void) {
         assert(ptM_ishole(r, 0));
         {
             pt_Hole *h = (pt_Hole *)r->children[0];
-            assert(h->n == 5 && memcmp(h->data, "hello", 5) == 0);
+            assert(r->bytes[0] == 5 && memcmp(h->data, "hello", 5) == 0);
         }
     }
     pt_release(c.tree), pt_release(b);
@@ -1666,7 +1665,7 @@ static void test_edit_fresh_lit_mid(void) {
         assert(ptM_ishole(r, 1));
         {
             pt_Hole *h = (pt_Hole *)r->children[1];
-            assert(h->n == 3 && memcmp(h->data, "XYZ", 3) == 0);
+            assert(r->bytes[1] == 3 && memcmp(h->data, "XYZ", 3) == 0);
         }
         assert(!ptM_ishole(r, 2));
         assert(r->bytes[2] == 3 && memcmp(r->children[2], "def", 3) == 0);
@@ -1693,7 +1692,7 @@ static void test_edit_fresh_boundary(void) {
             assert(ptM_ishole(r, 0));
             {
                 pt_Hole *h = (pt_Hole *)r->children[0];
-                assert(h->n == 3 && memcmp(h->data, "XYZ", 3) == 0);
+                assert(r->bytes[0] == 3 && memcmp(h->data, "XYZ", 3) == 0);
             }
             assert(!ptM_ishole(r, 1));
             assert(r->bytes[1] == 6
@@ -1718,8 +1717,8 @@ static void test_edit_fresh_boundary(void) {
                    && memcmp(r->children[0], "abcdef", 6) == 0);
             assert(ptM_ishole(r, 1));
             {
-                pt_Hole *h = (pt_Hole *)r->children[1];
-                assert(h->n == 3 && memcmp(h->data, "XYZ", 3) == 0);
+            pt_Hole *h = (pt_Hole *)r->children[1];
+            assert(r->bytes[1] == 3 && memcmp(h->data, "XYZ", 3) == 0);
             }
         }
         pt_release(c.tree), pt_release(b);
@@ -1747,7 +1746,7 @@ static void test_edit_append_tail(void) {
         assert(ptM_ishole(r, 0));
         {
             pt_Hole *h = (pt_Hole *)r->children[0];
-            assert(h->n == 11 && memcmp(h->data, "hello world", 11) == 0);
+            assert(r->bytes[0] == 11 && memcmp(h->data, "hello world", 11) == 0);
         }
     }
     pt_release(c.tree);
@@ -1780,12 +1779,12 @@ static void test_edit_append_full(void) {
         assert(ptM_ishole(r, 1));
         {
             pt_Hole *ha = (pt_Hole *)r->children[0];
-            assert(ha->n == 60);
+            assert(r->bytes[0] == 60);
             for (i = 0; i < 60; ++i) assert(ha->data[i] == 'a');
         }
         {
             pt_Hole *hb = (pt_Hole *)r->children[1];
-            assert(hb->n == 5 && memcmp(hb->data, "bbbbb", 5) == 0);
+            assert(r->bytes[1] == 5 && memcmp(hb->data, "bbbbb", 5) == 0);
         }
     }
     pt_release(c.tree);
@@ -1812,7 +1811,7 @@ static void test_edit_prev_hole(void) {
         assert(ptM_ishole(r, 0));
         {
             pt_Hole *h = (pt_Hole *)r->children[0];
-            assert(h->n == 8 && memcmp(h->data, "helloabc", 8) == 0);
+            assert(r->bytes[0] == 8 && memcmp(h->data, "helloabc", 8) == 0);
         }
         assert(!ptM_ishole(r, 1));
         assert(r->bytes[1] == 3 && memcmp(r->children[1], "XYZ", 3) == 0);
@@ -1840,7 +1839,7 @@ static void test_edit_mid_fit(void) {
         assert(ptM_ishole(r, 0));
         {
             pt_Hole *h = (pt_Hole *)r->children[0];
-            assert(h->n == 14);
+            assert(r->bytes[0] == 14);
             assert(memcmp(h->data, "helloXYZ world", 14) == 0);
         }
     }
@@ -1875,16 +1874,16 @@ static void test_edit_mid_split(void) {
         assert(ptM_ishole(r, 2));
         {
             pt_Hole *hl = (pt_Hole *)r->children[0];
-            assert(hl->n == 30);
+            assert(r->bytes[0] == 30);
             for (i = 0; i < 30; ++i) assert(hl->data[i] == 'a');
         }
         {
             pt_Hole *hm = (pt_Hole *)r->children[1];
-            assert(hm->n == 5 && memcmp(hm->data, "bbbbb", 5) == 0);
+            assert(r->bytes[1] == 5 && memcmp(hm->data, "bbbbb", 5) == 0);
         }
         {
             pt_Hole *hr = (pt_Hole *)r->children[2];
-            assert(hr->n == 30);
+            assert(r->bytes[2] == 30);
             for (i = 0; i < 30; ++i) assert(hr->data[i] == 'a');
         }
     }
@@ -1912,7 +1911,7 @@ static void test_edit_del_then_ins(void) {
         assert(ptM_ishole(r, 1));
         {
             pt_Hole *h = (pt_Hole *)r->children[1];
-            assert(h->n == 3 && memcmp(h->data, "XYZ", 3) == 0);
+            assert(r->bytes[1] == 3 && memcmp(h->data, "XYZ", 3) == 0);
         }
         assert(!ptM_ishole(r, 2));
         assert(r->bytes[2] == 6);
@@ -1958,10 +1957,12 @@ static void test_edit_type_sequence(void) {
         assert(r->child_count == 1);
         assert(ptM_ishole(r, 0));
         {
+        assert(r->bytes[0] == (size_t)n);
+        {
             pt_Hole *h = (pt_Hole *)r->children[0];
-            assert(h->n == (unsigned short)n);
             for (k = 0; k < n; ++k)
                 assert(h->data[k] == (char)('a' + (k % 26)));
+        }
         }
     }
     pt_release(c.tree), pt_release(b);
@@ -2021,7 +2022,7 @@ static void test_edit_upmask(void) {
     assert(leaf0->bytes[0] == 1 && memcmp(leaf0->children[0], "a", 1) == 0);
     assert(ptM_ishole(leaf0, 1));
     hole = (pt_Hole *)leaf0->children[1];
-    assert(hole->n == 3 && memcmp(hole->data, "XYZ", 3) == 0);
+    assert(leaf0->bytes[1] == 3 && memcmp(hole->data, "XYZ", 3) == 0);
     assert(!ptM_ishole(leaf0, 2));
     assert(leaf0->bytes[2] == 1 && memcmp(leaf0->children[2], "a", 1) == 0);
     assert(!ptM_ishole(leaf0, 3));
