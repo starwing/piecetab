@@ -1,5 +1,6 @@
 #define PT_FANOUT    4
 #define PT_PAGE_SIZE 512
+#define PT_MAX_HOLESIZE 16
 #define PT_STATIC_API
 #ifndef PT_POOL_STATS
 # define PT_POOL_STATS
@@ -1430,12 +1431,12 @@ static void test_remove_merge_literal(void) {
 static void test_remove_merge_hole_full(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
     pt_Cursor c;
-    editV(&c, 30, 1, innerV(
-        leafV(holeV("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), litV("X")),
-        leafV(holeV("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"))));
+    editV(&c, 10, 1, innerV(
+        leafV(holeV("AAAAAAAAAA"), litV("X")),
+        leafV(holeV("BBBBBB"))));
     assert(pt_remove(&c, 1) == PT_OK);
-    assert(pt_checktree(c.tree) && pt_checkcursor(&c, 30));
-    assert(pt_bytes(c.tree) == 62);
+    assert(pt_checktree(c.tree) && pt_checkcursor(&c, 10));
+    assert(pt_bytes(c.tree) == 16);
     pt_release(c.tree);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
@@ -1444,14 +1445,13 @@ static void test_remove_merge_hole_full(void) {
 static void test_remove_merge_hole_split(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
     pt_Cursor c;
-    /* delete "X"+22B of hole B: 23 bytes from pos 40
-       → mergeleaf partial merge: hole A(40)+hole B(40)>62, can=22 */
-    editV(&c, 40, 1, innerV(
-        leafV(holeV("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), litV("X")),
-        leafV(holeV("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"))));
-    assert(pt_remove(&c, 23) == PT_OK);
-    assert(pt_checktree(c.tree) && pt_checkcursor(&c, 40));
-    assert(pt_bytes(c.tree) == 58);
+    /* mergeleaf full merge: hole A(10) + hole B(5) = 15 ≤ 16 */
+    editV(&c, 10, 1, innerV(
+        leafV(holeV("AAAAAAAAAA"), litV("X")),
+        leafV(holeV("BBBBB"))));
+    assert(pt_remove(&c, 1) == PT_OK);
+    assert(pt_checktree(c.tree));
+    assert(pt_bytes(c.tree) == 15);
     pt_release(c.tree);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
@@ -1759,19 +1759,19 @@ static void test_edit_append_full(void) {
     pt_Blob   b = pt_empty(S);
     pt_Cursor c;
     int       i;
-    /* hole with 60 bytes (close to PT_MAX_HOLESIZE=62), append 5 → overflow */
+    /* hole with 14 bytes (close to PT_MAX_HOLESIZE=16), append 5 → overflow */
     {
-        static char bigbuf[61];
-        for (i = 0; i < 60; ++i) bigbuf[i] = 'a';
-        bigbuf[60] = '\0';
+        static char bigbuf[15];
+        for (i = 0; i < 14; ++i) bigbuf[i] = 'a';
+        bigbuf[14] = '\0';
         pt_seek(&c, b, 0);
-        assert(pt_edit(&c, 0, bigbuf, 60) == PT_OK);
+        assert(pt_edit(&c, 0, bigbuf, 14) == PT_OK);
     }
     pt_release(b);
-    pt_locate(&c, 60);
+    pt_locate(&c, 14);
     assert(pt_edit(&c, 0, "bbbbb", 5) == PT_OK);
     assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 65));
+    assert(pt_checkcursor(&c, 19));
     {
         pt_Node *r = &c.tree->root;
         assert(r->child_count == 2);
@@ -1779,8 +1779,8 @@ static void test_edit_append_full(void) {
         assert(ptM_ishole(r, 1));
         {
             pt_Hole *ha = (pt_Hole *)r->children[0];
-            assert(r->bytes[0] == 60);
-            for (i = 0; i < 60; ++i) assert(ha->data[i] == 'a');
+            assert(r->bytes[0] == 14);
+            for (i = 0; i < 14; ++i) assert(ha->data[i] == 'a');
         }
         {
             pt_Hole *hb = (pt_Hole *)r->children[1];
@@ -1853,19 +1853,19 @@ static void test_edit_mid_split(void) {
     pt_Blob   b = pt_empty(S);
     pt_Cursor c;
     int       i;
-    /* hole with 60 bytes, insert 5 at middle → 65 > CAP → splitins */
+    /* hole with 12 bytes, insert 5 at middle → 17 > CAP → splitins */
     {
-        static char splbuf[61];
-        for (i = 0; i < 60; ++i) splbuf[i] = 'a';
-        splbuf[60] = '\0';
+        static char splbuf[13];
+        for (i = 0; i < 12; ++i) splbuf[i] = 'a';
+        splbuf[12] = '\0';
         pt_seek(&c, b, 0);
-        assert(pt_edit(&c, 0, splbuf, 60) == PT_OK);
+        assert(pt_edit(&c, 0, splbuf, 12) == PT_OK);
     }
     pt_release(b);
-    pt_locate(&c, 30);
+    pt_locate(&c, 6);
     assert(pt_edit(&c, 0, "bbbbb", 5) == PT_OK);
     assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 35));
+    assert(pt_checkcursor(&c, 11));
     {
         pt_Node *r = &c.tree->root;
         assert(r->child_count == 3);
@@ -1874,8 +1874,8 @@ static void test_edit_mid_split(void) {
         assert(ptM_ishole(r, 2));
         {
             pt_Hole *hl = (pt_Hole *)r->children[0];
-            assert(r->bytes[0] == 30);
-            for (i = 0; i < 30; ++i) assert(hl->data[i] == 'a');
+            assert(r->bytes[0] == 6);
+            for (i = 0; i < 6; ++i) assert(hl->data[i] == 'a');
         }
         {
             pt_Hole *hm = (pt_Hole *)r->children[1];
@@ -1883,8 +1883,8 @@ static void test_edit_mid_split(void) {
         }
         {
             pt_Hole *hr = (pt_Hole *)r->children[2];
-            assert(r->bytes[2] == 30);
-            for (i = 0; i < 30; ++i) assert(hr->data[i] == 'a');
+            assert(r->bytes[2] == 6);
+            for (i = 0; i < 6; ++i) assert(hr->data[i] == 'a');
         }
     }
     pt_release(c.tree);
@@ -1943,7 +1943,7 @@ static void test_edit_type_sequence(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
     pt_Blob   b = pt_empty(S);
     pt_Cursor c;
-    int       k, n = 50;
+    int       k, n = 15;
     pt_seek(&c, b, 0);
     for (k = 0; k < n; ++k) {
         char ch = (char)('a' + (k % 26));
@@ -1951,7 +1951,7 @@ static void test_edit_type_sequence(void) {
         assert(pt_checktree(c.tree));
         assert(pt_checkcursor(&c, (size_t)(k + 1)));
     }
-    /* all 50 chars merged into a single hole via branch A */
+    /* all 15 chars merged into a single hole via branch A */
     {
         pt_Node *r = &c.tree->root;
         assert(r->child_count == 1);
@@ -2074,11 +2074,11 @@ static void test_commit_no_merge(void) {
     pt_seek(&c, b, 0);
     {
         char bigbuf[64];
-        for (i = 0; i < 60; ++i) bigbuf[i] = 'a';
-        bigbuf[60] = '\0';
-        assert(pt_edit(&c, 0, bigbuf, 60) == PT_OK);
+        for (i = 0; i < 14; ++i) bigbuf[i] = 'a';
+        bigbuf[14] = '\0';
+        assert(pt_edit(&c, 0, bigbuf, 14) == PT_OK);
     }
-    assert(pt_edit(&c, 0, "!!", 2) == PT_OK); /* fits: 62=CAP */
+    assert(pt_edit(&c, 0, "!!", 2) == PT_OK); /* fills to CAP=16 */
     assert(pt_edit(&c, 0, "XY", 2) == PT_OK); /* over CAP → 2nd hole */
     {
         pt_Node *r = &c.tree->root;
@@ -2150,18 +2150,14 @@ static void test_commit_freshpage(void) {
     pt_Blob   b = pt_empty(S);
     /* Single edit → 1 hole; commit copies data into scratch */
     pt_seek(&c, b, 0);
-    assert(pt_edit(&c, 0,
-                   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                   "a",
-                   55)
-           == PT_OK);
+    assert(pt_edit(&c, 0, "aaaaaaaaaaaaaaa", 15) == PT_OK);
     assert(pt_commit(&c) != NULL);
     assert(pt_checktree(c.tree) && !c.dirty);
     {
         pt_Node *r = &c.tree->root;
         assert(r->child_count == 1);
         assert(!ptM_ishole(r, 0));
-        assert(r->bytes[0] == 55);
+        assert(r->bytes[0] == 15);
     }
     pt_release(c.tree), pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
@@ -2230,18 +2226,18 @@ static void test_commit_reserve_pages(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
     pt_Cursor c;
     editV(&c, 0, 1, innerV(
-        leafV(holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-              holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-              holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-              holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")),
-        leafV(holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-              holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-              holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-              holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")),
-        leafV(holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-              holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-              holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-              holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))));
+        leafV(holeV("aaaaaaaaaaaaaaaa"),
+              holeV("aaaaaaaaaaaaaaaa"),
+              holeV("aaaaaaaaaaaaaaaa"),
+              holeV("aaaaaaaaaaaaaaaa")),
+        leafV(holeV("aaaaaaaaaaaaaaaa"),
+              holeV("aaaaaaaaaaaaaaaa"),
+              holeV("aaaaaaaaaaaaaaaa"),
+              holeV("aaaaaaaaaaaaaaaa")),
+        leafV(holeV("aaaaaaaaaaaaaaaa"),
+              holeV("aaaaaaaaaaaaaaaa"),
+              holeV("aaaaaaaaaaaaaaaa"),
+              holeV("aaaaaaaaaaaaaaaa"))));
     assert(pt_edit(&c, 0, ".", 1) == PT_OK);
     assert(pt_commit(&c) != NULL);
     assert(pt_checktree(c.tree));
@@ -2262,12 +2258,12 @@ static void test_commit_reservebuf_oom(void) {
     /* create a tree with holes via pt_edit */
     {
         char bigbuf[64];
-        for (i = 0; i < 60; ++i) bigbuf[i] = 'a';
-        bigbuf[60] = '\0';
-        assert(pt_edit(&c, 0, bigbuf, 60) == PT_OK);
+        for (i = 0; i < 15; ++i) bigbuf[i] = 'a';
+        bigbuf[15] = '\0';
+        assert(pt_edit(&c, 0, bigbuf, 15) == PT_OK);
     }
     bytes_before = pt_bytes(c.tree);
-    assert(c.dirty && bytes_before == 60);
+    assert(c.dirty && bytes_before == 15);
     cnt = 0; /* kill allocf — next alloc (scratch page) fails */
     assert(pt_commit(&c) == NULL);
     assert(c.dirty == 1);                     /* tree not frozen */
@@ -2417,13 +2413,13 @@ static void test_commit_reserve_leftover(void) {
     int       i;
 
     pt_seek(&c, b, 0);
-    /* 9 edits of 55 bytes = 495 total hole bytes → need=495,
-       pages=495/(504-62)+1=2, actual freeze uses ~1 page (504), so 1
+    /* 31 edits of 16 bytes = 496 total hole bytes → need=496,
+       pages=496/(504-16)+1=2, actual freeze uses ~1 page (504), so 1
        leftover page remains in the reserve list. */
-    for (i = 0; i < 9; ++i) {
-        static char bigbuf[64];
-        memset(bigbuf, 'H', 55);
-        assert(pt_edit(&c, 0, bigbuf, 55) == PT_OK);
+    for (i = 0; i < 31; ++i) {
+        static char bigbuf[17];
+        memset(bigbuf, 'H', 16);
+        assert(pt_edit(&c, 0, bigbuf, 16) == PT_OK);
     }
     assert(c.dirty);
     /* Commit succeeds, 1 page left in reserve */
@@ -2465,11 +2461,11 @@ static void test_commit_reservebuf_oom_multi(void) {
     size_t    bytes_before;
 
     pt_seek(&c, b, 0);
-    /* 9 edits of 50 bytes = 450 total → pages=450/442+1=2 */
-    for (i = 0; i < 9; ++i) {
-        static char bigbuf[64];
-        memset(bigbuf, 'x', 50);
-        assert(pt_edit(&c, 0, bigbuf, 50) == PT_OK);
+    /* 32 edits of 16 bytes = 512 total → pages=512/488+1=2 */
+    for (i = 0; i < 32; ++i) {
+        static char bigbuf[17];
+        memset(bigbuf, 'x', 16);
+        assert(pt_edit(&c, 0, bigbuf, 16) == PT_OK);
     }
     bytes_before = pt_bytes(c.tree);
     assert(c.dirty && bytes_before > 0);
