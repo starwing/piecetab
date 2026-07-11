@@ -603,34 +603,16 @@ PT_API int pt_advance(pt_Cursor *C, pt_Delta d) {
  * FANOUT/2 free in the cursor's half, so require FANOUT >= 4. */
 PT_STATIC_ASSERT(PT_FANOUT >= 4);
 
-static pt_Node *ptK_cownode(
-        pt_Cursor *C, pt_Node **slot, pt_Node **old, int k) {
+static pt_Node *ptK_cow(pt_Cursor *C, int l, int d) {
     pt_State *S = C->tree->S;
-    pt_Node  *child = *slot, *nw;
-    int       i;
-    *old = child;
-    if (child->version == C->tree->root.version) return child;
-    nw = (pt_Node *)ptP_ralloc(&S->nodes);
-    *nw = *child, nw->version = C->tree->root.version;
-    /* deep-copy holes in leaf data (k==0: children are leaf data) */
-    if (k == 0)
-        for (i = 0; i < nw->child_count; ++i)
-            if (ptM_ishole(nw, i)) {
-                pt_Hole *nh = (pt_Hole *)ptP_alloc(S, &S->holes);
-                *nh = *(pt_Hole *)child->children[i];
-                nw->children[i] = (pt_Node *)nh;
-            }
-    return (*slot = nw);
-}
-
-static void ptK_cowpath(pt_Cursor *C) {
-    int l;
-    for (l = 0; l < ptK_levels(C); ++l) {
-        int      k = ptK_levels(C) - 1 - l;
-        pt_Node *old, *nw = ptK_cownode(C, C->paths[l], &old, k);
-        if (nw != old)
-            C->paths[l + 1] = nw->children + (C->paths[l + 1] - old->children);
-    }
+    pt_Node  *p = ptK_parent(C, l);
+    int       i = ptK_idx(C, p, l) + d;
+    pt_Node  *n = p->children[i], *nn;
+    if (l == ptK_levels(C) || n->version == C->tree->root.version) return n;
+    nn = (pt_Node *)ptP_ralloc(&S->nodes);
+    *nn = *n, nn->version = C->tree->root.version;
+    if (d == 0) C->paths[l + 1] = &nn->children[C->paths[l + 1] - n->children];
+    return p->children[i] = nn;
 }
 
 static void ptH_append(pt_Hole *h, const char *s, size_t len) {
@@ -661,11 +643,8 @@ static void ptM_movebits(pt_Node *dst, pt_Node *src, int from, int n) {
 
 static void ptI_splitnode(pt_Cursor *C, int l) {
     pt_State *S = C->tree->S;
-    int       k = ptK_levels(C) - 1 - l;
-    pt_Node  *o, *nw, *nd = ptK_cownode(C, C->paths[l], &o, k), *p;
+    pt_Node  *nd = ptK_cow(C, l, 0), *nw, *p;
     int       i, cs, mid = nd->child_count / 2, nc = nd->child_count - mid;
-    if (nd != o)
-        C->paths[l + 1] = nd->children + (C->paths[l + 1] - o->children);
     p = ptK_parent(C, l), i = ptK_idx(C, p, l);
     nw = (pt_Node *)ptP_ralloc(&S->nodes), nw->version = C->tree->root.version;
     memset(nw->mask, 0, sizeof(nw->mask));
@@ -1042,27 +1021,27 @@ static int ptR_balancenode(pt_Node **ns, int left, pt_Diff *ds) {
 
 static int ptR_foldnode(pt_Cursor *C, int lfirst, int l) {
     pt_Node  *p = ptK_parent(C, l), ***cp = &C->paths[l];
-    int       w, cl, cr, dn, i = ptK_idx(C, p, l), k;
-    pt_Node **ns = &p->children[i], *o = *ns, *old;
+    int       w, cl, cr, dn, i = ptK_idx(C, p, l), doff;
+    pt_Node **ns = &p->children[i];
     pt_Diff   ds;
     if (assert(ptN_cc(p) > 1), ptN_cc(ns[0]) > PT_FANOUT / 2) return 0;
     if ((i && lfirst) || i == p->child_count - 1) ns -= 1, i -= 1;
-    k = ptK_levels(C) - 1 - l;
-    ns[0] = ptK_cownode(C, ns, &old, k);
-    ns[1] = ptK_cownode(C, ns + 1, &old, k);
+    doff = (int)(ns - C->paths[l]);
+    ns[0] = ptK_cow(C, l, doff);
+    ns[1] = ptK_cow(C, l, doff + 1);
     if ((cl = ptN_cc(ns[0])) + (cr = ptN_cc(ns[1])) <= PT_FANOUT) {
         ptN_copy(ns[0], cl, ns[1], 0, cr);
         ns[0]->child_count += cr, ns[1]->child_count -= cr;
         p->bytes[i] += p->bytes[i + 1];
         for (w = 0; w < PT_MASK_SIZE; ++w) ns[0]->mask[w] |= ns[1]->mask[w];
-        if (*ns != o)
+        if (doff)
             cp[1] = &ns[0]->children[cp[1] - ns[1]->children + cl], cp[0] -= 1;
         return ptN_remove(C->tree->S, p, ptK_levels(C) - l, i + 1, i + 2), 1;
     }
-    dn = ptR_balancenode(ns, (ns[0] == o), &ds);
-    assert(dn != 0 && (dn < 0) != (*ns != o));
+    dn = ptR_balancenode(ns, !doff, &ds);
+    assert(dn != 0 && (dn < 0) != (doff != 0));
     p->bytes[i] -= ds, p->bytes[i + 1] += ds;
-    if (*ns != o) cp[1] += dn;
+    if (doff) cp[1] += dn;
     return 0;
 }
 
@@ -1243,7 +1222,7 @@ static int ptR_rmleaf(pt_Cursor *L, pt_Cursor *R) {
     return 0;
 }
 
-static int ptK_fork(pt_Cursor *C) {
+static int ptK_markdirty(pt_Cursor *C) {
     pt_State *S = C->tree->S;
     pt_Tree  *old = C->tree, *nt;
     if (C->dirty) return PT_OK;
@@ -1258,26 +1237,12 @@ static int ptK_fork(pt_Cursor *C) {
 static int ptK_cowedit(pt_Cursor *C, pt_Cursor *R) {
     int fl, l, levels = ptK_levels(C);
     for (l = 0; l < levels && C->paths[l] == R->paths[l]; ++l) {
-        int      k = levels - 1 - l;
-        pt_Node *old, *nw = ptK_cownode(C, C->paths[l], &old, k);
-        if (nw != old) {
-            C->paths[l + 1] = nw->children + (C->paths[l + 1] - old->children);
-            R->paths[l + 1] = nw->children + (R->paths[l + 1] - old->children);
-        }
+        ptK_cow(C, l, 0);
+        R->paths[l + 1] = C->paths[l + 1];
     }
     fl = l;
-    for (l = fl; l < levels; ++l) {
-        int      k = levels - 1 - l;
-        pt_Node *old, *nw = ptK_cownode(C, C->paths[l], &old, k);
-        if (nw != old)
-            C->paths[l + 1] = nw->children + (C->paths[l + 1] - old->children);
-    }
-    for (l = fl; l < levels; ++l) {
-        int      k = levels - 1 - l;
-        pt_Node *old, *nw = ptK_cownode(R, R->paths[l], &old, k);
-        if (nw != old)
-            R->paths[l + 1] = nw->children + (R->paths[l + 1] - old->children);
-    }
+    for (l = fl; l < levels; ++l) ptK_cow(C, l, 0);
+    for (l = fl; l < levels; ++l) ptK_cow(R, l, 0);
     return fl;
 }
 
@@ -1314,7 +1279,7 @@ PT_API int pt_remove(pt_Cursor *C, size_t len) {
     l = ptK_levels(C);
     r = ptP_reserve(C->tree->S, &C->tree->S->nodes, 4 * l + 5);
     if (!r) return PT_ERRMEM;
-    if (old = C->tree, r = ptK_fork(C), r != PT_OK) return r;
+    if (old = C->tree, r = ptK_markdirty(C), r != PT_OK) return r;
     R.tree = C->tree;
     R.paths[0] = C->tree->root.children + (R.paths[0] - old->root.children);
     if (C->paths[l] == R.paths[l])
@@ -1455,10 +1420,11 @@ PT_API void pt_rollback(pt_Cursor *c) {
 }
 
 static int ptK_beginedit(pt_Cursor *C, size_t need) {
-    int r;
+    int r, l;
     if (!ptP_reserve(C->tree->S, &C->tree->S->nodes, need)) return PT_ERRMEM;
-    if ((r = ptK_fork(C)) != PT_OK) return r;
-    return ptK_cowpath(C), PT_OK;
+    if ((r = ptK_markdirty(C)) != PT_OK) return r;
+    for (l = 0; l < ptK_levels(C); ++l) ptK_cow(C, l, 0);
+    return PT_OK;
 }
 
 PT_API int pt_insert(pt_Cursor *C, const char *s, size_t len) {

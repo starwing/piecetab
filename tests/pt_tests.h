@@ -314,17 +314,48 @@ PT_STATIC int pt_checkleaves(const pt_Blob *S, unsigned **brs) {
 /*  tree construction helpers (leafV / botV / innerV / cacheV)       */
 /* ================================================================ */
 
-#define litV(s)     (s)
-#define leafV(...)  leafV_(S, __VA_ARGS__, (const char *)NULL)
-#define innerV(...) innerV_(S, __VA_ARGS__, (pt_Node *)NULL)
+typedef struct {
+    void  *data;
+    size_t len;
+    int    is_hole;
+} pt_LeafValue;
+
+#define innerV(...)    innerV_(S, __VA_ARGS__, NULL)
+#define leafV(...)     leafV_(S, __VA_ARGS__, litV_(NULL, 0))
+#define litV(s)        litV_("" s, sizeof(s) - 1)
+#define holeV(s)       holeV_(S, "" s, sizeof(s) - 1)
+#define treeV(l, root) treeV_(S, l, root)
+
+#define editV(c, off, l, root)             \
+    do {                                   \
+        pt_Blob _tv_ = treeV_(S, l, root); \
+        pt_seek((c), _tv_, (off));         \
+        (c)->dirty = 1;                    \
+    } while (0)
+
+static pt_LeafValue litV_(const char *s, size_t len) {
+    pt_LeafValue v;
+    v.data = (void *)s, v.len = len, v.is_hole = 0;
+    return v;
+}
+
+static pt_LeafValue holeV_(pt_State *S, const char *s, size_t len) {
+    pt_LeafValue v;
+    pt_Hole     *h = (pt_Hole *)ptP_alloc(S, &S->holes);
+    assert(len <= PT_MAX_HOLESIZE);
+    h->n = (unsigned short)len;
+    memcpy(h->data, s, len);
+    v.data = (void *)h, v.len = len, v.is_hole = 1;
+    return v;
+}
 
 PT_STATIC pt_Node *leafV_(pt_State *S, ...) {
-    va_list     ap;
-    unsigned    i, cc = 0;
-    pt_Node    *n;
-    const char *s;
+    va_list      ap;
+    unsigned     i, cc = 0;
+    pt_Node     *n;
+    pt_LeafValue v;
     va_start(ap, S);
-    while (va_arg(ap, const char *) != NULL) cc++;
+    while (va_arg(ap, pt_LeafValue).data != NULL) cc++;
     va_end(ap);
     n = (pt_Node *)ptP_alloc(S, &S->nodes);
     assert(n && cc <= PT_FANOUT);
@@ -332,9 +363,10 @@ PT_STATIC pt_Node *leafV_(pt_State *S, ...) {
     n->child_count = (unsigned short)cc, n->version = 0;
     va_start(ap, S);
     for (i = 0; i < cc; i++) {
-        s = va_arg(ap, const char *);
-        n->children[i] = (pt_Node *)(char *)s;
-        n->bytes[i] = strlen(s);
+        v = va_arg(ap, pt_LeafValue);
+        n->children[i] = (pt_Node *)v.data;
+        ptM_sethole(n, i, v.is_hole);
+        n->bytes[i] = v.len;
     }
     va_end(ap);
     return n;
@@ -364,7 +396,7 @@ PT_STATIC pt_Node *innerV_(pt_State *S, ...) {
     return n;
 }
 
-PT_STATIC pt_Blob treeV(pt_State *S, unsigned levels, pt_Node *root) {
+PT_STATIC pt_Blob treeV_(pt_State *S, unsigned levels, pt_Node *root) {
     pt_Tree *t = (pt_Tree *)pt_from(S, NULL, 0);
     unsigned i;
     assert(t && root->child_count <= PT_FANOUT);
@@ -380,9 +412,9 @@ PT_STATIC pt_Blob treeV(pt_State *S, unsigned levels, pt_Node *root) {
 /*  pt_asserttree — build expected tree and compare                    */
 /* ================================================================ */
 
-#define pt_asserttree(c, lvls, ...)                                      \
+#define pt_asserttree(c, lvls, root)                                     \
     do {                                                                 \
-        pt_Blob __d = treeV(S, lvls, __VA_ARGS__);                       \
+        pt_Blob __d = treeV_(S, lvls, root);                             \
         if (!pt_comparetree((c), __d)) {                                 \
             fprintf(stderr, "pt_asserttree FAILED at %s:%d\n", __FILE__, \
                     __LINE__);                                           \

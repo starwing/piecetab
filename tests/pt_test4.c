@@ -533,8 +533,8 @@ static void test_remove_release_order(void) {
     pt_insert(&c, "XYZ", 3);
     b1 = pt_commit(&c);
     assert(pt_checktree(b1));
-    pt_release(b0);            /* release source first; b1 still shares nodes */
-    assert(pt_checktree(b1));  /* b1 not dangling */
+    pt_release(b0);           /* release source first; b1 still shares nodes */
+    assert(pt_checktree(b1)); /* b1 not dangling */
     pt_release(b1);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
@@ -544,7 +544,7 @@ static void test_remove_release_order(void) {
 
 static void test_remove_same_mid(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b = treeV(S, 0, leafV(litV("abcdef")));
+    pt_Blob   b = treeV(0, leafV(litV("abcdef")));
     pt_Cursor c;
     pt_seek(&c, b, 2);
     assert(pt_remove(&c, 2) == PT_OK); /* delete "cd" -> split into two */
@@ -558,7 +558,7 @@ static void test_remove_same_mid(void) {
 
 static void test_remove_same_prefix(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b = treeV(S, 0, leafV(litV("abcdef")));
+    pt_Blob   b = treeV(0, leafV(litV("abcdef")));
     pt_Cursor c;
     pt_seek(&c, b, 0);
     assert(pt_remove(&c, 2) == PT_OK); /* delete prefix "ab" */
@@ -572,7 +572,7 @@ static void test_remove_same_prefix(void) {
 
 static void test_remove_same_suffix(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b = treeV(S, 0, leafV(litV("abcdef")));
+    pt_Blob   b = treeV(0, leafV(litV("abcdef")));
     pt_Cursor c;
     pt_seek(&c, b, 4);
     assert(pt_remove(&c, 2) == PT_OK); /* delete suffix "ef" */
@@ -586,7 +586,7 @@ static void test_remove_same_suffix(void) {
 
 static void test_remove_piece_whole(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b = treeV(S, 0, leafV(litV("aa"), litV("bb"), litV("cc")));
+    pt_Blob   b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));
     pt_Cursor c;
     pt_seek(&c, b, 2);
     assert(pt_remove(&c, 2) == PT_OK); /* delete whole middle piece "bb" */
@@ -600,7 +600,7 @@ static void test_remove_piece_whole(void) {
 
 static void test_remove_cross(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b = treeV(S, 0, leafV(litV("aaa"), litV("bbb"), litV("ccc")));
+    pt_Blob   b = treeV(0, leafV(litV("aaa"), litV("bbb"), litV("ccc")));
     pt_Cursor c;
     pt_seek(&c, b, 2);
     assert(pt_remove(&c, 5) == PT_OK); /* [2,7): a|bbb|c across 3 pieces */
@@ -614,7 +614,7 @@ static void test_remove_cross(void) {
 
 static void test_remove_to_end(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b = treeV(S, 0, leafV(litV("aa"), litV("bb"), litV("cc")));
+    pt_Blob   b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));
     pt_Cursor c;
     pt_seek(&c, b, 2);
     assert(pt_remove(&c, 4) == PT_OK); /* delete "bb"+"cc" to end */
@@ -628,7 +628,7 @@ static void test_remove_to_end(void) {
 
 static void test_remove_all(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b = treeV(S, 0, leafV(litV("aa"), litV("bb")));
+    pt_Blob   b = treeV(0, leafV(litV("aa"), litV("bb")));
     pt_Cursor c;
     pt_seek(&c, b, 0);
     assert(pt_remove(&c, 4) == PT_OK); /* delete everything */
@@ -643,9 +643,8 @@ static void test_remove_all(void) {
 static void test_remove_across_leaves(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
     pt_Blob   b = treeV(
-            S, 1,
-            innerV(leafV(litV("aaa"), litV("bbb")),
-                   leafV(litV("ccc"), litV("ddd"))));
+            1, innerV(leafV(litV("aaa"), litV("bbb")),
+                      leafV(litV("ccc"), litV("ddd"))));
     pt_Cursor c;
     pt_seek(&c, b, 2);
     assert(pt_remove(&c, 7) == PT_OK);
@@ -660,9 +659,8 @@ static void test_remove_across_leaves(void) {
 static void test_remove_deep_shrink(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
     pt_Blob   b = treeV(
-            S, 2,
-            innerV(innerV(leafV(litV("aa")), leafV(litV("bb"))),
-                   innerV(leafV(litV("cc")))));
+            2, innerV(innerV(leafV(litV("aa")), leafV(litV("bb"))),
+                      innerV(leafV(litV("cc")))));
     pt_Cursor c;
     pt_seek(&c, b, 0);
     assert(pt_remove(&c, 4) == PT_OK);
@@ -1055,7 +1053,6 @@ static void test_peekscratch_adjacent(void) {
     X(remove_cow)               \
     X(remove_oom)               \
     X(remove_brute)             \
-    X(remove_cow_hole)          \
     X(remove_stitch_full)       \
     X(remove_fold_balance)      \
     X(remove_stitch_overflow)   \
@@ -1103,65 +1100,6 @@ static void test_peekscratch_adjacent(void) {
     X(commit_deep2)             \
     X(commit_reserve_leftover)  \
     X(commit_reservebuf_oom_multi)
-
-/* ================= hole tree helpers ================= */
-
-PT_STATIC pt_Hole *make_hole(pt_State *S, const char *s, size_t len) {
-    pt_Hole *h = (pt_Hole *)ptP_alloc(S, &S->holes);
-    assert(h && len <= PT_MAX_HOLESIZE);
-    h->n = (unsigned short)len;
-    memcpy(h->data, s, len);
-    return h;
-}
-
-/* 手动创建含 hole 的简单 leaf 节点（单层，直接当 root 用 treeV） */
-PT_STATIC pt_Node *leafholeV(
-        pt_State *S, const char *s1, int ishole1, const char *s2, int ishole2,
-        const char *s3, int ishole3) {
-    pt_Node       *n = (pt_Node *)ptP_alloc(S, &S->nodes);
-    unsigned short cc = 0;
-    assert(n && 3 <= PT_FANOUT);
-    memset(n->mask, 0, sizeof(n->mask));
-    n->version = 0;
-    if (s1) {
-        if (ishole1) {
-            pt_Hole *h = make_hole(S, s1, strlen(s1));
-            n->children[0] = (pt_Node *)h;
-            ptM_sethole(n, 0, 1);
-            n->bytes[0] = strlen(s1);
-        } else {
-            n->children[0] = (pt_Node *)s1;
-            n->bytes[0] = strlen(s1);
-        }
-        cc++;
-    }
-    if (s2) {
-        if (ishole2) {
-            pt_Hole *h = make_hole(S, s2, strlen(s2));
-            n->children[1] = (pt_Node *)h;
-            ptM_sethole(n, 1, 1);
-            n->bytes[1] = strlen(s2);
-        } else {
-            n->children[1] = (pt_Node *)s2;
-            n->bytes[1] = strlen(s2);
-        }
-        cc++;
-    }
-    if (s3) {
-        if (ishole3) {
-            pt_Hole *h = make_hole(S, s3, strlen(s3));
-            n->children[2] = (pt_Node *)h;
-            ptM_sethole(n, 2, 1);
-            n->bytes[2] = strlen(s3);
-        } else {
-            n->children[2] = (pt_Node *)s3;
-            n->bytes[2] = strlen(s3);
-        }
-        cc++;
-    }
-    n->child_count = cc;
-    return n;
-}
 
 /* ================= hole remove tests ================= */
 
@@ -1370,42 +1308,13 @@ static void test_remove_brute(void) {
     pt_close(S);
 }
 
-/* === remove: COW hole deep copy, stitch/findroom, fold/balance === */
-
-static void test_remove_cow_hole(void) {
-    pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b;
-    pt_Hole  *h;
-    pt_Node  *lf;
-    pt_Cursor c;
-
-    lf = (pt_Node *)ptP_alloc(S, &S->nodes);
-    memset(lf, 0, sizeof(pt_Node));
-    h = (pt_Hole *)ptP_alloc(S, &S->holes);
-    h->n = 5;
-    memcpy(h->data, "hello", 5);
-    lf->children[0] = (pt_Node *)h;
-    lf->bytes[0] = 5;
-    ptM_sethole(lf, 0, 1);
-    lf->child_count = 1;
-
-    b = treeV(S, 1, innerV(lf, (pt_Node *)NULL));
-    pt_seek(&c, b, 1);
-    assert(pt_remove(&c, 3) == PT_OK);
-    assert(pt_bytes(c.tree) == 2);
-    pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
-    pt_close(S);
-}
-
 static void test_remove_stitch_full(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
     pt_Cursor c;
     /* COW + cross-leaf eraserange: commit tree then remove across leaves */
     pt_Blob b = treeV(
-            S, 1,
-            innerV(leafV(litV("aa"), litV("bb")),
-                   leafV(litV("cc"), litV("dd"))));
+            1, innerV(leafV(litV("aa"), litV("bb")),
+                      leafV(litV("cc"), litV("dd"))));
     pt_seek(&c, b, 2);
     assert(pt_remove(&c, 4) == PT_OK); /* delete "bb"+"cc" cross-leaf */
     assert(pt_checktree(c.tree));
@@ -1422,9 +1331,8 @@ static void test_remove_fold_balance(void) {
        Remove "a" -> left leaf empty, foldnode tries merge but
        totals > FANOUT(4) -> triggers balancenode */
     pt_Blob b = treeV(
-            S, 1,
-            innerV(leafV(litV("a")),
-                   leafV(litV("x"), litV("y"), litV("z"), litV("w"))));
+            1, innerV(leafV(litV("a")),
+                      leafV(litV("x"), litV("y"), litV("z"), litV("w"))));
     pt_seek(&c, b, 0);
     assert(pt_remove(&c, 3) == PT_OK);
     assert(pt_checktree_allow_empty(c.tree, 1));
@@ -1435,38 +1343,11 @@ static void test_remove_fold_balance(void) {
 
 static void test_remove_hole_trim(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b;
-    pt_Hole  *h1, *h2;
-    pt_Node  *lf1, *lf2;
     pt_Cursor c;
-
-    /* levels=1: inner(leaf1(hole"abc"), leaf2(hole"def"))
-       Remove across both holes -> triggers trimright/trimleft on holes */
-    lf1 = (pt_Node *)ptP_alloc(S, &S->nodes);
-    memset(lf1, 0, sizeof(pt_Node));
-    h1 = (pt_Hole *)ptP_alloc(S, &S->holes);
-    h1->n = 3;
-    memcpy(h1->data, "abc", 3);
-    lf1->children[0] = (pt_Node *)h1;
-    lf1->bytes[0] = 3;
-    ptM_sethole(lf1, 0, 1);
-    lf1->child_count = 1;
-
-    lf2 = (pt_Node *)ptP_alloc(S, &S->nodes);
-    memset(lf2, 0, sizeof(pt_Node));
-    h2 = (pt_Hole *)ptP_alloc(S, &S->holes);
-    h2->n = 3;
-    memcpy(h2->data, "def", 3);
-    lf2->children[0] = (pt_Node *)h2;
-    lf2->bytes[0] = 3;
-    ptM_sethole(lf2, 0, 1);
-    lf2->child_count = 1;
-
-    b = treeV(S, 1, innerV(lf1, lf2, (pt_Node *)NULL));
-    pt_seek(&c, b, 1);
+    editV(&c, 1, 0, leafV(holeV("abc"), holeV("def")));
     assert(pt_remove(&c, 4) == PT_OK);
     assert(pt_bytes(c.tree) == 2);
-    pt_release(c.tree), pt_release(b);
+    pt_release(c.tree);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -1487,7 +1368,7 @@ static void test_remove_merge_literal(void) {
         lf->children[1] = (pt_Node *)"SEP", lf->bytes[1] = 3;
         lf->children[2] = (pt_Node *)(buf + 3), lf->bytes[2] = 3;
         lf->child_count = 3;
-        b = treeV(S, 0, lf);
+        b = treeV(0, lf);
         pt_seek(&c, b, 3);
         assert(pt_remove(&c, 3) == PT_OK);
         assert(pt_checktree(c.tree) && pt_checkcursor(&c, 3));
@@ -1510,7 +1391,7 @@ static void test_remove_merge_literal(void) {
         l1->children[0] = (pt_Node *)"Q", l1->bytes[0] = 1;
         l1->children[1] = (pt_Node *)(buf + 3), l1->bytes[1] = 3;
         l1->child_count = 2;
-        b = treeV(S, 1, innerV(l0, l1));
+        b = treeV(1, innerV(l0, l1));
         pt_seek(&c, b, 3);
         assert(pt_remove(&c, 2) == PT_OK);
         assert(pt_checktree(c.tree) && pt_checkcursor(&c, 3));
@@ -1534,7 +1415,7 @@ static void test_remove_merge_literal(void) {
         l1->children[0] = (pt_Node *)"Z", l1->bytes[0] = 1;
         l1->children[1] = (pt_Node *)(buf + 3), l1->bytes[1] = 3;
         l1->child_count = 2;
-        b = treeV(S, 1, innerV(l0, l1));
+        b = treeV(1, innerV(l0, l1));
         pt_seek(&c, b, 3);
         assert(pt_remove(&c, 3) == PT_OK);
         assert(pt_checktree(c.tree) && pt_checkcursor(&c, 3));
@@ -1549,62 +1430,30 @@ static void test_remove_merge_literal(void) {
 
 static void test_remove_merge_hole_full(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Node  *l0 = (pt_Node *)ptP_alloc(S, &S->nodes);
-    pt_Node  *l1 = (pt_Node *)ptP_alloc(S, &S->nodes);
-    pt_Blob   b;
     pt_Cursor c;
-    memset(l0, 0, sizeof(pt_Node));
-    l0->children[0] = (pt_Node *)make_hole(
-            S, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 30);
-    l0->bytes[0] = 30;
-    ptM_sethole(l0, 0, 1);
-    l0->children[1] = (pt_Node *)"X";
-    l0->bytes[1] = 1;
-    l0->child_count = 2;
-    memset(l1, 0, sizeof(pt_Node));
-    l1->children[0] = (pt_Node *)make_hole(
-            S, "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", 32);
-    l1->bytes[0] = 32;
-    ptM_sethole(l1, 0, 1);
-    l1->child_count = 1;
-    b = treeV(S, 1, innerV(l0, l1));
-    pt_seek(&c, b, 30);
+    editV(&c, 30, 1, innerV(
+        leafV(holeV("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), litV("X")),
+        leafV(holeV("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"))));
     assert(pt_remove(&c, 1) == PT_OK);
     assert(pt_checktree(c.tree) && pt_checkcursor(&c, 30));
     assert(pt_bytes(c.tree) == 62);
-    pt_release(c.tree), pt_release(b);
+    pt_release(c.tree);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
 
 static void test_remove_merge_hole_split(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Node  *l0 = (pt_Node *)ptP_alloc(S, &S->nodes);
-    pt_Node  *l1 = (pt_Node *)ptP_alloc(S, &S->nodes);
-    pt_Blob   b;
     pt_Cursor c;
-    memset(l0, 0, sizeof(pt_Node));
-    l0->children[0] = (pt_Node *)make_hole(
-            S, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 40);
-    l0->bytes[0] = 40;
-    ptM_sethole(l0, 0, 1);
-    l0->children[1] = (pt_Node *)"X";
-    l0->bytes[1] = 1;
-    l0->child_count = 2;
-    memset(l1, 0, sizeof(pt_Node));
-    l1->children[0] = (pt_Node *)make_hole(
-            S, "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", 40);
-    l1->bytes[0] = 40;
-    ptM_sethole(l1, 0, 1);
-    l1->child_count = 1;
-    b = treeV(S, 1, innerV(l0, l1));
     /* delete "X"+22B of hole B: 23 bytes from pos 40
        → mergeleaf partial merge: hole A(40)+hole B(40)>62, can=22 */
-    pt_seek(&c, b, 40);
+    editV(&c, 40, 1, innerV(
+        leafV(holeV("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), litV("X")),
+        leafV(holeV("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"))));
     assert(pt_remove(&c, 23) == PT_OK);
     assert(pt_checktree(c.tree) && pt_checkcursor(&c, 40));
     assert(pt_bytes(c.tree) == 58);
-    pt_release(c.tree), pt_release(b);
+    pt_release(c.tree);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -1618,7 +1467,7 @@ static void test_remove_stitch_deep(void) {
     /* levels=1: root with 3 leaves, each with 2 pieces.
        Delete 6 bytes across all 3 leaves → triggers stitch+backwardnode. */
     b = treeV(
-            S, 1,
+            1,
             innerV(leafV(litV("aa"), litV("bb")), leafV(litV("cc"), litV("dd")),
                    leafV(litV("ee"), litV("ff"))));
     pt_seek(&c, b, 2);                 /* start of "bb" */
@@ -1635,26 +1484,13 @@ static void test_remove_stitch_deep(void) {
 
 static void test_remove_trim_hole(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Hole  *h;
-    pt_Node  *lf;
-    pt_Blob   b;
     pt_Cursor c;
-    lf = (pt_Node *)ptP_alloc(S, &S->nodes);
-    memset(lf, 0, sizeof(pt_Node));
-    h = (pt_Hole *)ptP_alloc(S, &S->holes);
-    h->n = 2;
-    memcpy(h->data, "xy", 2);
-    lf->children[0] = (pt_Node *)h;
-    lf->bytes[0] = 2;
-    ptM_sethole(lf, 0, 1);
-    lf->children[1] = (pt_Node *)"ab";
-    lf->bytes[1] = 2;
-    lf->child_count = 2;
-    b = treeV(S, 1, innerV(lf, leafV(litV("cd"), litV("ef"))));
-    pt_seek(&c, b, 0);
+    editV(&c, 0, 1, innerV(
+        leafV(holeV("xy"), litV("ab")),
+        leafV(litV("cd"), litV("ef"))));
     assert(pt_remove(&c, 4) == PT_OK);
     assert(pt_checktree(c.tree));
-    pt_release(c.tree), pt_release(b);
+    pt_release(c.tree);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -1686,7 +1522,7 @@ static void test_remove_hole_eraseleaf(void) {
 
 static void test_splice_basic(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b = treeV(S, 0, leafV(litV("hello")));
+    pt_Blob   b = treeV(0, leafV(litV("hello")));
     pt_Cursor c;
     pt_seek(&c, b, 1);
     assert(pt_splice(&c, 3, "XYZ", 3) == PT_OK); /* del "ell", ins "XYZ" */
@@ -1700,7 +1536,7 @@ static void test_splice_basic(void) {
 
 static void test_splice_del0(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b = treeV(S, 0, leafV(litV("abc")));
+    pt_Blob   b = treeV(0, leafV(litV("abc")));
     pt_Cursor c;
     pt_seek(&c, b, 0);
     assert(pt_splice(&c, 0, "XYZ", 3) == PT_OK); /* del=0 → insert only */
@@ -1713,7 +1549,7 @@ static void test_splice_del0(void) {
 
 static void test_splice_null(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b = treeV(S, 0, leafV(litV("hello")));
+    pt_Blob   b = treeV(0, leafV(litV("hello")));
     pt_Cursor c;
     pt_seek(&c, b, 1);
     assert(pt_splice(&c, 3, NULL, 0) == PT_OK); /* del "ell", no insert */
@@ -1730,10 +1566,9 @@ static void test_splice_null(void) {
 static void test_remove_stitch_overflow(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
     pt_Blob   b = treeV(
-            S, 2,
-            innerV(innerV(leafV(litV("a")), leafV(litV("b"))),
-                   innerV(leafV(litV("c")), leafV(litV("d"))),
-                   innerV(leafV(litV("e")))));
+            2, innerV(innerV(leafV(litV("a")), leafV(litV("b"))),
+                      innerV(leafV(litV("c")), leafV(litV("d"))),
+                      innerV(leafV(litV("e")))));
     pt_Cursor c;
     pt_seek(&c, b, 0);
     assert(pt_remove(&c, 3) == PT_OK);
@@ -1748,10 +1583,9 @@ static void test_remove_stitch_overflow(void) {
 static void test_remove_foldnode_balance(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
     pt_Blob   b = treeV(
-            S, 3,
-            innerV(innerV(innerV(leafV(litV("a")), leafV(litV("b"))),
-                          innerV(leafV(litV("c")), leafV(litV("d")))),
-                   innerV(innerV(leafV(litV("e"))))));
+            3, innerV(innerV(innerV(leafV(litV("a")), leafV(litV("b"))),
+                             innerV(leafV(litV("c")), leafV(litV("d")))),
+                      innerV(innerV(leafV(litV("e"))))));
     pt_Cursor c;
     pt_seek(&c, b, 0);
     assert(pt_remove(&c, 3) == PT_OK);
@@ -1818,7 +1652,7 @@ static void test_edit_empty(void) {
 
 static void test_edit_fresh_lit_mid(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b = treeV(S, 0, leafV(litV("abcdef")));
+    pt_Blob   b = treeV(0, leafV(litV("abcdef")));
     pt_Cursor c;
     pt_seek(&c, b, 3);
     assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
@@ -1847,7 +1681,7 @@ static void test_edit_fresh_boundary(void) {
 
     /* poff==0: insert before piece */
     {
-        pt_Blob   b = treeV(S, 0, leafV(litV("abcdef")));
+        pt_Blob   b = treeV(0, leafV(litV("abcdef")));
         pt_Cursor c;
         pt_seek(&c, b, 0);
         assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
@@ -1870,7 +1704,7 @@ static void test_edit_fresh_boundary(void) {
 
     /* poff==len: insert after piece */
     {
-        pt_Blob   b = treeV(S, 0, leafV(litV("abcdef")));
+        pt_Blob   b = treeV(0, leafV(litV("abcdef")));
         pt_Cursor c;
         pt_seek(&c, b, 6);
         assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
@@ -2152,10 +1986,10 @@ static void test_edit_split_tree(void) {
     /* expected: levels=1, inner(left: lit"aa", hole"ZZ", lit"bb",
        right: lit"cc", lit"dd") */
     {
-        pt_Node *exp_lf = leafholeV(S, "aa", 0, "ZZ", 1, "bb", 0);
+        pt_Node *exp_lf = leafV(litV("aa"), holeV("ZZ"), litV("bb"));
         pt_Node *exp_rf = leafV(litV("cc"), litV("dd"));
-        pt_Node *exp_in = innerV(exp_lf, exp_rf, (pt_Node *)NULL);
-        pt_Blob  expected = treeV(S, 1, exp_in);
+        pt_Node *exp_in = innerV(exp_lf, exp_rf);
+        pt_Blob  expected = treeV(1, exp_in);
         assert(pt_comparetree(c.tree, expected));
         pt_release(expected);
     }
@@ -2172,9 +2006,8 @@ static void test_edit_upmask(void) {
     pt_Hole  *hole;
     /* need each leaf to have ≥2 children for pt_checktree */
     b = treeV(
-            S, 1,
-            innerV(leafV(litV("aa"), litV("bb")),
-                   leafV(litV("cc"), litV("dd"))));
+            1, innerV(leafV(litV("aa"), litV("bb")),
+                      leafV(litV("cc"), litV("dd"))));
     pt_seek(&c, b, 1);
     assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
     assert(pt_checktree(c.tree));
@@ -2292,21 +2125,19 @@ static void test_commit_mixed(void) {
 
 static void test_commit_deep(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Blob   b = treeV(
-            S, 1,
-            innerV(leafholeV(S, "abc", 1, NULL, 0, NULL, 0),
-                   leafV(litV("def"), litV("ghi"))));
     pt_Cursor c;
-    int       i;
-    pt_seek(&c, b, 0);
+    editV(&c, 0, 1, innerV(
+        leafV(holeV("abc")),
+        leafV(litV("def"), litV("ghi"))));
     assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
     assert(pt_commit(&c) != NULL);
     assert(pt_checktree(c.tree));
     {
         pt_Node *r = &c.tree->root;
+        int i;
         for (i = 0; i < (int)r->child_count; ++i) assert(!ptM_ishole(r, i));
     }
-    pt_release(c.tree), pt_release(b);
+    pt_release(c.tree);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -2396,52 +2227,24 @@ static void test_commit_bytes_invariant(void) {
 /* multi-page reserve chain (levels=1, 3 leaves with holes) */
 static void test_commit_reserve_pages(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
-    pt_Node  *lf1, *lf2, *lf3;
-    pt_Blob   b;
     pt_Cursor c;
-    int       i;
-    lf1 = (pt_Node *)ptP_alloc(S, &S->nodes);
-    memset(lf1, 0, sizeof(pt_Node));
-    lf1->version = 0;
-    lf1->child_count = 4;
-    for (i = 0; i < 4; ++i) {
-        lf1->children[i] = (pt_Node *)make_hole(
-                S,
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                55);
-        lf1->bytes[i] = 55;
-        ptM_sethole(lf1, i, 1);
-    }
-    lf2 = (pt_Node *)ptP_alloc(S, &S->nodes);
-    memset(lf2, 0, sizeof(pt_Node));
-    lf2->version = 0;
-    lf2->child_count = 4;
-    for (i = 0; i < 4; ++i) {
-        lf2->children[i] = (pt_Node *)make_hole(
-                S,
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                55);
-        lf2->bytes[i] = 55;
-        ptM_sethole(lf2, i, 1);
-    }
-    lf3 = (pt_Node *)ptP_alloc(S, &S->nodes);
-    memset(lf3, 0, sizeof(pt_Node));
-    lf3->version = 0;
-    lf3->child_count = 4;
-    for (i = 0; i < 4; ++i) {
-        lf3->children[i] = (pt_Node *)make_hole(
-                S,
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                55);
-        lf3->bytes[i] = 55;
-        ptM_sethole(lf3, i, 1);
-    }
-    b = treeV(S, 1, innerV(lf1, lf2, lf3, (pt_Node *)NULL));
-    pt_seek(&c, b, 0);
+    editV(&c, 0, 1, innerV(
+        leafV(holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+              holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+              holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+              holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")),
+        leafV(holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+              holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+              holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+              holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")),
+        leafV(holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+              holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+              holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+              holeV("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))));
     assert(pt_edit(&c, 0, ".", 1) == PT_OK);
     assert(pt_commit(&c) != NULL);
     assert(pt_checktree(c.tree));
-    pt_release(c.tree), pt_release(b);
+    pt_release(c.tree);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
