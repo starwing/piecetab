@@ -1,5 +1,5 @@
-#define PT_FANOUT    4
-#define PT_PAGE_SIZE 512
+#define PT_FANOUT       4
+#define PT_PAGE_SIZE    512
 #define PT_MAX_HOLESIZE 16
 #define PT_STATIC_API
 #ifndef PT_POOL_STATS
@@ -1008,100 +1008,6 @@ static void test_peekscratch_adjacent(void) {
     pt_close(S);
 }
 
-#define TESTS(X)                \
-    X(lifecycle)                \
-    X(seek_empty)               \
-    X(insert_basic)             \
-    X(insert_before)            \
-    X(insert_after)             \
-    X(insert_mid)               \
-    X(insert_split_root)        \
-    X(insert_locend)            \
-    X(insert_split_leaf)        \
-    X(insert_deep)              \
-    X(insert_cow)               \
-    X(insert_multiversion)      \
-    X(insert_oom_reserve)       \
-    X(insert_oom_fork)          \
-    X(merge_right)              \
-    X(merge_left)               \
-    X(advance_brute)            \
-    X(null_params)              \
-    X(insert_split_front)       \
-    X(rollback)                 \
-    X(insert_committed_split)   \
-    X(splice_basic)             \
-    X(splice_del0)              \
-    X(splice_null)              \
-    X(from_basic)               \
-    X(release_order)            \
-    X(remove_release_order)     \
-    X(rollback_released_source) \
-    X(remove_same_mid)          \
-    X(remove_same_prefix)       \
-    X(remove_same_suffix)       \
-    X(remove_piece_whole)       \
-    X(remove_cross)             \
-    X(remove_to_end)            \
-    X(remove_all)               \
-    X(remove_across_leaves)     \
-    X(remove_deep_shrink)       \
-    X(remove_params)            \
-    X(remove_hole_whole)        \
-    X(remove_hole_mid)          \
-    X(remove_hole_boundary)     \
-    X(remove_hole_mixed)        \
-    X(remove_cow)               \
-    X(remove_oom)               \
-    X(remove_brute)             \
-    X(remove_stitch_full)       \
-    X(remove_fold_balance)      \
-    X(remove_stitch_overflow)   \
-    X(remove_foldnode_balance)  \
-    X(remove_hole_trim)         \
-    X(remove_merge_literal)     \
-    X(remove_merge_hole_full)   \
-    X(remove_merge_hole_split)  \
-    X(remove_stitch_deep)       \
-    X(remove_trim_hole)         \
-    X(remove_hole_eraseleaf)    \
-    X(edit_params)              \
-    X(edit_empty)               \
-    X(edit_fresh_lit_mid)       \
-    X(edit_fresh_boundary)      \
-    X(edit_append_tail)         \
-    X(edit_append_full)         \
-    X(edit_prev_hole)           \
-    X(edit_mid_fit)             \
-    X(edit_mid_split)           \
-    X(edit_del_then_ins)        \
-    X(edit_del_only)            \
-    X(edit_type_sequence)       \
-    X(edit_split_tree)          \
-    X(edit_upmask)              \
-    X(commit_single_hole)       \
-    X(commit_no_merge)          \
-    X(commit_mixed)             \
-    X(commit_deep)              \
-    X(commit_freshpage)         \
-    X(commit_clean)             \
-    X(commit_then_reseek)       \
-    X(commit_bytes_invariant)   \
-    X(commit_reserve_pages)     \
-    X(commit_reservebuf_oom)    \
-    X(edit_commit_roundtrip)    \
-    X(edit_commit_edit)         \
-    X(edit_cow)                 \
-    X(edit_rollback)            \
-    X(edit_oom)                 \
-    X(edit_brute)               \
-    X(peekscratch_roundtrip)    \
-    X(peekscratch_params)       \
-    X(peekscratch_adjacent)     \
-    X(commit_deep2)             \
-    X(commit_reserve_leftover)  \
-    X(commit_reservebuf_oom_multi)
-
 /* ================= hole remove tests ================= */
 
 static void test_remove_params(void) {
@@ -1431,9 +1337,9 @@ static void test_remove_merge_literal(void) {
 static void test_remove_merge_hole_full(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
     pt_Cursor c;
-    editV(&c, 10, 1, innerV(
-        leafV(holeV("AAAAAAAAAA"), litV("X")),
-        leafV(holeV("BBBBBB"))));
+    editV(&c, 10, 1,
+          innerV(leafV(holeV("AAAAAAAAAA"), litV("X")),
+                 leafV(holeV("BBBBBB"))));
     assert(pt_remove(&c, 1) == PT_OK);
     assert(pt_checktree(c.tree) && pt_checkcursor(&c, 10));
     assert(pt_bytes(c.tree) == 16);
@@ -1446,9 +1352,8 @@ static void test_remove_merge_hole_split(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
     pt_Cursor c;
     /* mergeleaf full merge: hole A(10) + hole B(5) = 15 ≤ 16 */
-    editV(&c, 10, 1, innerV(
-        leafV(holeV("AAAAAAAAAA"), litV("X")),
-        leafV(holeV("BBBBB"))));
+    editV(&c, 10, 1,
+          innerV(leafV(holeV("AAAAAAAAAA"), litV("X")), leafV(holeV("BBBBB"))));
     assert(pt_remove(&c, 1) == PT_OK);
     assert(pt_checktree(c.tree));
     assert(pt_bytes(c.tree) == 15);
@@ -1484,9 +1389,9 @@ static void test_remove_stitch_deep(void) {
 static void test_remove_trim_hole(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
     pt_Cursor c;
-    editV(&c, 0, 1, innerV(
-        leafV(holeV("xy"), litV("ab")),
-        leafV(litV("cd"), litV("ef"))));
+    editV(&c, 0, 1,
+          innerV(leafV(holeV("xy"), litV("ab")),
+                 leafV(litV("cd"), litV("ef"))));
     assert(pt_remove(&c, 4) == PT_OK);
     assert(pt_checktree(c.tree));
     pt_release(c.tree);
@@ -1717,8 +1622,8 @@ static void test_edit_fresh_boundary(void) {
                    && memcmp(r->children[0], "abcdef", 6) == 0);
             assert(ptM_ishole(r, 1));
             {
-            pt_Hole *h = (pt_Hole *)r->children[1];
-            assert(r->bytes[1] == 3 && memcmp(h->data, "XYZ", 3) == 0);
+                pt_Hole *h = (pt_Hole *)r->children[1];
+                assert(r->bytes[1] == 3 && memcmp(h->data, "XYZ", 3) == 0);
             }
         }
         pt_release(c.tree), pt_release(b);
@@ -1746,7 +1651,8 @@ static void test_edit_append_tail(void) {
         assert(ptM_ishole(r, 0));
         {
             pt_Hole *h = (pt_Hole *)r->children[0];
-            assert(r->bytes[0] == 11 && memcmp(h->data, "hello world", 11) == 0);
+            assert(r->bytes[0] == 11
+                   && memcmp(h->data, "hello world", 11) == 0);
         }
     }
     pt_release(c.tree);
@@ -1957,12 +1863,12 @@ static void test_edit_type_sequence(void) {
         assert(r->child_count == 1);
         assert(ptM_ishole(r, 0));
         {
-        assert(r->bytes[0] == (size_t)n);
-        {
-            pt_Hole *h = (pt_Hole *)r->children[0];
-            for (k = 0; k < n; ++k)
-                assert(h->data[k] == (char)('a' + (k % 26)));
-        }
+            assert(r->bytes[0] == (size_t)n);
+            {
+                pt_Hole *h = (pt_Hole *)r->children[0];
+                for (k = 0; k < n; ++k)
+                    assert(h->data[k] == (char)('a' + (k % 26)));
+            }
         }
     }
     pt_release(c.tree), pt_release(b);
@@ -2127,15 +2033,14 @@ static void test_commit_mixed(void) {
 static void test_commit_deep(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
     pt_Cursor c;
-    editV(&c, 0, 1, innerV(
-        leafV(holeV("abc")),
-        leafV(litV("def"), litV("ghi"))));
+    editV(&c, 0, 1,
+          innerV(leafV(holeV("abc")), leafV(litV("def"), litV("ghi"))));
     assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
     assert(pt_commit(&c) != NULL);
     assert(pt_checktree(c.tree));
     {
         pt_Node *r = &c.tree->root;
-        int i;
+        int      i;
         for (i = 0; i < (int)r->child_count; ++i) assert(!ptM_ishole(r, i));
     }
     pt_release(c.tree);
@@ -2225,19 +2130,13 @@ static void test_commit_bytes_invariant(void) {
 static void test_commit_reserve_pages(void) {
     pt_State *S = pt_newstate(&test_alloc, NULL);
     pt_Cursor c;
-    editV(&c, 0, 1, innerV(
-        leafV(holeV("aaaaaaaaaaaaaaaa"),
-              holeV("aaaaaaaaaaaaaaaa"),
-              holeV("aaaaaaaaaaaaaaaa"),
-              holeV("aaaaaaaaaaaaaaaa")),
-        leafV(holeV("aaaaaaaaaaaaaaaa"),
-              holeV("aaaaaaaaaaaaaaaa"),
-              holeV("aaaaaaaaaaaaaaaa"),
-              holeV("aaaaaaaaaaaaaaaa")),
-        leafV(holeV("aaaaaaaaaaaaaaaa"),
-              holeV("aaaaaaaaaaaaaaaa"),
-              holeV("aaaaaaaaaaaaaaaa"),
-              holeV("aaaaaaaaaaaaaaaa"))));
+    editV(&c, 0, 1,
+          innerV(leafV(holeV("aaaaaaaaaaaaaaaa"), holeV("aaaaaaaaaaaaaaaa"),
+                       holeV("aaaaaaaaaaaaaaaa"), holeV("aaaaaaaaaaaaaaaa")),
+                 leafV(holeV("aaaaaaaaaaaaaaaa"), holeV("aaaaaaaaaaaaaaaa"),
+                       holeV("aaaaaaaaaaaaaaaa"), holeV("aaaaaaaaaaaaaaaa")),
+                 leafV(holeV("aaaaaaaaaaaaaaaa"), holeV("aaaaaaaaaaaaaaaa"),
+                       holeV("aaaaaaaaaaaaaaaa"), holeV("aaaaaaaaaaaaaaaa"))));
     assert(pt_edit(&c, 0, ".", 1) == PT_OK);
     assert(pt_commit(&c) != NULL);
     assert(pt_checktree(c.tree));
@@ -2483,6 +2382,557 @@ static void test_commit_reservebuf_oom_multi(void) {
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
+
+/* ================= read interface tests ================= */
+
+static void test_read_params(void) {
+    pt_State *S = pt_newstate(&test_alloc, NULL);
+    pt_Blob   b = pt_from(S, "hello", 5);
+    pt_Cursor c;
+    size_t    n;
+    char      buf[8];
+
+    /* pt_piece NULL checks */
+    assert(pt_piece(NULL, &n) == NULL);
+
+    /* pt_next NULL checks */
+    assert(pt_next(NULL, &n) == NULL);
+
+    /* pt_prev NULL checks */
+    assert(pt_prev(NULL, &n) == NULL);
+
+    /* pt_read NULL checks */
+    assert(pt_read(NULL, buf, 5) == 0);
+    pt_seek(&c, b, 0);
+    assert(pt_read(&c, NULL, 5) == 0);
+
+    /* pt_next at end (poff==bytes[i]) */
+    pt_seek(&c, b, 5);
+    {
+        const char *p = pt_next(&c, &n);
+        assert(p == NULL && n == 0);
+    }
+
+    /* pt_prev at start (off==0) */
+    pt_seek(&c, b, 0);
+    {
+        const char *p = pt_prev(&c, &n);
+        assert(p == NULL && n == 0);
+    }
+
+    /* pt_prev with poff>0 (return current piece start) */
+    pt_seek(&c, b, 3);
+    {
+        const char *p = pt_prev(&c, &n);
+        assert(p != NULL && n == 3);
+        assert(memcmp(p, "hel", 3) == 0);
+        assert(pt_offset(&c) == 0);
+    }
+
+    /* pt_read with len=0 */
+    pt_seek(&c, b, 0);
+    assert(pt_read(&c, buf, 0) == 0);
+
+    /* pt_piece with poff past piece len */
+    pt_seek(&c, b, 5);
+    {
+        const char *p = pt_piece(&c, &n);
+        assert(p == NULL && n == 0);
+    }
+
+    /* C->tree == NULL branches (zeroed cursor) */
+    {
+        pt_Cursor cz;
+        size_t    zn;
+        memset(&cz, 0, sizeof(cz));
+        assert(pt_piece(&cz, &zn) == NULL);
+        assert(pt_next(&cz, &zn) == NULL);
+        assert(pt_prev(&cz, &zn) == NULL);
+        assert(pt_read(&cz, buf, 5) == 0);
+    }
+
+    pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_piece_positions(void) {
+    pt_State   *S = pt_newstate(&test_alloc, NULL);
+    pt_Blob     b = treeV(0, leafV(litV("hello"), litV("world"), litV("!!!")));
+    pt_Cursor   c;
+    const char *p;
+    size_t      n;
+
+    /* Start of first piece */
+    pt_seek(&c, b, 0);
+    p = pt_piece(&c, &n);
+    assert(p != NULL && n == 5 && memcmp(p, "hello", 5) == 0);
+
+    /* Middle of first piece */
+    pt_seek(&c, b, 2);
+    p = pt_piece(&c, &n);
+    assert(p != NULL && n == 3 && memcmp(p, "llo", 3) == 0);
+
+    /* Boundary between pieces */
+    pt_seek(&c, b, 5);
+    p = pt_piece(&c, &n);
+    assert(p != NULL && n == 5 && memcmp(p, "world", 5) == 0);
+
+    /* End of last piece */
+    pt_seek(&c, b, 10);
+    p = pt_piece(&c, &n);
+    assert(p != NULL && n == 3 && memcmp(p, "!!!", 3) == 0);
+
+    /* Past end */
+    pt_seek(&c, b, 13);
+    p = pt_piece(&c, &n);
+    assert(p == NULL && n == 0);
+
+    /* pt_piece with NULL plen */
+    pt_seek(&c, b, 0);
+    p = pt_piece(&c, NULL);
+    assert(p != NULL);
+
+    pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_next_basic(void) {
+    pt_State   *S = pt_newstate(&test_alloc, NULL);
+    pt_Blob     b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));
+    pt_Cursor   c;
+    const char *p;
+    size_t      n;
+
+    /* Forward from start */
+    pt_seek(&c, b, 0);
+    p = pt_next(&c, &n);
+    assert(p != NULL && n == 2 && memcmp(p, "aa", 2) == 0);
+    assert(pt_offset(&c) == 2);
+
+    p = pt_next(&c, &n);
+    assert(p != NULL && n == 2 && memcmp(p, "bb", 2) == 0);
+    assert(pt_offset(&c) == 4);
+
+    p = pt_next(&c, &n);
+    assert(p != NULL && n == 2 && memcmp(p, "cc", 2) == 0);
+    assert(pt_offset(&c) == 6);
+
+    /* No more pieces */
+    p = pt_next(&c, &n);
+    assert(p == NULL && n == 0);
+
+    /* Forward from middle */
+    pt_seek(&c, b, 2);
+    p = pt_next(&c, &n);
+    assert(p != NULL && n == 2 && memcmp(p, "bb", 2) == 0);
+    assert(pt_offset(&c) == 4);
+
+    p = pt_next(&c, &n);
+    assert(p != NULL && n == 2 && memcmp(p, "cc", 2) == 0);
+    assert(pt_offset(&c) == 6);
+
+    /* pt_next with NULL plen */
+    pt_seek(&c, b, 0);
+    p = pt_next(&c, NULL);
+    assert(p != NULL);
+
+    pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_prev_basic(void) {
+    pt_State   *S = pt_newstate(&test_alloc, NULL);
+    pt_Blob     b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));
+    pt_Cursor   c;
+    const char *p;
+    size_t      n;
+
+    /* Backward from end */
+    pt_seek(&c, b, 6);
+    p = pt_prev(&c, &n);
+    assert(p != NULL && n == 2 && memcmp(p, "cc", 2) == 0);
+    assert(pt_offset(&c) == 4);
+
+    p = pt_prev(&c, &n);
+    assert(p != NULL && n == 2 && memcmp(p, "bb", 2) == 0);
+    assert(pt_offset(&c) == 2);
+
+    p = pt_prev(&c, &n);
+    assert(p != NULL && n == 2 && memcmp(p, "aa", 2) == 0);
+    assert(pt_offset(&c) == 0);
+
+    /* No more previous */
+    p = pt_prev(&c, &n);
+    assert(p == NULL && n == 0);
+
+    /* pt_prev with NULL plen */
+    pt_seek(&c, b, 6);
+    p = pt_prev(&c, NULL);
+    assert(p != NULL);
+
+    pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+/* Single piece tree — pt_next/pt_prev edges */
+static void test_trav_single(void) {
+    pt_State   *S = pt_newstate(&test_alloc, NULL);
+    pt_Blob     b = treeV(0, leafV(litV("hello")));
+    pt_Cursor   c;
+    const char *p;
+    size_t      n;
+
+    /* Forward: one piece then stop */
+    pt_seek(&c, b, 0);
+    p = pt_next(&c, &n);
+    assert(p != NULL && n == 5 && memcmp(p, "hello", 5) == 0);
+
+    p = pt_next(&c, &n);
+    assert(p == NULL && n == 0);
+
+    /* Backward from middle */
+    pt_seek(&c, b, 3);
+    p = pt_prev(&c, &n);
+    assert(p != NULL && n == 3 && memcmp(p, "hel", 3) == 0);
+    assert(pt_offset(&c) == 0);
+
+    /* Backward from end */
+    pt_seek(&c, b, 5);
+    p = pt_prev(&c, &n);
+    assert(p != NULL && n == 5 && memcmp(p, "hello", 5) == 0);
+    assert(pt_offset(&c) == 0);
+
+    pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+/* Levels=1 forward traversal — exercises walk-up-then-down in pt_next */
+static void test_next_levels1(void) {
+    pt_State   *S = pt_newstate(&test_alloc, NULL);
+    pt_Blob     b = pt_empty(S);
+    pt_Cursor   c;
+    const char *p;
+    size_t      n;
+
+    /* Build levels=1 tree via editing (triggers splitroot) */
+    pt_seek(&c, b, 0);
+    pt_append(&c, "aa", 2);
+    pt_append(&c, "bb", 2);
+    pt_append(&c, "cc", 2);
+    pt_append(&c, "dd", 2);
+    pt_append(&c, "ee", 2);
+    pt_release(b);
+    assert(c.tree->levels == 1);
+
+    /* Full forward */
+    pt_seek(&c, c.tree, 0);
+    {
+        char   fwd[16];
+        size_t off = 0;
+        while ((p = pt_next(&c, &n)) != NULL) memcpy(fwd + off, p, n), off += n;
+        assert(off == 10 && memcmp(fwd, "aabbccddee", 10) == 0);
+    }
+
+    pt_release(c.tree);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+/* Levels=1 backward traversal */
+static void test_prev_levels1(void) {
+    pt_State *S = pt_newstate(&test_alloc, NULL);
+    pt_Blob   b = treeV(
+            1, innerV(leafV(litV("aa"), litV("bb")),
+                      leafV(litV("cc"), litV("dd"))));
+    pt_Cursor   c;
+    const char *p;
+    size_t      n;
+
+    /* Full backward */
+    pt_seek(&c, b, 8);
+    {
+        char   rev[16];
+        size_t end = 8;
+        while ((p = pt_prev(&c, &n)) != NULL) end -= n, memcpy(rev + end, p, n);
+        assert(end == 0 && memcmp(rev, "aabbccdd", 8) == 0);
+    }
+
+    /* From "cc" (start of leaf 1), prev jumps to "bb" (leaf 0) */
+    pt_seek(&c, b, 4);
+    p = pt_prev(&c, &n);
+    assert(p != NULL && n == 2 && memcmp(p, "bb", 2) == 0);
+    assert(pt_offset(&c) == 2);
+
+    pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_read_basic(void) {
+    pt_State *S = pt_newstate(&test_alloc, NULL);
+    pt_Blob   b = treeV(0, leafV(litV("hello world")));
+    pt_Cursor c;
+    char      buf[32];
+    size_t    r;
+
+    /* Read partial from start */
+    pt_seek(&c, b, 0);
+    r = pt_read(&c, buf, 5);
+    assert(r == 5 && memcmp(buf, "hello", 5) == 0);
+    assert(pt_offset(&c) == 5);
+
+    /* Read remaining */
+    r = pt_read(&c, buf, 32);
+    assert(r == 6 && memcmp(buf, " world", 6) == 0);
+    assert(pt_offset(&c) == 11);
+
+    /* Read past end */
+    r = pt_read(&c, buf, 32);
+    assert(r == 0);
+
+    /* Read from middle */
+    pt_seek(&c, b, 6);
+    r = pt_read(&c, buf, 5);
+    assert(r == 5 && memcmp(buf, "world", 5) == 0);
+    assert(pt_offset(&c) == 11);
+
+    pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_read_cross(void) {
+    pt_State *S = pt_newstate(&test_alloc, NULL);
+    pt_Blob   b = treeV(0, leafV(litV("aaaa"), litV("bbbb"), litV("cccc")));
+    pt_Cursor c;
+    char      buf[32];
+    size_t    r;
+
+    /* Read across first two pieces exactly */
+    pt_seek(&c, b, 2);
+    r = pt_read(&c, buf, 6);
+    assert(r == 6 && memcmp(buf, "aabbbb", 6) == 0);
+    assert(pt_offset(&c) == 8);
+
+    /* Read across multiple pieces to end */
+    pt_seek(&c, b, 6);
+    r = pt_read(&c, buf, 32);
+    assert(r == 6 && memcmp(buf, "bbcccc", 6) == 0);
+
+    /* Read full tree */
+    pt_seek(&c, b, 0);
+    r = pt_read(&c, buf, 32);
+    assert(r == 12);
+    assert(memcmp(buf, "aaaabbbbcccc", 12) == 0);
+
+    pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_read_full(void) {
+    pt_State   *S = pt_newstate(&test_alloc, NULL);
+    static char ref[128];
+    pt_Blob     b;
+    pt_Cursor   c;
+    char        buf[256];
+    size_t      r;
+    int         k;
+
+    for (k = 0; k < 128; ++k) ref[k] = (char)('A' + (k % 26));
+    b = pt_from(S, ref, 128);
+    pt_seek(&c, b, 0);
+    r = pt_read(&c, buf, 256);
+    assert(r == 128 && memcmp(buf, ref, 128) == 0);
+    assert(pt_offset(&c) == 128);
+    pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_read_empty(void) {
+    pt_State *S = pt_newstate(&test_alloc, NULL);
+    pt_Blob   b = pt_empty(S);
+    pt_Cursor c;
+    char      buf[8];
+    size_t    r;
+
+    pt_seek(&c, b, 0);
+    r = pt_read(&c, buf, 5);
+    assert(r == 0);
+
+    /* pt_next/pt_prev on empty tree */
+    {
+        const char *p;
+        size_t      n;
+        p = pt_next(&c, &n);
+        assert(p == NULL && n == 0);
+        p = pt_prev(&c, &n);
+        assert(p == NULL && n == 0);
+    }
+
+    pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_read_cursor_mid(void) {
+    pt_State *S = pt_newstate(&test_alloc, NULL);
+    pt_Blob   b = pt_from(S, "abcdefghij", 10);
+    pt_Cursor c;
+    char      buf[16];
+    size_t    r;
+
+    /* Read from middle of content (not piece boundary) */
+    pt_seek(&c, b, 3);
+    r = pt_read(&c, buf, 4);
+    assert(r == 4 && memcmp(buf, "defg", 4) == 0);
+    assert(pt_offset(&c) == 7);
+
+    /* Read remaining after mid-read */
+    r = pt_read(&c, buf, 10);
+    assert(r == 3 && memcmp(buf, "hij", 3) == 0);
+    assert(pt_offset(&c) == 10);
+
+    pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_trav_deep(void) {
+    pt_State *S = pt_newstate(&test_alloc, NULL);
+    pt_Blob   b = treeV(
+            2, innerV(innerV(leafV(litV("aa"), litV("bb")),
+                             leafV(litV("cc"), litV("dd"))),
+                      innerV(leafV(litV("ee"), litV("ff")),
+                             leafV(litV("gg"), litV("hh")))));
+    pt_Cursor   c;
+    const char *p;
+    size_t      n, off = 0, end = 16;
+    char        fwd[16], rev[16];
+    pt_seek(&c, b, 0);
+    while ((p = pt_next(&c, &n)) != NULL) memcpy(fwd + off, p, n), off += n;
+    assert(off == 16 && memcmp(fwd, "aabbccddeeffgghh", 16) == 0);
+    pt_seek(&c, b, pt_bytes(b));
+    while ((p = pt_prev(&c, &n)) != NULL) end -= n, memcpy(rev + end, p, n);
+    assert(end == 0 && memcmp(rev, "aabbccddeeffgghh", 16) == 0);
+    assert(pt_offset(&c) == 0);
+    pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+#define TESTS(X)                   \
+    X(advance_brute)               \
+    X(commit_bytes_invariant)      \
+    X(commit_clean)                \
+    X(commit_deep)                 \
+    X(commit_deep2)                \
+    X(commit_freshpage)            \
+    X(commit_mixed)                \
+    X(commit_no_merge)             \
+    X(commit_reserve_leftover)     \
+    X(commit_reserve_pages)        \
+    X(commit_reservebuf_oom)       \
+    X(commit_reservebuf_oom_multi) \
+    X(commit_single_hole)          \
+    X(commit_then_reseek)          \
+    X(edit_append_full)            \
+    X(edit_append_tail)            \
+    X(edit_brute)                  \
+    X(edit_commit_edit)            \
+    X(edit_commit_roundtrip)       \
+    X(edit_cow)                    \
+    X(edit_del_only)               \
+    X(edit_del_then_ins)           \
+    X(edit_empty)                  \
+    X(edit_fresh_boundary)         \
+    X(edit_fresh_lit_mid)          \
+    X(edit_mid_fit)                \
+    X(edit_mid_split)              \
+    X(edit_oom)                    \
+    X(edit_params)                 \
+    X(edit_prev_hole)              \
+    X(edit_rollback)               \
+    X(edit_split_tree)             \
+    X(edit_type_sequence)          \
+    X(edit_upmask)                 \
+    X(from_basic)                  \
+    X(insert_after)                \
+    X(insert_basic)                \
+    X(insert_before)               \
+    X(insert_committed_split)      \
+    X(insert_cow)                  \
+    X(insert_deep)                 \
+    X(insert_locend)               \
+    X(insert_mid)                  \
+    X(insert_multiversion)         \
+    X(insert_oom_fork)             \
+    X(insert_oom_reserve)          \
+    X(insert_split_front)          \
+    X(insert_split_leaf)           \
+    X(insert_split_root)           \
+    X(lifecycle)                   \
+    X(merge_left)                  \
+    X(merge_right)                 \
+    X(next_basic)                  \
+    X(next_levels1)                \
+    X(null_params)                 \
+    X(peekscratch_adjacent)        \
+    X(peekscratch_params)          \
+    X(peekscratch_roundtrip)       \
+    X(piece_positions)             \
+    X(prev_basic)                  \
+    X(read_cursor_mid)             \
+    X(prev_levels1)                \
+    X(read_basic)                  \
+    X(read_cross)                  \
+    X(read_empty)                  \
+    X(read_full)                   \
+    X(read_params)                 \
+    X(release_order)               \
+    X(remove_across_leaves)        \
+    X(remove_all)                  \
+    X(remove_brute)                \
+    X(remove_cow)                  \
+    X(remove_cross)                \
+    X(remove_deep_shrink)          \
+    X(remove_fold_balance)         \
+    X(remove_foldnode_balance)     \
+    X(remove_hole_boundary)        \
+    X(remove_hole_eraseleaf)       \
+    X(remove_hole_mid)             \
+    X(remove_hole_mixed)           \
+    X(remove_hole_trim)            \
+    X(remove_hole_whole)           \
+    X(remove_merge_hole_full)      \
+    X(remove_merge_hole_split)     \
+    X(remove_merge_literal)        \
+    X(remove_oom)                  \
+    X(remove_params)               \
+    X(remove_piece_whole)          \
+    X(remove_release_order)        \
+    X(remove_same_mid)             \
+    X(remove_same_prefix)          \
+    X(remove_same_suffix)          \
+    X(remove_stitch_deep)          \
+    X(remove_stitch_full)          \
+    X(remove_stitch_overflow)      \
+    X(remove_to_end)               \
+    X(remove_trim_hole)            \
+    X(rollback)                    \
+    X(rollback_released_source)    \
+    X(seek_empty)                  \
+    X(splice_basic)                \
+    X(splice_del0)                 \
+    X(splice_null)                 \
+    X(trav_deep)                   \
+    X(trav_single)
 
 #define X(name) {#name, test_##name},
 PT_TEST_MAIN("piecetab tests")
