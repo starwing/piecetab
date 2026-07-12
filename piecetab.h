@@ -109,9 +109,11 @@ PT_API int pt_remove(pt_Cursor *C, size_t len);
 PT_API void    pt_rollback(pt_Cursor *C);
 PT_API pt_Blob pt_commit(pt_Cursor *C);
 
-/* literal scratch buffer */
-PT_API char *pt_literal(pt_State *S, size_t *plen);
-PT_API char *pt_scratch(pt_State *S, size_t *plen);
+/* literal scratch buffer (arena) */
+PT_API char *pt_reserve(pt_Cursor *C, size_t len);
+PT_API char *pt_scratch(pt_Cursor *C, size_t *plen);
+
+PT_API const char *pt_literal(pt_Cursor *C, size_t len);
 
 /* cursor definition */
 
@@ -148,6 +150,10 @@ PT_NS_END
 # define PT_MAX_HOLESIZE 64
 #endif
 
+#ifndef PT_ARENA_SIZE
+# define PT_ARENA_SIZE 1024
+#endif
+
 #define PT_MASK_BITS (sizeof(pt_Mask) * CHAR_BIT)
 
 #define pt_min(a, b) ((a) < (b) ? (a) : (b))
@@ -177,11 +183,23 @@ typedef struct pt_Node {
 
 PT_STATIC_ASSERT(PT_FANOUT <= PT_MASK_BITS);
 
+typedef struct pt_Block {
+    struct pt_Block *next; /* next block in chain */
+    size_t           size; /* data capacity (bytes) */
+    size_t           used; /* bytes written so far */
+} pt_Block;
+
+typedef struct pt_Arena {
+    pt_Block *current; /* blocks with free space, head = active writable */
+    pt_Block *full;    /* blocks that are completely full */
+} pt_Arena;
+
 typedef struct pt_Tree {
+    pt_Node         root;   /* embedded root node */
     pt_State       *S;      /* owning pt_State */
     struct pt_Tree *from;   /* source tree for COW lifetime */
+    pt_Arena        arena;  /* local arena for literal data (lazy) */
     size_t          bytes;  /* total bytes in this tree */
-    pt_Node         root;   /* embedded root node */
     unsigned        refc;   /* reference count */
     unsigned short  levels; /* tree height, 0 = leaf-only root */
 } pt_Tree;
@@ -195,22 +213,14 @@ typedef struct pt_Pool {
 #endif
 } pt_Pool;
 
-typedef struct pt_Scratch {
-    size_t remain;  /* remaining bytes in current buffer */
-    char  *buffer;  /* current write position */
-    void  *pages;   /* linked list of allocated pages */
-    void  *reserve; /* linked list of pre-allocated pages for commit */
-} pt_Scratch;
-
 struct pt_State {
-    void      *alloc_ud;    /* user data for allocator */
-    pt_Alloc  *allocf;      /* allocator function */
-    pt_Scratch scratch;     /* scratch buffer for commit */
-    pt_Pool    nodes;       /* pool for pt_Node */
-    pt_Pool    holes;       /* pool for pt_Hole */
-    pt_Pool    trees;       /* pool for pt_Tree */
-    pt_Tree    empty;       /* sentinel empty tree zero-alloc */
-    pt_Ver     max_version; /* global COW version counter */
+    void     *alloc_ud;    /* user data for allocator */
+    pt_Alloc *allocf;      /* allocator function */
+    pt_Pool   nodes;       /* pool for pt_Node */
+    pt_Pool   holes;       /* pool for pt_Hole */
+    pt_Pool   trees;       /* pool for pt_Tree */
+    pt_Tree   empty;       /* sentinel empty tree zero-alloc */
+    pt_Ver    max_version; /* global COW version counter */
 };
 
 /* mempool */
@@ -223,15 +233,12 @@ struct pt_State {
 
 static void ptP_init(pt_Pool *pool, size_t obj_size) {
     memset(pool, 0, sizeof(pt_Pool)), pool->obj_size = obj_size;
-    assert(obj_size > sizeof(void *) && obj_size < PT_PAGE_SIZE / 4);
+    assert(obj_size > sizeof(void *) && obj_size < PT_PAGE_SIZE / 2);
 }
 
 /* clang-format off */
 static void ptP_free(pt_Pool *pool, void *obj)
 { ptP_stat(pool->live_obj-=1); *(void **)obj = pool->freed, pool->freed = obj; }
-
-static void ptP_initscratch(pt_Scratch* pool)
-{ memset(pool, 0, sizeof(pt_Scratch)); }
 /* clang-format on */
 
 static void ptP_destroy(pt_State *S, pt_Pool *pool) {
@@ -276,61 +283,20 @@ static int ptP_reserve(pt_State *S, pt_Pool *pool, size_t n) {
     return *t = NULL, (pool->freed = freed), 1;
 }
 
-static char *ptP_scratch(pt_State *S) {
-    void *p = S->scratch.reserve;
-    if (S->scratch.remain != 0) return S->scratch.buffer;
-    if (!p && !(p = S->allocf(S->alloc_ud, NULL, 0, PT_PAGE_SIZE))) return 0;
-    if (p == S->scratch.reserve) S->scratch.reserve = *(void **)p;
-    *(void **)p = S->scratch.pages, S->scratch.pages = p;
-    S->scratch.pages = p;
-    S->scratch.remain = PT_PAGE_SIZE - sizeof(void *);
-    return S->scratch.buffer = (char *)p + sizeof(void *);
+static pt_Block *ptA_alloc(pt_State *S, size_t sz) {
+    pt_Block *b = (pt_Block *)S->allocf(
+            S->alloc_ud, NULL, 0, sizeof(pt_Block) + sz);
+    if (b == NULL) return NULL;
+    return b->next = NULL, b->size = sz, b->used = 0, b;
 }
 
-static void ptP_freescratch(pt_State *S, pt_Scratch *pool) {
-    void *next, *page = pool->pages;
-    for (; page; page = next)
-        next = *(void **)page, S->allocf(S->alloc_ud, page, PT_PAGE_SIZE, 0);
-    for (page = pool->reserve; page; page = next)
-        next = *(void **)page, S->allocf(S->alloc_ud, page, PT_PAGE_SIZE, 0);
-    ptP_initscratch(pool);
-}
-
-/* reserve enough scratch pages so freeze never calls allocf (全或无). */
-static int ptP_reservescratch(pt_State *S, size_t total) {
-    size_t usable = PT_PAGE_SIZE - sizeof(void *);
-    size_t need, pages;
-    void  *page, *head, *tail, *tmp;
-    if (total == 0) return 1;
-    need = (total > S->scratch.remain) ? total - S->scratch.remain : 0;
-    if (need == 0) return 1;
-    pages = need / (usable - PT_MAX_HOLESIZE) + 1;
-    head = NULL;
-    tail = NULL;
-    while (pages--) {
-        page = S->allocf(S->alloc_ud, NULL, 0, PT_PAGE_SIZE);
-        if (page == NULL) {
-            while (head) {
-                tmp = *(void **)head;
-                S->allocf(S->alloc_ud, head, PT_PAGE_SIZE, 0);
-                head = tmp;
-            }
-            return 0;
-        }
-        *(void **)page = NULL;
-        if (tail) {
-            *(void **)tail = page;
-            tail = page;
-        } else {
-            head = page;
-            tail = page;
-        }
-    }
-    if (head) {
-        *(void **)tail = S->scratch.reserve;
-        S->scratch.reserve = head;
-    }
-    return 1;
+static void ptA_destroy(pt_State *S, pt_Arena *a) {
+    pt_Block *b, *next;
+    for (b = a->current; b; b = next)
+        next = b->next, S->allocf(S->alloc_ud, b, 0, 0);
+    for (b = a->full; b; b = next)
+        next = b->next, S->allocf(S->alloc_ud, b, 0, 0);
+    memset(a, 0, sizeof(pt_Arena));
 }
 
 /* utils */
@@ -463,7 +429,6 @@ PT_API pt_State *pt_open(pt_Alloc *allocf, void *ud) {
     ptP_init(&S->nodes, sizeof(pt_Node));
     ptP_init(&S->holes, sizeof(pt_Hole));
     ptP_init(&S->trees, sizeof(pt_Tree));
-    ptP_initscratch(&S->scratch);
     S->empty.S = S, S->empty.refc = 1;
     S->max_version = 0;
     return S;
@@ -474,7 +439,6 @@ PT_API void pt_close(pt_State *S) {
     ptP_destroy(S, &S->nodes);
     ptP_destroy(S, &S->holes);
     ptP_destroy(S, &S->trees);
-    ptP_freescratch(S, &S->scratch);
     S->allocf(S->alloc_ud, S, sizeof(pt_State), 0);
 }
 
@@ -498,21 +462,6 @@ PT_API pt_Blob pt_from(pt_State *S, const char *s, size_t len) {
     return t->bytes = len, t;
 }
 
-PT_API char *pt_literal(pt_State *S, size_t *plen) {
-    char *p;
-    if (S == NULL || plen == NULL || *plen == 0) return NULL;
-    if ((p = ptP_scratch(S)) == NULL) return NULL;
-    if (*plen > S->scratch.remain) *plen = S->scratch.remain;
-    return S->scratch.remain -= *plen, S->scratch.buffer += *plen, p;
-}
-
-PT_API char *pt_scratch(pt_State *S, size_t *plen) {
-    char *p;
-    if (S == NULL || plen == NULL) return NULL;
-    if ((p = ptP_scratch(S)) == NULL) return NULL;
-    return *plen = S->scratch.remain, p;
-}
-
 PT_API unsigned pt_release(pt_Blob b) {
     pt_Tree *t = (pt_Tree *)b;
     if (t == NULL || t == &t->S->empty) return 0;
@@ -521,6 +470,7 @@ PT_API unsigned pt_release(pt_Blob b) {
         pt_Tree *nt = t->from;
         pt_Node *r = (assert(nt), &t->root);
         ptN_purge(t->S, r, t->levels, 0, ptN_cc(r), r->version);
+        ptA_destroy(t->S, &t->arena);
         ptP_free(&t->S->trees, t);
         if (nt == &nt->S->empty) return 0;
         if (nt->refc > 1) return --nt->refc, 0;
@@ -682,45 +632,29 @@ static size_t ptC_holebytes(pt_Node *n, int k) {
     return total;
 }
 
-/* E7: copy hole data into scratch, switching pages when remain < n */
-static char *ptC_freshscratch(pt_State *S, const char *s, size_t n) {
-    char *p;
-    if (S->scratch.remain < n) {
-        void *page = S->scratch.reserve;
-        assert(page != NULL);
-        S->scratch.reserve = *(void **)page;
-        *(void **)page = S->scratch.pages;
-        S->scratch.pages = page;
-        S->scratch.buffer = (char *)page + sizeof(void *);
-        S->scratch.remain = PT_PAGE_SIZE - sizeof(void *);
-    }
-    p = S->scratch.buffer;
-    S->scratch.buffer += n;
-    S->scratch.remain -= n;
-    memcpy(p, s, n);
-    return p;
-}
-
-/* E11: 1:1 pointer swap, no literal merge, no child_count/bytes change */
-static void ptC_freezeleaf(pt_State *S, pt_Node *n) {
+/* Copy hole data into reserved arena buffer at *ppos, advancing pointer. */
+static void ptC_freezeleaf(pt_State *S, pt_Node *n, char **ppos) {
     pt_Mask m = n->mask;
     int     i;
     while (ptM_iterhole(&m, &i, ptN_cc(n))) {
         pt_Hole *h = (pt_Hole *)n->children[i];
-        char    *lit = ptC_freshscratch(S, h->data, n->bytes[i]);
-        n->children[i] = (pt_Node *)lit;
+        size_t   nb = n->bytes[i];
+        memcpy(*ppos, h->data, nb);
+        n->children[i] = (pt_Node *)*ppos;
+        *ppos += nb;
         ptP_free(&S->holes, h);
     }
     n->mask = 0;
 }
 
 /* non-recursive mask-guided walk (仿 advance 上升下降). */
-static void ptC_freeze(pt_State *S, pt_Tree *tree) {
+static void ptC_freeze(pt_State *S, pt_Tree *tree, char *pos) {
     pt_Node *stk[PT_MAX_LEVEL], *p, *cont;
     int      ix[PT_MAX_LEVEL];
     int      k, l;
+    char    *wp = pos;
     if (tree->levels == 0) {
-        ptC_freezeleaf(S, &tree->root);
+        ptC_freezeleaf(S, &tree->root, &wp);
         return;
     }
     stk[0] = &tree->root;
@@ -736,7 +670,7 @@ static void ptC_freeze(pt_State *S, pt_Tree *tree) {
         if (!ptM_ishole(p, k)) continue;
         if (l == tree->levels - 1) {
             cont = p->children[k];
-            ptC_freezeleaf(S, cont);
+            ptC_freezeleaf(S, cont, &wp);
             ptM_sethole(p, k, 0);
         } else {
             ptM_sethole(p, k, 0);
@@ -748,11 +682,18 @@ static void ptC_freeze(pt_State *S, pt_Tree *tree) {
 
 PT_API pt_Blob pt_commit(pt_Cursor *C) {
     size_t total;
+    char  *buf;
     if (C == NULL || C->tree == NULL) return NULL;
     if (!C->dirty) return pt_retain(C->tree), C->tree;
     total = ptC_holebytes(&C->tree->root, C->tree->levels);
-    if (total > 0 && !ptP_reservescratch(C->tree->S, total)) return NULL;
-    ptC_freeze(C->tree->S, C->tree); /* 相2 冻结（不可失败） */
+    if (total > 0) {
+        buf = pt_reserve(C, total);
+        if (buf == NULL) return NULL;
+        ptC_freeze(C->tree->S, C->tree, buf);
+        C->tree->arena.current->used += total;
+    } else {
+        ptC_freeze(C->tree->S, C->tree, NULL);
+    }
     return C->dirty = 0, C->tree;
 }
 
@@ -773,10 +714,63 @@ static int ptK_markdirty(pt_Cursor *C) {
     if (C->dirty) return PT_OK;
     if (!(nt = (pt_Tree *)ptP_alloc(S, &S->trees))) return PT_ERRMEM;
     *nt = *old;
+    nt->arena.current = NULL; /* child gets new arena, not parent's blocks */
+    nt->arena.full = NULL;
     nt->root.version = ++S->max_version, nt->refc = 1;
     nt->from = old, pt_retain(old); /* keep source alive: COW lifetime */
     C->paths[0] = nt->root.children + (C->paths[0] - old->root.children);
     return C->tree = nt, C->dirty = 1, PT_OK;
+}
+
+PT_API char *pt_reserve(pt_Cursor *C, size_t len) {
+    pt_State *S;
+    pt_Block *b, **pp;
+    if (C == NULL || C->tree == NULL) return NULL;
+    if (ptK_markdirty(C) != PT_OK) return NULL;
+    S = C->tree->S;
+    if (len == 0) len = PT_ARENA_SIZE;
+    b = C->tree->arena.current;
+    if (b && b->size - b->used >= len) return (char *)(b + 1) + b->used;
+    for (pp = &C->tree->arena.current; *pp; pp = &(*pp)->next) {
+        b = *pp;
+        if (b->size - b->used >= len) {
+            *pp = b->next;
+            b->next = C->tree->arena.current;
+            C->tree->arena.current = b;
+            return (char *)(b + 1) + b->used;
+        }
+    }
+    b = ptA_alloc(S, pt_max(len, PT_ARENA_SIZE));
+    if (b == NULL) return NULL;
+    b->next = C->tree->arena.current;
+    return C->tree->arena.current = b, (char *)(b + 1);
+}
+
+PT_API char *pt_scratch(pt_Cursor *C, size_t *plen) {
+    pt_Block *b;
+    if (C == NULL || C->tree == NULL || plen == NULL) return NULL;
+    b = C->tree->arena.current;
+    if (b == NULL) return *plen = 0, NULL;
+    assert(b->used < b->size);
+    *plen = b->size - b->used;
+    return (char *)(b + 1) + b->used;
+}
+
+PT_API const char *pt_literal(pt_Cursor *C, size_t len) {
+    const char *s;
+    pt_Block   *b;
+    size_t      n;
+    if (C == NULL || C->tree == NULL || len == 0) return NULL;
+    if (ptK_markdirty(C) != PT_OK) return NULL;
+    if ((b = C->tree->arena.current) == NULL || (n = b->size - b->used) < len)
+        return NULL;
+    s = (char *)(b + 1) + b->used, b->used += len;
+    if (b->used == b->size) {
+        C->tree->arena.current = b->next;
+        b->next = C->tree->arena.full;
+        C->tree->arena.full = b;
+    }
+    return s;
 }
 
 static pt_Node *ptK_cow(pt_Cursor *C, int l, int d) {

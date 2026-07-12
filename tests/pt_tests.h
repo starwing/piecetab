@@ -316,6 +316,8 @@ typedef struct {
 #define holeV(s)       holeV_(S, "" s, sizeof(s) - 1)
 #define treeV(l, root) treeV_(S, l, root)
 
+#define pt_nonnull(c) (assert(c), c)
+
 #define editV(c, off, l, root)             \
     do {                                   \
         pt_Blob _tv_ = treeV_(S, l, root); \
@@ -389,7 +391,7 @@ PT_STATIC pt_Blob treeV_(pt_State *S, unsigned levels, pt_Node *root) {
     t->bytes = 0;
     for (i = 0; i < t->root.child_count; i++) t->bytes += t->root.bytes[i];
     pt_checktree_allow_empty(t, 1);
-    return t;
+    return assert(t), t;
 }
 
 /* ================================================================ */

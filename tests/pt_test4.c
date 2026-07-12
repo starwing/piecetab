@@ -883,127 +883,338 @@ static void test_edit_brute(void) {
 
 static void test_peekscratch_roundtrip(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Blob   b = pt_empty(S);
+    pt_Cursor c;
     char     *h;
     size_t    cap, used;
 
-    /* 第一次 peek: remain==0 → 取新页 */
-    cap = 0;
-    h = pt_scratch(S, &cap);
-    assert(h != NULL);
-    assert(cap == PT_PAGE_SIZE - sizeof(void *));
+    pt_seek(&c, b, 0);
 
-    /* 再 peek: 同一位置，容量不变（未推进） */
+    /* Arena not built yet → scratch returns NULL */
+    cap = 123;
+    assert(pt_scratch(&c, &cap) == NULL);
+    assert(cap == 0);
+
+    /* Build arena via pt_reserve */
+    h = pt_reserve(&c, 0);
+    assert(h != NULL);
+
+    /* First scratch: head at h, cap == PT_ARENA_SIZE */
+    cap = 0;
+    h = pt_scratch(&c, &cap);
+    assert(h != NULL);
+    assert(cap == PT_ARENA_SIZE);
+
+    /* Re-scratch: same position, unchanged */
     {
         char  *h2;
         size_t cap2 = 0;
-        h2 = pt_scratch(S, &cap2);
+        h2 = pt_scratch(&c, &cap2);
         assert(h2 == h);
         assert(cap2 == cap);
     }
 
-    /* 写 10 字节到 scratch 区 */
+    /* Write 10 bytes to scratch area */
     used = 10;
     memcpy(h, "HelloWorld", 10);
 
-    /* 再次 peek: 仍同一位置，容量不变 */
+    /* Scratch again: still same position */
     {
         char  *h3;
         size_t cap3 = 0;
-        h3 = pt_scratch(S, &cap3);
+        h3 = pt_scratch(&c, &cap3);
         assert(h3 == h);
         assert(cap3 == cap);
     }
 
-    /* pt_literal 固化: 返回同一 H，推进 */
+    /* pt_literal: commit 10 bytes, return old head */
     {
-        char *h4 = pt_literal(S, &used);
+        const char *h4 = (pt_reserve(&c, used), pt_literal(&c, used));
         assert(h4 == h);
         assert(used == 10);
     }
 
-    /* 再次 peek: 在新位置（h+10），容量 cap-10 */
+    /* Scratch after literal: position advanced by 10 */
     {
         char  *h5;
         size_t cap5 = 0;
-        h5 = pt_scratch(S, &cap5);
+        h5 = pt_scratch(&c, &cap5);
         assert(h5 == h + 10);
         assert(cap5 == cap - 10);
     }
 
-    /* 插入 H 到 tree，内容校验 */
+    /* Insert into tree, verify content */
     {
-        pt_Blob   b = pt_empty(S);
-        pt_Cursor c;
-        char      buf[16];
-        size_t    blen;
-        pt_seek(&c, b, 0);
+        char   buf[16];
+        size_t blen;
         assert(pt_insert(&c, h, 10) == PT_OK);
         assert(pt_checktree(c.tree));
         assert(pt_bytes(c.tree) == 10);
         blen = collect_bytes(c.tree, buf, sizeof(buf));
         assert(blen == 10);
         assert(memcmp(buf, "HelloWorld", 10) == 0);
-        pt_release(c.tree), pt_release(b);
     }
-
+    pt_release(c.tree), pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
 
 static void test_peekscratch_params(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    size_t    cap = 123;
+    pt_Blob   b = pt_empty(S);
+    pt_Cursor c;
+    size_t    cap;
 
+    pt_seek(&c, b, 0); /* init cursor */
+
+    /* NULL cursor */
+    cap = 123;
     assert(pt_scratch(NULL, &cap) == NULL);
-    assert(cap == 123); /* 未改写 */
-    assert(pt_scratch(S, NULL) == NULL);
+    assert(cap == 123);
 
+    /* NULL plen */
+    assert(pt_scratch(&c, NULL) == NULL);
+
+    /* Arena not built: scratch returns NULL, *plen set to 0 */
+    cap = 456;
+    assert(pt_scratch(&c, &cap) == NULL);
+    assert(cap == 0);
+
+    pt_release(b);
     pt_close(S);
 }
 
 static void test_peekscratch_adjacent(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Blob   b = pt_empty(S);
+    pt_Cursor c;
     char     *h1, *h2;
     size_t    cap, used;
 
-    /* 第一次 peek */
-    cap = 0;
-    h1 = pt_scratch(S, &cap);
-    assert(h1 != NULL);
-    assert(cap == PT_PAGE_SIZE - sizeof(void *));
+    pt_seek(&c, b, 0);
 
-    /* 写 8 字节（对齐）后用 pt_literal 固化 */
+    /* Build arena and get first scratch */
+    pt_reserve(&c, 0);
+    cap = 0;
+    h1 = pt_scratch(&c, &cap);
+    assert(h1 != NULL);
+    assert(cap == PT_ARENA_SIZE);
+
+    /* Write 8 bytes, then literal to commit */
     used = 8;
     memcpy(h1, "HelloABC", 8);
-    pt_literal(S, &used);
+    pt_literal(&c, used);
 
-    /* peek 得到相邻新头 h1+8 */
+    /* Next scratch: adjacent at h1+8 */
     cap = 0;
-    h2 = pt_scratch(S, &cap);
+    h2 = pt_scratch(&c, &cap);
     assert(h2 == h1 + 8);
 
-    /* 写 3 字节到新头 */
+    /* Write 3 bytes, literal to commit */
     used = 3;
     memcpy(h2, "XYZ", 3);
-    pt_literal(S, &used);
+    pt_literal(&c, used);
 
-    /* 插入到 tree 校验内容（指针须对齐，h1 与 h2 均为 8 字节对齐） */
+    /* Insert both into tree, verify content */
     {
-        pt_Blob   b = pt_empty(S);
-        pt_Cursor c;
-        char      buf[16];
-        size_t    blen;
-        pt_seek(&c, b, 0);
+        char   buf[16];
+        size_t blen;
         assert(pt_insert(&c, h1, 8) == PT_OK);
-        pt_advance(&c, 8); /* 移到末尾再插 h2 */
+        pt_advance(&c, 8);
         assert(pt_insert(&c, h2, 3) == PT_OK);
         assert(pt_bytes(c.tree) == 11);
         blen = collect_bytes(c.tree, buf, sizeof(buf));
         assert(blen == 11);
         assert(memcmp(buf, "HelloABCXYZ", 11) == 0);
-        pt_release(c.tree), pt_release(b);
+    }
+    pt_release(c.tree), pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+/* ================= arena tests ================= */
+
+static void test_arena_lazy(void) {
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Blob   b = pt_empty(S);
+    pt_Cursor c;
+
+    pt_seek(&c, b, 0);
+
+    /* Lazy: arena not built before any edit/reserve */
+    assert(c.tree->arena.current == NULL);
+    assert(c.tree->arena.full == NULL);
+
+    /* pt_scratch before any reserve/literal returns NULL, *plen=0 */
+    {
+        size_t cap = 123;
+        assert(pt_scratch(&c, &cap) == NULL);
+        assert(cap == 0);
     }
 
+    /* pt_reserve builds the arena */
+    assert(pt_reserve(&c, 0) != NULL);
+    assert(c.tree != b);
+    assert(c.tree->arena.current != NULL);
+
+    pt_release(c.tree), pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_arena_reserve_full(void) {
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Blob   b = pt_empty(S);
+    pt_Cursor c;
+
+    pt_seek(&c, b, 0);
+
+    /* First reserve: block allocated with PT_ARENA_SIZE */
+    assert(pt_reserve(&c, 0) != NULL);
+    assert(c.tree->arena.current != NULL);
+
+    /* Fill the block: literal entire capacity → moves block to full chain */
+    {
+        size_t n = PT_ARENA_SIZE;
+        assert(pt_literal(&c, n) != NULL);
+        assert(n == PT_ARENA_SIZE);
+    }
+    assert(c.tree->arena.current == NULL); /* head exhausted */
+    assert(c.tree->arena.full != NULL);    /* moved to full */
+
+    /* Next reserve allocates new block */
+    assert(pt_reserve(&c, 0) != NULL);
+    assert(c.tree->arena.current != NULL);
+
+    /* Custom-sized reserve: block >= max(len, PT_ARENA_SIZE) */
+    {
+        char *p = pt_reserve(&c, 256);
+        assert(p != NULL);
+    }
+
+    pt_release(c.tree), pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_arena_dirty_break(void) {
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Blob   b = pt_empty(S);
+    pt_Cursor c;
+    size_t    cap;
+
+    pt_seek(&c, b, 0);
+    assert(!c.dirty);
+
+    /* pt_scratch does NOT trigger dirty (read-only) */
+    assert(pt_scratch(&c, &cap) == NULL);
+    assert(!c.dirty);
+    assert(c.tree == b); /* no fork */
+
+    /* pt_reserve triggers dirty + builds arena */
+    assert(pt_reserve(&c, 0) != NULL);
+    assert(c.dirty);
+    assert(c.tree != b);
+
+    /* Fork a second cursor from original blob: independent arena */
+    {
+        pt_Cursor c2;
+        pt_seek(&c2, b, 0);
+        assert(pt_reserve(&c2, 0) != NULL);
+        assert(c2.dirty);
+        assert(c2.tree != c.tree);
+        assert(c2.tree->arena.current != c.tree->arena.current);
+        pt_release(c2.tree);
+    }
+
+    pt_release(c.tree), pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_arena_reserve_reuse(void) {
+    /* Exercise pt_reserve for-loop that traverses current chain and
+       unlinks a non-head block with enough space (lines 742-750). */
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Blob   b = pt_empty(S);
+    pt_Cursor c;
+    size_t    n;
+    char     *p;
+
+    pt_seek(&c, b, 0);
+
+    /* Build block A (head), consume a little */
+    assert(pt_reserve(&c, 100) != NULL);
+    n = 80;
+    assert(pt_literal(&c, n) != NULL);
+    assert(n == 80);
+
+    /* Block A (size=1024, used=80, rem=944) cannot satisfy len=1000
+       → allocate block B (size=1024, used=0), current = B → A */
+    assert(pt_reserve(&c, 1000) != NULL);
+
+    /* Consume B heavily so B's remainder < the next request */
+    n = 950;
+    assert(pt_literal(&c, n) != NULL);
+    assert(n == 950);
+    /* now current = B(rem=74) → A(rem=944) */
+
+    /* Request: head B(74) < 200, so loop skips B; A(944) >= 200
+       → A unlinked from chain, moved to head. */
+    p = pt_reserve(&c, 200);
+    assert(p != NULL);
+    assert(c.tree->arena.current != NULL);
+
+    /* Verify we can write into it */
+    memcpy(p, "test", 4);
+
+    pt_release(c.tree), pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_arena_literal_cold(void) {
+    /* pt_literal cold-start: arena not built, *plen < PT_ARENA_SIZE */
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Blob   b = pt_empty(S);
+    pt_Cursor c;
+    size_t    n;
+    char     *p;
+
+    pt_seek(&c, b, 0);
+    assert(c.tree->arena.current == NULL);
+
+    n = 10;
+    p = pt_reserve(&c, n), assert(p != NULL);
+    p = (char *)pt_literal(&c, n), assert(p != NULL);
+    assert(c.tree->arena.current != NULL);
+    assert(c.tree->arena.current->size == PT_ARENA_SIZE);
+    assert(c.tree->arena.current->used == 10);
+    memcpy(p, "hello", 5);
+
+    pt_release(c.tree), pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_arena_literal_params(void) {
+    /* pt_literal parameter validation returning NULL */
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Blob   b = pt_empty(S);
+    pt_Cursor c;
+    size_t    n;
+
+    pt_seek(&c, b, 0);
+
+    /* NULL cursor */
+    n = 10;
+    assert(pt_literal(NULL, n) == NULL);
+
+    /* *plen == 0 */
+    n = 0;
+    assert(pt_literal(&c, n) == NULL);
+
+    pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -2302,48 +2513,59 @@ static void test_commit_deep2(void) {
     pt_close(S);
 }
 
-/* ================= commit with leftover reserve pages ================= */
+/* ================= frozen-into-arena verification ================= */
 
 static void test_commit_reserve_leftover(void) {
-    int       cnt = 10000;
-    pt_State *S = pt_open(&oom_alloc, &cnt);
+    pt_State *S = pt_open(&test_alloc, NULL);
     pt_Blob   b = pt_empty(S);
     pt_Cursor c;
     int       i;
 
     pt_seek(&c, b, 0);
-    /* 31 edits of 16 bytes = 496 total hole bytes → need=496,
-       pages=496/(504-16)+1=2, actual freeze uses ~1 page (504), so 1
-       leftover page remains in the reserve list. */
+    /* 31 edits of 16 bytes = 496 total hole bytes */
     for (i = 0; i < 31; ++i) {
         static char bigbuf[17];
-        memset(bigbuf, 'H', 16);
+        memset(bigbuf, (char)('A' + (i % 26)), 16);
         assert(pt_edit(&c, 0, bigbuf, 16) == PT_OK);
     }
     assert(c.dirty);
-    /* Commit succeeds, 1 page left in reserve */
+    /* Commit: freeze hole data into tree arena */
     assert(pt_commit(&c) != NULL);
     assert(!c.dirty);
 
-    /* Kill allocf, call pt_literal — must get page from reserve (L363 pop) */
-    cnt = 0;
+    /* Verify: all holes frozen to literals, mask=0 */
     {
-        size_t cap;
-        char  *peek = pt_scratch(S, &cap);
-        assert(peek != NULL);
-        if (cap > 0) {
-            size_t n = cap;
-            char  *p = pt_literal(S, &n);
-            assert(p != NULL); /* exhaust remain from freeze */
-        }
-        /* Now remain==0; next pt_literal triggers ptP_scratchpage which
-           pops from reserve without calling allocf (cnt==0 would fail). */
-        {
-            size_t n = 1;
-            char  *p = pt_literal(S, &n);
-            assert(p != NULL); /* from reserve, not allocf */
+        pt_Node *r = &c.tree->root;
+        int      j;
+        for (j = 0; j < (int)r->child_count; ++j) {
+            assert(!ptM_ishole(r, j));
         }
     }
+    assert(pt_checktree(c.tree));
+    assert(pt_bytes(c.tree) == 31 * 16);
+
+    /* Verify data content via pt_read */
+    {
+        char   buf[512];
+        size_t n;
+        pt_seek(&c, c.tree, 0);
+        n = pt_read(&c, buf, sizeof(buf));
+        assert(n == 31 * 16);
+        for (i = 0; i < 31; ++i) {
+            int j;
+            for (j = 0; j < 16; ++j)
+                assert(buf[i * 16 + j] == (char)('A' + (i % 26)));
+        }
+    }
+
+    /* Arena block exists with used == total */
+    {
+        pt_Block *ab = c.tree->arena.current;
+        assert(ab != NULL);
+        assert(ab->used == 31 * 16);
+    }
+
+    /* Release: arena freed, live_obj zero */
     pt_release(c.tree), pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
@@ -2360,7 +2582,7 @@ static void test_commit_reservebuf_oom_multi(void) {
     size_t    bytes_before;
 
     pt_seek(&c, b, 0);
-    /* 32 edits of 16 bytes = 512 total → pages=512/488+1=2 */
+    /* 32 edits of 16 bytes = 512 total → pt_reserve allocs 1 block (1024) */
     for (i = 0; i < 32; ++i) {
         static char bigbuf[17];
         memset(bigbuf, 'x', 16);
@@ -2369,7 +2591,7 @@ static void test_commit_reservebuf_oom_multi(void) {
     bytes_before = pt_bytes(c.tree);
     assert(c.dirty && bytes_before > 0);
 
-    cnt = 1; /* only 1 scratch page alloc succeeds, need 2 */
+    cnt = 0; /* pt_reserve ptA_alloc fails */
     assert(pt_commit(&c) == NULL);
     /* Tree must be unchanged (E12 all-or-nothing) */
     assert(c.dirty == 1);
@@ -2464,7 +2686,7 @@ static void test_piece_positions(void) {
     size_t      n;
 
     /* Start of first piece */
-    pt_seek(&c, b, 0);
+    pt_seek(&c, pt_nonnull(b), 0);
     p = pt_piece(&c, &n);
     assert(p != NULL && n == 5 && memcmp(p, "hello", 5) == 0);
 
@@ -2789,7 +3011,7 @@ static void test_read_cursor_mid(void) {
     size_t    r;
 
     /* Read from middle of content (not piece boundary) */
-    pt_seek(&c, b, 3);
+    pt_seek(&c, pt_nonnull(b), 3);
     r = pt_read(&c, buf, 4);
     assert(r == 4 && memcmp(buf, "defg", 4) == 0);
     assert(pt_offset(&c) == 7);
@@ -2829,6 +3051,12 @@ static void test_trav_deep(void) {
 
 #define TESTS(X)                   \
     X(advance_brute)               \
+    X(arena_dirty_break)           \
+    X(arena_lazy)                  \
+    X(arena_literal_cold)          \
+    X(arena_literal_params)        \
+    X(arena_reserve_full)          \
+    X(arena_reserve_reuse)         \
     X(commit_bytes_invariant)      \
     X(commit_clean)                \
     X(commit_deep)                 \
