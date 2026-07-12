@@ -58,7 +58,7 @@ typedef void *pt_Alloc(void *ud, void *ptr, size_t osize, size_t nsize);
 
 /* lifetime*/
 
-PT_API pt_State *pt_newstate(pt_Alloc *allocf, void *ud);
+PT_API pt_State *pt_open(pt_Alloc *allocf, void *ud);
 PT_API void      pt_close(pt_State *S);
 PT_API pt_Alloc *pt_getallocf(pt_State *S, void **pud);
 
@@ -151,10 +151,6 @@ PT_NS_END
 
 #define PT_MASK_BITS (sizeof(pt_Mask) * CHAR_BIT)
 
-#ifndef PT_MASK_SIZE
-# define PT_MASK_SIZE ((int)((PT_FANOUT + PT_MASK_BITS - 1) / PT_MASK_BITS))
-#endif
-
 #define pt_min(a, b) ((a) < (b) ? (a) : (b))
 #define pt_max(a, b) ((a) > (b) ? (a) : (b))
 
@@ -164,23 +160,23 @@ PT_NS_END
 
 PT_NS_BEGIN
 
-typedef size_t    pt_Mask;
-typedef ptrdiff_t pt_Diff;
-typedef unsigned  pt_Ver;
+typedef size_t   pt_Mask;
+typedef unsigned pt_Ver;
 
-typedef struct pt_Hole {
-    char data[PT_MAX_HOLESIZE];
-} pt_Hole;
-
+/* clang-format off */
+typedef struct pt_Hole { char data[PT_MAX_HOLESIZE]; } pt_Hole;
 PT_STATIC_ASSERT(sizeof(pt_Hole) % sizeof(void *) == 0);
+/* clang-format on */
 
 typedef struct pt_Node {
-    size_t          bytes[PT_FANOUT];
-    pt_Mask         mask[PT_MASK_SIZE];
     struct pt_Node *children[PT_FANOUT];
+    size_t          bytes[PT_FANOUT];
+    pt_Mask         mask;
     pt_Ver          version;
     unsigned short  child_count;
 } pt_Node;
+
+PT_STATIC_ASSERT(PT_FANOUT <= PT_MASK_BITS);
 
 typedef struct pt_Tree {
     pt_State       *S;
@@ -249,14 +245,14 @@ static void ptP_destroy(pt_State *S, pt_Pool *pool) {
 }
 
 static void *ptP_ralloc(pt_Pool *pool) {
-    char *obj = pool->freed;
+    void *obj = pool->freed;
     assert(obj), ptP_stat(pool->live_obj += 1);
     return (pool->freed = *(void **)obj), (void *)obj;
 }
 
 static void *ptP_alloc(pt_State *S, pt_Pool *pool) {
     size_t sz = pool->obj_size;
-    char  *p, *end, *obj = pool->freed;
+    char  *p, *end, *obj = (char *)pool->freed;
     if (obj) return ptP_ralloc(pool);
     p = (char *)S->allocf(S->alloc_ud, NULL, 0, PT_PAGE_SIZE);
     if (p == NULL) return NULL;
@@ -351,9 +347,17 @@ static int ptP_reservescratch(pt_State *S, size_t total) {
 #define ptN_hole(p, i)  ((pt_Hole *)((p)->children[i]))
 #define ptN_lit(p, i)   ((const char *)((p)->children[i]))
 
+#define ptM_mask(n) (((pt_Mask)1 << (n)) - 1)
+
 /* clang-format off */
 static size_t ptN_sumbytes(const pt_Node *n, int i, int end)
 { size_t s = 0; for (; i < end; ++i) s += n->bytes[i]; return s; }
+
+static int ptM_ishole(const pt_Node *n, int i)
+{ return assert(i >= 0 && i < PT_FANOUT), (n->mask & ((pt_Mask)1 << i)) != 0; }
+
+static void ptM_move(pt_Node *d, pt_Node *s, int si, int n)
+{ d->mask = (s->mask >> si) & ((1 << n) - 1); }
 /* clang-format on */
 
 PT_API unsigned pt_version(pt_Blob b) { return b ? b->root.version : 0; }
@@ -362,35 +366,26 @@ PT_API unsigned pt_retain(pt_Blob b) { return b ? ++((pt_Tree *)b)->refc : 0; }
 PT_API pt_Blob  pt_empty(pt_State *S) { return S ? &S->empty : NULL; }
 
 static void ptM_sethole(pt_Node *n, int i, int ishole) {
-    pt_Mask *m = &n->mask[i / PT_MASK_BITS];
-    *m ^= (-!!ishole ^ *m) & ((pt_Mask)1 << (i % PT_MASK_BITS));
+    assert(i >= 0 && i < PT_FANOUT);
+    n->mask ^= (-!!ishole ^ n->mask) & ((pt_Mask)1 << i);
 }
 
-static int ptM_ishole(const pt_Node *n, int i) {
-    const pt_Mask m = n->mask[i / PT_MASK_BITS];
-    return (m & ((pt_Mask)1 << (i % PT_MASK_BITS))) != 0;
-}
-
-static void ptM_movebits(pt_Node *dst, pt_Node *src, int from, int n) {
-    int j;
-    for (j = 0; j < n; ++j) ptM_sethole(dst, j, ptM_ishole(src, from + j));
-}
-
-static void ptM_setsubmask(pt_Node *p, int i, const pt_Node *child) {
-    size_t w;
-    for (w = 0; w < PT_MASK_SIZE && !child->mask[w]; ++w) continue;
-    ptM_sethole(p, i, w < PT_MASK_SIZE);
+static int ptM_iterhole(pt_Mask *m, int *pi, int cc) {
+    if (*m == 0) return 0;
+    *pi = __builtin_ctzll(*m);
+    return *m &= *m - 1, *pi < cc;
 }
 
 static void ptM_upmask(pt_Cursor *C) {
-    int l;
+    int      l, i;
+    pt_Node *p;
     for (l = ptK_levels(C) - 1; l >= 0; --l) {
-        pt_Node *p = ptK_parent(C, l);
-        ptM_setsubmask(p, ptK_idx(C, p, l), ptK_parent(C, l + 1));
+        i = ptK_idx(C, p = ptK_parent(C, l), l);
+        ptM_sethole(p, i, (int)p->children[i]->mask);
     }
 }
 
-static void ptM_upbytes(pt_Cursor *C, int l, pt_Diff db) {
+static void ptM_upbytes(pt_Cursor *C, int l, pt_Delta db) {
     if (db == 0) return;
     for (; l >= 0; --l) {
         pt_Node *p;
@@ -400,18 +395,13 @@ static void ptM_upbytes(pt_Cursor *C, int l, pt_Diff db) {
     C->tree->bytes += db;
 }
 
-static int ptN_countholes(const pt_Node *n) {
-    int i, s = 0;
-    for (i = 0; i < ptN_cc(n); ++i)
-        if (ptM_ishole(n, i)) s += n->bytes[i];
-    return s;
-}
-
 static void ptN_purge(pt_State *S, pt_Node *p, int k, int s, int e, pt_Ver v) {
     int i;
+    assert(s <= e && e <= ptN_cc(p));
     if (k == 0) {
-        for (i = s; i < e; ++i)
-            if (ptM_ishole(p, i)) ptP_free(&S->holes, p->children[i]);
+        pt_Mask m = p->mask & (ptM_mask(e - s) << s);
+        while (ptM_iterhole(&m, &i, ptN_cc(p)))
+            ptP_free(&S->holes, p->children[i]);
     } else {
         for (i = s; i < e; ++i) {
             pt_Node *c = (pt_Node *)p->children[i];
@@ -423,42 +413,33 @@ static void ptN_purge(pt_State *S, pt_Node *p, int k, int s, int e, pt_Ver v) {
     }
 }
 
+static void ptN_copy(pt_Node *d, int di, const pt_Node *s, int si, int n) {
+    assert(di + n <= PT_FANOUT && si + n <= PT_FANOUT);
+    memcpy(&d->children[di], &s->children[si], n * sizeof(pt_Node *));
+    memcpy(&d->bytes[di], &s->bytes[si], n * sizeof(size_t));
+    d->mask = (d->mask & ~(ptM_mask(n) << di))
+            | ((s->mask >> si) & ptM_mask(n)) << di;
+}
+
 static void ptN_move(pt_Node *d, int di, int si, int n) {
-    int i;
+    assert(di + n <= PT_FANOUT && si + n <= PT_FANOUT);
     memmove(&d->children[di], &d->children[si], n * sizeof(pt_Node *));
     memmove(&d->bytes[di], &d->bytes[si], n * sizeof(size_t));
-    if (di < si)
-        for (i = 0; i < n; ++i) ptM_sethole(d, di + i, ptM_ishole(d, si + i));
-    else
-        for (i = n - 1; i >= 0; --i)
-            ptM_sethole(d, di + i, ptM_ishole(d, si + i));
+    d->mask = (d->mask & ~(ptM_mask(n) << di) & ~(ptM_mask(n) << si))
+            | ((d->mask >> si) & ptM_mask(n)) << di;
 }
 
 static void ptN_remove(pt_State *S, pt_Node *p, int k, int s, int e) {
-    int m = ptN_cc(p) - e;
-    ptN_purge(S, p, k, s, e, p->version);
     assert(s <= e && e <= ptN_cc(p));
-    ptN_move(p, s, e, m);
+    ptN_purge(S, p, k, s, e, p->version);
+    ptN_move(p, s, e, ptN_cc(p) - e);
     p->child_count -= e - s;
 }
 
 static void ptN_makespace(pt_Node *p, int i, int n) {
-    int w, m = ptN_cc(p) - i;
     assert(ptN_cc(p) + n <= PT_FANOUT && i <= ptN_cc(p));
-    memmove(&p->children[i + n], &p->children[i], m * sizeof(pt_Node *));
-    memmove(&p->bytes[i + n], &p->bytes[i], m * sizeof(size_t));
-    for (w = m - 1; w >= 0; --w) {
-        ptM_sethole(p, w + i + n, ptM_ishole(p, w + i));
-        ptM_sethole(p, w + i, 0);
-    }
+    ptN_move(p, i + n, i, ptN_cc(p) - i);
     p->child_count += n;
-}
-
-static void ptN_copy(pt_Node *d, int di, const pt_Node *s, int si, int n) {
-    int i;
-    memcpy(&d->children[di], &s->children[si], n * sizeof(pt_Node *));
-    memcpy(&d->bytes[di], &s->bytes[si], n * sizeof(size_t));
-    for (i = 0; i < n; ++i) ptM_sethole(d, di + i, ptM_ishole(s, si + i));
 }
 
 /* lifetime */
@@ -472,7 +453,7 @@ static void *ptS_defallocf(void *ud, void *ptr, size_t osize, size_t nsize) {
     return newptr;
 }
 
-PT_API pt_State *pt_newstate(pt_Alloc *allocf, void *ud) {
+PT_API pt_State *pt_open(pt_Alloc *allocf, void *ud) {
     pt_State *S;
     if (allocf == NULL) allocf = &ptS_defallocf;
     S = (pt_State *)allocf(ud, NULL, 0, sizeof(pt_State));
@@ -636,7 +617,7 @@ PT_API const char *pt_piece(pt_Cursor *C, size_t *plen) {
     int      i;
     if (C == NULL || C->tree == NULL) return NULL;
     i = ptK_idx(C, p = ptK_parent(C, ptK_levels(C)), ptK_levels(C));
-    if (C->poff >= p->bytes[i]) return plen && (*plen = 0), NULL;
+    if (C->poff >= p->bytes[i]) return plen && (*plen = 0), (const char *)NULL;
     if (plen) *plen = p->bytes[i] - C->poff;
     return (const char *)p->children[i] + C->poff;
 }
@@ -648,7 +629,7 @@ PT_API const char *pt_next(pt_Cursor *C, size_t *plen) {
     pt_Node    *p;
     if (C == NULL || C->tree == NULL) return NULL;
     l = ptK_levels(C), i = ptK_idx(C, p = ptK_parent(C, l), l);
-    if (C->poff == p->bytes[i]) return plen && (*plen = 0), NULL;
+    if (C->poff == p->bytes[i]) return plen && (*plen = 0), (const char *)NULL;
     s = (const char *)p->children[i] + C->poff, bc = p->bytes[i] - C->poff;
     while (i + 1 >= ptN_cc(p) && --l >= 0)
         i = ptK_idx(C, p = ptK_parent(C, l), l);
@@ -667,7 +648,7 @@ PT_API const char *pt_prev(pt_Cursor *C, size_t *plen) {
         plen && (*plen = C->poff), C->poff = 0;
         return (const char *)p->children[i];
     }
-    if (C->off == 0) return plen && (*plen = 0), NULL;
+    if (C->off == 0) return plen && (*plen = 0), (const char *)NULL;
     while (i <= 0 && --l >= 0) i = ptK_idx(C, p = ptK_parent(C, l), l);
     assert(l >= 0 && i > 0), C->paths[l] -= 1, i -= 1;
     while (++l <= ptK_levels(C))
@@ -690,32 +671,15 @@ PT_API size_t pt_read(pt_Cursor *C, char *buf, size_t len) {
 
 /* commit */
 
-static size_t ptC_holebytes(const pt_Tree *tree) {
-    pt_Node *stk[PT_MAX_LEVEL], *p, *cont;
-    int      ix[PT_MAX_LEVEL];
-    int      k, l;
-    size_t   total;
-    if (tree->levels == 0) return ptN_countholes(&tree->root);
-    stk[0] = (pt_Node *)&tree->root;
-    ix[0] = 0;
-    l = 0;
-    total = 0;
-    while (l >= 0) {
-        p = stk[l];
-        if (ix[l] >= ptN_cc(p)) {
-            --l;
-            continue;
-        }
-        k = ix[l]++;
-        if (!ptM_ishole(p, k)) continue;
-        if (l == tree->levels - 1) {
-            cont = p->children[k];
-            total += ptN_countholes(cont);
-        } else {
-            stk[++l] = p->children[k];
-            ix[l] = 0;
-        }
-    }
+static size_t ptC_holebytes(pt_Node *n, int k) {
+    pt_Mask m = n->mask;
+    size_t  total = 0;
+    int     i;
+    if (k == 0)
+        while (ptM_iterhole(&m, &i, ptN_cc(n))) total += n->bytes[i];
+    else
+        while (ptM_iterhole(&m, &i, ptN_cc(n)))
+            total += ptC_holebytes(n->children[i], k - 1);
     return total;
 }
 
@@ -739,17 +703,16 @@ static char *ptC_freshscratch(pt_State *S, const char *s, size_t n) {
 }
 
 /* E11: 1:1 pointer swap, no literal merge, no child_count/bytes change */
-static void ptC_freezeleaf(pt_State *S, pt_Node *cont) {
-    int i;
-    for (i = 0; i < ptN_cc(cont); ++i) {
-        if (ptM_ishole(cont, i)) {
-            pt_Hole *h = (pt_Hole *)cont->children[i];
-            char    *lit = ptC_freshscratch(S, h->data, cont->bytes[i]);
-            cont->children[i] = (pt_Node *)lit;
-            ptP_free(&S->holes, h);
-        }
+static void ptC_freezeleaf(pt_State *S, pt_Node *n) {
+    pt_Mask m = n->mask;
+    int     i;
+    while (ptM_iterhole(&m, &i, ptN_cc(n))) {
+        pt_Hole *h = (pt_Hole *)n->children[i];
+        char    *lit = ptC_freshscratch(S, h->data, n->bytes[i]);
+        n->children[i] = (pt_Node *)lit;
+        ptP_free(&S->holes, h);
     }
-    memset(cont->mask, 0, sizeof(cont->mask));
+    n->mask = 0;
 }
 
 /* non-recursive mask-guided walk (仿 advance 上升下降). */
@@ -784,21 +747,14 @@ static void ptC_freeze(pt_State *S, pt_Tree *tree) {
     }
 }
 
-PT_API pt_Blob pt_commit(pt_Cursor *c) {
-    pt_State *S;
-    size_t    total;
-    if (c == NULL || c->tree == NULL) return NULL;
-    if (!c->dirty) {
-        pt_retain(c->tree);
-        return c->tree;
-    }
-    S = c->tree->S;
-    total = ptC_holebytes(c->tree);                 /* 相0 测量 */
-    if (total > 0 && !ptP_reservescratch(S, total)) /* 相1 全或无闸门 */
-        return NULL;
-    ptC_freeze(S, c->tree); /* 相2 冻结（不可失败） */
-    c->dirty = 0;
-    return c->tree;
+PT_API pt_Blob pt_commit(pt_Cursor *C) {
+    size_t total;
+    if (C == NULL || C->tree == NULL) return NULL;
+    if (!C->dirty) return pt_retain(C->tree), C->tree;
+    total = ptC_holebytes(&C->tree->root, C->tree->levels);
+    if (total > 0 && !ptP_reservescratch(C->tree->S, total)) return NULL;
+    ptC_freeze(C->tree->S, C->tree); /* 相2 冻结（不可失败） */
+    return C->dirty = 0, C->tree;
 }
 
 PT_API void pt_rollback(pt_Cursor *c) {
@@ -860,15 +816,15 @@ static void ptI_splitroot(pt_Cursor *C) {
     *pp = save, ptN_setcc(pp, mid);
     for (nc = mid; nc < ptN_cc(&save); ++nc) ptM_sethole(pp, nc, 0);
     nc = ptN_cc(&save) - mid;
-    memset(nw->mask, 0, sizeof(nw->mask));
+    nw->mask = 0;
     memcpy(nw->children, &save.children[mid], nc * sizeof(pt_Node *));
     memcpy(nw->bytes, &save.bytes[mid], nc * sizeof(size_t));
-    ptM_movebits(nw, &save, mid, nc), ptN_setcc(nw, nc);
+    ptM_move(nw, &save, mid, nc), ptN_setcc(nw, nc);
     pp->version = nw->version = C->tree->root.version;
     r->children[0] = pp, r->children[1] = nw, ptN_setcc(r, 2);
     r->bytes[0] = ptN_sumbytes(pp, 0, mid);
     r->bytes[1] = C->tree->bytes - r->bytes[0];
-    ptM_setsubmask(r, 0, pp), ptM_setsubmask(r, 1, nw);
+    ptM_sethole(r, 0, (int)pp->mask), ptM_sethole(r, 1, (int)nw->mask);
     C->tree->levels++;
     memmove(C->paths + 1, C->paths, C->tree->levels * sizeof(pt_Node **));
     C->paths[0] = &r->children[i >= mid];
@@ -881,14 +837,13 @@ static void ptI_splitnode(pt_Cursor *C, int l) {
     int       cs, mid = ptN_cc(nd) / 2, nc = ptN_cc(nd) - mid;
     int       i = ptK_idx(C, p = ptK_parent(C, l), l);
     nw = (pt_Node *)ptP_ralloc(&S->nodes), nw->version = C->tree->root.version;
-    memset(nw->mask, 0, sizeof(nw->mask));
     memcpy(nw->children, &nd->children[mid], nc * sizeof(pt_Node *));
     memcpy(nw->bytes, &nd->bytes[mid], nc * sizeof(size_t));
-    ptM_movebits(nw, nd, mid, nc), ptN_setcc(nw, nc), ptN_setcc(nd, mid);
+    ptM_move(nw, nd, mid, nc), ptN_setcc(nw, nc), ptN_setcc(nd, mid);
     ptN_makespace(p, i + 1, 1), p->children[i + 1] = nw;
     p->bytes[i] = ptN_sumbytes(nd, 0, mid);
     p->bytes[i + 1] = ptN_sumbytes(nw, 0, nc);
-    ptM_setsubmask(p, i, nd), ptM_setsubmask(p, i + 1, nw);
+    ptM_sethole(p, i, (int)nd->mask), ptM_sethole(p, i + 1, (int)nw->mask);
     cs = (int)(C->paths[l + 1] - nd->children);
     if (cs >= mid)
         C->paths[l] = &p->children[i + 1],
@@ -949,7 +904,7 @@ PT_API int pt_insert(pt_Cursor *C, const char *s, size_t len) {
     ptN_makespace(p, ins, 1);
     p->children[ins] = (pt_Node *)s, p->bytes[ins] = len;
     ptM_sethole(p, ins, 0), C->paths[l] = &p->children[ins];
-    ptM_upbytes(C, l - 1, (pt_Diff)len);
+    ptM_upbytes(C, l - 1, (pt_Delta)len);
     C->off = off, C->poff = 0;
     return ptK_mergelit(C), PT_OK;
 }
@@ -1015,7 +970,7 @@ static void ptH_putslot(pt_Cursor *C, const char *s, size_t len) {
     p->children[ins] = ptH_new(C->tree->S, s, len), p->bytes[ins] = len;
     ptM_sethole(p, ins, 1);
     C->paths[l] = &p->children[ins];
-    ptM_upbytes(C, l - 1, (pt_Diff)len), ptM_upmask(C);
+    ptM_upbytes(C, l - 1, (pt_Delta)len), ptM_upmask(C);
     C->off += C->poff, C->poff = len;
 }
 
@@ -1036,7 +991,7 @@ static void ptH_splitins(pt_Cursor *C, const char *s, size_t len) {
     p->children[i + 2] = rh, p->bytes[i + 2] = n - C->poff;
     ptM_sethole(p, i + 2, 1);
     C->paths[l] = &p->children[i + 1];
-    ptM_upbytes(C, l - 1, (pt_Diff)len), ptM_upmask(C);
+    ptM_upbytes(C, l - 1, (pt_Delta)len), ptM_upmask(C);
     C->off += C->poff, C->poff = len;
 }
 
@@ -1052,14 +1007,14 @@ static int ptK_inserthole(pt_Cursor *C, const char *s, size_t len) {
     if (ptM_ishole(p, i) && C->poff == p->bytes[i]
         && p->bytes[i] + len <= PT_MAX_HOLESIZE) {
         ptH_append(p, i, p->bytes[i], s, len), C->poff += len;
-        return ptM_upbytes(C, l - 1, (pt_Diff)len), ptM_upmask(C), 1;
+        return ptM_upbytes(C, l - 1, (pt_Delta)len), ptM_upmask(C), 1;
     }
     /* B: cursor in hole middle */
     if (ptM_ishole(p, i) && C->poff > 0 && C->poff < p->bytes[i]) {
         if (p->bytes[i] + len > PT_MAX_HOLESIZE)
             return ptH_splitins(C, s, len), 1;
         ptH_append(p, i, C->poff, s, len), C->poff += len;
-        return ptM_upbytes(C, l - 1, (pt_Diff)len), ptM_upmask(C), 1;
+        return ptM_upbytes(C, l - 1, (pt_Delta)len), ptM_upmask(C), 1;
     }
     /* C: poff==0 and previous piece is a hole that fits */
     if (C->poff == 0 && i > 0 && ptM_ishole(p, i - 1)
@@ -1067,7 +1022,7 @@ static int ptK_inserthole(pt_Cursor *C, const char *s, size_t len) {
         ptH_append(p, i - 1, p->bytes[i - 1], s, len);
         C->paths[l] = &p->children[i - 1];
         C->poff = p->bytes[i - 1], C->off -= p->bytes[i - 1] - len;
-        return ptM_upbytes(C, l - 1, (pt_Diff)len), ptM_upmask(C), 1;
+        return ptM_upbytes(C, l - 1, (pt_Delta)len), ptM_upmask(C), 1;
     }
     /* D: fresh hole slot */
     return ptH_putslot(C, s, len), 1;
@@ -1106,7 +1061,7 @@ static void ptD_trimright(pt_Cursor *L, int l) {
     size_t   old = p->bytes[i];
     if (L->poff > 0 && L->poff < old) {
         p->bytes[i] = L->poff;
-        ptM_upbytes(L, l - 1, -(pt_Diff)(old - L->poff));
+        ptM_upbytes(L, l - 1, -(pt_Delta)(old - L->poff));
     }
 }
 
@@ -1121,7 +1076,7 @@ static void ptD_trimleft(pt_Cursor *R, int l) {
         else
             p->children[i] = (pt_Node *)(ptN_lit(p, i) + poffR),
             p->bytes[i] -= poffR;
-        ptM_upbytes(R, l - 1, -(pt_Diff)poffR);
+        ptM_upbytes(R, l - 1, -(pt_Delta)poffR);
         R->poff = 0;
     }
 }
@@ -1136,7 +1091,7 @@ static void ptD_cutdiv(pt_Cursor *L, pt_Cursor *R, pt_Node *rt, int fl) {
     ptN_setcc(&rt[k], cc - i);
     ptN_copy(&rt[k], 0, p, i, cc - i), ptN_setcc(p, i);
     i = ptK_idx(L, p, fl), i += !(fl == levels && L->poff == 0);
-    db = ptN_sumbytes(p, i, cc), ptM_upbytes(L, fl - 1, -(pt_Diff)db);
+    db = ptN_sumbytes(p, i, cc), ptM_upbytes(L, fl - 1, -(pt_Delta)db);
     ptN_remove(S, p, k, i, ptN_cc(p));
 }
 
@@ -1149,7 +1104,7 @@ static void ptD_cutrange(pt_Cursor *L, pt_Cursor *R, pt_Node *rt, int fl) {
         k = levels - kl;
         p = ptK_parent(L, kl), i = ptK_idx(L, p, kl), cc = ptN_cc(p);
         i += !(kl == levels && L->poff == 0);
-        db = ptN_sumbytes(p, i, cc), ptM_upbytes(L, kl - 1, -(pt_Diff)db);
+        db = ptN_sumbytes(p, i, cc), ptM_upbytes(L, kl - 1, -(pt_Delta)db);
         ptN_remove(S, p, k, i, cc);
         p = ptK_parent(R, kl), i = ptK_idx(R, p, kl), cc = ptN_cc(p);
         i += !(kl == levels && R->poff < p->bytes[i]);
@@ -1163,11 +1118,10 @@ static void ptD_cutrange(pt_Cursor *L, pt_Cursor *R, pt_Node *rt, int fl) {
 static int ptD_makechain(pt_Cursor *C, int from, int to) {
     pt_Node *p, *nn, ***cp = C->paths + to;
     int      l, r = 0;
-    if (from < 0) {
+    if (assert(from < to), from < 0) {
         nn = (pt_Node *)ptP_ralloc(&C->tree->S->nodes);
         p = &C->tree->root, *nn = *p;
-        p->bytes[0] = C->tree->bytes;
-        memset(p->mask, 0, sizeof(p->mask));
+        p->bytes[0] = C->tree->bytes, ptM_sethole(p, 0, (int)nn->mask);
         p->children[0] = nn, p->child_count = 1;
         memmove(cp + 2, cp + 1, (ptK_levels(C) - to) * sizeof(pt_Node **));
         C->tree->levels += 1, from = 0, to += 1, cp += 1, r = 1;
@@ -1175,10 +1129,8 @@ static int ptD_makechain(pt_Cursor *C, int from, int to) {
     for (l = from; l < to; ++l) {
         nn = (pt_Node *)ptP_ralloc(&C->tree->S->nodes);
         p = ptK_parent(C, l), nn->child_count = 0;
-        nn->version = C->tree->root.version;
-        memset(nn->mask, 0, sizeof(nn->mask));
-        p->bytes[ptN_cc(p)] = 0;
-        C->paths[l] = &p->children[ptN_cc(p)];
+        nn->version = C->tree->root.version, nn->mask = 0;
+        p->bytes[ptN_cc(p)] = 0, C->paths[l] = &p->children[ptN_cc(p)];
         p->children[ptN_cc(p)] = nn, p->child_count += 1;
     }
     return *cp = &nn->children[0], r;
@@ -1194,7 +1146,7 @@ static int ptD_findroom(pt_Cursor *C, pt_Node *rt, int l) {
     if (fl >= 0 && (c = ptN_cc(p) - i - 1) > 0) {
         int    k = ptK_levels(C) - fl;
         size_t db = ptN_sumbytes(p, i + 1, ptN_cc(p));
-        ptM_upbytes(C, fl - 1, -(pt_Diff)db);
+        ptM_upbytes(C, fl - 1, -(pt_Delta)db);
         rt[k].child_count = 0;
         ptN_copy(&rt[k], 0, p, i + 1, c);
         ptN_setcc(p, i + 1);
@@ -1217,45 +1169,43 @@ static void ptD_backwardnode(pt_Cursor *C, int d, int l) {
     C->paths[l] -= d;
 }
 
-static int ptD_balancenode(pt_Node **ns, int left, pt_Diff *ds) {
+static int ptD_balancenode(pt_Node **ns, int left, pt_Delta *ds) {
     int d, l = ptN_cc(ns[0]), r = ptN_cc(ns[1]);
     d = l - ((l + r + (left != 0)) >> 1);
     assert(d != 0);
     if (d < 0) {
         ptN_copy(ns[0], l, ns[1], 0, -d);
         ptN_move(ns[1], 0, -d, r + d);
-        *ds = -(pt_Diff)ptN_sumbytes(ns[0], l, l - d);
+        *ds = -(pt_Delta)ptN_sumbytes(ns[0], l, l - d);
     } else {
         ptN_move(ns[1], d, 0, r);
         ptN_copy(ns[1], 0, ns[0], l - d, d);
-        *ds = (pt_Diff)ptN_sumbytes(ns[1], 0, d);
+        *ds = (pt_Delta)ptN_sumbytes(ns[1], 0, d);
     }
     return ptN_setcc(ns[0], l - d), ptN_setcc(ns[1], r + d), d;
 }
 
 static int ptD_foldnode(pt_Cursor *C, int lfirst, int l) {
     pt_Node  *p = ptK_parent(C, l), ***cp = &C->paths[l];
-    int       w, cl, cr, dn, i = ptK_idx(C, p, l), doff;
-    pt_Node **ns = &p->children[i];
-    pt_Diff   ds;
+    int       cl, cr, dn, i = ptK_idx(C, p, l);
+    pt_Node **ns = &p->children[i], *o = *ns;
+    pt_Delta  ds;
     if (assert(ptN_cc(p) > 1), ptN_cc(ns[0]) > PT_FANOUT / 2) return 0;
-    if ((i && lfirst) || i == ptN_cc(p) - 1) ns -= 1, i -= 1;
-    doff = (int)(ns - C->paths[l]);
-    ns[0] = ptK_cow(C, l, doff);
-    ns[1] = ptK_cow(C, l, doff + 1);
+    if ((i && lfirst) || i == ptN_cc(p) - 1) ns -= 1, o -= 1, i -= 1;
+    ns[0] = ptK_cow(C, l, *ns != o), ns[1] = ptK_cow(C, l, *ns == o);
     if ((cl = ptN_cc(ns[0])) + (cr = ptN_cc(ns[1])) <= PT_FANOUT) {
         ptN_copy(ns[0], cl, ns[1], 0, cr);
         ns[0]->child_count += cr, ns[1]->child_count -= cr;
         p->bytes[i] += p->bytes[i + 1];
-        for (w = 0; w < PT_MASK_SIZE; ++w) ns[0]->mask[w] |= ns[1]->mask[w];
-        if (doff)
+        ns[0]->mask |= ns[1]->mask << cl;
+        if (*ns != o)
             cp[1] = &ns[0]->children[cp[1] - ns[1]->children + cl], cp[0] -= 1;
         return ptN_remove(C->tree->S, p, ptK_levels(C) - l, i + 1, i + 2), 1;
     }
-    dn = ptD_balancenode(ns, !doff, &ds);
-    assert(dn != 0 && (dn < 0) != (doff != 0));
+    dn = ptD_balancenode(ns, *ns != o, &ds);
+    assert(dn != 0 && (dn < 0) != (*ns != o));
     p->bytes[i] -= ds, p->bytes[i + 1] += ds;
-    if (doff) cp[1] += dn;
+    if (*ns != o) cp[1] += dn;
     return 0;
 }
 
@@ -1292,7 +1242,7 @@ static void ptD_stitchnode(pt_Cursor *L, pt_Node *rt) {
         if ((m = pt_min(rtcc, PT_FANOUT - ptN_cc(p))) > 0) {
             ptN_copy(p, ptN_cc(p), &rt[k], 0, m), ptN_setcc(p, ptN_cc(p) + m);
             db = ptN_sumbytes(&rt[k], 0, m),
-            ptM_upbytes(L, kl - 1, (pt_Diff)db);
+            ptM_upbytes(L, kl - 1, (pt_Delta)db);
         }
         if (!(m < rtcc || kl == 0)) continue;
         if (kl == 0 && ptN_cc(&L->tree->root) == 1)
@@ -1303,7 +1253,7 @@ static void ptD_stitchnode(pt_Cursor *L, pt_Node *rt) {
         l = kl, d = k ? PT_FANOUT - ptK_idx(L, ptK_parent(L, l), l) : m;
         r = ptD_findroom(L, rt, l), l += r, p = ptK_parent(L, l);
         ptN_copy(p, 0, &rt[k], m, ptN_setcc(p, rtcc - m));
-        db = ptN_sumbytes(&rt[k], m, rtcc), ptM_upbytes(L, l - 1, (pt_Diff)db);
+        db = ptN_sumbytes(&rt[k], m, rtcc), ptM_upbytes(L, l - 1, (pt_Delta)db);
     }
 }
 
@@ -1316,7 +1266,7 @@ static int ptD_mergeleaf(pt_Cursor *L, pt_Node *rt) {
                    == (char *)rt->children[0]) {
         rt->bytes[0] += p->bytes[cc - 1];
         rt->children[0] = p->children[cc - 1];
-        ptM_upbytes(L, l - 1, -(pt_Diff)p->bytes[cc - 1]);
+        ptM_upbytes(L, l - 1, -(pt_Delta)p->bytes[cc - 1]);
         if (atcc) L->off -= p->bytes[cc - 1], L->poff = p->bytes[cc - 1];
         L->paths[l] = &p->children[cc - 1], ptN_setcc(p, cc - 1);
         return 0;
@@ -1329,7 +1279,7 @@ static int ptD_mergeleaf(pt_Cursor *L, pt_Node *rt) {
             ptP_free(&L->tree->S->holes, rh);
             rt->bytes[0] += nl;
             rt->children[0] = p->children[cc - 1];
-            ptM_upbytes(L, l - 1, -(pt_Diff)nl);
+            ptM_upbytes(L, l - 1, -(pt_Delta)nl);
             if (atcc) L->off -= nl, L->poff = nl;
             L->paths[l] = &p->children[cc - 1], ptN_setcc(p, cc - 1);
             return 0;
@@ -1421,7 +1371,7 @@ static int ptD_rmleaf(pt_Cursor *L, pt_Cursor *R) {
         i = ptK_idx(L, p = ptK_parent(L, ptK_levels(L)), ptK_levels(L));
     }
     ptD_cutpiece(L, L->poff, R->poff);
-    ptM_upbytes(L, ptK_levels(L) - 1, -(pt_Diff)de);
+    ptM_upbytes(L, ptK_levels(L) - 1, -(pt_Delta)de);
     if (ptN_cc(p) == 0)
         L->paths[ptK_levels(L)] = &p->children[0], L->off = 0, L->poff = 0;
     if (ptN_cc(p) < oc && ptK_levels(L) > 0)

@@ -124,8 +124,8 @@ PT_STATIC int pt_checktree_allow_empty(pt_Blob snap, int allow_empty) {
             pt_check(
                     snap->root.bytes[0] > 0
                             && snap->root.bytes[0] <= PT_MAX_HOLESIZE,
-                    "[chk] SINGLE HOLE bytes=%zu > %d\n",
-                    snap->root.bytes[0], (int)PT_MAX_HOLESIZE);
+                    "[chk] SINGLE HOLE bytes=%zu > %d\n", snap->root.bytes[0],
+                    (int)PT_MAX_HOLESIZE);
         } else {
             pt_check(
                     snap->root.bytes[0] > 0, "[chk] SINGLE LITERAL bytes=%zu\n",
@@ -348,8 +348,7 @@ PT_STATIC pt_Node *leafV_(pt_State *S, ...) {
     va_end(ap);
     n = (pt_Node *)ptP_alloc(S, &S->nodes);
     assert(n && cc <= PT_FANOUT);
-    (void)memset(n->mask, 0, sizeof(n->mask));
-    n->child_count = (unsigned short)cc, n->version = 0;
+    ptN_setcc(n, cc), n->version = 0, n->mask = 0;
     va_start(ap, S);
     for (i = 0; i < cc; i++) {
         v = va_arg(ap, pt_LeafValue);
@@ -364,22 +363,18 @@ PT_STATIC pt_Node *leafV_(pt_State *S, ...) {
 PT_STATIC pt_Node *innerV_(pt_State *S, ...) {
     va_list  ap;
     unsigned i, cc = 0;
-    pt_Node *n, *ch;
-    int      w;
+    pt_Node *n, *c;
     va_start(ap, S);
     while (va_arg(ap, pt_Node *) != NULL) cc++;
     va_end(ap);
     n = (pt_Node *)ptP_alloc(S, &S->nodes);
     assert(n && cc <= PT_FANOUT);
-    memset(n->mask, 0, sizeof(n->mask));
-    n->child_count = (unsigned short)cc, n->version = 0;
+    ptN_setcc(n, cc), n->version = 0, n->mask = 0;
     va_start(ap, S);
     for (i = 0; i < cc; i++) {
-        ch = va_arg(ap, pt_Node *);
-        n->children[i] = ch;
-        n->bytes[i] = ptN_sumbytes(ch, 0, ch->child_count);
-        for (w = 0; w < PT_MASK_SIZE && !ch->mask[w]; ++w) continue;
-        ptM_sethole(n, i, w != PT_MASK_SIZE);
+        c = va_arg(ap, pt_Node *);
+        n->children[i] = c, n->bytes[i] = ptN_sumbytes(c, 0, c->child_count);
+        ptM_sethole(n, i, (int)c->mask);
     }
     va_end(ap);
     return n;
