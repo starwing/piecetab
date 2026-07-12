@@ -8,6 +8,7 @@ CompileFlags:
     - "-pedantic"
     - "-std=c89"
     - "-I."
+    - "-I.."
     - "-Itests"
     - "-DPT_STATIC_API"
     - "-Wno-variadic-macros"

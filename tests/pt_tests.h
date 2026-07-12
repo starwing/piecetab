@@ -22,7 +22,7 @@
         if (!(e)) return pt_log(__VA_ARGS__), 0; \
     } while (0)
 
-#include "piecetab.h"
+#include "../piecetab.h"
 
 PT_STATIC void pt_dumptree(pt_Blob snap, const char *tag);
 PT_STATIC void pt_dumpcursor(const pt_Cursor *C, const char *tag);
@@ -34,7 +34,7 @@ PT_STATIC void pt_dumpcursor(const pt_Cursor *C, const char *tag);
 PT_STATIC void *test_alloc(void *ud, void *p, size_t osize, size_t nsize) {
     void *np;
     (void)ud, (void)osize;
-    if (nsize == 0) return free(p), NULL;
+    if (nsize == 0) return free(p), (void *)NULL;
     return np = realloc(p, nsize), assert(np != NULL), np;
 }
 

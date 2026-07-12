@@ -1,7 +1,8 @@
 #define LC_LEAF_FANOUT 4
 #define LC_FANOUT      4
 #define LC_PAGE_SIZE   512
-#define LC_STATIC_API
+#undef LC_IMPLEMENTATION
+#define LC_IMPLEMENTATION
 #ifndef LC_POOL_STATS
 # define LC_POOL_STATS
 #endif
@@ -2421,6 +2422,137 @@ static void test_insert_noscanner(void) {
     lc_close(S);
 }
 
+static void test_locate_params(void) {
+    assert(lc_locate(NULL, 0) == LC_ERRPARAM);
+}
+
+static void test_locate_basic(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    int       r;
+
+    lc_scanV(c, 10, 15, 15);
+    assert(lc_checktree(c));
+
+    lc_seek(&C, c, 0);
+
+    r = lc_locate(&C, 0);
+    assert(r == LC_OK && lc_offset(&C) == 0 && lc_line(&C) == 0);
+    assert(lc_checkcursor(&C, 0));
+
+    r = lc_locate(&C, 10);
+    assert(r == LC_OK && lc_offset(&C) == 10 && lc_line(&C) == 1);
+    assert(lc_checkcursor(&C, 10));
+
+    r = lc_locate(&C, 25);
+    assert(r == LC_OK && lc_offset(&C) == 25 && lc_line(&C) == 2);
+    assert(lc_checkcursor(&C, 25));
+
+    r = lc_locate(&C, 40);
+    assert(r == LC_OK && lc_offset(&C) == 40 && lc_line(&C) == 3);
+    assert(lc_checkcursor(&C, 40));
+
+    r = lc_locate(&C, 50);
+    assert(r == LC_OK && lc_offset(&C) == 50);
+    assert(lc_checkcursor(&C, 50));
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_locate_empty(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    int       r;
+
+    lc_seek(&C, lc_nonnull(c), 0);
+    r = lc_locate(&C, 0);
+    assert(r == LC_OK && lc_offset(&C) == 0);
+    assert(lc_checkcursor(&C, 0));
+
+    r = lc_locate(&C, 5);
+    assert(r == LC_OK && lc_offset(&C) == 5);
+    assert(lc_checkcursor(&C, 5));
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_locline_params(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+
+    assert(lc_locline(NULL, 0) == LC_ERRPARAM);
+    lc_seek(&C, c, 0);
+    assert(lc_locline(&C, 1) == LC_ERRPARAM);
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_locline_basic(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    int       r;
+
+    lc_scanV(c, 10, 15, 15);
+    assert(lc_checktree(c));
+
+    lc_seek(&C, c, 0);
+
+    r = lc_locline(&C, 0);
+    assert(r == LC_OK && lc_offset(&C) == 0 && lc_line(&C) == 0);
+    assert(lc_checkcursor(&C, 0));
+
+    r = lc_locline(&C, 1);
+    assert(r == LC_OK && lc_offset(&C) == 10 && lc_line(&C) == 1);
+    assert(lc_checkcursor(&C, 10));
+
+    r = lc_locline(&C, 3);
+    assert(r == LC_OK && lc_offset(&C) == 40 && lc_line(&C) == 3);
+    assert(lc_checkcursor(&C, 40));
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_locline_empty(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    int       r;
+
+    lc_seek(&C, lc_nonnull(c), 0);
+    r = lc_locline(&C, 0);
+    assert(r == LC_OK && lc_line(&C) == 0);
+    assert(lc_checkcursor(&C, 0));
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
+static void test_locline_crossleaf(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newtree(S);
+    lc_Cursor C;
+    int       r;
+
+    lc_rscanV(c, 6, 10);
+    assert(lc_breaks(c) == 6);
+
+    lc_seek(&C, c, 0);
+    r = lc_locline(&C, 4);
+    assert(r == LC_OK && lc_line(&C) == 4);
+    assert(lc_checkcursor(&C, lc_offset(&C)));
+
+    lc_deltree(S, c);
+    lc_close(S);
+}
+
 #define TESTS(X)                  \
     X(lifecycle)                  \
     X(scan_params)                \
@@ -2517,7 +2649,14 @@ static void test_insert_noscanner(void) {
     X(insert_trailing)            \
     X(insert_noop)                \
     X(insert_many)                \
-    X(insert_noscanner)
+    X(insert_noscanner)           \
+    X(locate_params)              \
+    X(locate_basic)               \
+    X(locate_empty)               \
+    X(locline_params)             \
+    X(locline_basic)              \
+    X(locline_empty)              \
+    X(locline_crossleaf)
 
 #define X(name) {#name, test_##name},
 LC_TEST_MAIN("linecache tests")
