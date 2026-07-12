@@ -47,9 +47,8 @@
 
 PT_NS_BEGIN
 
-typedef struct pt_State  pt_State;
-typedef struct pt_Cursor pt_Cursor;
-
+typedef struct pt_State       pt_State;
+typedef struct pt_Cursor      pt_Cursor;
 typedef const struct pt_Tree *pt_Blob;
 
 typedef ptrdiff_t pt_Delta;
@@ -85,11 +84,11 @@ PT_API int pt_locate(pt_Cursor *C, size_t off);
 PT_API int pt_advance(pt_Cursor *C, pt_Delta d);
 
 /* read */
+PT_API size_t pt_read(pt_Cursor *C, char *buf, size_t len);
+
 PT_API const char *pt_piece(pt_Cursor *C, size_t *plen);
 PT_API const char *pt_next(pt_Cursor *C, size_t *plen);
 PT_API const char *pt_prev(pt_Cursor *C, size_t *plen);
-
-PT_API size_t pt_read(pt_Cursor *C, char *buf, size_t len);
 
 /* query */
 #define pt_offset(C) ((C)->off + (C)->poff)
@@ -119,11 +118,11 @@ PT_API char *pt_scratch(pt_State *S, size_t *plen);
 #define PT_MAX_LEVEL 16
 
 struct pt_Cursor {
-    struct pt_Node **paths[PT_MAX_LEVEL];
-    struct pt_Tree  *tree;
-    size_t           poff;
-    size_t           off;
-    int              dirty;
+    struct pt_Node **paths[PT_MAX_LEVEL]; /* root-to-leaf child slot ptrs */
+    struct pt_Tree  *tree;                /* blob under navigation or edit */
+    size_t           poff;                /* offset in current leaf piece */
+    size_t           off;                 /* bytes before current piece */
+    int              dirty;               /* non-zero during transient edit */
 };
 
 PT_NS_END
@@ -169,22 +168,22 @@ PT_STATIC_ASSERT(sizeof(pt_Hole) % sizeof(void *) == 0);
 /* clang-format on */
 
 typedef struct pt_Node {
-    struct pt_Node *children[PT_FANOUT];
-    size_t          bytes[PT_FANOUT];
-    pt_Mask         mask;
-    pt_Ver          version;
-    unsigned short  child_count;
+    struct pt_Node *children[PT_FANOUT]; /* interior subnodes or leaf data */
+    size_t          bytes[PT_FANOUT];    /* subtree sum or piece length */
+    pt_Mask         mask;                /* hole (leaf) or has-hole (inner) */
+    pt_Ver          version;             /* COW version vs tree root */
+    unsigned short  child_count;         /* valid child count in node */
 } pt_Node;
 
 PT_STATIC_ASSERT(PT_FANOUT <= PT_MASK_BITS);
 
 typedef struct pt_Tree {
-    pt_State       *S;
-    struct pt_Tree *from;
-    size_t          bytes;
-    pt_Node         root;
-    unsigned        refc;
-    unsigned short  levels;
+    pt_State       *S;      /* owning pt_State */
+    struct pt_Tree *from;   /* source tree for COW lifetime */
+    size_t          bytes;  /* total bytes in this tree */
+    pt_Node         root;   /* embedded root node */
+    unsigned        refc;   /* reference count */
+    unsigned short  levels; /* tree height, 0 = leaf-only root */
 } pt_Tree;
 
 typedef struct pt_Pool {
@@ -204,14 +203,14 @@ typedef struct pt_Scratch {
 } pt_Scratch;
 
 struct pt_State {
-    void      *alloc_ud;
-    pt_Alloc  *allocf;
-    pt_Scratch scratch;
-    pt_Pool    nodes;
-    pt_Pool    holes;
-    pt_Pool    trees;
-    pt_Tree    empty;
-    pt_Ver     max_version;
+    void      *alloc_ud;    /* user data for allocator */
+    pt_Alloc  *allocf;      /* allocator function */
+    pt_Scratch scratch;     /* scratch buffer for commit */
+    pt_Pool    nodes;       /* pool for pt_Node */
+    pt_Pool    holes;       /* pool for pt_Hole */
+    pt_Pool    trees;       /* pool for pt_Tree */
+    pt_Tree    empty;       /* sentinel empty tree zero-alloc */
+    pt_Ver     max_version; /* global COW version counter */
 };
 
 /* mempool */
