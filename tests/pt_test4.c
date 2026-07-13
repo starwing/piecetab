@@ -332,7 +332,7 @@ static void test_merge_right(void) {
     pt_insert(&c, buf + 3, 3);                  /* ["def"] */
     assert(pt_insert(&c, buf + 0, 3) == PT_OK); /* "abc" before, contiguous */
     assert(pt_checktree(c.tree));
-    pt_asserttree(c.tree, 0, leafV(litV("abcdef"))); /* merged into one */
+    pt_asserttree(c.tree, 0, leafV(litV("abc"), litV("def")));
     assert(pt_checkcursor(&c, 0));
     pt_release(c.tree), pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
@@ -811,70 +811,100 @@ static size_t collect_bytes(pt_Blob b, char *buf, size_t cap) {
 
 /* §8.1 edit_brute: position-independent content verification */
 
+static void maketree(pt_State *S, pt_Cursor *C, size_t off);
+
 static void test_edit_brute(void) {
-    pt_State          *S = pt_open(&test_alloc, NULL);
-    char               ref[256];
-    size_t             reflen = 20;
-    size_t             pos, del;
-    unsigned           ins;
-    static const char *ins_str[] = {"", "X", "YZ", "123"};
-    size_t             ins_count;
-    size_t             i;
-    /* build reference */
-    for (i = 0; i < reflen; ++i) ref[i] = (char)('A' + (i % 26));
-
-    ins_count = sizeof(ins_str) / sizeof(ins_str[0]);
-    for (pos = 0; pos <= reflen; ++pos) {
-        size_t maxdel = reflen - pos;
-        for (del = 0; del <= maxdel; ++del) {
-            for (ins = 0; ins < ins_count; ++ins) {
-                pt_Blob   fb = pt_from(S, ref, reflen);
-                pt_Cursor c;
-                size_t    ilen = strlen(ins_str[ins]);
-                size_t    expect_len = reflen - del + ilen;
-                char      actual[512];
-                char      expected[512];
-                size_t    alen, eoff;
-                pt_Blob   snap;
-                unsigned  k;
-
-                pt_seek(&c, fb, pos);
-                assert(pt_edit(&c, del, ilen > 0 ? ins_str[ins] : NULL, ilen)
-                       == PT_OK);
-
-                /* verify length and tree invariants */
-                assert(pt_bytes(c.tree) == expect_len);
-                assert(pt_checktree(c.tree));
-
-                /* collect bytes and compare with reference */
-                alen = collect_bytes(c.tree, actual, sizeof(actual));
-                assert(alen == expect_len);
-
-                eoff = 0;
-                memcpy(expected + eoff, ref, pos);
-                eoff += pos;
-                if (ilen > 0) {
-                    memcpy(expected + eoff, ins_str[ins], ilen);
-                    eoff += ilen;
-                }
-                memcpy(expected + eoff, ref + pos + del, reflen - pos - del);
-                eoff += reflen - pos - del;
-                assert(eoff == expect_len);
-                assert(memcmp(actual, expected, expect_len) == 0);
-
-                /* commit: content unchanged, no holes */
-                snap = pt_commit(&c);
-                assert(snap != NULL);
-                assert(pt_bytes(c.tree) == expect_len);
-                assert(pt_checktree(c.tree));
-                assert(!c.dirty);
-                for (k = 0; k < c.tree->root.child_count; ++k)
-                    assert(!ptM_ishole(&c.tree->root, k));
-
-                pt_release(c.tree); /* snap == c.tree (from-chain frees fb) */
-                assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
-            }
+    static const char alphabet
+            [] = "abcdefghijklmnopqrstuvwxyz0123456789"
+                 "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                 "abcdefghijklmnopqrstuvwxyz0123456789"
+                 "ABCDEFGHIJKLMNOPQRSTUVWXYZabcd";
+    int const nb = 256;
+    pt_State   *S = pt_open(&test_alloc, NULL);
+    pt_Cursor   C;
+    char        ref[256], expected[512], actual[512];
+    int         i, pos;
+    size_t      nread;
+    for (i = 0; i < 64; i++) {
+        ref[i * 4 + 0] = alphabet[i * 2 + 0];
+        ref[i * 4 + 1] = alphabet[i * 2 + 1];
+        ref[i * 4 + 2] = '#';
+        ref[i * 4 + 3] = '#';
+    }
+    for (pos = 0; pos <= nb; ++pos) {
+        maketree(S, &C, (size_t)pos);
+        assert(pt_edit(&C, 0, "##", 2) == PT_OK);
+        if (!pt_checktree(C.tree)) {
+            pt_log("edit_brute FAIL pos=%d\n", pos);
+            pt_dumptree(C.tree, "after edit");
+            pt_checktree(C.tree), assert(0);
         }
+        if (!pt_checkcursor(&C, (size_t)pos + 2)) {
+            pt_log("edit_brute cursor pos=%d off=%zu\n", pos,
+                   pt_offset(&C));
+            assert(0);
+        }
+        memcpy(expected, ref, (size_t)pos);
+        memcpy(expected + pos, "##", 2);
+        memcpy(expected + pos + 2, ref + pos, 256 - (size_t)pos);
+        pt_seek(&C, C.tree, 0);
+        nread = pt_read(&C, actual, 258);
+        if (nread != 258 || memcmp(actual, expected, 258) != 0) {
+            pt_log("edit_brute content fail pos=%d nread=%zu\n",
+                   pos, nread);
+            assert(0);
+        }
+        pt_release(C.tree);
+        assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    }
+    pt_close(S);
+}
+
+/* §8.2 insert_brute: position-independent literal insert */
+
+static void test_insert_brute(void) {
+    static const char alphabet
+            [] = "abcdefghijklmnopqrstuvwxyz0123456789"
+                 "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                 "abcdefghijklmnopqrstuvwxyz0123456789"
+                 "ABCDEFGHIJKLMNOPQRSTUVWXYZabcd";
+    int const nb = 256;
+    pt_State   *S = pt_open(&test_alloc, NULL);
+    pt_Cursor   C;
+    char        ref[256], expected[512], actual[512];
+    int         i, pos;
+    size_t      nread;
+    for (i = 0; i < 64; i++) {
+        ref[i * 4 + 0] = alphabet[i * 2 + 0];
+        ref[i * 4 + 1] = alphabet[i * 2 + 1];
+        ref[i * 4 + 2] = '#';
+        ref[i * 4 + 3] = '#';
+    }
+    for (pos = 0; pos <= nb; ++pos) {
+        maketree(S, &C, (size_t)pos);
+        assert(pt_insert(&C, "##", 2) == PT_OK);
+        if (!pt_checktree(C.tree)) {
+            pt_log("insert_brute FAIL pos=%d\n", pos);
+            pt_dumptree(C.tree, "after insert");
+            pt_checktree(C.tree), assert(0);
+        }
+        if (!pt_checkcursor(&C, (size_t)pos)) {
+            pt_log("insert_brute cursor pos=%d off=%zu\n", pos,
+                   pt_offset(&C));
+            assert(0);
+        }
+        memcpy(expected, ref, (size_t)pos);
+        memcpy(expected + pos, "##", 2);
+        memcpy(expected + pos + 2, ref + pos, 256 - (size_t)pos);
+        pt_seek(&C, C.tree, 0);
+        nread = pt_read(&C, actual, 258);
+        if (nread != 258 || memcmp(actual, expected, 258) != 0) {
+            pt_log("insert_brute content fail pos=%d nread=%zu\n",
+                   pos, nread);
+            assert(0);
+        }
+        pt_release(C.tree);
+        assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     }
     pt_close(S);
 }
@@ -3049,6 +3079,175 @@ static void test_trav_deep(void) {
     pt_close(S);
 }
 
+/* ================= splice_brute: exhaustive enumeration ================= */
+
+static void maketree(pt_State *S, pt_Cursor *C, size_t off) {
+    static const char litbuf
+            [] = "abcdefghijklmnopqrstuvwxyz0123456789"
+                 "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                 "abcdefghijklmnopqrstuvwxyz0123456789"
+                 "ABCDEFGHIJKLMNOPQRSTUVWXYZabcd";
+    pt_Node *leaves[32], *inners[8], *inner1, *inner2, *inner3, *root;
+    int      i, j, idx = 0;
+
+    for (i = 0; i < 32; i++) {
+        pt_Node *lf = (pt_Node *)ptP_alloc(S, &S->nodes);
+        pt_Hole *h0 = (pt_Hole *)ptP_alloc(S, &S->holes);
+        pt_Hole *h1 = (pt_Hole *)ptP_alloc(S, &S->holes);
+        memset(lf, 0, sizeof(pt_Node));
+        memset(h0, 0, sizeof(pt_Hole));
+        memset(h1, 0, sizeof(pt_Hole));
+        h0->data[0] = '#', h0->data[1] = '#';
+        h1->data[0] = '#', h1->data[1] = '#';
+        lf->child_count = 4;
+        lf->children[0] = (pt_Node *)(litbuf + idx);
+        lf->bytes[0] = 2;
+        lf->children[1] = (pt_Node *)h0;
+        lf->bytes[1] = 2;
+        lf->mask |= (1u << 1);
+        lf->children[2] = (pt_Node *)(litbuf + idx + 2);
+        lf->bytes[2] = 2;
+        lf->children[3] = (pt_Node *)h1;
+        lf->bytes[3] = 2;
+        lf->mask |= (1u << 3);
+        idx += 4;
+        leaves[i] = lf;
+    }
+
+    for (i = 0; i < 8; i++) {
+        pt_Node *n = (pt_Node *)ptP_alloc(S, &S->nodes);
+        memset(n, 0, sizeof(pt_Node));
+        n->child_count = 4;
+        for (j = 0; j < 4; j++) {
+            n->children[j] = leaves[i * 4 + j];
+            n->bytes[j] = ptN_sumbytes(leaves[i * 4 + j], 0, 4);
+            if (leaves[i * 4 + j]->mask) n->mask |= (1u << j);
+        }
+        inners[i] = n;
+    }
+
+    inner1 = (pt_Node *)ptP_alloc(S, &S->nodes);
+    memset(inner1, 0, sizeof(pt_Node));
+    inner1->child_count = 4;
+    for (j = 0; j < 4; j++) {
+        inner1->children[j] = inners[j];
+        inner1->bytes[j] = ptN_sumbytes(inners[j], 0, 4);
+        if (inners[j]->mask) inner1->mask |= (1u << j);
+    }
+
+    inner2 = (pt_Node *)ptP_alloc(S, &S->nodes);
+    memset(inner2, 0, sizeof(pt_Node));
+    inner2->child_count = 2;
+    for (j = 0; j < 2; j++) {
+        inner2->children[j] = inners[4 + j];
+        inner2->bytes[j] = ptN_sumbytes(inners[4 + j], 0, 4);
+        if (inners[4 + j]->mask) inner2->mask |= (1u << j);
+    }
+
+    inner3 = (pt_Node *)ptP_alloc(S, &S->nodes);
+    memset(inner3, 0, sizeof(pt_Node));
+    inner3->child_count = 2;
+    for (j = 0; j < 2; j++) {
+        inner3->children[j] = inners[6 + j];
+        inner3->bytes[j] = ptN_sumbytes(inners[6 + j], 0, 4);
+        if (inners[6 + j]->mask) inner3->mask |= (1u << j);
+    }
+
+    root = (pt_Node *)ptP_alloc(S, &S->nodes);
+    memset(root, 0, sizeof(pt_Node));
+    root->child_count = 3;
+    root->children[0] = inner1;
+    root->bytes[0] = ptN_sumbytes(inner1, 0, 4);
+    if (inner1->mask) root->mask |= (1u << 0);
+    root->children[1] = inner2;
+    root->bytes[1] = ptN_sumbytes(inner2, 0, 2);
+    if (inner2->mask) root->mask |= (1u << 1);
+    root->children[2] = inner3;
+    root->bytes[2] = ptN_sumbytes(inner3, 0, 2);
+    if (inner3->mask) root->mask |= (1u << 2);
+
+    pt_seek(C, treeV(3, root), off);
+    C->dirty = 1;
+}
+
+static void test_splice_brute(void) {
+    int const         nb = 256;
+    pt_State         *S = pt_open(&test_alloc, NULL);
+    int               r, i, pos, del, ins;
+    char              ref[256], expected[512], actual[512];
+    pt_Cursor         C;
+    size_t            epos, edel, expect_len, cursor_exp, nread;
+    static const char alphabet
+            [] = "abcdefghijklmnopqrstuvwxyz0123456789"
+                 "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                 "abcdefghijklmnopqrstuvwxyz0123456789"
+                 "ABCDEFGHIJKLMNOPQRSTUVWXYZabcd";
+
+    for (i = 0; i < 64; i++) {
+        ref[i * 4 + 0] = alphabet[i * 2 + 0];
+        ref[i * 4 + 1] = alphabet[i * 2 + 1];
+        ref[i * 4 + 2] = '#';
+        ref[i * 4 + 3] = '#';
+    }
+
+    for (pos = 0; pos <= nb + 1; ++pos)
+        for (del = 0; del <= nb + 1; ++del)
+            for (ins = 0; ins <= 1; ++ins) {
+                /* if (!(pos == 3 && del == 3 && ins == 1)) continue; */
+
+                maketree(S, &C, (size_t)pos);
+                epos = (size_t)pos < 256 ? (size_t)pos : 256;
+                edel = (size_t)del < 256 - epos ? (size_t)del : 256 - epos;
+                expect_len = 256 - edel + (ins ? 1u : 0u);
+                cursor_exp = epos + (ins ? 1u : 0u);
+
+                if (ins)
+                    r = pt_splice(&C, (size_t)del, "!", 1);
+                else
+                    r = pt_splice(&C, (size_t)del, NULL, 0);
+                assert(r == PT_OK);
+
+                if (!pt_checktree(C.tree)) {
+                    pt_log("FAIL pos=%d del=%d ins=%d\n", pos, del, ins);
+                    pt_dumptree(C.tree, "after splice");
+                    pt_checktree(C.tree);
+                    assert(0);
+                }
+
+                if (!pt_checkcursor(&C, cursor_exp)) {
+                    pt_log("splice pos=%d del=%d ins=%d off=%zu exp=%zu\n", pos,
+                           del, ins, pt_offset(&C), cursor_exp);
+                    assert(0);
+                }
+
+                if (ins) {
+                    memcpy(expected, ref, epos);
+                    expected[epos] = '!';
+                    memcpy(expected + epos + 1, ref + epos + edel,
+                           256 - epos - edel);
+                } else {
+                    memcpy(expected, ref, epos);
+                    memcpy(expected + epos, ref + epos + edel,
+                           256 - epos - edel);
+                }
+
+                pt_seek(&C, C.tree, 0);
+                nread = pt_read(&C, actual, expect_len);
+                if (nread != expect_len
+                    || memcmp(actual, expected, expect_len) != 0) {
+                    pt_log("splice pos=%d del=%d ins=%d content fail"
+                           " nread=%zu exp=%zu\n",
+                           pos, del, ins, nread, expect_len);
+                    assert(0);
+                }
+
+                pt_release(C.tree);
+                assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+            }
+
+    pt_close(S);
+}
+
 #define TESTS(X)                   \
     X(advance_brute)               \
     X(arena_dirty_break)           \
@@ -3105,6 +3304,7 @@ static void test_trav_deep(void) {
     X(insert_split_front)          \
     X(insert_split_leaf)           \
     X(insert_split_root)           \
+    X(insert_brute)                \
     X(lifecycle)                   \
     X(merge_left)                  \
     X(merge_right)                 \
@@ -3158,6 +3358,7 @@ static void test_trav_deep(void) {
     X(seek_empty)                  \
     X(splice_basic)                \
     X(splice_del0)                 \
+    X(splice_brute)                \
     X(splice_null)                 \
     X(trav_deep)                   \
     X(trav_single)

@@ -112,6 +112,9 @@ PT_STATIC int pt_checknode(const pt_Node *n, int rl, int mc, int *has_hole) {
 
 PT_STATIC int pt_checktree_allow_empty(pt_Blob snap, int allow_empty) {
     int hh = 0;
+    pt_check(
+            snap->root.child_count != 0 || snap->bytes == 0,
+            "[chk] EMPTY root but bytes=%zu\n", snap->bytes);
     if (snap->root.child_count == 0) {
         pt_check(
                 snap->bytes == 0, "[chk] EMPTY tree has bytes=%zu\n",
