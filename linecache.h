@@ -829,12 +829,12 @@ static void lcD_stitch(lc_Cursor *C, lc_Node *rt) {
 static void lcD_cutrange(lc_Cursor *L, lc_Cursor *R, lc_Node *rt, int fl) {
     lc_State *S = L->tree->S;
     int       i, k, kl, cc, l = lcK_levels(L);
-    lc_Delta  db, dl;
+    lc_Delta  db = 0, dl = 0;
     lc_Node  *p;
     for (kl = l; kl > fl; --kl) {
         i = lcK_idx(L, p = lcK_parent(L, kl), kl), cc = lcN_cc(p);
-        db = lcN_sumbytes(p, i + 1, cc), dl = lcN_sumbreaks(p, i + 1, cc);
-        lcM_up(L, kl - 1, -db, -dl);
+        p->bytes[i] -= db, p->breaks[i] -= dl;
+        db += lcN_sumbytes(p, i + 1, cc), dl += lcN_sumbreaks(p, i + 1, cc);
         k = l - kl, lcN_remove(S, p, k, i + 1, cc);
         i = lcK_idx(R, p = lcK_parent(R, kl), kl), cc = lcN_cc(p);
         i += (k || p->breaks[i] == 0);
@@ -845,7 +845,8 @@ static void lcD_cutrange(lc_Cursor *L, lc_Cursor *R, lc_Node *rt, int fl) {
     k = l - fl, i += (k || p->breaks[i] == 0);
     lcN_copy(&rt[k], 0, p, i, lcN_setcc(&rt[k], cc - i));
     lcN_setcc(p, i), i = lcK_idx(L, p, fl);
-    db = lcN_sumbytes(p, i + 1, cc), dl = lcN_sumbreaks(p, i + 1, cc);
+    p->bytes[i] -= db, p->breaks[i] -= dl;
+    db += lcN_sumbytes(p, i + 1, cc), dl += lcN_sumbreaks(p, i + 1, cc);
     lcM_up(L, fl - 1, -db, -dl), lcN_remove(S, p, k, i + 1, lcN_cc(p));
 }
 
