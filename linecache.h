@@ -779,28 +779,28 @@ static void lcD_backwardnode(lc_Cursor *C, int d, int l) {
 }
 
 static void lcD_stitchnode(lc_Cursor *C, lc_Node *rt) {
-    int k, d = 0, l = lcK_levels(C);
+    int      k, i, d = 0, l = lcK_levels(C);
+    lc_Delta db = 0, dl = 0;
+    lc_Node *p, *r;
     for (k = 0; k <= lcK_levels(C); ++k) {
-        int      m, fl, r, kl = lcK_levels(C) - k, rtcc = lcN_cc(&rt[k]);
-        lc_Node *p = lcK_parent(C, kl);
-        lc_Delta db, dl;
-        lcN_setcc(&rt[k], 0);
+        int m, fl, kl = lcK_levels(C) - k, rtcc = lcN_cc(r = &rt[k]);
+        lcN_setcc(r, 0), i = lcK_idx(C, p = lcK_parent(C, kl), kl);
+        if (i < lcN_cc(p)) p->bytes[i] += db, p->breaks[i] += dl;
         if ((m = lc_min(rtcc, LC_FANOUT - lcN_cc(p))) > 0) {
-            lcN_copy(p, lcN_cc(p), &rt[k], 0, m), lcN_setcc(p, lcN_cc(p) + m);
-            db = lcN_sumbytes(&rt[k], 0, m), dl = lcN_sumbreaks(&rt[k], 0, m);
-            lcM_up(C, kl - 1, db, dl);
+            lcN_copy(p, lcN_cc(p), r, 0, m), lcN_setcc(p, lcN_cc(p) + m);
+            db += lcN_sumbytes(r, 0, m), dl += lcN_sumbreaks(r, 0, m);
         }
         if (!(m < rtcc || kl == 0)) continue;
+        lcM_up(C, kl - 1, db, dl), db = dl = 0;
         if (kl == 0 && lcN_cc(&C->tree->root) == 1)
             lcD_rebalance(C, 0), l -= (k - lcK_levels(C));
         for (fl = kl; fl < l; ++fl) lcD_foldnode(C, (fl == kl), fl);
         if (k) lcD_backwardnode(C, d, l);
         if (!(m < rtcc)) continue;
         l = kl, d = k ? LC_FANOUT - lcK_idx(C, lcK_parent(C, l), l) : m;
-        r = lcD_findroom(C, rt, 1, l), l += r, p = lcK_parent(C, l);
-        lcN_copy(p, 0, &rt[k], m, lcN_setcc(p, rtcc - m));
-        db = lcN_sumbytes(&rt[k], m, rtcc), dl = lcN_sumbreaks(&rt[k], m, rtcc);
-        lcM_up(C, l - 1, db, dl);
+        l += lcD_findroom(C, rt, 1, l), p = lcK_parent(C, l);
+        lcN_copy(p, 0, r, m, lcN_setcc(p, rtcc - m));
+        db += lcN_sumbytes(r, m, rtcc), dl += lcN_sumbreaks(r, m, rtcc);
     }
 }
 
