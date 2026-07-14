@@ -938,55 +938,44 @@ static void ptH_remove(pt_Node *n, int i, size_t d, size_t len) {
     n->bytes[i] = end - len;
 }
 
-static void ptD_trimright(pt_Cursor *L, int l) {
-    pt_Node *p = ptK_parent(L, l);
-    int      i = ptK_idx(L, p, l);
-    size_t   bc = p->bytes[i];
-    if (L->poff > 0 && L->poff < bc) {
-        p->bytes[i] = L->poff;
-        ptM_upbytes(L, l - 1, -(pt_Delta)(bc - L->poff));
-    }
+static void ptD_trimright(pt_Cursor *L) {
+    pt_Node *p;
+    int      l = ptK_levels(L), i = ptK_idx(L, p = ptK_parent(L, l), l);
+    ptM_upbytes(L, l, -(pt_Delta)(p->bytes[i] - L->poff));
 }
 
-static void ptD_trimleft(pt_Cursor *R, int l) {
-    pt_Node *p = ptK_parent(R, l);
-    int      i = ptK_idx(R, p, l);
-    size_t   old = p->bytes[i];
-    size_t   poffR = R->poff;
-    if (poffR > 0 && poffR < old) {
-        if (ptM_ishole(p, i))
-            ptH_remove(p, i, 0, poffR);
-        else {
-            p->children[i] = (pt_Node *)(ptN_lit(p, i) + poffR);
-            p->bytes[i] -= poffR;
-        }
-        ptM_upbytes(R, l - 1, -(pt_Delta)poffR), R->poff = 0;
+static void ptD_trimleft(pt_Cursor *R) {
+    pt_Node *p;
+    int      l = ptK_levels(R), i = ptK_idx(R, p = ptK_parent(R, l), l);
+    if (ptM_ishole(p, i))
+        ptH_remove(p, i, 0, R->poff);
+    else {
+        p->children[i] = (pt_Node *)(ptN_lit(p, i) + R->poff);
+        p->bytes[i] -= R->poff;
     }
+    ptM_upbytes(R, l - 1, -(pt_Delta)R->poff), R->poff = 0;
 }
 
 static void ptD_cutrange(pt_Cursor *L, pt_Cursor *R, pt_Node *rt, int fl) {
     pt_State *S = L->tree->S;
-    int       l = ptK_levels(L), kl, k, i, cc;
+    int       kl, k, i, cc, l = ptK_levels(L);
+    pt_Delta  db = 0;
     pt_Node  *p;
     for (kl = l; kl > fl; --kl) {
         p = ptK_parent(L, kl), i = ptK_idx(L, p, kl), cc = ptN_cc(p);
-        i += !(kl == l && L->poff == 0);
-        ptM_upbytes(L, kl - 1, -(pt_Delta)ptN_sumbytes(p, i, cc));
-        k = l - kl, ptN_remove(S, p, k, i, cc);
-        p = ptK_parent(R, kl), i = ptK_idx(R, p, kl), cc = ptN_cc(p);
-        i += !(kl == l && R->poff < p->bytes[i]);
-        ptN_setcc(&rt[k], cc - i);
-        ptN_copy(&rt[k], 0, p, i, cc - i);
-        ptN_remove(S, p, k, 0, i), ptN_setcc(p, 0);
+        p->bytes[i] -= db, db += ptN_sumbytes(p, i + 1, cc);
+        k = l - kl, ptN_remove(S, p, k, i + 1, cc);
+        i = ptK_idx(R, p = ptK_parent(R, kl), kl), cc = ptN_cc(p);
+        i += (k || p->bytes[i] == 0);
+        ptN_copy(&rt[k], 0, p, i, cc - i), ptN_setcc(&rt[k], cc - i);
+        ptN_purge(S, p, k, 0, i, rt->version), ptN_setcc(p, 0);
     }
-    k = l - fl, p = ptK_parent(R, fl);
-    i = ptK_idx(R, p, fl), cc = ptN_cc(p);
-    i += !(fl == l && R->poff < p->bytes[i]);
-    ptN_setcc(&rt[k], cc - i);
-    ptN_copy(&rt[k], 0, p, i, cc - i), ptN_setcc(p, i);
-    i = ptK_idx(L, p, fl), i += !(fl == l && L->poff == 0);
-    ptM_upbytes(L, fl - 1, -(pt_Delta)ptN_sumbytes(p, i, cc));
-    ptN_remove(S, p, k, i, ptN_cc(p));
+    p = ptK_parent(R, fl), i = ptK_idx(R, p, fl), cc = ptN_cc(p);
+    k = l - fl, i += (k || p->bytes[i] == 0);
+    ptN_copy(&rt[k], 0, p, i, ptN_setcc(&rt[k], cc - i));
+    ptN_setcc(p, i), i = ptK_idx(L, p, fl);
+    p->bytes[i] -= db, db += ptN_sumbytes(p, i + 1, cc);
+    ptM_upbytes(L, fl - 1, -db), ptN_remove(S, p, k, i + 1, ptN_cc(p));
 }
 
 static int ptD_makechain(pt_Cursor *C, int from, int to) {
@@ -1074,7 +1063,7 @@ static int ptD_foldnode(pt_Cursor *C, int lfirst, int l) {
             cp[1] = &ns[0]->children[cp[1] - ns[1]->children + cl], cp[0] -= 1;
         return ptN_remove(C->tree->S, p, ptK_levels(C) - l, i + 1, i + 2), 1;
     }
-    dn = ptD_balancenode(ns, *ns != o, &ds);
+    dn = ptD_balancenode(ns, (*ns == o), &ds);
     assert(dn != 0 && (dn < 0) != (*ns != o));
     p->bytes[i] -= ds, p->bytes[i + 1] += ds;
     ptM_sethole(p, i, (int)ns[0]->mask);
@@ -1134,7 +1123,7 @@ static void ptD_stitchnode(pt_Cursor *L, pt_Node *rt) {
 static int ptD_mergeleaf(pt_Cursor *C, pt_Node *rt) {
     int      cc, hL, hR, merged = 0, l = ptK_levels(C);
     pt_Node *p = ptK_parent(C, l);
-    size_t   d = 0, bc = p->bytes[(cc = ptN_cc(p)) - 1];
+    size_t   d = 0, bc = p->bytes[assert(ptN_cc(p)), (cc = ptN_cc(p)) - 1];
     hL = ptM_ishole(p, cc - 1), hR = ptM_ishole(rt, 0);
     if (!hL && !hR && ptN_lit(p, cc - 1) + bc == ptN_lit(rt, 0))
         merged = 1;
@@ -1159,16 +1148,17 @@ static int ptD_mergeleaf(pt_Cursor *C, pt_Node *rt) {
 
 static void ptD_stitch(pt_Cursor *L, pt_Node *rt) {
     size_t   d = 0;
-    int      i, l = ptK_levels(L);
+    int      i, cc, l = ptK_levels(L);
     pt_Node *p = ptK_parent(L, l);
     assert(ptD_checkstitch(L) == PT_OK);
-    if (ptN_cc(p) && ptN_cc(&rt[0])) d = (size_t)ptD_mergeleaf(L, rt);
-    ptD_stitchnode(L, rt);
-    ptD_rebalance(L, 0);
-    l = ptK_levels(L), p = ptK_parent(L, l), i = ptK_idx(L, p, l);
-    if (ptN_cc(p) && i == ptN_cc(p)) {
+    if ((cc = ptN_cc(p)) && p->bytes[cc - 1] == 0)
+        ptN_remove(L->tree->S, p, 0, cc - 1, cc), cc -= 1;
+    if (cc && ptN_cc(&rt[0])) d = (size_t)ptD_mergeleaf(L, rt);
+    ptD_stitchnode(L, rt), ptD_rebalance(L, 0);
+    l = ptK_levels(L), i = ptK_idx(L, p = ptK_parent(L, l), l), cc = ptN_cc(p);
+    if (cc && i == cc) {
         L->paths[ptK_levels(L)] -= 1;
-        L->poff += p->bytes[ptN_cc(p) - 1], L->off -= p->bytes[ptN_cc(p) - 1];
+        L->poff += p->bytes[cc - 1], L->off -= p->bytes[cc - 1];
     }
     if (d > L->poff) {
         ptD_backwardnode(L, 1, l);
@@ -1180,10 +1170,10 @@ static void ptD_stitch(pt_Cursor *L, pt_Node *rt) {
 
 static void ptD_rmrange(pt_Cursor *L, pt_Cursor *R, int fl) {
     pt_Node *rt = L->tree->S->rt;
-    int      k, l = ptK_levels(L);
+    int      k;
     for (k = 0; k < PT_MAX_LEVEL; ++k)
         ptN_setcc(&rt[k], 0), rt[k].version = L->tree->root.version;
-    ptD_trimright(L, l), ptD_trimleft(R, l);
+    ptD_trimright(L), ptD_trimleft(R);
     ptD_cutrange(L, R, rt, fl), ptD_stitch(L, rt);
 }
 
