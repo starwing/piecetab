@@ -214,13 +214,14 @@ typedef struct pt_Pool {
 } pt_Pool;
 
 struct pt_State {
-    void     *alloc_ud;    /* user data for allocator */
-    pt_Alloc *allocf;      /* allocator function */
-    pt_Pool   nodes;       /* pool for pt_Node */
-    pt_Pool   holes;       /* pool for pt_Hole */
-    pt_Pool   trees;       /* pool for pt_Tree */
-    pt_Tree   empty;       /* sentinel empty tree zero-alloc */
-    pt_Ver    max_version; /* global COW version counter */
+    void     *alloc_ud;         /* user data for allocator */
+    pt_Alloc *allocf;           /* allocator function */
+    pt_Pool   nodes;            /* pool for pt_Node */
+    pt_Pool   holes;            /* pool for pt_Hole */
+    pt_Pool   trees;            /* pool for pt_Tree */
+    pt_Node   rt[PT_MAX_LEVEL]; /* scratch nodes for tree stitch */
+    pt_Tree   empty;            /* sentinel empty tree zero-alloc */
+    pt_Ver    max_version;      /* global COW version counter */
 };
 
 /* mempool */
@@ -1176,8 +1177,8 @@ static void ptD_stitch(pt_Cursor *L, pt_Node *rt) {
 }
 
 static void ptD_rmrange(pt_Cursor *L, pt_Cursor *R, int fl) {
-    pt_Node rt[PT_MAX_LEVEL];
-    int     k, l = ptK_levels(L);
+    pt_Node *rt = L->tree->S->rt;
+    int      k, l = ptK_levels(L);
     for (k = 0; k < PT_MAX_LEVEL; ++k)
         ptN_setcc(&rt[k], 0), rt[k].version = L->tree->root.version;
     ptD_trimright(L, l), ptD_trimleft(R, l);

@@ -186,10 +186,11 @@ typedef struct lc_Pool {
 } lc_Pool;
 
 struct lc_State {
-    void     *alloc_ud; /* user data for allocf */
-    lc_Alloc *allocf;   /* memory allocator */
-    lc_Pool   nodes;    /* pool for lc_Node objects */
-    lc_Pool   leaves;   /* pool for lc_Leaf objects */
+    void     *alloc_ud;         /* user data for allocf */
+    lc_Alloc *allocf;           /* memory allocator */
+    lc_Pool   nodes;            /* pool for lc_Node objects */
+    lc_Pool   leaves;           /* pool for lc_Leaf objects */
+    lc_Node   rt[LC_MAX_LEVEL]; /* scratch nodes for tree stitch */
 };
 
 /* pool allocator */
@@ -863,8 +864,8 @@ static void lcD_addbytes(lc_Cursor *C, unsigned ins) {
 }
 
 static void lcD_rmrange(lc_Cursor *L, lc_Cursor *R) {
-    lc_Node rt[LC_MAX_LEVEL];
-    int     l;
+    lc_Node *rt = L->tree->S->rt;
+    int      l;
     assert(L->tree->S == R->tree->S);
     for (l = 0; l < LC_MAX_LEVEL; ++l) lcN_setcc(&rt[l], 0);
     for (l = 0; l <= lcK_levels(L); ++l)
