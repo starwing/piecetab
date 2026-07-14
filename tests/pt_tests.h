@@ -208,8 +208,16 @@ PT_STATIC void pt_dumpnode(const pt_Node *n, int idx, int l, int levels) {
     if ((unsigned)l == (unsigned)levels || levels == 0) {
         for (i = 0; i < cc; ++i) {
             if (ptM_ishole(n, i)) {
-                pt_log("%*sL%u HOLE bytes=%zu\n", (l + 1) * 2, "", i,
+                const unsigned char *hd = (const unsigned char *)n->children[i];
+                unsigned             ki;
+                pt_log("%*sL%u HOLE bytes=%zu data=", (l + 1) * 2, "", i,
                        n->bytes[i]);
+                for (ki = 0; ki < (unsigned)pt_min(n->bytes[i], 16); ++ki)
+                    pt_log("%02x", hd[ki]);
+                pt_log(" '");
+                for (ki = 0; ki < (unsigned)pt_min(n->bytes[i], 16); ++ki)
+                    pt_log("%c", hd[ki] >= 32 && hd[ki] < 127 ? (char)hd[ki] : '.');
+                pt_log("'\n");
             } else {
                 pt_log("%*sL%u LIT bytes=%zu %.*s\n", (l + 1) * 2, "", i,
                        n->bytes[i], (int)n->bytes[i],
