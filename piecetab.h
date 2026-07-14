@@ -274,13 +274,13 @@ static int ptP_reserve(pt_State *S, pt_Pool *p, size_t n) {
     void  *freed = p->freed, **t = &freed;
     size_t c;
     for (c = 0; c < n && *t; ++c) t = (void **)*t;
-    if (c >= n) return 1;
+    if (c >= n) return PT_OK;
     for (p->freed = NULL; c < n; ++c) {
         void *obj = ptP_alloc(S, p);
-        if (obj == NULL) return 0;
+        if (obj == NULL) return PT_ERRMEM;
         ptP_stat(p->live_obj -= 1), *t = obj, t = (void **)obj;
     }
-    return *t = NULL, (p->freed = freed), 1;
+    return *t = NULL, (p->freed = freed), PT_OK;
 }
 
 static pt_Block *ptA_alloc(pt_State *S, size_t sz) {
@@ -772,8 +772,8 @@ static pt_Node *ptK_cow(pt_Cursor *C, int l, int d) {
 
 static int ptK_beginedit(pt_Cursor *C, size_t need) {
     int r, l;
-    if (!ptP_reserve(C->tree->S, &C->tree->S->nodes, need)) return PT_ERRMEM;
-    if ((r = ptK_markdirty(C)) != PT_OK) return r;
+    if ((r = ptP_reserve(C->tree->S, &C->tree->S->nodes, need))) return r;
+    if ((r = ptK_markdirty(C))) return r;
     for (l = 0; l < ptK_levels(C); ++l) ptK_cow(C, l, 0);
     return PT_OK;
 }
@@ -884,7 +884,7 @@ PT_API int pt_edit(pt_Cursor *C, size_t del, const char *s, size_t len) {
     if (!s && len > 0) return PT_ERRPARAM;
     if (del == 0 && len == 0) return PT_OK;
     if ((r = ptK_beginedit(C, 6 * (l = ptK_levels(C)) + 8)) != PT_OK) return r;
-    if (len > 0 && !ptH_reserve(C->tree->S, 2)) return PT_ERRMEM;
+    if (len > 0 && (r = ptH_reserve(C->tree->S, 2))) return r;
     if (del > 0 && (r = pt_remove(C, del)) != PT_OK) return r;
     if (len == 0) return PT_OK;
     if (ptK_bytes(C) == 0) return ptI_onepiece(C, s, len, 1), PT_OK;
@@ -919,7 +919,7 @@ PT_API int pt_append(pt_Cursor *C, const char *s, size_t len) {
         p->bytes[i] += len, C->poff += len;
         return ptM_upbytes(C, ptK_levels(C) - 1, (pt_Delta)len), PT_OK;
     }
-    return ptI_splitins(C, s, len, 0), PT_OK;
+    return ptI_splitins(C, s, len, 0), ptM_upmask(C), PT_OK;
 }
 
 PT_API int pt_insert(pt_Cursor *C, const char *s, size_t len) {
@@ -1102,7 +1102,7 @@ static void ptD_rebalance(pt_Cursor *C, int l) {
 }
 
 /* clang-format off */
-static int ptD_checkstitch(pt_Cursor *C)
+PT_STATIC int ptD_checkstitch(pt_Cursor *C)
 { return ptP_reserve(C->tree->S, &C->tree->S->nodes, ptK_levels(C) + 2); }
 /* clang-format on */
 
@@ -1161,7 +1161,7 @@ static void ptD_stitch(pt_Cursor *L, pt_Node *rt) {
     size_t   d = 0;
     int      i, l = ptK_levels(L);
     pt_Node *p = ptK_parent(L, l);
-    ptD_checkstitch(L);
+    assert(ptD_checkstitch(L) == PT_OK);
     if (ptN_cc(p) && ptN_cc(&rt[0])) d = (size_t)ptD_mergeleaf(L, rt);
     ptD_stitchnode(L, rt);
     ptD_rebalance(L, 0);
@@ -1210,7 +1210,7 @@ static void ptD_cutpiece(pt_Cursor *C, size_t lo, size_t hi) {
     }
 }
 
-static int ptD_rmleaf(pt_Cursor *L, pt_Cursor *R) {
+static void ptD_rmleaf(pt_Cursor *L, pt_Cursor *R) {
     pt_Node *p = ptK_parent(L, ptK_levels(L));
     int      l = ptK_levels(L), i = ptK_idx(L, p, l), oc = ptN_cc(p);
     pt_Delta d = pt_offset(R) - pt_offset(L);
@@ -1225,7 +1225,6 @@ static int ptD_rmleaf(pt_Cursor *L, pt_Cursor *R) {
     ptD_cutpiece(L, L->poff, R->poff), ptM_upbytes(L, l - 1, -d);
     if (ptN_cc(p) == 0) L->paths[l] = &p->children[0], L->off = 0, L->poff = 0;
     if (ptN_cc(p) < oc && l > 0) ptD_rebalance(L, l - 1), ptM_upmask(L);
-    return 0;
 }
 
 static int ptD_cowpaths(pt_Cursor *L, pt_Cursor *R) {
@@ -1236,42 +1235,30 @@ static int ptD_cowpaths(pt_Cursor *L, pt_Cursor *R) {
     }
     for (fl = l; l < ptK_levels(L); ++l) ptK_cow(L, l, 0);
     for (l = fl; l < ptK_levels(R); ++l) ptK_cow(R, l, 0);
-    return fl;
+    return fl + (fl == ptK_levels(L) && L->paths[fl] == R->paths[fl]);
 }
 
 PT_API int pt_remove(pt_Cursor *C, size_t len) {
+    int       r, i, l;
     pt_Cursor R;
-    pt_Tree  *old;
-    size_t    dellen;
-    int       r, l;
     if (!C || !C->tree) return PT_ERRPARAM;
-    if (len == 0 || ptK_bytes(C) == 0) return PT_OK;
-    if (C->off + C->poff + len > ptK_bytes(C))
-        len = ptK_bytes(C) - (C->off + C->poff);
-    R = *C, pt_advance(&R, (pt_Delta)len);
-    dellen = pt_offset(&R) - pt_offset(C);
-    if (dellen == 0) return PT_OK;
-    l = ptK_levels(C);
-    r = ptP_reserve(C->tree->S, &C->tree->S->nodes, 4 * l + 5);
-    if (!r) return PT_ERRMEM;
-    if (old = C->tree, r = ptK_markdirty(C), r != PT_OK) return r;
-    R.tree = C->tree;
-    R.paths[0] = C->tree->root.children + (R.paths[0] - old->root.children);
-    if (C->paths[l] == R.paths[l])
-        ptD_cowpaths(C, &R), ptD_rmleaf(C, &R);
-    else
-        ptD_rmrange(C, &R, ptD_cowpaths(C, &R));
-    return PT_OK;
+    if (len == 0 || pt_offset(C) >= ptK_bytes(C)) return PT_OK;
+    if (pt_offset(C) + len > ptK_bytes(C)) len = ptK_bytes(C) - pt_offset(C);
+    R = *C, pt_advance(&R, (pt_Delta)len), i = ptK_idx(&R, &R.tree->root, 0);
+    r = ptP_reserve(C->tree->S, &C->tree->S->nodes, 4 * ptK_levels(C) + 5);
+    if (r != PT_OK || (r = ptK_markdirty(C)) != PT_OK) return r;
+    R.tree = C->tree, R.paths[0] = C->tree->root.children + i;
+    if ((l = ptD_cowpaths(C, &R)) > ptK_levels(C))
+        return ptD_rmleaf(C, &R), PT_OK;
+    return ptD_rmrange(C, &R, l), PT_OK;
 }
 
 PT_API int pt_splice(pt_Cursor *C, size_t del, const char *s, size_t len) {
-    int r, l;
+    int r;
     if (!C || !C->tree) return PT_ERRPARAM;
     if (del == 0 && (s == NULL || len == 0)) return PT_OK;
-    l = ptK_levels(C);
-    if (!ptP_reserve(C->tree->S, &C->tree->S->nodes, 6 * l + 8))
-        return PT_ERRMEM;
-    if ((r = pt_remove(C, del)) != PT_OK) return r;
+    r = ptP_reserve(C->tree->S, &C->tree->S->nodes, 6 * ptK_levels(C) + 8);
+    if (r != PT_OK || (r = pt_remove(C, del)) != PT_OK) return r;
     if (s != NULL && len > 0) return pt_append(C, s, len);
     return PT_OK;
 }

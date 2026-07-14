@@ -820,11 +820,11 @@ static void test_edit_brute(void) {
                  "abcdefghijklmnopqrstuvwxyz0123456789"
                  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcd";
     int const nb = 256;
-    pt_State   *S = pt_open(&test_alloc, NULL);
-    pt_Cursor   C;
-    char        ref[256], expected[512], actual[512];
-    int         i, pos;
-    size_t      nread;
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Cursor C;
+    char      ref[256], expected[512], actual[512];
+    int       i, pos;
+    size_t    nread;
     for (i = 0; i < 64; i++) {
         ref[i * 4 + 0] = alphabet[i * 2 + 0];
         ref[i * 4 + 1] = alphabet[i * 2 + 1];
@@ -840,8 +840,7 @@ static void test_edit_brute(void) {
             pt_checktree(C.tree), assert(0);
         }
         if (!pt_checkcursor(&C, (size_t)pos + 2)) {
-            pt_log("edit_brute cursor pos=%d off=%zu\n", pos,
-                   pt_offset(&C));
+            pt_log("edit_brute cursor pos=%d off=%zu\n", pos, pt_offset(&C));
             assert(0);
         }
         memcpy(expected, ref, (size_t)pos);
@@ -850,8 +849,7 @@ static void test_edit_brute(void) {
         pt_seek(&C, C.tree, 0);
         nread = pt_read(&C, actual, 258);
         if (nread != 258 || memcmp(actual, expected, 258) != 0) {
-            pt_log("edit_brute content fail pos=%d nread=%zu\n",
-                   pos, nread);
+            pt_log("edit_brute content fail pos=%d nread=%zu\n", pos, nread);
             assert(0);
         }
         pt_release(C.tree);
@@ -869,11 +867,11 @@ static void test_insert_brute(void) {
                  "abcdefghijklmnopqrstuvwxyz0123456789"
                  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcd";
     int const nb = 256;
-    pt_State   *S = pt_open(&test_alloc, NULL);
-    pt_Cursor   C;
-    char        ref[256], expected[512], actual[512];
-    int         i, pos;
-    size_t      nread;
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Cursor C;
+    char      ref[256], expected[512], actual[512];
+    int       i, pos;
+    size_t    nread;
     for (i = 0; i < 64; i++) {
         ref[i * 4 + 0] = alphabet[i * 2 + 0];
         ref[i * 4 + 1] = alphabet[i * 2 + 1];
@@ -889,8 +887,7 @@ static void test_insert_brute(void) {
             pt_checktree(C.tree), assert(0);
         }
         if (!pt_checkcursor(&C, (size_t)pos)) {
-            pt_log("insert_brute cursor pos=%d off=%zu\n", pos,
-                   pt_offset(&C));
+            pt_log("insert_brute cursor pos=%d off=%zu\n", pos, pt_offset(&C));
             assert(0);
         }
         memcpy(expected, ref, (size_t)pos);
@@ -899,8 +896,7 @@ static void test_insert_brute(void) {
         pt_seek(&C, C.tree, 0);
         nread = pt_read(&C, actual, 258);
         if (nread != 258 || memcmp(actual, expected, 258) != 0) {
-            pt_log("insert_brute content fail pos=%d nread=%zu\n",
-                   pos, nread);
+            pt_log("insert_brute content fail pos=%d nread=%zu\n", pos, nread);
             assert(0);
         }
         pt_release(C.tree);
@@ -3193,8 +3189,6 @@ static void test_splice_brute(void) {
     for (pos = 0; pos <= nb + 1; ++pos)
         for (del = 0; del <= nb + 1; ++del)
             for (ins = 0; ins <= 1; ++ins) {
-                /* if (!(pos == 3 && del == 3 && ins == 1)) continue; */
-
                 maketree(S, &C, (size_t)pos);
                 epos = (size_t)pos < 256 ? (size_t)pos : 256;
                 edel = (size_t)del < 256 - epos ? (size_t)del : 256 - epos;
