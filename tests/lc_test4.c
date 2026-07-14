@@ -1605,7 +1605,7 @@ static void test_append_rootpush(void) {
     lc_close(S);
 }
 
-static void test_append_fillrt_findlevel(void) {
+static void test_append_findroom_findlevel(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     lc_Cursor cur;
@@ -2626,7 +2626,7 @@ static void test_locline_crossleaf(void) {
     X(append_leaf_split)          \
     X(append_stitch_shiftup)      \
     X(append_rootpush)            \
-    X(append_fillrt_findlevel)    \
+    X(append_findroom_findlevel)  \
     X(append_noop)                \
     X(append_trailing)            \
     X(append_brute)               \
