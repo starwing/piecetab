@@ -222,7 +222,7 @@ just pt-lines         # 未覆盖行源码
 ```
 
 - 测试骨架 `tests/pt_tests.h`：`TESTS(X)` 宏列举 + `PT_TEST_MAIN`
-- 覆盖率现状：100% 行 / 100% 函数（`just pt-cov`），分支约 85%
+- 覆盖率现状：100% 行 / 100% 函数（`just pt-cov`），分支约 91%
 - **树构造 DSL**: `treeV(levels, innerV(leafV(litV("ab"), holeV("cd"))))`
   直接搭树；`editV` 搭树后置 dirty
 - **断言工具**: `pt_asserttree(blob, levels, root)` 全树精确比对（优先用，
