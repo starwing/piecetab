@@ -1746,6 +1746,52 @@ static void test_append_noscanner(void) {
     lc_close(S);
 }
 
+static void test_append_oom_brute(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c;
+    lc_Cursor C;
+    int       pos, ins, e, oom, rem, r;
+    int       cnt = 0;
+    int const n = 32;
+
+    assert(S);
+    for (pos = 0; pos <= n * 2 + 1; ++pos)
+        for (ins = 0; ins <= n; ++ins)
+            for (e = 0; e <= 1; ++e)
+                for (oom = 0; oom <= 10; ++oom) {
+                    int o = oom;
+                    c = lc_newtree(S);
+                    lc_rscanV(c, 64, 2);
+                    assert(lc_checktree(c));
+                    lc_seek(&C, c, pos);
+                    S->nodes.freed = S->leaves.freed = NULL;
+                    rem = ins;
+                    S->allocf = oom_alloc;
+                    S->alloc_ud = &o;
+                    r = lc_append(&C, e, brute_scanner, &rem);
+                    S->allocf = test_alloc;
+                    S->alloc_ud = NULL;
+                    if (r == LC_ERRMEM) {
+                        if (!lc_checktree(c)
+                            || !lc_checkcursor(&C, (size_t)pos)) {
+                            lc_log("OOM brute fail pos=%d ins=%d e=%d"
+                                   " oom=%d\n",
+                                   pos, ins, e, oom);
+                            lc_dumptree(c, "oom brute fail");
+                            lc_dumpcursor(&C, "oom brute fail");
+                            abort();
+                        }
+                        lc_deltree(S, c);
+                        ++cnt;
+                        continue;
+                    }
+                    assert(r == LC_OK);
+                    lc_deltree(S, c);
+                }
+    lc_log("  test_append_oom_brute: %d OOM cases\n", cnt);
+    lc_close(S);
+}
+
 static void test_append_oom_trailing(void) {
     lc_State *S;
     lc_Cache *c;
@@ -1766,6 +1812,8 @@ static void test_append_oom_trailing(void) {
             lc_seek(&C, c, 0);
             pbrs = brs;
             if (lc_append(&C, 0, lc_scanner, &pbrs) == LC_ERRMEM) {
+                assert(lc_checktree(c));
+                assert(lc_checkcursor(&C, 0));
                 assert(S->leaves.live_obj == slb);
                 assert(S->nodes.live_obj == snb);
                 found = 1;
@@ -1782,7 +1830,6 @@ static void test_append_oom_normal(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     lc_Cursor C;
-    unsigned  brs_b[] = {17, 1, 0}, *pb;
     lc_Leaf   lfdum;
     int       oom = 0;
     void     *lf;
@@ -1798,12 +1845,13 @@ static void test_append_oom_normal(void) {
     lc_localfill(&S->leaves, &lf, &lfdum, 1);
 
     {
-        size_t slb = S->leaves.live_obj, snb = S->nodes.live_obj;
-        S->allocf = oom_alloc;
-        S->alloc_ud = &oom;
+        size_t   slb = S->leaves.live_obj, snb = S->nodes.live_obj;
+        unsigned brs[] = {17, 1, 0}, *pb = brs;
+        S->allocf = oom_alloc, S->alloc_ud = &oom;
         lc_seek(&C, c, 3);
-        pb = brs_b;
         assert(lc_append(&C, 0, lc_rscanner, &pb) == LC_ERRMEM);
+        assert(lc_checktree(c));
+        assert(lc_checkcursor(&C, 3));
         assert(S->leaves.live_obj == slb);
         assert(S->nodes.live_obj == snb);
     }
@@ -1846,6 +1894,11 @@ static void test_append_oom_col0(void) {
         S->alloc_ud = &oom;
         pb = brs_b;
         assert(lc_append(&C, 0, lc_scanner, &pb) == LC_ERRMEM);
+        S->allocf = test_alloc;
+        S->alloc_ud = NULL;
+        assert(lc_checktree(c));
+        assert(lc_checkcursor(&C, 0));
+        lc_asserttree(c, 0, botV(leafV(5, 5)));
         assert(S->leaves.live_obj == slb);
         assert(S->nodes.live_obj == snb);
     }
@@ -1881,6 +1934,8 @@ static void test_append_oom_shiftup(void) {
         S->alloc_ud = &oom;
         lc_seek(&C, c, 1);
         assert(lc_append(&C, 0, lc_scanner, &p) == LC_ERRMEM);
+        assert(lc_checktree_allow_empty(c, 1));
+        assert(lc_checkcursor(&C, 1));
         assert(S->leaves.live_obj == slb);
         assert(S->nodes.live_obj == snb);
     }
@@ -1916,6 +1971,8 @@ static void test_append_oom_rootpush(void) {
         S->alloc_ud = &oom;
         lc_seek(&C, c, 1);
         assert(lc_append(&C, 0, lc_scanner, &p) == LC_ERRMEM);
+        assert(lc_checktree_allow_empty(c, 1));
+        assert(lc_checkcursor(&C, 1));
         assert(S->nodes.live_obj == snb);
     }
 
@@ -1960,6 +2017,8 @@ static void test_append_oom_deroot(void) {
         S->alloc_ud = &oom;
         lc_seek(&C, c, 1);
         assert(lc_append(&C, 0, lc_scanner, &p) == LC_ERRMEM);
+        assert(lc_checktree_allow_empty(c, 1));
+        assert(lc_checkcursor(&C, 1));
         assert(S->nodes.live_obj == snb);
     }
 
@@ -1986,7 +2045,13 @@ static void test_append_oom_rollback(void) {
         lc_seek(&C, c, 1);
         p = bs;
         r = lc_append(&C, 0, lc_scanner, &p);
+        S->allocf = test_alloc;
+        S->alloc_ud = NULL;
         assert(r < 0);
+        assert(lc_checktree_allow_empty(c, 1));
+        assert(lc_checkcursor(&C, 1));
+        lc_asserttree(
+                c, 0, botV(leafV(1, 0), leafV(1, 0), leafV(1, 0), leafV(1, 0)));
     }
 
     lc_deltree(S, c);
@@ -1998,9 +2063,7 @@ static void test_append_oom_rollback(void) {
  * oom=4 fails at stitch reserve; oom=5 succeeds.
  * stitch reserve(l+2 nodes) consumes exactly 1 page = 1 allocf. */
 static void test_append_oom_full(void) {
-    unsigned  ins[] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-                       1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-                       1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0};
+    unsigned  ins[] = {45, 1, 0};
     unsigned *p;
     lc_State *S;
     lc_Cache *c;
@@ -2019,11 +2082,11 @@ static void test_append_oom_full(void) {
     S->allocf = oom_alloc;
     S->alloc_ud = &oom;
     lc_seek(&C, c, 254);
-    r = lc_append(&C, 0, lc_scanner, &p);
-    S->allocf = test_alloc;
-    S->alloc_ud = NULL;
-    assert(r == LC_ERRMEM); /* rollback restores tree but may leave
-                             * structural invariants violated — known bug */
+    r = lc_append(&C, 0, lc_rscanner, &p);
+    S->allocf = test_alloc, S->alloc_ud = NULL;
+    assert(r == LC_ERRMEM);
+    assert(lc_checktree(c));
+    assert(lc_checkcursor(&C, 254));
     lc_deltree(S, c);
     lc_close(S);
 
@@ -2187,6 +2250,8 @@ static void test_append_oom_cutleaf(void) {
     S->allocf = test_alloc;
     S->alloc_ud = NULL;
     assert(r == LC_ERRMEM);
+    assert(lc_checktree(c));
+    assert(lc_checkcursor(&C, 5));
     lc_deltree(S, c);
     lc_close(S);
 }
@@ -2630,6 +2695,7 @@ static void test_locline_crossleaf(void) {
     X(append_noop)                \
     X(append_trailing)            \
     X(append_brute)               \
+    X(append_oom_brute)           \
     X(append_noscanner)           \
     X(append_oom_trailing)        \
     X(append_oom_normal)          \
