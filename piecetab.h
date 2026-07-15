@@ -1000,17 +1000,13 @@ static void ptD_cutrange(pt_Cursor *L, pt_Cursor *R, pt_Node *rt, int fl) {
     ptM_up(L, fl - 1, -db), ptN_remove(S, p, k, i + 1, ptN_cc(p));
 }
 
-static int ptD_makechain(pt_Cursor *C, int from, int to) {
+static void ptD_makechain(pt_Cursor *C, int from, int to) {
     pt_Node *p, *nn, ***cp = C->paths + to;
-    int      l, r = 0;
-    if (assert(from < to), from < 0) {
-        nn = (pt_Node *)ptP_ralloc(&C->tree->S->nodes);
-        p = &C->tree->root, *nn = *p;
-        p->bytes[0] = C->tree->bytes, ptM_sethole(p, 0, nn->mask != 0);
-        p->children[0] = nn, p->child_count = 1;
-        memmove(cp + 2, cp + 1, (ptK_levels(C) - to) * sizeof(pt_Node **));
-        C->tree->levels += 1, from = 0, to += 1, cp += 1, r = 1;
-    }
+    int      l;
+    assert(0 <= from && from < to);
+    /* Bulk-insert legacy (lc_scan-style tree growth) was removed: in the
+     * remove-only stitch context the chain never deepens the root and the
+     * break level never keeps right siblings (cutrange cleared them). */
     for (l = from; l < to; ++l) {
         nn = (pt_Node *)ptP_ralloc(&C->tree->S->nodes);
         p = ptK_parent(C, l), nn->child_count = 0;
@@ -1019,24 +1015,18 @@ static int ptD_makechain(pt_Cursor *C, int from, int to) {
         p->children[ptN_cc(p)] = nn, p->child_count += 1;
         ptM_sethole(p, ptN_cc(p) - 1, 0);
     }
-    return *cp = &nn->children[0], r;
+    *cp = &nn->children[0];
 }
 
-static int ptD_findroom(pt_Cursor *C, pt_Node *rt, int l) {
-    int      i, fl, c;
+static void ptD_findroom(pt_Cursor *C, int l) {
+    int      i, fl;
     pt_Node *p;
     for (fl = l - 1; fl >= 0; --fl) {
         p = ptK_parent(C, fl), i = ptK_idx(C, p, fl);
         if (i < PT_FANOUT - 1) break;
     }
-    if (fl >= 0 && (c = ptN_cc(p) - i - 1) > 0) {
-        int k = ptK_levels(C) - fl;
-        ptM_up(C, fl - 1, -(pt_Delta)ptN_sumbytes(p, i + 1, ptN_cc(p)));
-        rt[k].child_count = 0;
-        ptN_copy(&rt[k], 0, p, i + 1, c);
-        ptN_setcc(p, i + 1), ptN_setcc(&rt[k], c);
-    }
-    return ptD_makechain(C, fl, l);
+    assert(fl >= 0 && ptN_cc(p) - i - 1 == 0);
+    ptD_makechain(C, fl, l);
 }
 
 static void ptD_backwardnode(pt_Cursor *C, int d, int l) {
@@ -1096,10 +1086,10 @@ static int ptD_foldnode(pt_Cursor *C, int lfirst, int l) {
 
 static void ptD_rebalance(pt_Cursor *C, int l) {
     assert(l == 0 || l < ptK_levels(C));
-    for (; l > 0; --l) {
+    for (; l >= 0 && l < ptK_levels(C); --l) {
         pt_Node *p = ptK_parent(C, l);
         if (ptN_cc(p->children[ptK_idx(C, p, l)]) >= PT_FANOUT / 2) break;
-        assert(ptN_cc(p) > 1);
+        if (ptN_cc(p) < 2) break; /* lone-child root: collapse below */
         if (!ptD_foldnode(C, 0, l)) break;
     }
     while (ptK_levels(C) > 0 && ptN_cc(&C->tree->root) == 1) {
@@ -1120,7 +1110,7 @@ PT_STATIC int ptD_checkstitch(pt_Cursor *C)
 static void ptD_stitchnode(pt_Cursor *L, pt_Node *rt) {
     int k, d = 0, l = ptK_levels(L);
     for (k = 0; k <= ptK_levels(L); ++k) {
-        int      m, fl, r, kl = ptK_levels(L) - k, rtcc = ptN_cc(&rt[k]);
+        int      m, fl, kl = ptK_levels(L) - k, rtcc = ptN_cc(&rt[k]);
         pt_Node *p = ptK_parent(L, kl);
         ptN_setcc(&rt[k], 0);
         if ((m = pt_min(rtcc, PT_FANOUT - ptN_cc(p))) > 0) {
@@ -1133,8 +1123,8 @@ static void ptD_stitchnode(pt_Cursor *L, pt_Node *rt) {
         for (fl = kl; fl < l; ++fl) ptD_foldnode(L, (fl == kl), fl);
         if (k) ptD_backwardnode(L, d, l);
         if (!(m < rtcc)) continue;
-        l = kl, d = k ? PT_FANOUT - ptK_idx(L, ptK_parent(L, l), l) : m;
-        r = ptD_findroom(L, rt, l), l += r, p = ptK_parent(L, l);
+        p = ptK_parent(L, l = kl), d = k ? ptN_cc(p) - ptK_idx(L, p, l) : m;
+        ptD_findroom(L, l), p = ptK_parent(L, l);
         ptN_copy(p, 0, &rt[k], m, ptN_setcc(p, rtcc - m));
         ptM_up(L, l - 1, (pt_Delta)ptN_sumbytes(&rt[k], m, rtcc));
     }
@@ -1151,12 +1141,12 @@ static int ptD_mergeleaf(pt_Cursor *C, pt_Node *rt) {
         d = pt_min(rt->bytes[0], PT_MAX_HOLESIZE - bc);
         ptH_append(p, cc - 1, bc, ptN_hole(rt, 0)->data, d);
         if (d < rt->bytes[0])
-            ptH_remove(rt, 0, 0, d);
+            ptH_remove(rt, 0, 0, d), ptM_up(C, l - 1, (pt_Delta)d);
         else
             ptP_free(&C->tree->S->holes, ptN_hole(rt, 0)), merged = 1, d = 0;
     }
     if (!merged)
-        C->off += C->poff, C->poff = 0, C->paths[l] = &p->children[cc];
+        C->off += C->poff + d, C->poff = 0, C->paths[l] = &p->children[cc];
     else {
         rt->bytes[0] += bc, rt->children[0] = p->children[cc - 1];
         ptM_up(C, l - 1, -(pt_Delta)bc);

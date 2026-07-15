@@ -206,6 +206,10 @@ grep '^static' piecetab.h
    `ptD_stitch`（`mergeleaf` 试合并断口叶 → `stitchnode` 逐层缝回 rt →
    `rebalance` 收尾，游标落删除点）
 4. `rt[k]` 索引恒守 `k = levels - l`（洋葱层铁律，同 lc）
+5. **批量插入遗产已删**（lc 的 scan/append 扩树路径 pt 不存在）：
+   `ptD_makechain` 不再支持根加深（`from < 0`），`ptD_findroom` 不再
+   搬运断层右余——remove-only stitch 语境下二者均不可达，以 assert
+   守卫。若未来引入批量插入 API，须从 git 历史/linecache 恢复。
 
 ## 十、测试
 
@@ -218,6 +222,7 @@ just pt-lines         # 未覆盖行源码
 ```
 
 - 测试骨架 `tests/pt_tests.h`：`TESTS(X)` 宏列举 + `PT_TEST_MAIN`
+- 覆盖率现状：100% 行 / 100% 函数（`just pt-cov`），分支约 85%
 - **树构造 DSL**: `treeV(levels, innerV(leafV(litV("ab"), holeV("cd"))))`
   直接搭树；`editV` 搭树后置 dirty
 - **断言工具**: `pt_asserttree(blob, levels, root)` 全树精确比对（优先用，

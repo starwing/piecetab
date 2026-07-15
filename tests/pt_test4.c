@@ -356,6 +356,37 @@ static void test_merge_left(void) {
     pt_close(S);
 }
 
+/* L936-937: pt_append LEFT merge (poff==0, i>0, prev literal contiguous) */
+static void test_append_merge_left(void) {
+    static const char buf[] = "ABCD";
+    pt_State         *S = pt_open(&test_alloc, NULL);
+    pt_Node          *lf = (pt_Node *)ptP_alloc(S, &S->nodes);
+    pt_Blob           b;
+    pt_Cursor         c;
+    memset(lf, 0, sizeof(pt_Node));
+    lf->children[0] = (pt_Node *)(buf + 0), lf->bytes[0] = 2;
+    lf->children[1] = (pt_Node *)(buf + 2), lf->bytes[1] = 2;
+    lf->child_count = 2;
+    b = treeV(0, lf);
+    pt_seek(&c, b, 2);
+    assert(pt_checkcursor(&c, 2));
+    assert(pt_append(&c, buf + 2, 2) == PT_OK);
+    assert(pt_checktree(c.tree));
+    assert(pt_checkcursor(&c, 4));
+    assert(pt_bytes(c.tree) == 6);
+    pt_asserttree(c.tree, 0, leafV(litV("ABCD"), litV("CD")));
+    {
+        char   rd[16];
+        size_t nr;
+        pt_seek(&c, c.tree, 0);
+        nr = pt_read(&c, rd, 6);
+        assert(nr == 6 && memcmp(rd, "ABCDCD", 6) == 0);
+    }
+    pt_release(c.tree), pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
 /* T3k: differential — incremental advance must match a fresh pt_seek */
 
 static void test_advance_brute(void) {
@@ -811,26 +842,35 @@ static size_t collect_bytes(pt_Blob b, char *buf, size_t cap) {
 
 /* §8.1 edit_brute: position-independent content verification */
 
+/* shared 288-byte reference for maketree-based brute tests:
+ * 72 groups of {lit,lit,'#','#'} drawn from pt_srcbuf pairs */
+static const char pt_srcbuf
+        [] = "abcdefghijklmnopqrstuvwxyz0123456789"
+             "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+             "abcdefghijklmnopqrstuvwxyz0123456789"
+             "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+             "abcdefghijklmnopqrst";
+
 static void maketree(pt_State *S, pt_Cursor *C, size_t off);
 
-static void test_edit_brute(void) {
-    static const char alphabet
-            [] = "abcdefghijklmnopqrstuvwxyz0123456789"
-                 "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                 "abcdefghijklmnopqrstuvwxyz0123456789"
-                 "ABCDEFGHIJKLMNOPQRSTUVWXYZabcd";
-    int const nb = 256;
-    pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Cursor C;
-    char      ref[256], expected[512], actual[512];
-    int       i, pos;
-    size_t    nread;
-    for (i = 0; i < 64; i++) {
-        ref[i * 4 + 0] = alphabet[i * 2 + 0];
-        ref[i * 4 + 1] = alphabet[i * 2 + 1];
+static void makeref(char *ref) {
+    int i;
+    for (i = 0; i < 72; i++) {
+        ref[i * 4 + 0] = pt_srcbuf[i * 2 + 0];
+        ref[i * 4 + 1] = pt_srcbuf[i * 2 + 1];
         ref[i * 4 + 2] = '#';
         ref[i * 4 + 3] = '#';
     }
+}
+
+static void test_edit_brute(void) {
+    int const nb = 288;
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Cursor C;
+    char      ref[288], expected[576], actual[576];
+    int       pos;
+    size_t    nread;
+    makeref(ref);
     for (pos = 0; pos <= nb; ++pos) {
         maketree(S, &C, (size_t)pos);
         assert(pt_edit(&C, 0, "##", 2) == PT_OK);
@@ -845,10 +885,10 @@ static void test_edit_brute(void) {
         }
         memcpy(expected, ref, (size_t)pos);
         memcpy(expected + pos, "##", 2);
-        memcpy(expected + pos + 2, ref + pos, 256 - (size_t)pos);
+        memcpy(expected + pos + 2, ref + pos, 288 - (size_t)pos);
         pt_seek(&C, C.tree, 0);
-        nread = pt_read(&C, actual, 258);
-        if (nread != 258 || memcmp(actual, expected, 258) != 0) {
+        nread = pt_read(&C, actual, 290);
+        if (nread != 290 || memcmp(actual, expected, 290) != 0) {
             pt_log("edit_brute content fail pos=%d nread=%zu\n", pos, nread);
             assert(0);
         }
@@ -861,23 +901,13 @@ static void test_edit_brute(void) {
 /* §8.2 insert_brute: position-independent literal insert */
 
 static void test_insert_brute(void) {
-    static const char alphabet
-            [] = "abcdefghijklmnopqrstuvwxyz0123456789"
-                 "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                 "abcdefghijklmnopqrstuvwxyz0123456789"
-                 "ABCDEFGHIJKLMNOPQRSTUVWXYZabcd";
-    int const nb = 256;
+    int const nb = 288;
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Cursor C;
-    char      ref[256], expected[512], actual[512];
-    int       i, pos;
+    char      ref[288], expected[576], actual[576];
+    int       pos;
     size_t    nread;
-    for (i = 0; i < 64; i++) {
-        ref[i * 4 + 0] = alphabet[i * 2 + 0];
-        ref[i * 4 + 1] = alphabet[i * 2 + 1];
-        ref[i * 4 + 2] = '#';
-        ref[i * 4 + 3] = '#';
-    }
+    makeref(ref);
     for (pos = 0; pos <= nb; ++pos) {
         maketree(S, &C, (size_t)pos);
         assert(pt_insert(&C, "##", 2) == PT_OK);
@@ -892,10 +922,10 @@ static void test_insert_brute(void) {
         }
         memcpy(expected, ref, (size_t)pos);
         memcpy(expected + pos, "##", 2);
-        memcpy(expected + pos + 2, ref + pos, 256 - (size_t)pos);
+        memcpy(expected + pos + 2, ref + pos, 288 - (size_t)pos);
         pt_seek(&C, C.tree, 0);
-        nread = pt_read(&C, actual, 258);
-        if (nread != 258 || memcmp(actual, expected, 258) != 0) {
+        nread = pt_read(&C, actual, 290);
+        if (nread != 290 || memcmp(actual, expected, 290) != 0) {
             pt_log("insert_brute content fail pos=%d nread=%zu\n", pos, nread);
             assert(0);
         }
@@ -1241,6 +1271,39 @@ static void test_arena_literal_params(void) {
     assert(pt_literal(&c, n) == NULL);
 
     pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+/* ================= literal/pt_literal coverage ================= */
+
+/* L750: pt_literal returns NULL when arena.current == NULL */
+static void test_literal_arena_empty(void) {
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Blob   b = pt_empty(S);
+    pt_Cursor c;
+    size_t    n;
+    pt_seek(&c, b, 0);
+    n = 10;
+    assert(pt_literal(&c, n) == NULL);
+    pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+/* L750: pt_literal returns NULL when arena has insufficient remainder */
+static void test_literal_arena_short(void) {
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Blob   b = pt_empty(S);
+    pt_Cursor c;
+    size_t    n;
+    pt_seek(&c, b, 0);
+    assert(pt_reserve(&c, 0) != NULL);
+    n = PT_ARENA_SIZE - 5;
+    assert(pt_literal(&c, n) != NULL);
+    n = 10;
+    assert(pt_literal(&c, n) == NULL);
+    pt_release(c.tree), pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -1599,6 +1662,38 @@ static void test_remove_merge_hole_split(void) {
     pt_close(S);
 }
 
+/* L1154 + L1184-1187: mergeleaf partial hole merge + stitch backwardnode.
+   Two hole leaves (12+12=24B), delete 4B at boundary.
+   mergeleaf: d=min(10,16-10)=6, partial, ptH_remove(rt,0,0,d).
+   stitch: d>poff=0 → backwardnode. */
+static void test_remove_merge_hole_partial(void) {
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Cursor c;
+    editV(&c, 10, 1,
+          innerV(leafV(holeV("aaaaaaaaaaaa")), leafV(holeV("bbbbbbbbbbbb"))));
+    assert(pt_remove(&c, 4) == PT_OK);
+    assert(pt_checktree(c.tree));
+    assert(pt_bytes(c.tree) == 20);
+    assert(pt_checkcursor(&c, 10));
+    {
+        pt_Node *r = &c.tree->root;
+        assert(r->child_count == 2);
+        assert(r->bytes[0] == 16);
+        assert(r->bytes[1] == 4);
+    }
+    {
+        char   buf[32];
+        size_t nr;
+        pt_seek(&c, c.tree, 0);
+        nr = pt_read(&c, buf, 20);
+        assert(nr == 20);
+        assert(memcmp(buf, "aaaaaaaaaabbbbbbbbbb", 20) == 0);
+    }
+    pt_release(c.tree);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
 /* === deep stitch + findroom/backwardnode === */
 
 static void test_remove_stitch_deep(void) {
@@ -1658,6 +1753,199 @@ static void test_remove_hole_eraseleaf(void) {
 }
 
 /* === mergelit left-side merge === */
+
+/* ================= stitch findroom test ================= */
+
+/* full levels=2 tree: 4 inners x 4 leaves x 4 pieces, 1B each, from
+ * non-contiguous slices of src (stride 2 defeats literal merging) */
+static pt_Blob brute2_tree(pt_State *S, const char *src) {
+    pt_Node *root = (pt_Node *)ptP_alloc(S, &S->nodes);
+    int      a, b, ci;
+    memset(root, 0, sizeof(pt_Node));
+    for (a = 0; a < 4; ++a) {
+        pt_Node *in = (pt_Node *)ptP_alloc(S, &S->nodes);
+        memset(in, 0, sizeof(pt_Node));
+        for (b = 0; b < 4; ++b) {
+            pt_Node *lf = (pt_Node *)ptP_alloc(S, &S->nodes);
+            memset(lf, 0, sizeof(pt_Node));
+            for (ci = 0; ci < 4; ++ci) {
+                lf->children[ci] = (pt_Node *)(src + 2 * (a * 16 + b * 4 + ci));
+                lf->bytes[ci] = 1;
+            }
+            ptN_setcc(lf, 4);
+            in->children[b] = lf, in->bytes[b] = 4;
+        }
+        ptN_setcc(in, 4);
+        root->children[a] = in, root->bytes[a] = 16;
+    }
+    ptN_setcc(root, 4);
+    return treeV_(S, 2, root);
+}
+
+/* brute all (pos,len) removals on a full levels=2 tree, checking tree
+ * invariants, byte count, content and cursor position after each */
+static void test_remove_brute2(void) {
+    static char src[128];
+    char        expect[64], rd[64];
+    pt_State   *S = pt_open(&test_alloc, NULL);
+    size_t      pos, len, k;
+    for (k = 0; k < 128; ++k) src[k] = (char)('A' + (int)k % 26);
+    for (k = 0; k < 64; ++k) expect[k] = src[2 * k];
+    for (pos = 0; pos <= 64; ++pos) {
+        for (len = 1; len <= 64 - pos; ++len) {
+            pt_Blob   b = brute2_tree(S, src);
+            pt_Cursor c;
+            pt_seek(&c, b, pos);
+            assert(pt_remove(&c, len) == PT_OK);
+            if (!pt_checktree_allow_empty(c.tree, 1)
+                || pt_bytes(c.tree) != 64 - len || !pt_checkcursor(&c, pos)) {
+                pt_log("FAIL: brute2 pos=%zu len=%zu\n", pos, len);
+                pt_dumptree(c.tree, "brute2");
+                assert(0);
+            }
+            pt_locate(&c, 0);
+            assert(pt_read(&c, rd, 64) == 64 - len);
+            assert(memcmp(rd, expect, pos) == 0);
+            assert(memcmp(rd + pos, expect + pos + len, 64 - pos - len) == 0);
+            pt_release(c.tree), pt_release(b);
+        }
+    }
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+/* L1102-1103: tail rmleaf → rebalance(l-1) → foldnode balances leaves
+   (4+1 > FANOUT so balancenode path, tree stays legal) */
+static void test_remove_fold_balance2(void) {
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Blob   b = treeV(
+            2, innerV(innerV(leafV(litV("a"), litV("b")),
+                             leafV(litV("c"), litV("d"))),
+                      innerV(leafV(litV("e"), litV("f"), litV("g"), litV("h")),
+                             leafV(litV("i"), litV("j")))));
+    pt_Cursor c;
+    pt_seek(&c, b, 9);
+    assert(pt_remove(&c, 1) == PT_OK); /* erase tail "j": leaf cc 2 -> 1 */
+    assert(pt_checktree(c.tree));
+    assert(pt_bytes(c.tree) == 9);
+    assert(pt_checkcursor(&c, 9));
+    pt_asserttree(
+            c.tree, 2,
+            innerV(innerV(leafV(litV("a"), litV("b")),
+                          leafV(litV("c"), litV("d"))),
+                   innerV(leafV(litV("e"), litV("f")),
+                          leafV(litV("g"), litV("h"), litV("i")))));
+    pt_release(c.tree), pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+/* tail rmleaf → rebalance → foldnode merges leaves (2+1 <= FANOUT):
+   inner cc drops to 1 while root cc == 2; tree must stay legal */
+static void test_remove_fold_merge(void) {
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Blob   b = treeV(
+            2, innerV(innerV(leafV(litV("a"), litV("b")),
+                             leafV(litV("c"), litV("d"))),
+                      innerV(leafV(litV("g"), litV("h")),
+                             leafV(litV("i"), litV("j")))));
+    pt_Cursor c;
+    pt_seek(&c, b, 7);
+    assert(pt_remove(&c, 1) == PT_OK); /* erase tail "j": leaf cc 2 -> 1 */
+    assert(pt_checktree(c.tree));
+    assert(pt_bytes(c.tree) == 7);
+    assert(pt_checkcursor(&c, 7));
+    pt_release(c.tree), pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+/* L1033-1038: ptD_findroom fl>=0 && c>0. */
+static void test_remove_findroom(void) {
+    pt_Node  *root, *inner0, *inner1, *leaf0, *leaf1, *leaf2, *leaf3, *leaf4;
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Blob   b;
+    pt_Cursor c;
+    /* levels=2: root → [inner0, inner1]; inner0 full (4 leaves), inner1: 1
+       leaf. Total 18B. Remove 6 at offset 12 → crosses inner boundary. */
+    leaf0 = leafV(litV("aa"), litV("bb"), litV("cc"), litV("dd"));
+    leaf1 = leafV(litV("ee"), litV("ff"), litV("gg"), litV("hh"));
+    leaf2 = leafV(litV("ii"), litV("jj"), litV("kk"), litV("ll"));
+    leaf3 = leafV(litV("mm"), litV("nn"), litV("oo"), litV("pp"));
+    leaf4 = leafV(litV("qq"), litV("rr"));
+    inner0 = innerV(leaf0, leaf1, leaf2, leaf3);
+    inner1 = innerV(leaf4);
+    root = innerV(inner0, inner1);
+    b = treeV(2, root);
+    pt_seek(&c, b, 12);
+    assert(pt_remove(&c, 6) == PT_OK);
+    assert(pt_checktree_allow_empty(c.tree, 1));
+    pt_release(c.tree), pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+/* brute (pos,len) removals over mixed-shape levels=2 trees
+ * (leaf cc 4/3/2 mixes stress fold/stitch/findroom paths) */
+static pt_Blob brute3_tree(pt_State *S, const char *src, const int *shape) {
+    pt_Node *root = (pt_Node *)ptP_alloc(S, &S->nodes);
+    int      a, b, ci, pi, si = 0, off = 0;
+    memset(root, 0, sizeof(pt_Node));
+    for (a = 0; a < 4; ++a) {
+        pt_Node *n1 = (pt_Node *)ptP_alloc(S, &S->nodes);
+        int      n1b = 0;
+        memset(n1, 0, sizeof(pt_Node));
+        for (b = 0; b < 4; ++b) {
+            pt_Node *lc = (pt_Node *)ptP_alloc(S, &S->nodes);
+            int      cc = shape[si++ % 7], lcb = 0;
+            memset(lc, 0, sizeof(pt_Node));
+            for (ci = 0; ci < cc; ++ci) {
+                pi = shape[si++ % 7] > 2 ? 2 : 1;
+                lc->children[ci] = (pt_Node *)(src + off);
+                lc->bytes[ci] = pi, off += pi + 1, lcb += pi;
+            }
+            ptN_setcc(lc, cc);
+            n1->children[b] = lc, n1->bytes[b] = lcb, n1b += lcb;
+        }
+        ptN_setcc(n1, 4);
+        root->children[a] = n1, root->bytes[a] = n1b;
+    }
+    ptN_setcc(root, 4);
+    return treeV_(S, 2, root);
+}
+static void test_remove_brute3(void) {
+    static char      src[1024];
+    static const int shapes[3][7] = {
+            {4, 3, 2, 4, 2, 3, 4},
+            {2, 2, 3, 2, 4, 2, 2},
+            {4, 4, 4, 4, 4, 4, 4}};
+    pt_State *S = pt_open(&test_alloc, NULL);
+    size_t    k, pos, len, total;
+    int       si;
+    for (k = 0; k < 1024; ++k) src[k] = (char)('A' + (int)k % 26);
+    for (si = 0; si < 3; ++si) {
+        pt_Blob   b0 = brute3_tree(S, src, shapes[si]);
+        pt_Cursor c;
+        total = pt_bytes(b0);
+        pt_release(b0);
+        for (pos = 0; pos < total; ++pos) {
+            for (len = 1; len <= total - pos; ++len) {
+                pt_Blob b = brute3_tree(S, src, shapes[si]);
+                pt_seek(&c, b, pos);
+                assert(pt_remove(&c, len) == PT_OK);
+                if (!pt_checktree_allow_empty(c.tree, 1)
+                    || pt_bytes(c.tree) != total - len
+                    || !pt_checkcursor(&c, pos)) {
+                    pt_log("FAIL brute3 s=%d pos=%zu len=%zu\n", si, pos, len);
+                    assert(0);
+                }
+                pt_release(c.tree), pt_release(b);
+            }
+        }
+    }
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
 
 /* ================= splice tests ================= */
 
@@ -1731,6 +2019,25 @@ static void test_remove_foldnode_balance(void) {
     pt_seek(&c, b, 0);
     assert(pt_remove(&c, 3) == PT_OK);
     assert(pt_checktree_allow_empty(c.tree, 1));
+    pt_release(c.tree), pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+/* L1102-1103: ptD_rebalance foldnode path.
+   levels=2: inner of 2 leaves where leaf0 has 1 piece.
+   Removing that 1 piece → leaf cc=0 < 2, inner cc=2 > 1 → foldnode. */
+static void test_remove_foldnode(void) {
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Blob   b = treeV(
+            2, innerV(innerV(leafV(litV("a")),
+                             leafV(litV("b"), litV("c"), litV("d"), litV("e"))),
+                      innerV(leafV(litV("f")))));
+    pt_Cursor c;
+    pt_seek(&c, b, 0);
+    assert(pt_remove(&c, 1) == PT_OK);
+    assert(pt_checktree_allow_empty(c.tree, 1));
+    assert(pt_bytes(c.tree) == 5);
     pt_release(c.tree), pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
@@ -3107,16 +3414,14 @@ static void test_trav_deep(void) {
 
 /* ================= splice_brute: exhaustive enumeration ================= */
 
+/* levels=3 tree, 288 bytes: root cc=3 over inner cc {4,3,2} ("4-3-2"),
+ * each of the 9 inners holds 4 leaves of {lit,hole,lit,hole} 2B pieces */
 static void maketree(pt_State *S, pt_Cursor *C, size_t off) {
-    static const char litbuf
-            [] = "abcdefghijklmnopqrstuvwxyz0123456789"
-                 "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                 "abcdefghijklmnopqrstuvwxyz0123456789"
-                 "ABCDEFGHIJKLMNOPQRSTUVWXYZabcd";
-    pt_Node *leaves[32], *inners[8], *inner1, *inner2, *inner3, *root;
-    int      i, j, idx = 0;
+    static const int rshape[3] = {4, 3, 2};
+    pt_Node         *leaves[36], *inners[9], *root;
+    int              i, j, idx = 0, ii = 0;
 
-    for (i = 0; i < 32; i++) {
+    for (i = 0; i < 36; i++) {
         pt_Node *lf = (pt_Node *)ptP_alloc(S, &S->nodes);
         pt_Hole *h0 = (pt_Hole *)ptP_alloc(S, &S->holes);
         pt_Hole *h1 = (pt_Hole *)ptP_alloc(S, &S->holes);
@@ -3126,12 +3431,12 @@ static void maketree(pt_State *S, pt_Cursor *C, size_t off) {
         h0->data[0] = '#', h0->data[1] = '#';
         h1->data[0] = '#', h1->data[1] = '#';
         lf->child_count = 4;
-        lf->children[0] = (pt_Node *)(litbuf + idx);
+        lf->children[0] = (pt_Node *)(pt_srcbuf + idx);
         lf->bytes[0] = 2;
         lf->children[1] = (pt_Node *)h0;
         lf->bytes[1] = 2;
         lf->mask |= (1u << 1);
-        lf->children[2] = (pt_Node *)(litbuf + idx + 2);
+        lf->children[2] = (pt_Node *)(pt_srcbuf + idx + 2);
         lf->bytes[2] = 2;
         lf->children[3] = (pt_Node *)h1;
         lf->bytes[3] = 2;
@@ -3140,7 +3445,7 @@ static void maketree(pt_State *S, pt_Cursor *C, size_t off) {
         leaves[i] = lf;
     }
 
-    for (i = 0; i < 8; i++) {
+    for (i = 0; i < 9; i++) {
         pt_Node *n = (pt_Node *)ptP_alloc(S, &S->nodes);
         memset(n, 0, sizeof(pt_Node));
         n->child_count = 4;
@@ -3152,76 +3457,44 @@ static void maketree(pt_State *S, pt_Cursor *C, size_t off) {
         inners[i] = n;
     }
 
-    inner1 = (pt_Node *)ptP_alloc(S, &S->nodes);
-    memset(inner1, 0, sizeof(pt_Node));
-    inner1->child_count = 4;
-    for (j = 0; j < 4; j++) {
-        inner1->children[j] = inners[j];
-        inner1->bytes[j] = ptN_sumbytes(inners[j], 0, 4);
-        if (inners[j]->mask) inner1->mask |= (1u << j);
-    }
-
-    inner2 = (pt_Node *)ptP_alloc(S, &S->nodes);
-    memset(inner2, 0, sizeof(pt_Node));
-    inner2->child_count = 2;
-    for (j = 0; j < 2; j++) {
-        inner2->children[j] = inners[4 + j];
-        inner2->bytes[j] = ptN_sumbytes(inners[4 + j], 0, 4);
-        if (inners[4 + j]->mask) inner2->mask |= (1u << j);
-    }
-
-    inner3 = (pt_Node *)ptP_alloc(S, &S->nodes);
-    memset(inner3, 0, sizeof(pt_Node));
-    inner3->child_count = 2;
-    for (j = 0; j < 2; j++) {
-        inner3->children[j] = inners[6 + j];
-        inner3->bytes[j] = ptN_sumbytes(inners[6 + j], 0, 4);
-        if (inners[6 + j]->mask) inner3->mask |= (1u << j);
-    }
-
     root = (pt_Node *)ptP_alloc(S, &S->nodes);
     memset(root, 0, sizeof(pt_Node));
     root->child_count = 3;
-    root->children[0] = inner1;
-    root->bytes[0] = ptN_sumbytes(inner1, 0, 4);
-    if (inner1->mask) root->mask |= (1u << 0);
-    root->children[1] = inner2;
-    root->bytes[1] = ptN_sumbytes(inner2, 0, 2);
-    if (inner2->mask) root->mask |= (1u << 1);
-    root->children[2] = inner3;
-    root->bytes[2] = ptN_sumbytes(inner3, 0, 2);
-    if (inner3->mask) root->mask |= (1u << 2);
+    for (i = 0; i < 3; i++) {
+        pt_Node *n = (pt_Node *)ptP_alloc(S, &S->nodes);
+        memset(n, 0, sizeof(pt_Node));
+        n->child_count = (unsigned short)rshape[i];
+        for (j = 0; j < rshape[i]; j++) {
+            n->children[j] = inners[ii + j];
+            n->bytes[j] = ptN_sumbytes(inners[ii + j], 0, 4);
+            if (inners[ii + j]->mask) n->mask |= (1u << j);
+        }
+        ii += rshape[i];
+        root->children[i] = n;
+        root->bytes[i] = ptN_sumbytes(n, 0, rshape[i]);
+        if (n->mask) root->mask |= (1u << i);
+    }
 
     pt_seek(C, treeV(3, root), off);
     C->dirty = 1;
 }
 
 static void test_splice_brute(void) {
-    int const         nb = 256;
-    pt_State         *S = pt_open(&test_alloc, NULL);
-    int               r, i, pos, del, ins;
-    char              ref[256], expected[512], actual[512];
-    pt_Cursor         C;
-    size_t            epos, edel, expect_len, cursor_exp, nread;
-    static const char alphabet
-            [] = "abcdefghijklmnopqrstuvwxyz0123456789"
-                 "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                 "abcdefghijklmnopqrstuvwxyz0123456789"
-                 "ABCDEFGHIJKLMNOPQRSTUVWXYZabcd";
-    for (i = 0; i < 64; i++) {
-        ref[i * 4 + 0] = alphabet[i * 2 + 0];
-        ref[i * 4 + 1] = alphabet[i * 2 + 1];
-        ref[i * 4 + 2] = '#';
-        ref[i * 4 + 3] = '#';
-    }
+    int const nb = 288;
+    pt_State *S = pt_open(&test_alloc, NULL);
+    int       r, pos, del, ins;
+    char      ref[288], expected[576], actual[576];
+    pt_Cursor C;
+    size_t    epos, edel, expect_len, cursor_exp, nread;
+    makeref(ref);
 
     for (pos = 0; pos <= nb + 1; ++pos)
         for (del = 0; del <= nb + 1; ++del)
             for (ins = 0; ins <= 1; ++ins) {
                 maketree(S, &C, (size_t)pos);
-                epos = (size_t)pos < 256 ? (size_t)pos : 256;
-                edel = (size_t)del < 256 - epos ? (size_t)del : 256 - epos;
-                expect_len = 256 - edel + (ins ? 1u : 0u);
+                epos = (size_t)pos < 288 ? (size_t)pos : 288;
+                edel = (size_t)del < 288 - epos ? (size_t)del : 288 - epos;
+                expect_len = 288 - edel + (ins ? 1u : 0u);
                 cursor_exp = epos + (ins ? 1u : 0u);
 
                 if (ins)
@@ -3247,11 +3520,11 @@ static void test_splice_brute(void) {
                     memcpy(expected, ref, epos);
                     expected[epos] = '!';
                     memcpy(expected + epos + 1, ref + epos + edel,
-                           256 - epos - edel);
+                           288 - epos - edel);
                 } else {
                     memcpy(expected, ref, epos);
                     memcpy(expected + epos, ref + epos + edel,
-                           256 - epos - edel);
+                           288 - epos - edel);
                 }
 
                 pt_seek(&C, C.tree, 0);
@@ -3273,6 +3546,7 @@ static void test_splice_brute(void) {
 
 #define TESTS(X)                   \
     X(advance_brute)               \
+    X(append_merge_left)           \
     X(arena_dirty_break)           \
     X(arena_lazy)                  \
     X(arena_literal_cold)          \
@@ -3330,6 +3604,8 @@ static void test_splice_brute(void) {
     X(insert_split_root)           \
     X(insert_brute)                \
     X(lifecycle)                   \
+    X(literal_arena_empty)         \
+    X(literal_arena_short)         \
     X(merge_left)                  \
     X(merge_right)                 \
     X(next_basic)                  \
@@ -3351,10 +3627,16 @@ static void test_splice_brute(void) {
     X(remove_across_leaves)        \
     X(remove_all)                  \
     X(remove_brute)                \
+    X(remove_brute2)               \
+    X(remove_brute3)               \
     X(remove_cow)                  \
     X(remove_cross)                \
     X(remove_deep_shrink)          \
+    X(remove_findroom)             \
     X(remove_fold_balance)         \
+    X(remove_fold_balance2)        \
+    X(remove_fold_merge)           \
+    X(remove_foldnode)             \
     X(remove_foldnode_balance)     \
     X(remove_hole_boundary)        \
     X(remove_hole_eraseleaf)       \
@@ -3363,6 +3645,7 @@ static void test_splice_brute(void) {
     X(remove_hole_trim)            \
     X(remove_hole_whole)           \
     X(remove_merge_hole_full)      \
+    X(remove_merge_hole_partial)   \
     X(remove_merge_hole_split)     \
     X(remove_merge_literal)        \
     X(remove_oom)                  \
