@@ -243,14 +243,14 @@ LC_STATIC int lcP_reserve(lc_State *S, lc_Pool *p, size_t n) {
     void  *freed = p->freed, **t = &freed;
     size_t c;
     for (c = 0; c < n && *t; ++c) t = (void **)*t;
-    if (c >= n) return 1;
+    if (c >= n) return LC_OK;
     for (p->freed = NULL; c < n; ++c) {
         void *obj = lcP_alloc(S, p);
-        if (obj == NULL) return 0;
+        if (obj == NULL) return LC_ERRMEM;
         lcP_stat(p->live_obj -= 1);
         *t = obj, t = (void **)obj;
     }
-    return *t = NULL, (p->freed = freed), 1;
+    return *t = NULL, (p->freed = freed), LC_OK;
 }
 
 /* utils */
@@ -699,7 +699,7 @@ static int lcD_rmleaf(lc_Cursor *C, size_t del) {
 static int lcD_makechain(lc_Cursor *C, int from, int to, int nofail) {
     lc_Node *p, *nn, ***cp = C->paths + to;
     int      l, r = 0;
-    if (!nofail && !lcP_reserve(C->tree->S, &C->tree->S->nodes, to - from + 1))
+    if (!nofail && lcP_reserve(C->tree->S, &C->tree->S->nodes, to - from + 1))
         return LC_ERRMEM;
     if (assert(from < to), from < 0) {
         nn = (lc_Node *)lcP_ralloc(&C->tree->S->nodes);
@@ -810,7 +810,7 @@ static int lcD_checkstitch(lc_Cursor *C)
 static void lcD_stitch(lc_Cursor *C, lc_Node *rt) {
     int      d, i, l = lcK_levels(C);
     lc_Node *p = lcK_parent(C, l);
-    assert(lcD_checkstitch(C) && lcK_idx(C, p, l) >= lcN_cc(p) - 1);
+    assert(lcD_checkstitch(C) == LC_OK && lcK_idx(C, p, l) >= lcN_cc(p) - 1);
     d = lcN_cc(p) && lcN_cc(&rt[0]) ? lcD_mergeleaf(C, rt) : 0;
     lcD_stitchnode(C, rt), p = lcK_parent(C, l = lcK_levels(C));
     if (lcN_cc(p) && lcD_foldleaf(C))
@@ -978,7 +978,7 @@ static int lcB_makeroom(lc_Cursor *C) {
     lc_Leaf  *lf;
     for (; l >= 0 && lcN_cc(lcK_parent(C, l)) >= LC_FANOUT; --l)
         c += (l == 0) + 1;
-    lcP_reserve(S, &S->nodes, c);
+    if (lcP_reserve(S, &S->nodes, c) != LC_OK) return LC_ERRMEM;
     if (!(lf = lcL_new(S))) return LC_ERRMEM;
     for (l = lcK_levels(C); l >= 0; --l)
         if (lcN_cc(lcK_parent(C, l)) < LC_FANOUT) break;
@@ -1150,7 +1150,8 @@ LC_API int lc_append(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud) {
         C->off += C->loff, C->lnu = 0, C->loff = 0, water = lcK_levels(C);
         if ((r = lcD_findroom(C, rt, 0, lcK_levels(C))) < 0) break;
     }
-    if (r < 0 || !lcD_checkstitch(C)) return lcB_rollback(C, &sC, sl, water);
+    if (r < 0 || (r = lcD_checkstitch(C)))
+        return lcB_rollback(C, &sC, sl, water);
     if (lcN_cc(&rt[0]) > 0)
         rt[0].bytes[0] -= C->col, lcN_leaf(&rt[0], 0)->bytes[0] -= C->col;
     if (lcB_fixsource(&sC, slc, &rt[0], sl)) C->col = 0, C->off += sC.col;
