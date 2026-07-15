@@ -282,10 +282,10 @@ static int ptP_reserve(pt_State *S, pt_Pool *p, size_t n) {
     if (c >= n) return PT_OK;
     for (p->freed = NULL; c < n; ++c) {
         void *obj = ptP_alloc(S, p);
-        if (obj == NULL) return PT_ERRMEM;
+        if (obj == NULL) break;
         ptP_stat(p->live_obj -= 1), *t = obj, t = (void **)obj;
     }
-    return *t = NULL, (p->freed = freed), PT_OK;
+    return *t = NULL, (p->freed = freed), c < n ? PT_ERRMEM : PT_OK;
 }
 
 static pt_Block *ptA_alloc(pt_State *S, size_t sz) {

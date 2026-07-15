@@ -246,11 +246,10 @@ static int lcP_reserve(lc_State *S, lc_Pool *p, size_t n) {
     if (c >= n) return LC_OK;
     for (p->freed = NULL; c < n; ++c) {
         void *obj = lcP_alloc(S, p);
-        if (obj == NULL) return LC_ERRMEM;
-        lcP_stat(p->live_obj -= 1);
-        *t = obj, t = (void **)obj;
+        if (obj == NULL) break;
+        lcP_stat(p->live_obj -= 1), *t = obj, t = (void **)obj;
     }
-    return *t = NULL, (p->freed = freed), LC_OK;
+    return *t = NULL, (p->freed = freed), c < n ? LC_ERRMEM : LC_OK;
 }
 
 /* utils */
