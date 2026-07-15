@@ -57,19 +57,19 @@ This is a header-only library. Include `piecetab.h` in your project:
 - The library **does not** maintain a history tree. If you want undo/redo graphs, store `pt_Blob` values externally and manage relationships yourself.
 
 ### Navigation
-- `pt_peek(c, &len)` returns a pointer to the current readable fragment and its
-	length in bytes. The fragment is the contiguous range from the cursor position
-	to the end of the current line segment within the current piece (or the piece
-	end if there is no further line break in that piece). If there is no readable
-	fragment, it returns `NULL` and sets `len = 0`.
+- `pt_piece(c, &len)` returns a pointer to the current readable fragment starting
+	from `c->poff` within the piece, and its remaining length in bytes. Returns
+	`NULL` (and sets `len = 0` if `plen` is non-NULL) when the cursor is past
+	the end of the current piece or the tree is empty.
 
-- `pt_next(c)` advances the cursor to the next line fragment. It returns
-	`PT_OK` on success, `PT_ERRPARAM` for a null cursor, or `PT_ERREMPTY` when
-	there is no next fragment (end of tree).
+- `pt_next(c, &len)` advances to the next piece and returns its data.
+	Returns `NULL` and sets `len = 0` when there is no next piece (already at
+	the end of the tree). Typical full-traversal idiom:
+	`for (p = pt_piece(c, &n); n; p = pt_next(c, &n))`
 
-- `pt_prev(c)` moves the cursor to the previous line fragment. It returns
-	`PT_OK` on success, `PT_ERRPARAM` for a null cursor, or `PT_ERREMPTY` when
-	there is no previous fragment (start of tree).
+- `pt_prev(c, &len)` returns the content before the current piece and moves
+	the cursor backwards to land on that piece. Returns `NULL` and sets
+	`len = 0` when already at the beginning of the tree.
 
 - `pt_advance(c, delta)` moves the cursor by a byte offset.
 	- `delta == 0` is a no-op and returns `PT_OK`.

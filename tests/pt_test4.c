@@ -2753,32 +2753,33 @@ static void test_next_basic(void) {
     const char *p;
     size_t      n;
 
-    /* Forward from start */
+    /* Forward from start: piece then next */
     pt_seek(&c, b, 0);
-    p = pt_next(&c, &n);
+    p = pt_piece(&c, &n);
     assert(p != NULL && n == 2 && memcmp(p, "aa", 2) == 0);
-    assert(pt_offset(&c) == 2);
+    assert(pt_offset(&c) == 0);
 
     p = pt_next(&c, &n);
     assert(p != NULL && n == 2 && memcmp(p, "bb", 2) == 0);
-    assert(pt_offset(&c) == 4);
+    assert(pt_offset(&c) == 2);
 
     p = pt_next(&c, &n);
     assert(p != NULL && n == 2 && memcmp(p, "cc", 2) == 0);
-    assert(pt_offset(&c) == 6);
+    assert(pt_offset(&c) == 4);
 
     /* No more pieces */
     p = pt_next(&c, &n);
     assert(p == NULL && n == 0);
+    assert(pt_offset(&c) == 6);
 
     /* Forward from middle */
     pt_seek(&c, b, 2);
     p = pt_next(&c, &n);
-    assert(p != NULL && n == 2 && memcmp(p, "bb", 2) == 0);
+    assert(p != NULL && n == 2 && memcmp(p, "cc", 2) == 0);
     assert(pt_offset(&c) == 4);
 
     p = pt_next(&c, &n);
-    assert(p != NULL && n == 2 && memcmp(p, "cc", 2) == 0);
+    assert(p == NULL && n == 0);
     assert(pt_offset(&c) == 6);
 
     /* pt_next with NULL plen */
@@ -2834,10 +2835,14 @@ static void test_trav_single(void) {
     const char *p;
     size_t      n;
 
-    /* Forward: one piece then stop */
+    /* Forward: current piece via pt_piece, then next stops */
     pt_seek(&c, b, 0);
-    p = pt_next(&c, &n);
+    p = pt_piece(&c, &n);
     assert(p != NULL && n == 5 && memcmp(p, "hello", 5) == 0);
+
+    p = pt_next(&c, &n);
+    assert(p == NULL && n == 0);
+    assert(pt_offset(&c) == 5);
 
     p = pt_next(&c, &n);
     assert(p == NULL && n == 0);
@@ -2882,7 +2887,10 @@ static void test_next_levels1(void) {
     {
         char   fwd[16];
         size_t off = 0;
-        while ((p = pt_next(&c, &n)) != NULL) memcpy(fwd + off, p, n), off += n;
+        while ((p = pt_piece(&c, &n)) != NULL && n > 0) {
+            memcpy(fwd + off, p, n), off += n;
+            pt_next(&c, &n);
+        }
         assert(off == 10 && memcmp(fwd, "aabbccddee", 10) == 0);
     }
 
@@ -3064,7 +3072,8 @@ static void test_trav_deep(void) {
     size_t      n, off = 0, end = 16;
     char        fwd[16], rev[16];
     pt_seek(&c, b, 0);
-    while ((p = pt_next(&c, &n)) != NULL) memcpy(fwd + off, p, n), off += n;
+    for (p = pt_piece(&c, &n); n > 0; p = pt_next(&c, &n))
+        memcpy(fwd + off, p, n), off += n;
     assert(off == 16 && memcmp(fwd, "aabbccddeeffgghh", 16) == 0);
     pt_seek(&c, b, pt_bytes(b));
     while ((p = pt_prev(&c, &n)) != NULL) end -= n, memcpy(rev + end, p, n);
@@ -3178,7 +3187,6 @@ static void test_splice_brute(void) {
                  "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
                  "abcdefghijklmnopqrstuvwxyz0123456789"
                  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcd";
-
     for (i = 0; i < 64; i++) {
         ref[i * 4 + 0] = alphabet[i * 2 + 0];
         ref[i * 4 + 1] = alphabet[i * 2 + 1];
@@ -3189,7 +3197,6 @@ static void test_splice_brute(void) {
     for (pos = 0; pos <= nb + 1; ++pos)
         for (del = 0; del <= nb + 1; ++del)
             for (ins = 0; ins <= 1; ++ins) {
-
                 maketree(S, &C, (size_t)pos);
                 epos = (size_t)pos < 256 ? (size_t)pos : 256;
                 edel = (size_t)del < 256 - epos ? (size_t)del : 256 - epos;
