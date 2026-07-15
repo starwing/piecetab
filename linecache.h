@@ -239,7 +239,7 @@ static void *lcP_alloc(lc_State *S, lc_Pool *p) {
     return (p->freed = (void *)(obj + sz)), (void *)obj;
 }
 
-LC_STATIC int lcP_reserve(lc_State *S, lc_Pool *p, size_t n) {
+static int lcP_reserve(lc_State *S, lc_Pool *p, size_t n) {
     void  *freed = p->freed, **t = &freed;
     size_t c;
     for (c = 0; c < n && *t; ++c) t = (void **)*t;
@@ -613,7 +613,8 @@ static int lcD_foldleaf(lc_Cursor *C) {
             --*ps, C->lnu += cL, C->loff += lc, C->nu -= cL, C->off -= lc;
         return lcN_remove(C->tree->S, p, 0, i + 1, i + 2), 1;
     }
-    dl = lcD_balanceleaf(ls, cL, cR, &db), assert(dl && (dl < 0) != (*ls != o));
+    if (!(dl = lcD_balanceleaf(ls, cL, cR, &db))) return 0;
+    assert((dl < 0) != (*ls != o));
     p->bytes[i] -= db, p->bytes[i + 1] += db;
     p->breaks[i] -= dl, p->breaks[i + 1] += dl;
     if (*ls != o) C->lnu += dl, C->nu -= dl, C->off -= db;
@@ -795,7 +796,7 @@ static void lcD_stitchnode(lc_Cursor *C, lc_Node *rt) {
         for (fl = kl; fl < l; ++fl) lcD_foldnode(C, (fl == kl), fl);
         if (k) lcD_backwardnode(C, d, l);
         if (!(m < rtcc)) continue;
-        l = kl, d = k ? LC_FANOUT - lcK_idx(C, lcK_parent(C, l), l) : m;
+        p = lcK_parent(C, l = kl), d = k ? lcN_cc(p) - lcK_idx(C, p, l) : m;
         l += lcD_findroom(C, rt, 1, l), p = lcK_parent(C, l);
         lcN_copy(p, 0, r, m, lcN_setcc(p, rtcc - m));
         db += lcN_sumbytes(r, m, rtcc), dl += lcN_sumbreaks(r, m, rtcc);
@@ -861,13 +862,13 @@ static void lcD_addbytes(lc_Cursor *C, unsigned ins) {
 static void lcD_rmrange(lc_Cursor *L, lc_Cursor *R) {
     lc_Node *rt = L->tree->S->rt;
     int      l;
-    assert(L->tree->S == R->tree->S);
+    unsigned rm = (assert(L->tree->S == R->tree->S), L->col);
     for (l = 0; l < LC_MAX_LEVEL; ++l) lcN_setcc(&rt[l], 0);
     for (l = 0; l <= lcK_levels(L); ++l)
         if (L->paths[l] != R->paths[l]) break;
     lcD_trimright(L), lcD_trimleft(R);
     lcD_cutrange(L, R, rt, l), lcD_stitch(L, rt);
-    lcD_addbytes(L, R->col), L->col -= R->col;
+    L->col = 0, lcD_addbytes(L, rm);
 }
 
 LC_API int lc_remove(lc_Cursor *L, lc_Cursor *R) {

@@ -1312,6 +1312,94 @@ static void test_splice_brute(void) {
     lc_close(S);
 }
 
+/* brute (pos,len) splices over mixed-shape levels=2 trees
+ * (bot cc / leaf breaks 4/3/2 mixes stress fold/stitch/findroom paths) */
+static lc_Node *brute3_bot(lc_State *S, const int *shape, int *si) {
+    lc_Node *bot = (lc_Node *)lcP_alloc(S, &S->nodes);
+    int      ci, li, cc = shape[(*si)++ % 7];
+    for (ci = 0; ci < cc; ++ci) {
+        lc_Leaf *lf = lcL_new(S);
+        int      n = shape[(*si)++ % 7];
+        size_t   lb = 0;
+        for (li = 0; li < n; ++li)
+            lb += lf->bytes[li] = shape[(*si)++ % 7] > 2 ? 2u : 1u;
+        bot->children[ci] = (lc_Node *)lf;
+        bot->bytes[ci] = lb, bot->breaks[ci] = (size_t)n;
+    }
+    return lcN_setcc(bot, cc), bot;
+}
+
+static lc_Cache *brute3_cache(lc_State *S, const int *shape) {
+    lc_Node *root = (lc_Node *)lcP_alloc(S, &S->nodes);
+    int      a, b, si = 0;
+    for (a = 0; a < 4; ++a) {
+        lc_Node *n1 = (lc_Node *)lcP_alloc(S, &S->nodes);
+        for (b = 0; b < 4; ++b) {
+            lc_Node *bot = brute3_bot(S, shape, &si);
+            n1->children[b] = bot;
+            n1->bytes[b] = lcN_sumbytes(bot, 0, lcN_cc(bot));
+            n1->breaks[b] = lcN_sumbreaks(bot, 0, lcN_cc(bot));
+        }
+        lcN_setcc(n1, 4), root->children[a] = n1;
+        root->bytes[a] = lcN_sumbytes(n1, 0, 4);
+        root->breaks[a] = lcN_sumbreaks(n1, 0, 4);
+    }
+    return lcN_setcc(root, 4), cacheV(S, 2, root);
+}
+
+static void test_splice_brute3(void) {
+    static const int shapes[3][7] = {
+            {4, 3, 2, 4, 2, 3, 4},
+            {2, 2, 3, 2, 4, 2, 2},
+            {4, 4, 4, 4, 4, 4, 4}};
+    lc_State *S = lc_open(&test_alloc, NULL);
+    size_t    pos, len, total;
+    int       si;
+    for (si = 0; si < 3; ++si) {
+        lc_Cache *c0 = brute3_cache(S, shapes[si]);
+        total = lc_bytes(c0);
+        lc_delcache(S, c0);
+        for (pos = 0; pos < total; ++pos)
+            for (len = 1; len <= total - pos; ++len) {
+                lc_Cache *c = brute3_cache(S, shapes[si]);
+                lc_Cursor C;
+                size_t    hang;
+                lc_seek(&C, c, pos);
+                lc_splice(&C, len, 0);
+                hang = pos >= lc_bytes(c) ? (size_t)C.col : 0;
+                if (!lc_checktree_allow_empty(c, 1)
+                    || lc_bytes(c) != total - len - hang
+                    || !lc_checkcursor(&C, pos)) {
+                    lc_log("FAIL brute3 s=%d pos=%zu len=%zu bytes=%zu "
+                           "exp=%zu\n",
+                           si, pos, len, lc_bytes(c), total - len - hang);
+                    lc_dumptree(c, "after splice");
+                    lc_dumpcursor(&C, "after splice");
+                    abort();
+                }
+                lc_delcache(S, c);
+            }
+    }
+    lc_close(S);
+}
+
+/* cross-leaf splice with L->col (1) != R->col (0): del [1,4) of
+ * lines {3,1 | 2,2} kills line A's break and line B; A's leading
+ * byte must merge into line C → {1+2, 2} */
+static void test_splice_cross_col(void) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = cacheV(S, 0, botV(leafV(3, 1), leafV(2, 2)));
+    lc_Cursor C;
+    lc_seek(&C, c, 1);
+    lc_splice(&C, 3, 0);
+    assert(lc_checktree_allow_empty(c, 1));
+    assert(lc_bytes(c) == 5 && lc_breaks(c) == 2);
+    assert(lc_checkcursor(&C, 1));
+    checkleavesV(c, 1, 3, 1, 2);
+    lc_delcache(S, c);
+    lc_close(S);
+}
+
 static void test_splice_cov_rebalance(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(
@@ -2674,6 +2762,8 @@ static void test_locline_crossleaf(void) {
     X(splice_reset)               \
     X(splice_trailing)            \
     X(splice_brute)               \
+    X(splice_brute3)              \
+    X(splice_cross_col)           \
     X(splice_cov_rebalance)       \
     X(splice_cov_shiftnode_bal0)  \
     X(splice_cov_trimleaf)        \
