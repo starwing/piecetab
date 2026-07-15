@@ -114,7 +114,7 @@ grep '^LC_API' linecache.h
 | 类别     | 函数                                                            | 功用                                                                           |
 | -------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | 生命周期 | `lc_open`, `lc_close`, `lc_reset`                               | 状态管理                                                                       |
-| 树       | `lc_newtree`, `lc_deltree`                                      | 树生命周期                                                                     |
+| 树       | `lc_newcache`, `lc_delcache`                                      | 树生命周期                                                                     |
 | 批量     | `lc_scan`                                                       | 批量加载行断点到树尾（可叠加）                                                 |
 | 查询     | `lc_breaks`, `lc_bytes`                                         | 树级汇总                                                                       |
 | 定位     | `lc_seek`, `lc_seekline`                                        | 按偏移/行号定位游标                                                            |
@@ -137,7 +137,7 @@ grep '^static' linecache.h
 | `lcD_` | 删除/平衡 | `trimleft`, `trimright`, `balanceleaf`, `balancenode`, `foldleaf`, `foldnode`, `rebalance`, `rmleaf`, `rmrange`, `makechain`, `findroom`, `mergeleaf`, `backwardnode`, `stitch`, `stitchnode`, `checkstitch` |
 | `lcM_` | 度量      | `up` (自底向上传播 bytes/breaks 至根)                                                                                                                                                                        |
 | `lcN_` | 节点操作  | `sumbytes`, `sumbreaks`, `makespace`, `copy`, `move`, `remove`, `freechildren`                                                                                                                               |
-| `lcL_` | 叶操作    | `sumbytes` (宏 `lcL_new`, `lcL_idx`)                                                                                                                                                                         |
+| `lcL_` | 叶操作    | `sumbytes` (宏 `lcL_new`, `lcN_leaf`)                                                                                                                                                                          |
 | `lcP_` | 池        | `init`, `destroy`, `alloc`, `ralloc`, `free`, `reserve`                                                                                                                                                      |
 
 ## 七、lc_scan 流程概要
@@ -210,3 +210,120 @@ grep '^    X(' tests/lc_test4.c
 - 内部函数前缀 `lcX_` (如 `lcK_findleaf`)，X 为单字母分类码。
 - **禁止删测试**。先修测试后改代码。
 - 修改后必过 `clang-format`。
+
+## 十三、变量命名规范
+
+> **铁律**：新增函数**必须**从下表取变量名，不得自造。
+> 如有新概念需新名，先更新此表后写代码。
+
+### 13.1 层级变量（尾缀 `l` = level）
+
+| 变量 | 含义 | 上下文 |
+|------|------|--------|
+| `l`  | 当前层级（通用循环变量） | 函数参数、循环计数器 |
+| `sl` | saved levels（快照树深） | `sC` 保存时的 `lcK_levels(C)` |
+| `fl` | found level（findroom 寻得层） | `lcD_findroom` |
+| `kl` | 计算层号（`levels - k`） | `lcD_stitchnode`, `lcD_cutrange` |
+| `rl` | remaining levels（距叶层数） | `lc_checknode` |
+
+### 13.2 计数与度量
+
+| 变量   | 含义 | |
+|--------|------|---|
+| `cc`   | child_count of current node | `lcN_cc(p)` |
+| `lc`   | line count（break count of leaf/child） | `p->breaks[i]` |
+| `rtlc` | rt[0].breaks[0]（右半叶行数） | rollback leaf merge |
+| `rtcc` | rt[k].child_count | rollback node loop |
+| `n`    | 通用计数 | loops, memcpy |
+| `db`   | delta bytes（度量差，向上传播） | `lcM_up` 累积量 |
+| `dl`   | delta lines（行数差） | `lcM_up` 累积量 |
+| `cb`   | current bytes（本轮追加） | `lcB_append` 内循环 |
+| `cl`   | current lines（本轮追加行数） | `lcB_append` 内循环 |
+| `d`    | delta / distance（lcK_* 导航剩余距离） | `lcK_forwardoff` 等 |
+
+### 13.3 游标位置
+
+| 变量 | 含义 |
+|------|------|
+| `pos` | 绝对字节偏移（scanner 用） |
+| `off` | 叶起始字节偏移（全局累积） |
+| `loff`| 叶内字节偏移 |
+| `col` | 行内列偏移 |
+| `nu`  | 叶起始行号（全局累积） |
+| `lnu` | 叶内行索引 |
+
+### 13.4 节点/叶指针
+
+| 变量 | 含义 | 何处赋值 |
+|------|------|----------|
+| `p`  | parent（当前父节点） | `lcK_parent(C, l)` |
+| `d`  | destination（lcN_* 操作目标节点） | `lcN_copy(d, ...)` |
+| `r`  | rt[k]（右半临时节点） | `&rt[k]` |
+| `n`  | 通用 node / new node | `lcN_new(S)` |
+| `lf` | leaf pointer | `lcN_leaf(p, i)` |
+| `lr` | right leaf（rt[0] 右半叶） | `rt[0].children[0]` |
+| `nl` | new leaf | `lcL_new(S)` |
+| `nn` | new node | `lcP_ralloc(...)` |
+
+### 13.5 循环索引
+
+| 变量 | 含义 | 铁律 |
+|------|------|------|
+| `k`  | 洋葱层（0=叶, sl=根） | **所有 `k` 必须满足 `k = levels - l`** |
+| `i`  | parent 中子节点下标（通用） | 几乎所有函数 |
+| `j`  | 辅助下标 | 极少使用 |
+
+### 13.6 状态快照与参数
+
+| 变量 | 含义 |
+|------|------|
+| `sC`  | saved cursor（快照） |
+| `sbc` | saved break count（快照时 lnu） |
+| `S`   | lc_State |
+| `c`   | lc_Cache |
+| `root`| `&C->tree->root` |
+| `rt`  | `C->tree->S->rt`（临时节点数组） |
+| `w`   | water mark（findroom 调用过的最高层级） |
+| `e`   | extra bytes（行末追加字节） |
+| `rm`  | remainder（裂点残字节, = sC.col） |
+
+### 13.7 左右区分
+
+> 变量名末位 `L`/`R`（大写）表示左/右。**多字母变量必须用大写后缀**，
+> 以免和单字母 `l`（lines）或 `l`（levels）冲突。
+
+| 变量 | 含义 | 上下文 |
+|------|------|--------|
+| `cL`/`cR` | count-Left / count-Right | `lcD_foldleaf`, `lcD_foldnode`, `lcD_balanceleaf` |
+| `bL`/`bR` | bytes-Left / bytes-Right | `lcD_balanceleaf` |
+| `offL`/`offR` | offset-Left / offset-Right | cursor 左右偏移量 |
+
+### 13.8 单字母多义（领域不同、无需改）
+
+| 字母 | 领域 A | 领域 B |
+|------|--------|--------|
+| `d`  | destination（`lcN_*`） | distance / delta（`lcK_*`, `lcD_stitchnode`） |
+| `l`  | levels（`lcD_rebalance` 等） | left（`lcD_balanceleaf` 参数）— 单字母不冲突 |
+| `r`  | rt[k]（rollback/stitch） | right（balanceleaf）— 同上 |
+
+### 13.9 函数前缀
+
+| 前缀 | 全称 | 职责 |
+|------|------|------|
+| `lcK_` | Kurser | 游标导航 |
+| `lcB_` | Break | 行断、追加、裂叶、回滚 |
+| `lcD_` | Delete | 删除、折叠、平衡、缝合 |
+| `lcM_` | Metric | 度量向上传播 |
+| `lcN_` | Node | 节点运作（copy/move/purge/sum/makespace） |
+| `lcL_` | Leaf | 叶操作（sumbytes, new） |
+| `lcP_` | Pool | 池分配器 |
+
+### 13.10 快速检索
+
+```bash
+# 查某变量已用语义
+rg '\b<name>\b' linecache.h | head
+
+# 查某前缀函数清单
+grep '^static.*lcX_' linecache.h
+```

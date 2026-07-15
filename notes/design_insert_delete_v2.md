@@ -48,7 +48,7 @@
 | `lcD_rebalance`   | 修复   | 自 `l` 层向上逐层 foldnode，最后缩根           |
 | `lcD_stitchnode`  | 缝合   | 洋葱序将 `rt[]` 搬回树，边缝合边修复           |
 | `lcD_stitch`      | 缝合   | mergeleaf + stitchnode + foldleaf + 游标修正   |
-| `lcB_fixremain`   | 补写   | 将裂点残字节写入正确行                         |
+| `lcB_fixsource`   | 补写   | 将裂点残字节写入正确行                         |
 | `lcB_rollback`    | 回滚   | OOM 时恢复树至裂叶前状态                       |
 | `lc_append`       | 入口   | 裂叶→append+findroom→stitch→fixremain          |
 | `lc_splice`       | 入口   | 独叶删走 spliceleaf，跨叶走 splicerange        |
@@ -112,18 +112,18 @@ scanner 输出直填叶：先补完当前末叶，再分配新叶填至满或 sc
 ### 行为
 
 - 记 `pos = lc_offset(C)`（当前绝对字节偏移）、`p = parent(levels)`、`i = idx(C, p, levels)`
-- 设 `li = LC_LEAF_FANOUT`（保首轮进入内循环）、`db = dl = 0`
-- **外循环**（`; i < LC_FANOUT && li == LC_LEAF_FANOUT; ++i`）：
+- 设 `bc = LC_LEAF_FANOUT`（保首轮进入内循环）、`db = dl = 0`
+- **外循环**（`; i < LC_FANOUT && bc == LC_LEAF_FANOUT; ++i`）：
   - `lf = (lc_Leaf *)p->children[i]`
-  - `li = p->breaks[i]`（现存行数）
-  - 若 `i >= p->child_count`（需新叶）：`lcL_new` 分配，`li = p->bytes[i] = p->breaks[i] = 0`，`p->children[i] = (lc_Node *)lf`
-  - **内循环**（`cb = cl = 0; li < LC_LEAF_FANOUT && (br = sc(ud, pos)) != 0; ++li`）：`lf->bytes[li] = br`，`pos += br`，`cb += br`，`cl += 1`
+  - `bc = p->breaks[i]`（现存行数）
+  - 若 `i >= p->child_count`（需新叶）：`lcL_new` 分配，`bc = p->bytes[i] = p->breaks[i] = 0`，`p->children[i] = (lc_Node *)lf`
+  - **内循环**（`cb = cl = 0; bc < LC_LEAF_FANOUT && (br = sc(ud, pos)) != 0; ++bc`）：`lf->bytes[bc] = br`，`pos += br`，`cb += br`，`cl += 1`
   - `db += cb`，`dl += cl`，`p->bytes[i] += cb`，`p->breaks[i] += cl`
-  - 若 `i >= p->child_count && li == 0`（分配新叶但未填入任何行）：`i -= 1`，`lcP_free(leaves, lf)` 回收枯叶
+  - 若 `i >= p->child_count && bc == 0`（分配新叶但未填入任何行）：`i -= 1`，`lcP_free(leaves, lf)` 回收枯叶
   - `C->nu += cl`，`C->off += C->loff + cb`，`C->loff = 0`，`C->lnu = 0`
 - `lcM_up(C, levels - 1, (lc_Diff)db, (lc_Diff)dl)`：批量更新祖先度量
 - `C->paths[levels] = &p->children[i]`：指向下一待用空槽
-- 返回 `(p->child_count = i) == LC_FANOUT && li == LC_LEAF_FANOUT`
+- 返回 `(p->child_count = i) == LC_FANOUT && bc == LC_LEAF_FANOUT`
 
 ### 后置条件
 
@@ -134,9 +134,9 @@ scanner 输出直填叶：先补完当前末叶，再分配新叶填至满或 sc
 
 ### 不变式
 
-- **外循环仅在前轮叶满时继续**：`li == LC_LEAF_FANOUT` 保证这轮叶不能再填，需要下一叶
-- **首轮 `li = LC_LEAF_FANOUT` 必入**：若 C 不在末叶（如 cutleaf 后 `i < child_count`），末叶有未满空间，首轮即填
-- **空叶回收**：`i >= p->child_count && li == 0` 表示本轮新分配的叶未使用，回退 i 并释放。防止空叶留于父节点中
+- **外循环仅在前轮叶满时继续**：`bc == LC_LEAF_FANOUT` 保证这轮叶不能再填，需要下一叶
+- **首轮 `bc = LC_LEAF_FANOUT` 必入**：若 C 不在末叶（如 cutleaf 后 `i < child_count`），末叶有未满空间，首轮即填
+- **空叶回收**：`i >= p->child_count && bc == 0` 表示本轮新分配的叶未使用，回退 i 并释放。防止空叶留于父节点中
 - **度量批量更新**：`db`/`dl` 在外循环内逐个叶累加，外循环后一次性 `lcM_up` 更新祖先。避免每行调用 `lcM_up` 的 O(h) 开销
 - **paths 指向空位而非有效叶**：调用方（lc_scan 或 lc_append）自行决定是否需要回退
 
@@ -501,9 +501,9 @@ stitch 内部其他子调用均不分配节点：`mergeleaf` 仅释放叶子，`
 - C 位于正确叶中，`C->lnu` 准确，`C->loff` 已重算
 - 树完全平衡（stitchnode + foldleaf + rebalance 已覆盖所有层）
 
-## 14. lcB_fixremain — 补裂点残字节
+## 14. lcB_fixsource — 补裂点残字节
 
-`static int lcB_fixremain(lc_Cursor *sC, int l, unsigned rm)`
+`static int lcB_fixsource(lc_Cursor *sC, int l, unsigned rm)`
 
 S3 结束后调用，通过 sC（cutleaf 后快照）定位裂点叶，补写 `rm`（裂点行前半残字节 `C->col`）。返回 1 表示 rm 已补写入树（需调用方修 `C->loff` 或 `C->off`），返回 0 表示裂点叶已被 fold 合并（rm 已随数据自然归入）。
 
@@ -583,9 +583,9 @@ OOM 时恢复树至 cutleaf 后状态。降根至裂叶时高度（清除 append
 **S4 — 缝合**：`lcD_stitch(C, rt)`。失败 → rollback。
 
 **S5 — 补 e/rm**：
-- `lcB_fixremain(&sC, sl, C->col)`：补裂点残字节 `rm`。若返 1：sC 与 C 同叶 → `C->loff += C->col`；否则 → `C->off += C->col`。`C->col = 0`
+- `lcB_fixsource(&sC, sl, C->col)`：补裂点残字节 `rm`。若返 1：sC 与 C 同叶 → `C->loff += C->col`；否则 → `C->off += C->col`。`C->col = 0`
 - `p = parent(levels)`，`i = idx(C, p, levels)`
-- 若 `C->lnu < p->breaks[i]`（游标在有效行内）：`lcK_leaf(C)->bytes[C->lnu] += e`，`lcM_up(C, levels, e, 0)`
+- 若 `C->lnu < p->breaks[i]`（游标在有效行内）：`lcN_leaf(p, i)->bytes[C->lnu] += e`，`lcM_up(C, levels, e, 0)`
 - `C->col += e`，返回 `LC_OK`
 
 ### 不变式

@@ -15,16 +15,16 @@ static void test_lifecycle(void) {
     lc_State *s = lc_open(&test_alloc, NULL);
     lc_Cache *t1, *t2;
     assert(s);
-    t1 = lc_newtree(s);
+    t1 = lc_newcache(s);
     assert(t1 && lc_breaks(t1) == 0 && lc_bytes(t1) == 0);
-    t2 = lc_newtree(s);
+    t2 = lc_newcache(s);
     assert(t2 && t1 != t2);
-    lc_deltree(s, t1);
+    lc_delcache(s, t1);
     lc_reset(s);
-    t1 = lc_newtree(s);
+    t1 = lc_newcache(s);
     assert(t1 && lc_breaks(t1) == 0);
-    lc_deltree(s, t1);
-    lc_deltree(s, t2);
+    lc_delcache(s, t1);
+    lc_delcache(s, t2);
     lc_close(s);
 
     lc_reset(NULL);
@@ -35,25 +35,25 @@ static void test_lifecycle(void) {
         int z = 0;
         assert(lc_open(&oom_alloc, &z) == NULL);
     }
-    /* lc_newtree OOM */
+    /* lc_newcache OOM */
     {
         int       one = 1;
         lc_State *s2 = lc_open(&oom_alloc, &one);
         assert(s2 != NULL);
-        assert(lc_newtree(s2) == NULL);
+        assert(lc_newcache(s2) == NULL);
         lc_close(s2);
     }
 }
 
 static void test_scan_params(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     unsigned  brs[] = {0}, *pbrs = brs;
 
     assert(lc_scan(NULL, lc_scanner, &pbrs) == LC_ERRPARAM);
     assert(lc_scan(c, NULL, &pbrs) == LC_ERRPARAM);
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -63,28 +63,28 @@ static void test_scan_basic(void) {
     unsigned  empty[] = {0}, full[] = {5, 10, 15, 20, 0}, *pbrs;
 
     /* case 1: empty scanner on empty tree */
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     pbrs = empty;
     assert(lc_scan(c, lc_scanner, &pbrs) == LC_OK);
     assert(lc_breaks(c) == 0 && lc_bytes(c) == 0);
     assert(lc_checktree(c));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
 
     /* case 2: exactly one full leaf (4 breaks) */
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     pbrs = full;
     assert(lc_scan(c, lc_scanner, &pbrs) == LC_OK);
     assert(lc_breaks(c) == 4 && lc_bytes(c) == 50);
     assert(c->levels == 0 && c->root.child_count == 1);
     assert(lc_checktree(c));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
 
     lc_close(S);
 }
 
 static void test_scan_seek(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     int       r;
 
@@ -118,13 +118,13 @@ static void test_scan_seek(void) {
     assert(lc_breaks(c) == 5 && lc_bytes(c) == 55);
     assert(lc_checktree(c));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_scan_bulk(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     unsigned  brs[] = {120, 1, 0}, *pbrs = brs;
     int       r;
@@ -140,13 +140,13 @@ static void test_scan_bulk(void) {
     lc_seek(&C, c, 120);
     assert(lc_offset(&C) == 120 && lc_line(&C) == 120);
     assert(lc_checkcursor(&C, 120));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_scan_append(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     unsigned  brs_a[] = {4, 10, 0}, *pa = brs_a;
     unsigned  brs_b[] = {5, 20, 0}, *pb = brs_b;
     int       r;
@@ -156,7 +156,7 @@ static void test_scan_append(void) {
     r = lc_scan(c, lc_rscanner, &pb);
     assert(r == LC_OK && lc_breaks(c) == 9 && lc_bytes(c) == 140);
     assert(lc_checktree(c));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -168,10 +168,10 @@ static void test_scan_oom_items(void) {
 
     S = lc_open(&oom_alloc, &oom);
     if (!S) return;
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     r = lc_scan(c, lc_scanner, &pbrs);
     assert(r == LC_ERRMEM);
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -182,10 +182,10 @@ static void test_scan_oom_flush(void) {
     int       r, oom = 3;
     S = lc_open(&oom_alloc, &oom);
     if (!S) return;
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     r = lc_scan(c, lc_rscanner, &pbrs);
     assert(r == LC_ERRMEM);
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -196,29 +196,29 @@ static void test_scan_oom_build(void) {
     int       r, oom = 4;
     S = lc_open(&oom_alloc, &oom);
     if (!S) return;
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     r = lc_scan(c, lc_rscanner, &pbrs);
     assert(r == LC_ERRMEM);
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 /* scan beyond full tree: trigger makechain from<0 (root deepen) */
 static void test_scan_deepen_root(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
 
     lc_rscanV(c, 260, 1);
     assert(lc_breaks(c) == 260 && lc_bytes(c) == 260);
     assert(lc_checktree(c));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_scan_edge_makechain_empty(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     unsigned  lines[] = {16, 10, 0}, *p = lines;
 
     assert(lc_scan(c, lc_rscanner, &p) == LC_OK);
@@ -226,13 +226,13 @@ static void test_scan_edge_makechain_empty(void) {
     assert(lc_bytes(c) == 160);
     assert(lc_checktree(c));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_seek_params(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C, C2;
     memset(&C, 0, sizeof(C));
 
@@ -244,13 +244,13 @@ static void test_seek_params(void) {
     assert(lc_checkcursor(&C2, 0));
     assert(lc_seekline(&C2, c, 1) == LC_ERRPARAM);
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_seek_pastleaf(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     int       r;
 
@@ -264,13 +264,13 @@ static void test_seek_pastleaf(void) {
     assert(lc_checkcursor(&C, 45));
     ;
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_seek_line_leaf(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     int       r;
 
@@ -292,13 +292,13 @@ static void test_seek_line_leaf(void) {
     assert(lc_checkcursor(&C, 40));
     ;
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_seek_line_pastleaf(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     int       r;
 
@@ -311,13 +311,13 @@ static void test_seek_line_pastleaf(void) {
     assert(lc_checkcursor(&C, lc_offset(&C)));
     ;
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_seek_edge(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
 
     /* seek past end: locends, col = n - bytes */
@@ -327,24 +327,24 @@ static void test_seek_edge(void) {
     assert(C.col == 60);
     assert(lc_checkcursor(&C, 100));
     ;
-    lc_deltree(S, c);
+    lc_delcache(S, c);
 
     /* seekline on empty tree (no breaks) */
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     assert(lc_seek(&C, c, 0) == LC_OK);
     assert(lc_checkcursor(&C, 0));
     ;
     assert(lc_seekline(&C, c, 0) == LC_OK);
     assert(lc_checkcursor(&C, 0));
     ;
-    lc_deltree(S, c);
+    lc_delcache(S, c);
 
     lc_close(S);
 }
 
 static void test_advance_params(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
 
     assert(lc_advance(NULL, 1) == LC_ERRPARAM);
     {
@@ -355,13 +355,13 @@ static void test_advance_params(void) {
 
     assert(lc_linelen(NULL) == 0);
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_advance_single(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     int       r;
 
@@ -395,13 +395,13 @@ static void test_advance_single(void) {
     assert(r == LC_OK && lc_offset(&C) == 0);
     assert(lc_checkcursor(&C, 0));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_advance_cross(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
     int       r;
 
@@ -443,7 +443,7 @@ static void test_advance_cross(void) {
     assert(r == LC_OK && lc_line(&cur) == 10 && lc_offset(&cur) == 100);
     assert(lc_checkcursor(&cur, 100));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -455,7 +455,7 @@ static void test_advance_brute(void) {
     int const n = 128, nb = n * 2;
 
     S = lc_open(&test_alloc, NULL), assert(S);
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     lc_rscanV(c, n, 2);
     assert(lc_checktree(c));
 
@@ -471,13 +471,13 @@ static void test_advance_brute(void) {
                 abort();
             }
         }
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_advance_cov_skip_siblings(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
     int       r;
 
@@ -508,13 +508,13 @@ static void test_advance_cov_skip_siblings(void) {
     assert(r == LC_OK && lc_line(&cur) == 1 && lc_offset(&cur) == 10);
     assert(lc_checkcursor(&cur, 10));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_advline_params(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
 
     assert(lc_advline(NULL, 1) == LC_ERRPARAM);
     {
@@ -528,13 +528,13 @@ static void test_advline_params(void) {
         assert(lc_advline(&C, 0) == LC_OK);
     }
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_advline_cross(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
     int       r;
 
@@ -560,13 +560,13 @@ static void test_advline_cross(void) {
     assert(r == LC_OK && lc_line(&cur) == 8 && lc_offset(&cur) == 80);
     assert(lc_checkcursor(&cur, 80));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_advline_zero(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
     int       r;
 
@@ -579,7 +579,7 @@ static void test_advline_zero(void) {
     assert(lc_col(&cur) == 5 && lc_line(&cur) == 2);
     r = lc_advline(&cur, 0);
     assert(r == LC_OK && lc_line(&cur) == 2 && lc_col(&cur) == 0);
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -591,7 +591,7 @@ static void test_advline_brute(void) {
     int const n = 128, nb = n * 2;
 
     S = lc_open(&test_alloc, NULL), assert(S);
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     lc_rscanV(c, n, 2);
     assert(lc_checktree(c));
 
@@ -608,13 +608,13 @@ static void test_advline_brute(void) {
                 abort();
             }
         }
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_markbreak_params(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
 
     assert(lc_markbreak(NULL, 1) == LC_ERRPARAM);
@@ -623,13 +623,13 @@ static void test_markbreak_params(void) {
     lc_seek(&C, c, 0);
     assert(lc_markbreak(&C, 0) == LC_ERRPARAM);
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_markbreak_basic(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
     int       r;
 
@@ -658,7 +658,7 @@ static void test_markbreak_basic(void) {
     r = lc_markbreak(NULL, 1);
     assert(r == LC_ERRPARAM);
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -674,7 +674,7 @@ static void test_markbreak_brute(void) {
 
     for (pos = 0; pos <= nb + 1; ++pos)
         for (ins = 1; ins <= n; ++ins) {
-            c = lc_newtree(S);
+            c = lc_newcache(S);
             lc_rscanV(c, 128, 2); /* 128*2=256 bytes, levels≥2 */
             lc_seek(&C, c, pos);
             r = lc_markbreak(&C, ins);
@@ -691,7 +691,7 @@ static void test_markbreak_brute(void) {
                 lc_dumpcursor(&C, "insert brute fail");
                 abort();
             }
-            lc_deltree(S, c);
+            lc_delcache(S, c);
             assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
         }
     lc_close(S);
@@ -699,7 +699,7 @@ static void test_markbreak_brute(void) {
 
 static void test_markbreak_empty(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
     int       r;
 
@@ -712,7 +712,7 @@ static void test_markbreak_empty(void) {
     assert(lc_checkcursor(&cur, 10));
     assert(lc_linelen(&cur) == 0); /* at break boundary, gap=0 */
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -723,7 +723,7 @@ static void test_markbreak_crossline(void) {
     int       r;
 
     /* case 1: large gap split at br=10, line1 [1..99) */
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     lc_scanV(c, 1, 99, 100, 100);
     assert(lc_breaks(c) == 4);
     assert(lc_checktree(c));
@@ -736,10 +736,10 @@ static void test_markbreak_crossline(void) {
     assert(lc_breaks(c) == 5 && lc_bytes(c) == 300);
     assert(lc_offset(&C) == 11 && lc_line(&C) == 2 && lc_linelen(&C) == 89);
     assert(lc_checkcursor(&C, 11));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
 
     /* case 2: gap split at br=5, line1 offset 10, len=15 */
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     lc_scanV(c, 10, 15, 15);
     assert(lc_breaks(c) == 3 && lc_bytes(c) == 40);
     lc_seekline(&C, c, 1);
@@ -750,14 +750,14 @@ static void test_markbreak_crossline(void) {
     assert(lc_checktree(c));
     assert(lc_bytes(c) == 40 && lc_breaks(c) == 4);
     assert(lc_checkcursor(&C, 15));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
 
     lc_close(S);
 }
 
 static void test_markbreak_trailing(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
     int       r;
 
@@ -778,13 +778,13 @@ static void test_markbreak_trailing(void) {
     assert(lc_checkcursor(&cur, 65));
     assert(lc_linelen(&cur) == 0);
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_markbreak_noop(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
     int       r;
     lc_scanV(c, 10, 15, 15);
@@ -795,13 +795,13 @@ static void test_markbreak_noop(void) {
     r = lc_markbreak(&cur, 10);
     assert(r == LC_OK && lc_breaks(c) == 3 && lc_bytes(c) == 40);
     assert(lc_checkcursor(&cur, 15));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_markbreak_brzero(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
 
     lc_scanV(c, 10, 15, 15);
@@ -811,13 +811,13 @@ static void test_markbreak_brzero(void) {
     assert(lc_breaks(c) == 3);
     assert(lc_checkcursor(&cur, 5));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_markbreak_crossleaf(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
     int       r;
 
@@ -833,13 +833,13 @@ static void test_markbreak_crossleaf(void) {
     assert(lc_bytes(c) == 100 && lc_breaks(c) == 1);
     assert(lc_checkcursor(&cur, 100));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_markbreak_split(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
     int       r;
 
@@ -855,13 +855,13 @@ static void test_markbreak_split(void) {
     assert(r == LC_OK && lc_breaks(c) == 6);
     assert(lc_checkcursor(&cur, 5));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_markbreak_node_split(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
     int       r;
 
@@ -876,13 +876,13 @@ static void test_markbreak_node_split(void) {
     assert(r == LC_OK);
     assert(lc_checkcursor(&cur, 5));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_markbreak_root_split(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
     int       r;
 
@@ -896,13 +896,13 @@ static void test_markbreak_root_split(void) {
     assert(r == LC_OK && lc_breaks(c) == 71);
     assert(lc_checkcursor(&cur, 5));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_markbreak_root_add(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
     int       r;
     lc_rscanV(c, 21, 10);
@@ -912,13 +912,13 @@ static void test_markbreak_root_add(void) {
     r = lc_markbreak(&cur, 3);
     assert(r == LC_OK);
     assert(lc_checkcursor(&cur, 5));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_markbreak_cascade(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
     int       k, r;
 
@@ -933,13 +933,13 @@ static void test_markbreak_cascade(void) {
         if (k == 0) assert(lc_checkcursor(&cur, 4));
     }
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_markbreak_cov_split_right(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
     int       r;
 
@@ -953,7 +953,7 @@ static void test_markbreak_cov_split_right(void) {
     assert(r == LC_OK && lc_breaks(c) == 5);
     assert(lc_checkcursor(&cur, 28));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -978,14 +978,14 @@ static void test_markbreak_cov_child_right(void) {
     assert(r == LC_OK);
     assert(lc_checkcursor(&C, 169));
     assert(lc_checktree_allow_empty(c, 1));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     assert(S->nodes.live_obj == 0 && S->leaves.live_obj == 0);
     lc_close(S);
 }
 
 static void test_markbreak_fullleaf_pastend(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     int       r;
 
@@ -999,13 +999,13 @@ static void test_markbreak_fullleaf_pastend(void) {
     assert(lc_breaks(c) == 5);
     assert(lc_bytes(c) == 43);
     assert(lc_checktree(c));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_markbreak_fullleaf_brgt(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     int       r;
 
@@ -1017,13 +1017,13 @@ static void test_markbreak_fullleaf_brgt(void) {
     assert(r == LC_OK);
     assert(lc_breaks(c) == 8);
     lc_asserttree(c, 0, botV(leafV(10, 10, 13, 7), leafV(10, 10, 10, 10)));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_clearbreaks_basic(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     int       r;
 
@@ -1061,13 +1061,13 @@ static void test_clearbreaks_basic(void) {
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 45));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_clearbreaks_cov_slot(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
     int       r;
     lc_scanV(c, 10, 15, 15);
@@ -1078,13 +1078,13 @@ static void test_clearbreaks_cov_slot(void) {
     r = lc_clearbreaks(&cur, 16);
     assert(r == LC_OK && lc_breaks(c) == 2);
     assert(lc_checkcursor(&cur, 27));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_remove_params(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C, R, X;
     memset(&C, 0, sizeof(C));
     memset(&X, 0, sizeof(X));
@@ -1109,7 +1109,7 @@ static void test_remove_params(void) {
     lc_seek(&R, c, lc_bytes(c) + 8);
     assert(lc_remove(&C, &R) == LC_OK);
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -1119,7 +1119,7 @@ static void test_remove_basic(void) {
     lc_Cursor C, R;
 
     /* remove all */
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     lc_rscanV(c, 100, 10);
     lc_seek(&C, c, 0);
     lc_seek(&R, c, 1000);
@@ -1127,10 +1127,10 @@ static void test_remove_basic(void) {
     assert(lc_breaks(c) == 0 && lc_bytes(c) == 0);
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 0));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
 
     /* remove range — keep first 11 + last 9 bytes */
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     lc_rscanV(c, 100, 10);
     lc_seek(&C, c, 11);
     lc_seek(&R, c, 991);
@@ -1138,34 +1138,34 @@ static void test_remove_basic(void) {
     assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 11));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
 
     /* remove within single leaf */
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     lc_scanV(c, 10, 15, 15, 20);
     lc_seek(&C, c, 11);
     lc_seek(&R, c, 26);
     lc_remove(&C, &R);
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 11));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
 
     /* remove across leaves */
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     lc_scanV(c, 5, 5, 5, 5, 5, 5, 5, 5);
     lc_seek(&C, c, 5);
     lc_seek(&R, c, 21);
     lc_remove(&C, &R);
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 5));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
 
     lc_close(S);
 }
 
 static void test_splice_params(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     memset(&C, 0, sizeof(C));
 
@@ -1174,13 +1174,13 @@ static void test_splice_params(void) {
     lc_seek(&C, c, 0);
     lc_splice(&C, 5, 3);
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_splice_basic(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
 
     lc_rscanV(c, 100, 10);
@@ -1224,13 +1224,13 @@ static void test_splice_basic(void) {
     lc_splice(NULL, 1, 1);
     assert(lc_checktree(c));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_splice_trailing(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     lc_scanV(c, 10, 15, 15);
     lc_scan(c, lc_scanner, NULL);
@@ -1249,25 +1249,25 @@ static void test_splice_trailing(void) {
     assert(lc_checkcursor(&C, 45));
     assert(lc_line(&C) == 3);
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
 
     /* past-end: delete in trailing area should not move col */
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     lc_scanV(c, 10, 15, 15);
     lc_seek(&C, c, 40);
     lc_splice(&C, 5, 0); /* delete 5 past end */
     assert(lc_offset(&C) == 40);
     assert(lc_checkcursor(&C, 40));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
 
     /* past-end: del+ins, only ins affects col */
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     lc_scanV(c, 10, 15, 15);
     lc_seek(&C, c, 40);
     lc_splice(&C, 5, 10); /* del=5 ins=10 past end */
     assert(lc_offset(&C) == 50);
     assert(lc_checkcursor(&C, 50));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
 
     lc_close(S);
 }
@@ -1289,7 +1289,7 @@ static void test_splice_brute(void) {
     for (pos = 0; pos <= nb + 1; ++pos)
         for (del = 0; del <= nb + 1; ++del)
             for (ins = 0; ins <= 1; ++ins) {
-                c = lc_newtree(S);
+                c = lc_newcache(S);
                 lc_rscanV(c, n, 2);
                 assert(lc_checktree(c));
                 lc_seek(&C, c, pos);
@@ -1305,7 +1305,7 @@ static void test_splice_brute(void) {
                     lc_dumpcursor(&C, "after splice");
                     abort();
                 }
-                lc_deltree(S, c);
+                lc_delcache(S, c);
                 assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
             }
 
@@ -1332,7 +1332,7 @@ static void test_splice_cov_rebalance(void) {
     assert(lc_checktree_allow_empty(c, 1));
     assert(lc_checkcursor(&C, 0));
     ;
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -1345,7 +1345,7 @@ static void test_splice_cov_foldleaf_lr(void) {
     lc_splice(&C, 11, 0); /* delete 11 bytes → cross leaf, trim left */
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 10));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -1360,7 +1360,7 @@ static void test_splice_cov_shiftnode_bal0(void) {
     lc_splice(&C, 16, 0);
     assert(lc_checktree_allow_empty(c, 1));
     assert(lc_checkcursor(&C, 25));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     assert(S->nodes.live_obj == 0 && S->leaves.live_obj == 0);
     lc_close(S);
 }
@@ -1374,7 +1374,7 @@ static void test_splice_cov_trimleaf(void) {
     assert(c->root.child_count == 0 && c->bytes == 0 && c->breaks == 0);
     assert(lc_checktree_allow_empty(c, 1));
     assert(lc_checkcursor(&cur, 5));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -1387,7 +1387,7 @@ static void test_append_params(void) {
 
     S = lc_open(&test_alloc, NULL);
     assert(S);
-    c = lc_newtree(S);
+    c = lc_newcache(S);
 
     assert(lc_append(NULL, 0, lc_scanner, &pz) == LC_ERRPARAM);
     memset(&C, 0, sizeof(C));
@@ -1399,13 +1399,13 @@ static void test_append_params(void) {
     assert(v == LC_OK && lc_offset(&C) == 3);
     assert(lc_bytes(c) == 15 && lc_breaks(c) == 2);
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_append_leaf(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     unsigned  brs[] = {3, 3, 0}, *pb = brs;
     int       r;
@@ -1419,13 +1419,13 @@ static void test_append_leaf(void) {
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 19));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_append_col(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     unsigned  brs_b[] = {4, 4, 0}, *pb = brs_b;
     int       r;
@@ -1442,13 +1442,13 @@ static void test_append_col(void) {
     assert(lc_breaks(c) == 4 && lc_bytes(c) == 22);
     assert(lc_checkcursor(&C, 17));
     ;
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_append_basic(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     unsigned  zero[] = {0}, *pz = zero;
     int       r;
@@ -1463,13 +1463,13 @@ static void test_append_basic(void) {
     assert(lc_breaks(c) == 2 && lc_bytes(c) == 27);
     assert(lc_linelen(&C) == 17);
     assert(lc_checkcursor(&C, 12));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_append_many(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     unsigned  brs_b[] = {17, 1, 0}, *pb = brs_b;
     int       r;
@@ -1483,7 +1483,7 @@ static void test_append_many(void) {
     assert(lc_breaks(c) == 20 && lc_bytes(c) == 47);
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 22));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -1495,7 +1495,7 @@ static void test_append_empty(void) {
     int       r;
 
     /* case 1: insert with breaks into empty tree */
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     pbrs = brs;
     lc_seek(&C, c, 0);
     r = lc_append(&C, 5, lc_scanner, &pbrs);
@@ -1503,17 +1503,17 @@ static void test_append_empty(void) {
     assert(lc_checktree(c));
     assert(lc_breaks(c) == 3 && lc_bytes(c) == 30);
     assert(lc_checkcursor(&C, 35));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
 
     /* case 2: empty tree, e=0, scanner returns 0 (no-op) */
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     pbrs = zero;
     lc_seek(&C, c, 0);
     r = lc_append(&C, 0, lc_scanner, &pbrs);
     assert(r == LC_OK);
     assert(lc_breaks(c) == 0 && lc_bytes(c) == 0);
     assert(lc_checkcursor(&C, 0));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
 
     lc_close(S);
 }
@@ -1528,7 +1528,7 @@ static void test_append_sib(void) {
     assert(lc_append(&C, 0, lc_scanner, &p) == LC_OK);
     assert(lc_checktree_allow_empty(c, 1));
     assert(lc_checkcursor(&C, 4));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -1552,13 +1552,13 @@ static void test_append_deep(void) {
     assert(lc_append(&C, 0, lc_scanner, &p) == LC_OK);
     assert(lc_checktree_allow_empty(c, 1));
     assert(lc_checkcursor(&C, 2));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_append_leaf_split(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     unsigned  brs_b[] = {3, 3, 3, 0}, *pb = brs_b;
     int       r;
@@ -1572,7 +1572,7 @@ static void test_append_leaf_split(void) {
     assert(lc_checktree(c));
     assert(lc_breaks(c) == 6 && lc_bytes(c) == 26);
     assert(lc_checkcursor(&C, 16));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -1587,7 +1587,7 @@ static void test_append_stitch_shiftup(void) {
     assert(lc_checkcursor(&C, 1));
     ;
     assert(lc_checktree_allow_empty(c, 1));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -1601,7 +1601,7 @@ static void test_append_rootpush(void) {
     assert(lc_checktree_allow_empty(c, 1));
     assert(lc_checkcursor(&C, 11));
     ;
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -1623,13 +1623,13 @@ static void test_append_findroom_findlevel(void) {
     assert(r == LC_OK);
     assert(lc_checktree_allow_empty(c, 1));
     assert(lc_checkcursor(&cur, 6));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_append_noop(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     unsigned  zero[] = {0}, *pz = zero;
     int       r;
@@ -1643,13 +1643,13 @@ static void test_append_noop(void) {
     assert(lc_checktree(c));
     assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
     assert(lc_checkcursor(&C, 5));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_append_trailing(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     unsigned  brs[] = {5, 5, 0}, *pb = brs;
     int       r;
@@ -1666,7 +1666,7 @@ static void test_append_trailing(void) {
     assert(lc_checkcursor(&C, 35 + 7));
     ;
     assert(lc_breaks(c) == 4 && lc_bytes(c) == 35);
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -1691,7 +1691,7 @@ static void test_append_brute(void) {
     for (pos = 0; pos <= nb + 1; ++pos)
         for (ins = 0; ins <= n; ++ins)
             for (e = 0; e <= 1; ++e) {
-                c = lc_newtree(S);
+                c = lc_newcache(S);
                 lc_rscanV(c, 128, 2); /* 128*2=256 bytes, levels≥2 */
                 lc_seek(&C, c, pos);
                 rem = ins;
@@ -1704,7 +1704,7 @@ static void test_append_brute(void) {
                     lc_dumpcursor(&C, "insert brute fail");
                     abort();
                 }
-                lc_deltree(S, c);
+                lc_delcache(S, c);
                 assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
             }
     lc_close(S);
@@ -1712,7 +1712,7 @@ static void test_append_brute(void) {
 
 static void test_append_noscanner(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     size_t    bb, br;
 
@@ -1742,7 +1742,7 @@ static void test_append_noscanner(void) {
     assert(lc_append(&C, 0, NULL, NULL) == LC_OK);
     assert(lc_offset(&C) == 0 && lc_bytes(c) == bb);
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -1760,7 +1760,7 @@ static void test_append_oom_brute(void) {
             for (e = 0; e <= 1; ++e)
                 for (oom = 0; oom <= 10; ++oom) {
                     int o = oom;
-                    c = lc_newtree(S);
+                    c = lc_newcache(S);
                     lc_rscanV(c, 64, 2);
                     assert(lc_checktree(c));
                     lc_seek(&C, c, pos);
@@ -1781,12 +1781,12 @@ static void test_append_oom_brute(void) {
                             lc_dumpcursor(&C, "oom brute fail");
                             abort();
                         }
-                        lc_deltree(S, c);
+                        lc_delcache(S, c);
                         ++cnt;
                         continue;
                     }
                     assert(r == LC_OK);
-                    lc_deltree(S, c);
+                    lc_delcache(S, c);
                 }
     lc_log("  test_append_oom_brute: %d OOM cases\n", cnt);
     lc_close(S);
@@ -1802,7 +1802,7 @@ static void test_append_oom_trailing(void) {
         int oom = k;
         S = lc_open(&oom_alloc, &oom);
         if (!S) continue;
-        c = lc_newtree(S);
+        c = lc_newcache(S);
         if (!c) {
             lc_close(S);
             continue;
@@ -1819,7 +1819,7 @@ static void test_append_oom_trailing(void) {
                 found = 1;
             }
         }
-        lc_deltree(S, c);
+        lc_delcache(S, c);
         lc_close(S);
         if (found) break;
     }
@@ -1857,7 +1857,7 @@ static void test_append_oom_normal(void) {
     }
 
     S->leaves.freed = lf;
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -1903,7 +1903,7 @@ static void test_append_oom_col0(void) {
         assert(S->nodes.live_obj == snb);
     }
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -1941,7 +1941,7 @@ static void test_append_oom_shiftup(void) {
     }
 
     S->leaves.freed = lf;
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -1977,7 +1977,7 @@ static void test_append_oom_rootpush(void) {
     }
 
     S->nodes.freed = nf;
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -2022,7 +2022,7 @@ static void test_append_oom_deroot(void) {
         assert(S->nodes.live_obj == snb);
     }
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -2054,7 +2054,7 @@ static void test_append_oom_rollback(void) {
                 c, 0, botV(leafV(1, 0), leafV(1, 0), leafV(1, 0), leafV(1, 0)));
     }
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -2073,7 +2073,7 @@ static void test_append_oom_full(void) {
     /* oom=4: cutleaf(1 leaf pg) + append + findroom(2 node pgs) = 4.
      * stitch reserve(lv+2 nodes) needs 5th page → OOM → rollback. */
     S = lc_open(&test_alloc, NULL);
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     lc_rscanV(c, 256, 1);
     assert(lc_checktree(c));
     S->nodes.freed = S->leaves.freed = NULL;
@@ -2087,14 +2087,14 @@ static void test_append_oom_full(void) {
     assert(r == LC_ERRMEM);
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 254));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 
     /* oom=5: stitch gets its page → insert succeeds.
      * Total: cutleaf 1 + findroom 3 + stitch 1 = 5 allocf calls.
      * stitch reserve takes ceil((lv+2)/objs_per_page) page allocs. */
     S = lc_open(&test_alloc, NULL);
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     lc_rscanV(c, 256, 1);
     assert(lc_checktree(c));
     S->nodes.freed = S->leaves.freed = NULL;
@@ -2107,14 +2107,14 @@ static void test_append_oom_full(void) {
     S->allocf = test_alloc;
     S->alloc_ud = NULL;
     assert(r == LC_OK && lc_checktree(c));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 /* splice delete all with insertion triggers lcD_reset */
 static void test_splice_reset(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
 
     lc_scanV(c, 10, 15, 15);
@@ -2126,7 +2126,7 @@ static void test_splice_reset(void) {
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 0));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -2138,7 +2138,7 @@ static void test_splice_cov_foldleaf_rl(void) {
     lc_splice(&C, 10, 0);            /* cl+cr=5 > 4, balance dl<0 */
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 20));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     assert(S->nodes.live_obj == 0 && S->leaves.live_obj == 0);
     lc_close(S);
 }
@@ -2163,7 +2163,7 @@ static void test_splice_rebalance_earlyexit(void) {
                    innerV(botV(leafV(2)))));
     assert(lc_checktree_allow_empty(c, 1));
     assert(lc_checkcursor(&C, 0));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     assert(S->nodes.live_obj == 0 && S->leaves.live_obj == 0);
     lc_close(S);
 }
@@ -2171,7 +2171,7 @@ static void test_splice_rebalance_earlyexit(void) {
 /* markbreak at right-half of fully packed tree → root split with i>=mid */
 static void test_markbreak_cov_rootright(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     int       r;
 
@@ -2185,7 +2185,7 @@ static void test_markbreak_cov_rootright(void) {
     assert(r == LC_OK);
     assert(lc_checktree(c));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -2199,7 +2199,7 @@ static void test_markbreak_oom_oneline(void) {
     lc_Cursor C;
     int       r;
     if (!S) return;
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     if (!c) {
         lc_close(S);
         return;
@@ -2208,7 +2208,7 @@ static void test_markbreak_oom_oneline(void) {
     r = lc_markbreak(&C, 10);
     assert(r == LC_OK); /* oneline return discarded by comma operator */
     assert(S->leaves.live_obj == 0 && S->nodes.live_obj == 0);
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -2229,7 +2229,7 @@ static void test_markbreak_oom_makeroom(void) {
     S->allocf = test_alloc;
     S->alloc_ud = NULL;
     assert(r == LC_ERRMEM);
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -2252,13 +2252,13 @@ static void test_append_oom_cutleaf(void) {
     assert(r == LC_ERRMEM);
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 5));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_append_cov_rootdeep(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     unsigned  brs[] = {8, 1, 0}, *p = brs;
     int       r;
@@ -2272,7 +2272,7 @@ static void test_append_cov_rootdeep(void) {
     assert(r == LC_OK);
     assert(lc_checktree(c));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -2286,7 +2286,7 @@ static void test_insert_params(void) {
 
     S = lc_open(&test_alloc, NULL);
     assert(S);
-    c = lc_newtree(S);
+    c = lc_newcache(S);
 
     assert(lc_insert(NULL, 0, lc_scanner, &pz) == LC_ERRPARAM);
     memset(&C, 0, sizeof(C));
@@ -2294,13 +2294,13 @@ static void test_insert_params(void) {
     lc_seek(&C, c, 0);
     assert(lc_insert(&C, 0, lc_scanner, &pz) == LC_OK);
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_insert_basic(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     unsigned  zero[] = {0}, *pz = zero;
     int       r;
@@ -2315,13 +2315,13 @@ static void test_insert_basic(void) {
     assert(lc_breaks(c) == 2 && lc_bytes(c) == 27);
     assert(lc_linelen(&C) == 17);
     assert(lc_checkcursor(&C, 5));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_insert_leaf(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     unsigned  brs[] = {3, 3, 0}, *pb = brs;
     int       r;
@@ -2336,13 +2336,13 @@ static void test_insert_leaf(void) {
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 10));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_insert_col(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     unsigned  brs_b[] = {4, 4, 0}, *pb = brs_b;
     int       r;
@@ -2358,7 +2358,7 @@ static void test_insert_col(void) {
     assert(lc_breaks(c) == 4 && lc_bytes(c) == 22);
     assert(lc_checkcursor(&C, 6));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -2369,7 +2369,7 @@ static void test_insert_empty(void) {
     unsigned  brs[] = {10, 10, 10, 0}, zero[] = {0}, *pbrs;
     int       r;
 
-    c = lc_newtree(S);
+    c = lc_newcache(S);
 
     pbrs = brs;
     lc_seek(&C, c, 0);
@@ -2378,23 +2378,23 @@ static void test_insert_empty(void) {
     assert(lc_checktree(c));
     assert(lc_breaks(c) == 3 && lc_bytes(c) == 30);
     assert(lc_checkcursor(&C, 0));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
 
-    c = lc_newtree(S);
+    c = lc_newcache(S);
     pbrs = zero;
     lc_seek(&C, c, 0);
     r = lc_insert(&C, 0, lc_scanner, &pbrs);
     assert(r == LC_OK);
     assert(lc_breaks(c) == 0 && lc_bytes(c) == 0);
     assert(lc_checkcursor(&C, 0));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
 
     lc_close(S);
 }
 
 static void test_insert_trailing(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     unsigned  brs[] = {5, 5, 0}, *pb = brs;
     int       r;
@@ -2410,13 +2410,13 @@ static void test_insert_trailing(void) {
     assert(lc_breaks(c) == 4 && lc_bytes(c) == 35);
     assert(lc_checkcursor(&C, 25));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_insert_noop(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     unsigned  zero[] = {0}, *pz = zero;
     int       r;
@@ -2431,13 +2431,13 @@ static void test_insert_noop(void) {
     assert(lc_breaks(c) == 2 && lc_bytes(c) == 20);
     assert(lc_checkcursor(&C, 5));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_insert_many(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     unsigned  brs_b[] = {17, 1, 0}, *pb = brs_b;
     int       r;
@@ -2451,13 +2451,13 @@ static void test_insert_many(void) {
     assert(lc_breaks(c) == 20 && lc_bytes(c) == 47);
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 5));
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_insert_noscanner(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     size_t    bb, br;
     int       v;
@@ -2483,7 +2483,7 @@ static void test_insert_noscanner(void) {
     assert(lc_insert(&C, 0, NULL, NULL) == LC_OK);
     assert(lc_offset(&C) == 0 && lc_bytes(c) == bb);
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -2493,7 +2493,7 @@ static void test_locate_params(void) {
 
 static void test_locate_basic(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     int       r;
 
@@ -2522,13 +2522,13 @@ static void test_locate_basic(void) {
     assert(r == LC_OK && lc_offset(&C) == 50);
     assert(lc_checkcursor(&C, 50));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_locate_empty(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     int       r;
 
@@ -2541,26 +2541,26 @@ static void test_locate_empty(void) {
     assert(r == LC_OK && lc_offset(&C) == 5);
     assert(lc_checkcursor(&C, 5));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_locline_params(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
 
     assert(lc_locline(NULL, 0) == LC_ERRPARAM);
     lc_seek(&C, c, 0);
     assert(lc_locline(&C, 1) == LC_ERRPARAM);
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_locline_basic(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     int       r;
 
@@ -2581,13 +2581,13 @@ static void test_locline_basic(void) {
     assert(r == LC_OK && lc_offset(&C) == 40 && lc_line(&C) == 3);
     assert(lc_checkcursor(&C, 40));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_locline_empty(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     int       r;
 
@@ -2596,13 +2596,13 @@ static void test_locline_empty(void) {
     assert(r == LC_OK && lc_line(&C) == 0);
     assert(lc_checkcursor(&C, 0));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
 static void test_locline_crossleaf(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
     int       r;
 
@@ -2614,7 +2614,7 @@ static void test_locline_crossleaf(void) {
     assert(r == LC_OK && lc_line(&C) == 4);
     assert(lc_checkcursor(&C, lc_offset(&C)));
 
-    lc_deltree(S, c);
+    lc_delcache(S, c);
     lc_close(S);
 }
 

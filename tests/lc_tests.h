@@ -395,7 +395,7 @@ LC_STATIC lc_Node *innerV_(lc_State *S, ...) {
 }
 
 LC_STATIC lc_Cache *cacheV(lc_State *S, unsigned levels, lc_Node *root) {
-    lc_Cache *c = lc_newtree(S);
+    lc_Cache *c = lc_newcache(S);
     unsigned  i;
     assert(c && root->child_count <= LC_FANOUT);
     c->levels = (unsigned short)levels;
@@ -428,7 +428,7 @@ LC_STATIC lc_Cache *cacheV(lc_State *S, unsigned levels, lc_Node *root) {
             lc_dumptree((c), "actual");                                  \
             assert(0 && "lc_asserttree failed");                         \
         }                                                                \
-        lc_deltree(S, __d);                                              \
+        lc_delcache(S, __d);                                             \
     } while (0)
 
 /* ================================================================ */

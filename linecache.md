@@ -29,7 +29,7 @@ typedef struct lc_State lc_State;
 typedef struct lc_Cache lc_Cache;
 ```
 
-一棵 B+ 树。`root` 内嵌（非指针），故 `lc_newtree` 永不为 OOM（仅 root 嵌入于 cache 结构中）。多树间互不影响。
+一棵 B+ 树。`root` 内嵌（非指针），故 `lc_newcache` 永不为 OOM（仅 root 嵌入于 cache 结构中）。多树间互不影响。
 
 ### lc_Cursor — 游标
 
@@ -60,12 +60,12 @@ void      lc_reset(lc_State *S);
 ### 树生命周期
 
 ```c
-lc_Cache *lc_newtree(lc_State *S);
-void      lc_deltree(lc_State *S, lc_Cache *c);
+lc_Cache *lc_newcache(lc_State *S);
+void      lc_delcache(lc_State *S, lc_Cache *c);
 ```
 
-- `lc_newtree`: 分配一棵空树（root 嵌入，`levels=0`, `child_count=0`）。失败返回 `NULL`。
-- `lc_deltree`: 释放树中全部节点与叶，再释放 cache 结构。
+- `lc_newcache`: 分配一棵空树（root 嵌入，`levels=0`, `child_count=0`）。失败返回 `NULL`。
+- `lc_delcache`: 释放树中全部节点与叶，再释放 cache 结构。
 
 **约束**: 不允许多树间共享节点/叶——每树独立。`lc_reset` 后所有树失效。
 
