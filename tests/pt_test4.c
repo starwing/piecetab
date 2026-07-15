@@ -3189,6 +3189,7 @@ static void test_splice_brute(void) {
     for (pos = 0; pos <= nb + 1; ++pos)
         for (del = 0; del <= nb + 1; ++del)
             for (ins = 0; ins <= 1; ++ins) {
+
                 maketree(S, &C, (size_t)pos);
                 epos = (size_t)pos < 256 ? (size_t)pos : 256;
                 edel = (size_t)del < 256 - epos ? (size_t)del : 256 - epos;
