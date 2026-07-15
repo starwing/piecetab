@@ -2285,6 +2285,27 @@ static void test_commit_deep(void) {
     pt_close(S);
 }
 
+/* commit exactly fills the arena block: the full block must retire to
+ * the full list so pt_scratch stays valid afterwards */
+static void test_commit_fillblock(void) {
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Blob   b = pt_empty(S);
+    pt_Cursor c;
+    size_t    cap;
+    pt_seek(&c, b, 0);
+    assert(pt_reserve(&c, 0) != NULL); /* PT_ARENA_SIZE block */
+    assert(pt_scratch(&c, &cap) != NULL);
+    assert(pt_literal(&c, cap - 8) != NULL);        /* leave exactly 8 bytes */
+    assert(pt_edit(&c, 0, "12345678", 8) == PT_OK); /* 8-byte hole */
+    assert(pt_commit(&c) != NULL); /* freeze consumes the last 8 bytes */
+    assert(pt_checktree(c.tree) && !c.dirty);
+    assert(c.tree->arena.full != NULL && c.tree->arena.current == NULL);
+    assert(pt_scratch(&c, &cap) == NULL && cap == 0);
+    pt_release(c.tree), pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
 /* E7: freeze copies holes into scratch, handles page transition */
 static void test_commit_freshpage(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
@@ -3262,6 +3283,7 @@ static void test_splice_brute(void) {
     X(commit_clean)                \
     X(commit_deep)                 \
     X(commit_deep2)                \
+    X(commit_fillblock)            \
     X(commit_freshpage)            \
     X(commit_mixed)                \
     X(commit_no_merge)             \

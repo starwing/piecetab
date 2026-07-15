@@ -337,19 +337,24 @@ static void ptM_sethole(pt_Node *n, int i, int h) {
     n->mask ^= (-!!h ^ n->mask) & ((pt_Mask)1 << i);
 }
 
-static int ptM_iterhole(pt_Mask *m, int *pi, int cc) {
+static int ptM_ctz(pt_Mask m) {
     unsigned long i = 0;
-    if (*m == 0) return 0;
+    assert(m != 0);
 #if defined(_MSC_VER) && defined(_WIN64)
-    *pi = (_BitScanForward64(&i, m), i);
+    return _BitScanForward64(&i, m), (int)i;
 #elif defined(_MSC_VER)
-    *pi = (_BitScanForward(&i, (unsigned long)m), i);
+    return _BitScanForward(&i, (unsigned long)m), (int)i;
 #elif defined(__GNUC__)
-    (void)i, *pi = __builtin_ctzll(*m);
+    return (void)i, __builtin_ctzll(m);
 #else
-    while (!(*m & 1)) *m >>= 1, ++i;
-    *pi = i;
+    while (!(m & 1)) m >>= 1, ++i;
+    return (int)i;
 #endif
+}
+
+static int ptM_iterhole(pt_Mask *m, int *pi, int cc) {
+    if (*m == 0) return 0;
+    *pi = ptM_ctz(*m);
     return *m &= *m - 1, *pi < cc;
 }
 
@@ -677,9 +682,8 @@ PT_API pt_Blob pt_commit(pt_Cursor *C) {
     if (!C->dirty) return pt_retain(C->tree), C->tree;
     if ((total = ptC_holebytes(&C->tree->root, C->tree->levels)) > 0) {
         buf = pt_reserve(C, total);
-        if (buf == NULL) return NULL;
+        if (buf == NULL || pt_literal(C, total) != buf) return NULL;
         ptC_freeze(C->tree->S, C->tree, buf);
-        C->tree->arena.current->used += total;
     }
     return C->dirty = 0, C->tree;
 }
