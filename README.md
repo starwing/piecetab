@@ -45,6 +45,11 @@ complex content:
   `PT_ERRMEM` the structure stays consistent and the cursor stays valid
 - **Arena-backed literals**: `pt_reserve` / `pt_scratch` / `pt_literal`
   write bytes directly into the tree's arena without an extra copy
+- **Generational compaction**: each edit generation owns its arena;
+  `pt_compact` produces a fresh standalone buffer — bytes owned by the old
+  generations are copied into a compact new arena, external memory (e.g. a
+  large mmap) is referenced as-is, and releasing the old chain reclaims all
+  of its memory
 
 ### linecache.h
 
@@ -130,7 +135,7 @@ int main(void) {
 | Category  | Functions                                                                           |
 | --------- | ----------------------------------------------------------------------------------- |
 | Lifecycle | `pt_open`, `pt_close`, `pt_reset`, `pt_getallocf`                                   |
-| Buffer    | `pt_empty`, `pt_from`, `pt_retain`, `pt_release`                                    |
+| Buffer    | `pt_empty`, `pt_from`, `pt_compact`, `pt_retain`, `pt_release`                      |
 | Query     | `pt_bytes`, `pt_version`                                                            |
 | Cursor    | `pt_seek`, `pt_locate`, `pt_advance`, `pt_offset`                                   |
 | Read      | `pt_read`, `pt_piece`, `pt_next`, `pt_prev`                                         |
@@ -169,6 +174,7 @@ Override before including the implementation:
 | `PT_MAX_LEVEL` / `LC_MAX_LEVEL` | 16      | max tree depth           |
 | `PT_PAGE_SIZE` / `LC_PAGE_SIZE` | 65536   | pool allocator page size |
 | `PT_ARENA_SIZE`                 | 1024    | arena block minimum size |
+| `PT_COMPACT_RANGES`             | 64      | compact range array initial capacity |
 
 Both libraries accept a custom allocator (`lc_Alloc` / `pt_Alloc`,
 Lua-style realloc signature) at `*_open`.

@@ -70,6 +70,7 @@ PT_API unsigned pt_release(pt_Buffer b);
 /* construction */
 PT_API pt_Buffer pt_empty(pt_State *S);
 PT_API pt_Buffer pt_from(pt_State *S, const char *s, size_t len);
+PT_API pt_Buffer pt_compact(pt_State *S, pt_Buffer b);
 
 /* query */
 PT_API unsigned pt_version(pt_Buffer b);
@@ -143,9 +144,17 @@ PT_NS_END
 # include <intrin.h>
 #endif
 
+#define PT_STATIC_ASSERT(cond)      PT_SA_0(cond, pt_SA_, __LINE__)
+#define PT_SA_0(cond, prefix, line) PT_SA_1(cond, prefix, line)
+#define PT_SA_1(cond, prefix, line) typedef char prefix##line[(cond) ? 1 : -1]
+
 #ifndef PT_FANOUT
 # define PT_FANOUT 62
 #endif
+
+/* makeroom needs at most 2 free slots; a split of a full node leaves
+ * FANOUT/2 free in the cursor's half, so require FANOUT >= 4. */
+PT_STATIC_ASSERT(PT_FANOUT >= 4);
 
 #ifndef PT_PAGE_SIZE
 # define PT_PAGE_SIZE 65536
@@ -159,21 +168,28 @@ PT_NS_END
 # define PT_ARENA_SIZE 1024
 #endif
 
-#define PT_MASK_BITS (sizeof(pt_Mask) * CHAR_BIT)
+#ifndef PT_COMPACT_RANGES
+# define PT_COMPACT_RANGES 64 /* initial capacity of compact range array */
+#endif
+
+/* ranges array will increase by 1.5x, when PT_COMPACT_RANGES == 1 it will not
+ * grow, so it must be greater than 1. */
+PT_STATIC_ASSERT(PT_COMPACT_RANGES > 1);
 
 #define pt_min(a, b) ((a) < (b) ? (a) : (b))
 #define pt_max(a, b) ((a) > (b) ? (a) : (b))
-
-#define PT_STATIC_ASSERT(cond)      PT_SA_0(cond, pt_SA_, __LINE__)
-#define PT_SA_0(cond, prefix, line) PT_SA_1(cond, prefix, line)
-#define PT_SA_1(cond, prefix, line) typedef char prefix##line[(cond) ? 1 : -1]
 
 PT_NS_BEGIN
 
 typedef size_t   pt_Mask;
 typedef unsigned pt_Ver;
 
+#define PT_MASK_BITS (sizeof(pt_Mask) * CHAR_BIT)
+
+PT_STATIC_ASSERT(PT_FANOUT <= PT_MASK_BITS);
+
 /* clang-format off */
+typedef struct pt_Range { size_t start, end; } pt_Range;
 typedef struct pt_Hole { char data[PT_MAX_HOLESIZE]; } pt_Hole;
 PT_STATIC_ASSERT(sizeof(pt_Hole) % sizeof(void *) == 0);
 /* clang-format on */
@@ -185,8 +201,6 @@ typedef struct pt_Node {
     pt_Ver          version;             /* COW version vs tree root */
     unsigned short  child_count;         /* valid child count in node */
 } pt_Node;
-
-PT_STATIC_ASSERT(PT_FANOUT <= PT_MASK_BITS);
 
 typedef struct pt_Block {
     struct pt_Block *next; /* next block in chain */
@@ -647,25 +661,21 @@ static int ptK_markdirty(pt_Cursor *C) {
 
 PT_API char *pt_reserve(pt_Cursor *C, size_t len) {
     pt_State *S;
+    pt_Arena *a;
     pt_Block *b, **pp;
     if (C == NULL || C->tree == NULL) return NULL;
     if (ptK_markdirty(C) != PT_OK) return NULL;
-    S = C->tree->S;
     if (len == 0) len = PT_ARENA_SIZE;
-    b = C->tree->arena.current;
+    S = C->tree->S, a = &C->tree->arena, b = C->tree->arena.current;
     if (b && b->size - b->used >= len) return (char *)(b + 1) + b->used;
-    for (pp = &C->tree->arena.current; *pp; pp = &(*pp)->next) {
+    for (pp = &a->current; *pp; pp = &(*pp)->next) {
         if (b = *pp, b->size - b->used >= len) {
-            *pp = b->next;
-            b->next = C->tree->arena.current;
-            C->tree->arena.current = b;
+            *pp = b->next, b->next = a->current, a->current = b;
             return (char *)(b + 1) + b->used;
         }
     }
-    b = ptA_alloc(S, pt_max(len, PT_ARENA_SIZE));
-    if (b == NULL) return NULL;
-    b->next = C->tree->arena.current;
-    return C->tree->arena.current = b, (char *)(b + 1);
+    if ((b = ptA_alloc(S, pt_max(len, PT_ARENA_SIZE))) == NULL) return NULL;
+    return b->next = a->current, a->current = b, (char *)(b + 1);
 }
 
 PT_API char *pt_scratch(pt_Cursor *C, size_t *plen) {
@@ -677,27 +687,18 @@ PT_API char *pt_scratch(pt_Cursor *C, size_t *plen) {
 }
 
 PT_API const char *pt_literal(pt_Cursor *C, size_t len) {
-    const char *s;
-    pt_Block   *b;
-    size_t      n;
+    pt_Arena *a;
+    pt_Block *b;
+    size_t    n, off;
     if (C == NULL || C->tree == NULL || len == 0) return NULL;
     if (ptK_markdirty(C) != PT_OK) return NULL;
-    if ((b = C->tree->arena.current) == NULL || (n = b->size - b->used) < len)
-        return NULL;
-    s = (char *)(b + 1) + b->used, b->used += len;
-    if (b->used == b->size) {
-        C->tree->arena.current = b->next;
-        b->next = C->tree->arena.full;
-        C->tree->arena.full = b;
-    }
-    return s;
+    if ((b = (a = &C->tree->arena)->current) == NULL) return NULL;
+    if ((n = (off = b->used) + len) > b->size) return NULL;
+    if (n == b->size) a->current = b->next, b->next = a->full, a->full = b;
+    return b->used += len, (char *)(b + 1) + off;
 }
 
 /* insert */
-
-/* makeroom needs at most 2 free slots; a split of a full node leaves
- * FANOUT/2 free in the cursor's half, so require FANOUT >= 4. */
-PT_STATIC_ASSERT(PT_FANOUT >= 4);
 
 #define ptH_fit(p, i, len)  ((p)->bytes[i] + (len) <= PT_MAX_HOLESIZE)
 #define ptH_reserve(S, len) ptP_reserve(S, &S->holes, (len))
@@ -940,13 +941,21 @@ static void ptD_cutrange(pt_Cursor *L, pt_Cursor *R, pt_Node *rt, int fl) {
     ptM_up(L, fl - 1, -db), ptN_remove(S, p, k, i + 1, ptN_cc(p));
 }
 
-static void ptD_makechain(pt_Cursor *C, int from, int to) {
+static int ptD_makechain(pt_Cursor *C, int from, int to, int nofail) {
     pt_Node *p, *nn, ***cp = C->paths + to;
-    int      l;
-    assert(0 <= from && from < to);
-    /* Bulk-insert legacy (lc_scan-style tree growth) was removed: in the
-     * remove-only stitch context the chain never deepens the root and the
-     * break level never keeps right siblings (cutrange cleared them). */
+    int      l, r = 0;
+    if (!nofail && ptP_reserve(C->tree->S, &C->tree->S->nodes, to - from + 1))
+        return PT_ERRMEM;
+    if (assert(from < to), from < 0) {
+        int h = (assert(to == ptK_levels(C)), p = &C->tree->root,
+                 p->mask & ptM_mask(ptN_cc(p)))
+             != 0;
+        nn = (pt_Node *)ptP_ralloc(&C->tree->S->nodes), *nn = *p;
+        p->bytes[0] = ptK_bytes(C), p->children[0] = nn;
+        ptN_setcc(p, 1), p->mask = 0, ptM_sethole(p, 0, h);
+        memmove(cp + 2, cp + 1, (ptK_levels(C) - to) * sizeof(pt_Node **));
+        C->tree->levels += 1, from = 0, to += 1, cp += 1, r = 1;
+    }
     for (l = from; l < to; ++l) {
         nn = (pt_Node *)ptP_ralloc(&C->tree->S->nodes);
         p = ptK_parent(C, l), nn->child_count = 0;
@@ -955,7 +964,7 @@ static void ptD_makechain(pt_Cursor *C, int from, int to) {
         p->children[ptN_cc(p)] = nn, p->child_count += 1;
         ptM_sethole(p, ptN_cc(p) - 1, 0);
     }
-    *cp = &nn->children[0];
+    return *cp = &nn->children[0], r;
 }
 
 static void ptD_findroom(pt_Cursor *C, int l) {
@@ -966,7 +975,7 @@ static void ptD_findroom(pt_Cursor *C, int l) {
         if (i < PT_FANOUT - 1) break;
     }
     assert(fl >= 0 && ptN_cc(p) - i - 1 == 0);
-    ptD_makechain(C, fl, l);
+    ptD_makechain(C, fl, l, 1);
 }
 
 static void ptD_backwardnode(pt_Cursor *C, int d, int l) {
@@ -1293,6 +1302,106 @@ PT_API pt_Buffer pt_rollback(pt_Cursor *C) {
      * caller's reference must be added first or a sole-owned from dies */
     b = C->tree->from, assert(b != NULL), pt_retain(b);
     return pt_release(C->tree), C->tree = NULL, C->dirty = 0, b;
+}
+
+/* compact */
+
+typedef struct pt_Compact {
+    pt_Cursor *oC;  /* source cursor over old tree */
+    pt_Range  *rs;  /* arena block ranges, sorted by start */
+    size_t     nr;  /* range count */
+    size_t     cap; /* range array capacity */
+} pt_Compact;
+
+static int ptZ_rangecmp(const void *a, const void *b) {
+    size_t sa = ((const pt_Range *)a)->start;
+    size_t sb = ((const pt_Range *)b)->start;
+    return sa < sb ? -1 : sa > sb;
+}
+
+static int ptZ_inrange(const pt_Compact *B, const char *s) {
+    size_t q = (size_t)s, lo = 0, hi = B->nr;
+    while (lo < hi) {
+        size_t mid = lo + ((hi - lo) >> 1);
+        if (B->rs[mid].start <= q)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo > 0 && q < B->rs[lo - 1].end;
+}
+
+static int ptZ_addranges(pt_State *S, pt_Compact *B, const pt_Block *b) {
+    for (; b; b = b->next) {
+        if (B->nr == B->cap) {
+            size_t nc = B->cap ? (B->cap + (B->cap >> 1)) : PT_COMPACT_RANGES;
+            size_t sz = B->cap * sizeof(pt_Range), nz = nc * sizeof(pt_Range);
+            pt_Range *nrs = (pt_Range *)S->allocf(S->alloc_ud, B->rs, sz, nz);
+            if (nrs == NULL) return PT_ERRMEM;
+            B->rs = nrs, B->cap = nc;
+        }
+        B->rs[B->nr].start = (size_t)(b + 1);
+        B->rs[B->nr].end = B->rs[B->nr].start + b->size, B->nr += 1;
+    }
+    return PT_OK;
+}
+
+static int ptZ_collect(pt_State *S, const pt_Tree *t, pt_Compact *B) {
+    for (; t != &S->empty; t = t->from) {
+        pt_Block *c = t->arena.current, *f = t->arena.full;
+        if (ptZ_addranges(S, B, c) || ptZ_addranges(S, B, f)) return PT_ERRMEM;
+    }
+    if (B->nr) qsort(B->rs, B->nr, sizeof(pt_Range), &ptZ_rangecmp);
+    return PT_OK;
+}
+
+static int ptZ_append(pt_Cursor *C, pt_Compact *B) {
+    pt_Node    *p;
+    int         l = ptK_levels(C), i;
+    pt_Delta    db = 0;
+    size_t      n;
+    const char *w, *s = pt_piece(B->oC, &n);
+    i = ptN_cc(p = ptK_parent(C, l));
+    for (; s && i < PT_FANOUT; s = pt_next(B->oC, &n)) {
+        if (ptZ_inrange(B, s)) { /* migrate into the new arena */
+            if ((w = pt_reserve(C, n)) == NULL) return PT_ERRMEM;
+            memcpy((char *)w, s, n), s = pt_literal(C, n);
+        }
+        if (i > 0 && ptN_lit(p, i - 1) + p->bytes[i - 1] == s)
+            p->bytes[i - 1] += n;
+        else
+            p->children[i] = (pt_Node *)s, p->bytes[i] = n, i += 1;
+        db += (pt_Delta)n;
+    }
+    ptN_setcc(p, i), C->paths[l] = &p->children[assert(i > 0), i - 1];
+    return ptM_up(C, l - 1, db), i == PT_FANOUT && s != NULL;
+}
+
+static int ptZ_build(pt_Cursor *C, pt_Compact *B) {
+    int r, l;
+    if ((r = ptK_markdirty(C)) != PT_OK) return r;
+    while ((r = ptZ_append(C, B)) > 0) {
+        for (l = ptK_levels(C); l >= 0; --l)
+            if (ptN_cc(ptK_parent(C, l)) < PT_FANOUT) break;
+        if ((r = ptD_makechain(C, l, ptK_levels(C), 0)) < 0) break;
+    }
+    if (r < 0) return r;
+    for (l = 0; l < ptK_levels(C); ++l) ptD_foldnode(C, 0, l);
+    return ptD_rebalance(C, 0), PT_OK;
+}
+
+PT_API pt_Buffer pt_compact(pt_State *S, pt_Buffer b) {
+    pt_Cursor  nC, oC;
+    pt_Compact B;
+    int        r;
+    if (S == NULL || b == NULL || b->S != S) return NULL;
+    if (b->bytes == 0) return pt_empty(S);
+    assert(b->root.mask == 0); /* committed blob has no hole */
+    pt_seek(&oC, b, 0), pt_seek(&nC, pt_empty(S), 0);
+    memset(&B, 0, sizeof(B)), B.oC = &oC;
+    if ((r = ptZ_collect(S, b, &B)) == PT_OK) r = ptZ_build(&nC, &B);
+    if (B.rs) S->allocf(S->alloc_ud, B.rs, B.cap * sizeof(pt_Range), 0);
+    return (r == PT_OK) ? pt_commit(&nC) : (pt_rollback(&nC), (pt_Buffer)NULL);
 }
 
 PT_NS_END

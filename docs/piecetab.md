@@ -88,6 +88,7 @@ Default `ptS_defallocf` wraps `realloc`, aborting on failure.
 | `PT_MAX_LEVEL`    | 16      | Maximum tree depth (paths array size)     |
 | `PT_PAGE_SIZE`    | 65536   | Pool allocator page size                  |
 | `PT_ARENA_SIZE`   | 1024    | Arena block minimum capacity              |
+| `PT_COMPACT_RANGES` | 64    | Compact range array initial capacity      |
 | `PT_STATIC_API`   | —       | When defined, all functions become static |
 
 Half-full threshold = `FANOUT/2`. `PT_FANOUT >= 4` has a static assertion (makeroom needs at most 2 empty slots).
@@ -131,6 +132,7 @@ unsigned pt_release(pt_Buffer b);
 ```c
 pt_Buffer   pt_empty(pt_State *S);
 pt_Buffer   pt_from(pt_State *S, const char *s, size_t len);
+pt_Buffer   pt_compact(pt_State *S, pt_Buffer b);
 unsigned  pt_version(pt_Buffer b);
 size_t    pt_bytes(pt_Buffer b);
 ```
@@ -140,6 +142,19 @@ size_t    pt_bytes(pt_Buffer b);
 - **`pt_from`**: Constructs a single-piece buffer from external memory. **Does not copy** — only records pointer and length;
   the caller must ensure `s` remains valid for the buffer's lifetime. `len==0` returns an empty tree (`bytes=0`).
   `S==NULL` or `s==NULL && len>0` returns `NULL`. The returned buffer has one reference (refc=1).
+- **`pt_compact`**: Produces a **fresh standalone buffer** holding only the content currently
+  reachable from `b`, with `from = empty` (the COW history chain is cut).
+  - **internal** literals (bytes living in any arena along `b`'s `from` chain) are copied into the
+    new buffer's own compact arena; adjacent internal pieces become physically contiguous and merge
+    into single pieces
+  - **external** literals (user memory from `pt_from`/`pt_insert`, e.g. a large mmap) keep their
+    original pointers — never copied
+  - Does **not** release `b`; the caller releases the old chain afterwards to reclaim all of its
+    memory (`pt_Buffer nb = pt_compact(S, b); pt_release(b);`)
+  - `b->bytes==0` (including the sentinel) returns `pt_empty(S)`; on OOM returns `NULL` with `b`
+    untouched; `S==NULL`, `b==NULL` or a buffer from another state returns `NULL`
+  - Cost is O(fragments), independent of the original file size — removed content is not in the
+    tree and is never visited
 - **`pt_version`**: Returns the buffer's version number (the root node's `version` field). `b==NULL` returns 0.
   The version number is `++S->max_version` assigned at creation time.
 - **`pt_bytes`**: Returns total byte count of the buffer. `b==NULL` returns 0. O(1).
@@ -242,7 +257,7 @@ int pt_remove(pt_Cursor *C, size_t len);
 ### 3.9 Transactions
 
 ```c
-void    pt_rollback(pt_Cursor *C);
+pt_Buffer pt_rollback(pt_Cursor *C);
 pt_Buffer pt_commit(pt_Cursor *C);
 ```
 
@@ -251,25 +266,26 @@ automatically forks a new internal tree via `ptK_markdirty` (`version = ++max_ve
 `from = old tree` and retained), held only by the cursor, unreachable externally. Subsequent edits continue on this internal tree
 until commit or rollback.
 
+Both functions return an **owned reference** and **detach the cursor**
+(`C->tree = NULL`) — re-attach with `pt_seek` on the returned buffer.
+
 - **`pt_commit`**:
-  - **No pending edits (`!C->dirty`)**: retains the current tree once, returns the current buffer.
-    The caller gets an owned reference and must `pt_release` when no longer needed.
+  - **No pending edits (`!C->dirty`)**: retains the current buffer once and returns it.
   - **Pending edits (`C->dirty`)**: freezes hole data into the arena (`ptC_freeze`:
-    hole content copied into arena blocks, hole pieces replaced with literal pointers), clears dirty, returns the new buffer.
-    The caller gets an owned reference.
-  - If the freeze process OOMs (arena allocation fails), returns `NULL`, dirty state preserved
-  - After return, `C->dirty = 0` — cursor reverts to navigation mode, pointing to the committed buffer
+    hole content copied into arena blocks, hole pieces replaced with literal pointers,
+    physically adjacent literals merged, tree rebalanced), clears dirty, returns the new buffer.
+  - If the freeze OOMs (arena allocation fails), returns `NULL`: the tree stays
+    consistent, dirty is preserved, and the cursor stays attached (repositioned via
+    `pt_locate`) so the commit can be retried
 
 - **`pt_rollback`**:
-  - **No pending edits**: no-op
-  - **Pending edits**: discards the internal new tree. If `from->refc == 1` (only this edit held the source),
-    the source tree must die — cursor invalidated (`C->tree = NULL`). Otherwise cursor returns to `from` (the pre-edit buffer).
-    Contract: **the caller is responsible for holding the buffer to roll back to** — if `pt_release` was called on that buffer,
-    rollback may leave the cursor pointing to freed memory
-  - Clears dirty, does not revert cursor position
+  - **No pending edits**: retains the current buffer once and returns it (same as clean commit).
+  - **Pending edits**: discards the internal transient tree and returns the pre-edit
+    source buffer (`from`), retained for the caller. This is unconditionally safe —
+    the returned reference keeps the source alive even if no one else held it.
 
 **Ownership rule summary**:
-- The buffer returned by `pt_commit` is **already owned by the caller** (owned reference); no extra `pt_retain` needed
+- Buffers returned by `pt_commit` / `pt_rollback` are **already owned by the caller** (owned reference); no extra `pt_retain` needed
 - If the caller previously held the pre-edit buffer, it should `pt_release` the old buffer after commit (replaced by the new buffer)
 - `pt_Cursor` itself **owns no buffer references**
 
@@ -390,7 +406,7 @@ Lazily initialized — blocks are allocated only on first `pt_reserve`/`pt_liter
 4. **Commit** (`ptC_freeze`): DFS traversal (skipping hole-free subtrees via internal node mask bits),
    copies hole data into arena, replaces hole pieces with literal pointers, returns `pt_Hole` objects to the pool.
    Clears dirty, returns the frozen buffer.
-5. **Rollback**: Discards the internal new tree (`pt_release`), cursor returns to `from` (or becomes invalid if `from` is dead).
+5. **Rollback**: Discards the internal new tree (`pt_release`), returns the retained `from` buffer and detaches the cursor.
 
 ### 5.2 Non-Atomic Edit Semantics
 
@@ -447,6 +463,26 @@ Deletion may cause `p->bytes[i]==0` in a leaf container (non-empty leaf, just a 
 
 This allows callers to `pt_append` segments from a sequentially allocated buffer and produce a single physically contiguous piece.
 
+### 5.8 Compaction (pt_compact)
+
+Two phases, both internal to the single low-frequency function:
+
+1. **Interval classification** (`ptZ_collect` / `ptZ_inranges`): walks `b`'s `from` chain
+   collecting every arena block interval `[block+1, block+1+size)` into a growable array
+   (initial capacity `PT_COMPACT_RANGES`, geometric growth), then qsorts by start address.
+   Each source piece is classified by binary search: pointer inside some interval = internal
+   (migrate), outside = external (keep). No per-literal tag is stored anywhere — the data
+   structures and hot paths carry zero overhead for this.
+2. **Bulk tree build** (`ptZ_bulkbuild`, lc_scan style, O(n)): pieces stream into the
+   rightmost leaf container (`ptZ_bulkleaf`), merging physically adjacent runs on the fly;
+   when the leaf container fills, `ptD_makechain` extends a fresh rightmost chain (deepening
+   the root when every level is full). A final top-down `ptD_foldnode` pass plus
+   `ptD_rebalance` restores the half-full invariant on the trailing path.
+
+Internal pieces are migrated with `pt_reserve` + `memcpy` + `pt_literal` into the new tree's
+arena; consecutive migrations land back-to-back and therefore merge. On OOM the half-built
+transient is discarded via rollback and `NULL` is returned; the source buffer is never touched.
+
 ---
 
 ## 6. Internal Function Naming Scheme
@@ -461,6 +497,7 @@ This allows callers to `pt_append` segments from a sequentially allocated buffer
 | `ptH_` | Hole        | Hole operations (new/append/remove)      |
 | `ptC_` | Commit      | Freeze hole→literal                      |
 | `ptA_` | Arena       | Arena allocation/destruction             |
+| `ptZ_` | Zip/Compact | Compaction: range classification + bulk tree build |
 | `ptP_` | Pool        | Pool allocator                           |
 | `ptS_` | State       | Default allocator                        |
 

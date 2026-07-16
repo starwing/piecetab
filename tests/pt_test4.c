@@ -1,6 +1,7 @@
-#define PT_FANOUT       4
-#define PT_PAGE_SIZE    512
-#define PT_MAX_HOLESIZE 16
+#define PT_FANOUT         4
+#define PT_PAGE_SIZE      512
+#define PT_MAX_HOLESIZE   16
+#define PT_COMPACT_RANGES 2
 #define PT_STATIC_API
 #ifndef PT_POOL_STATS
 # define PT_POOL_STATS
@@ -4238,6 +4239,237 @@ static void test_edit_cov_prevfull(void) {
     pt_close(S);
 }
 
+/* ================= compact ================= */
+
+static void test_compact_params(void) {
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_State *S2 = pt_open(&test_alloc, NULL);
+    pt_Buffer b = pt_from(S, "hello", 5);
+    assert(pt_compact(NULL, b) == NULL);
+    assert(pt_compact(S, NULL) == NULL);
+    assert(pt_compact(S2, b) == NULL); /* foreign state */
+    assert(pt_compact(S, pt_empty(S)) == pt_empty(S));
+    {
+        pt_Buffer z = pt_from(S, NULL, 0); /* zero-byte blob */
+        assert(pt_compact(S, z) == pt_empty(S));
+        pt_release(z);
+    }
+    pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S2), pt_close(S);
+}
+
+static void test_compact_basic(void) {
+    static const char big[] = "0123456789ABCDEF";
+    pt_State         *S = pt_open(&test_alloc, NULL);
+    pt_Buffer         b0 = pt_from(S, big, 16), b1, nb;
+    pt_Cursor         c;
+    const char       *old;
+
+    pt_seek(&c, b0, 8);
+    assert(pt_edit(&c, 0, "xy", 2) == PT_OK);
+    b1 = pt_commit(&c);
+    assert(b1 != NULL);
+    old = (const char *)b1->root.children[1]; /* internal "xy" */
+
+    nb = pt_compact(S, b1);
+    assert(nb != NULL && nb->from == &S->empty);
+    assert(pt_checktree(nb));
+    pt_asserttree(nb, 0, leafV(litV("01234567"), litV("xy"), litV("89ABCDEF")));
+    /* external pieces keep the original pointers (zero-copy) */
+    assert((const char *)nb->root.children[0] == big);
+    assert((const char *)nb->root.children[2] == big + 8);
+    /* internal piece migrated into nb's own arena */
+    assert((const char *)nb->root.children[1] != old);
+    assert(nb->arena.current != NULL);
+
+    /* old chain released: new blob must stay intact (ASAN guards) */
+    pt_release(b1), pt_release(b0);
+    {
+        char buf[32];
+        assert(collect_bytes(nb, buf, 32) == 18);
+        assert(memcmp(buf, "01234567xy89ABCDEF", 18) == 0);
+    }
+    pt_release(nb);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_compact_merge(void) {
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Buffer b1, b2, nb;
+    pt_Cursor c;
+
+    pt_seek(&c, pt_empty(S), 0);
+    assert(pt_edit(&c, 0, "ab", 2) == PT_OK);
+    b1 = pt_commit(&c);
+    pt_seek(&c, b1, 2);
+    assert(pt_edit(&c, 0, "cd", 2) == PT_OK);
+    b2 = pt_commit(&c);
+    assert(b1 && b2 && b2->root.child_count == 2);
+
+    /* both pieces internal: copied back-to-back, hence merged */
+    nb = pt_compact(S, b2);
+    assert(nb != NULL && nb->from == &S->empty);
+    pt_asserttree(nb, 0, leafV(litV("abcd")));
+
+    pt_release(b2), pt_release(b1);
+    {
+        char buf[8];
+        assert(collect_bytes(nb, buf, 8) == 4);
+        assert(memcmp(buf, "abcd", 4) == 0);
+    }
+    pt_release(nb);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+/* disjoint slices of one buffer: never adjacent, never merged */
+static pt_Buffer compact_makewide(pt_State *S, const char *src, int np) {
+    pt_Cursor c;
+    int       i;
+    pt_seek(&c, pt_empty(S), 0);
+    for (i = 0; i < np; ++i) assert(pt_append(&c, src + 2 * i, 1) == PT_OK);
+    return pt_commit(&c);
+}
+
+static void test_compact_deep(void) {
+    static const char src[] = "a-b-c-d-e-f-g-h-i-j-k-l-m-n-o-p-";
+    pt_State         *S = pt_open(&test_alloc, NULL);
+    pt_Buffer         b = compact_makewide(S, src, 16), nb;
+
+    nb = pt_compact(S, b); /* full leaves: root deepening, no fold */
+    assert(nb != NULL && nb->from == &S->empty);
+    assert(pt_checktree(nb));
+    assert(nb->levels == 1 && nb->root.child_count == 4);
+    assert(nb->arena.current == NULL); /* all external: zero-copy */
+    {
+        char buf[20];
+        assert(collect_bytes(nb, buf, 20) == 16);
+        assert(memcmp(buf, "abcdefghijklmnop", 16) == 0);
+    }
+    pt_release(nb), pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_compact_tail_balance(void) {
+    static const char src[] = "a-b-c-d-e-f-";
+    pt_State         *S = pt_open(&test_alloc, NULL);
+    pt_Buffer         b = compact_makewide(S, src, 6), nb;
+
+    nb = pt_compact(S, b); /* trailing leaf underfull: balanced [3,3] */
+    assert(nb != NULL);
+    assert(pt_checktree(nb));
+    pt_asserttree(
+            nb, 1,
+            innerV(leafV(litV_(src, 1), litV_(src + 2, 1), litV_(src + 4, 1)),
+                   leafV(litV_(src + 6, 1), litV_(src + 8, 1),
+                         litV_(src + 10, 1))));
+    pt_release(nb), pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_compact_chain(void) {
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Buffer b1, b2, b3, nb;
+    pt_Cursor c;
+
+    /* three generations: three arenas, ranges array must grow (cap 2) */
+    pt_seek(&c, pt_empty(S), 0);
+    assert(pt_edit(&c, 0, "aa", 2) == PT_OK);
+    b1 = pt_commit(&c);
+    pt_seek(&c, b1, 2);
+    assert(pt_edit(&c, 0, "bb", 2) == PT_OK);
+    b2 = pt_commit(&c);
+    pt_seek(&c, b2, 4);
+    assert(pt_edit(&c, 0, "cc", 2) == PT_OK);
+    b3 = pt_commit(&c);
+    assert(b1 && b2 && b3);
+
+    nb = pt_compact(S, b3); /* ancestor-arena literals are internal too */
+    assert(nb != NULL && nb->from == &S->empty);
+    pt_asserttree(nb, 0, leafV(litV("aabbcc")));
+
+    pt_release(b3), pt_release(b2), pt_release(b1);
+    {
+        char buf[8];
+        assert(collect_bytes(nb, buf, 8) == 6);
+        assert(memcmp(buf, "aabbcc", 6) == 0);
+    }
+    pt_release(nb);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_compact_oom(void) {
+    int       cnt = 1000, k;
+    pt_State *S = pt_open(&oom_alloc, &cnt);
+    pt_Buffer b1, b2, b3, nb;
+    pt_Cursor c;
+    size_t    pre;
+
+    /* three generations so ranges collect must grow (cap 2) */
+    pt_seek(&c, pt_empty(S), 0);
+    assert(pt_edit(&c, 0, "aa", 2) == PT_OK);
+    b1 = pt_commit(&c);
+    pt_seek(&c, b1, 2);
+    assert(pt_edit(&c, 0, "bb", 2) == PT_OK);
+    b2 = pt_commit(&c);
+    pt_seek(&c, b2, 4);
+    assert(pt_edit(&c, 0, "cc", 2) == PT_OK);
+    b3 = pt_commit(&c);
+    assert(b1 && b2 && b3);
+
+    pre = S->nodes.live_obj;
+    for (k = 0;; ++k) {
+        char buf[8];
+        cnt = k;
+        nb = pt_compact(S, b3);
+        if (nb != NULL) break;
+        assert(k < 64);
+        assert(S->nodes.live_obj == pre);       /* failure leaks nothing */
+        assert(collect_bytes(b3, buf, 8) == 6); /* source intact */
+        assert(memcmp(buf, "aabbcc", 6) == 0);
+    }
+    cnt = 1000;
+    pt_asserttree(nb, 0, leafV(litV("aabbcc")));
+    pt_release(nb), pt_release(b3), pt_release(b2), pt_release(b1);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+static void test_compact_oom_makechain(void) {
+    static const char src[] = "a-b-c-d-e-f-g-h-i-j-k-l-m-n-o-p-";
+    int               cnt = 1000;
+    pt_State         *S = pt_open(&oom_alloc, &cnt);
+    pt_Buffer         b = compact_makewide(S, src, 16), nb;
+    pt_Drain          d;
+    size_t            pre;
+
+    assert(b != NULL);
+    pre = S->nodes.live_obj;
+    d = pt_drainpool(&S->nodes); /* force makechain onto page alloc */
+    cnt = 0;
+    nb = pt_compact(S, b);
+    assert(nb == NULL);
+    pt_refillpool(&S->nodes, d), cnt = 1000;
+    assert(S->nodes.live_obj == pre);
+
+    nb = pt_compact(S, b); /* recovery */
+    assert(nb != NULL);
+    assert(pt_checktree(nb));
+    {
+        char buf[20];
+        assert(collect_bytes(nb, buf, 20) == 16);
+        assert(memcmp(buf, "abcdefghijklmnop", 16) == 0);
+    }
+    pt_release(nb), pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
 #define TESTS(X)                   \
     X(advance_brute)               \
     X(append_merge_left)           \
@@ -4264,6 +4496,14 @@ static void test_edit_cov_prevfull(void) {
     X(commit_seam_left)            \
     X(commit_single_hole)          \
     X(commit_then_reseek)          \
+    X(compact_params)              \
+    X(compact_basic)               \
+    X(compact_merge)               \
+    X(compact_deep)                \
+    X(compact_tail_balance)        \
+    X(compact_chain)               \
+    X(compact_oom)                 \
+    X(compact_oom_makechain)       \
     X(edit_append_full)            \
     X(edit_append_tail)            \
     X(edit_brute)                  \

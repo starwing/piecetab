@@ -36,6 +36,9 @@
   一致，游标仍然有效
 - **arena 直写 literal**：`pt_reserve` / `pt_scratch` / `pt_literal`
   将字节直接写入树的 arena，免二次拷贝
+- **分代压缩**：每个编辑代独占自己的 arena；`pt_compact` 产出独立的
+  紧凑新 Buffer——旧代持有的字节拷入紧凑新 arena，外部内存（如大文件
+  mmap）原指针引用不拷贝，release 旧链即回收其全部内存
 
 ### linecache.h
 
@@ -119,7 +122,7 @@ int main(void) {
 | 类别     | 函数                                                                                     |
 | -------- | ---------------------------------------------------------------------------------------- |
 | 生命周期 | `pt_open`, `pt_close`, `pt_reset`, `pt_getallocf`                                        |
-| Buffer   | `pt_empty`, `pt_from`, `pt_retain`, `pt_release`                                         |
+| Buffer   | `pt_empty`, `pt_from`, `pt_compact`, `pt_retain`, `pt_release`                           |
 | 查询     | `pt_bytes`, `pt_version`                                                                 |
 | 游标     | `pt_seek`, `pt_locate`, `pt_advance`, `pt_offset`                                        |
 | 读取     | `pt_read`, `pt_piece`, `pt_next`, `pt_prev`                                              |
@@ -158,6 +161,7 @@ int main(void) {
 | `PT_MAX_LEVEL` / `LC_MAX_LEVEL` | 16    | 最大树深         |
 | `PT_PAGE_SIZE` / `LC_PAGE_SIZE` | 65536 | 池分配器页大小   |
 | `PT_ARENA_SIZE`                 | 1024  | arena 块最小容量 |
+| `PT_COMPACT_RANGES`             | 64    | compact 区间数组初始容量 |
 
 两库均可在 `*_open` 时传入自定义分配器（`lc_Alloc` / `pt_Alloc`，
 Lua 风格 realloc 签名）。

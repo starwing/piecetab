@@ -85,6 +85,7 @@ typedef void *pt_Alloc(void *ud, void *ptr, size_t osize, size_t nsize);
 | `PT_MAX_LEVEL`    | 16    | 最大树深（paths 数组大小） |
 | `PT_PAGE_SIZE`    | 65536 | 池分配器页大小             |
 | `PT_ARENA_SIZE`   | 1024  | arena 块最小容量           |
+| `PT_COMPACT_RANGES` | 64  | compact 区间数组初始容量   |
 | `PT_STATIC_API`   | —     | 定义后所有函数为 static    |
 
 半满阈值 = `FANOUT/2`。`PT_FANOUT >= 4` 有静态断言（makeroom 最多需 2 空槽）。
@@ -131,6 +132,7 @@ unsigned pt_release(pt_Buffer b);
 ```c
 pt_Buffer pt_empty(pt_State *S);
 pt_Buffer pt_from(pt_State *S, const char *s, size_t len);
+pt_Buffer pt_compact(pt_State *S, pt_Buffer b);
 unsigned  pt_version(pt_Buffer b);
 size_t    pt_bytes(pt_Buffer b);
 ```
@@ -140,6 +142,17 @@ size_t    pt_bytes(pt_Buffer b);
 - **`pt_from`**: 从外部内存构造单 piece buffer。**不拷贝**——仅记录指针与长度，
   调用方须保证 `s` 在 buffer 存活期间有效。`len==0` 返回空树（`bytes=0`）。
   `S==NULL` 或 `s==NULL && len>0` 返回 `NULL`。返回的 buffer 拥有一引用 (refc=1)。
+- **`pt_compact`**: 产出**独立的紧凑新 Buffer**，只含 `b` 当前可达内容，
+  `from = empty`（切断 COW 历史链）。
+  - **internal** literal（字节位于 `b` 的 `from` 链上任一 arena 内）拷入新 Buffer
+    独占的紧凑 arena；相邻 internal piece 拷贝后物理相连，自动合并为单 piece
+  - **external** literal（`pt_from`/`pt_insert` 的用户内存，如大文件 mmap）
+    保留原指针——绝不拷贝
+  - **不内部 release** `b`；调用方随后自行 release 旧链以回收其全部内存
+    （`pt_Buffer nb = pt_compact(S, b); pt_release(b);`）
+  - `b->bytes==0`（含哨兵）返回 `pt_empty(S)`；OOM 返回 `NULL` 且 `b` 不受影响；
+    `S==NULL`、`b==NULL` 或 `b` 属其他状态返回 `NULL`
+  - 成本 O(碎片量)，与原文件大小无关——remove 掉的内容不在树里，不会被遍历
 - **`pt_version`**: 返回 buffer 版本号（root 节点的 `version` 字段）。`b==NULL` 返回 0。
   版本号即创建时分配的 `++S->max_version`。
 - **`pt_bytes`**: 返回 buffer 总字节数。`b==NULL` 返回 0。O(1)。
@@ -244,7 +257,7 @@ int pt_remove(pt_Cursor *C, size_t len);
 ### 3.9 事务
 
 ```c
-void      pt_rollback(pt_Cursor *C);
+pt_Buffer pt_rollback(pt_Cursor *C);
 pt_Buffer pt_commit(pt_Cursor *C);
 ```
 
@@ -253,25 +266,25 @@ pt_Buffer pt_commit(pt_Cursor *C);
 `from = 旧树` 并 retain），仅游标持有，外部不可达。后续编辑继续作用于该内部 tree，
 直到 commit 或 rollback。
 
+两个函数均返回 **owned reference** 并 **detach 游标**（`C->tree = NULL`）——
+用 `pt_seek` 在返回的 buffer 上重新绑定。
+
 - **`pt_commit`**:
-  - **无待提交编辑 (`!C->dirty`)**: retain 当前树一次，返回当前 buffer。
-    调用方获得 owned reference，须在不再需要时 `pt_release`。
+  - **无待提交编辑 (`!C->dirty`)**: retain 当前 buffer 一次并返回。
   - **有待提交编辑 (`C->dirty`)**: 将 hole 数据冻结至 arena（`ptC_freeze`：
-    hole 内容拷入 arena 块，hole piece 被替换为 literal 指针），清 dirty，返回该新 buffer。
-    调用方获得 owned reference。
-  - 冻结过程若 OOM（arena 分配失败），返回 `NULL`，dirty 状态保留
-  - 返回后 `C->dirty = 0`——游标恢复为导航态，指向已提交的 buffer
+    hole 内容拷入 arena 块，hole piece 被替换为 literal 指针，物理相邻
+    literal 合并，树重平衡），清 dirty，返回该新 buffer。
+  - 冻结过程若 OOM（arena 分配失败），返回 `NULL`：树保持合法、dirty 保留、
+    游标不 detach（经 `pt_locate` 复位），可重试 commit
 
 - **`pt_rollback`**:
-  - **无待提交编辑**: no-op
-  - **有待提交编辑**: 丢弃内部新 tree。若 `from->refc == 1`（仅本编辑持有来源），
-    来源树必死——游标失效（`C->tree = NULL`）。否则游标回到 `from`（编辑前的 buffer）。
-    契约：**使用者负责持有要回退到的 buffer**——若在该 buffer 上做了 pt_release，
-    rollback 后游标可能指向已释放内存
-  - 清 dirty，不回退 cursor 位置
+  - **无待提交编辑**: retain 当前 buffer 一次并返回（同 clean commit）。
+  - **有待提交编辑**: 丢弃内部 transient 树，返回编辑前的来源 buffer
+    （`from`，已为调用方 retain）。**无条件安全**——返回的引用为源树续命，
+    即使无人另行持有亦然。
 
 **所有权规则小结**:
-- `pt_commit` 返回的 buffer **已为调用方持有**（owned reference），无需额外 `pt_retain`
+- `pt_commit` / `pt_rollback` 返回的 buffer **已为调用方持有**（owned reference），无需额外 `pt_retain`
 - 若调用方原先持有编辑前的 buffer，commit 后应 release 旧 buffer（被新 buffer 替代）
 - `pt_Cursor` 本身**不持有任何 buffer 引用**
 
@@ -394,7 +407,7 @@ typedef struct pt_Arena {
 4. **Commit** (`ptC_freeze`): DFS 遍历（借内层 mask 位跳过无 hole 子树），
    将 hole 数据拷入 arena、hole piece 换为 literal 指针、释放 `pt_Hole` 对象回池。
    清 dirty，返回已冻结的 buffer。
-5. **Rollback**: 丢弃内部新 tree（`pt_release`），游标回 `from`（或失效若 from 已死）。
+5. **Rollback**: 丢弃内部新 tree（`pt_release`），返回已 retain 的 `from` buffer 并 detach 游标。
 
 ### 5.2 编辑非原子语义
 
@@ -451,6 +464,24 @@ typedef struct pt_Arena {
 
 此机制允许 caller 使用链式分配的缓冲区逐段 `pt_append` 时产生单个物理连续的 piece。
 
+### 5.8 压缩 (pt_compact)
+
+两个阶段，全部内聚于这一个低频函数内：
+
+1. **区间判定**（`ptZ_collect` / `ptZ_inranges`）：沿 `b` 的 `from` 链收集每个
+   arena block 区间 `[block+1, block+1+size)` 存入可增长数组（初始容量
+   `PT_COMPACT_RANGES`，几何倍增），按起址 qsort。逐 piece 二分判定：指针落在
+   某区间内 = internal（搬迁），否则 = external（保留）。**不在任何地方存
+   per-literal tag**——数据结构与热路径零负担。
+2. **批量建树**（`ptZ_bulkbuild`，lc_scan 式，O(n)）：piece 流式填入最右叶容器
+   （`ptZ_bulkleaf`），随填随合并物理相邻段；叶容器满则 `ptD_makechain` 延伸新的
+   最右链（各层全满时根加深）。收尾自上而下逐层 `ptD_foldnode` + `ptD_rebalance`
+   修复尾部路径的半满不变式。
+
+internal piece 经 `pt_reserve` + `memcpy` + `pt_literal` 迁入新树 arena；连续
+搬迁首尾相接，自然合并。OOM 时经 rollback 丢弃半成品 transient 并返回 `NULL`，
+源 buffer 不受任何影响。
+
 ---
 
 ## 六、内部函数命名体系
@@ -465,6 +496,7 @@ typedef struct pt_Arena {
 | `ptH_` | Hole        | hole 操作（new/append/remove）     |
 | `ptC_` | Commit      | 冻结 hole→literal                  |
 | `ptA_` | Arena       | arena 分配/销毁                    |
+| `ptZ_` | Zip/Compact | 压缩：区间判定 + 批量建树          |
 | `ptP_` | Pool        | 池分配器                           |
 | `ptS_` | State       | 默认分配器                         |
 
