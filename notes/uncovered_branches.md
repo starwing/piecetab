@@ -12,12 +12,12 @@
 
 ## 分类
 
-| 类别 | 含义 | 优先级 |
-|------|------|--------|
-| **ASSERT** | `assert()` 内的分支 — release 下不可达，无需测 | 忽略 |
-| **DEAD** | 在当前常量/调用约定下数学不可达 | 忽略 |
-| **ERROR** | NULL检查/OOM 错误返回路径 — 防御性代码 | 低 |
-| **LOGIC** | 有意义的未覆盖逻辑路径 — 值得加测 | 中-高 |
+| 类别       | 含义                                           | 优先级 |
+| ---------- | ---------------------------------------------- | ------ |
+| **ASSERT** | `assert()` 内的分支 — release 下不可达，无需测 | 忽略   |
+| **DEAD**   | 在当前常量/调用约定下数学不可达                | 忽略   |
+| **ERROR**  | NULL检查/OOM 错误返回路径 — 防御性代码         | 低     |
+| **LOGIC**  | 有意义的未覆盖逻辑路径 — 值得加测              | 中-高  |
 
 ---
 
@@ -25,12 +25,12 @@
 
 `just pt-unbranched` 输出约100行，分类如下：
 
-| 类别 | 数量 | 说明 |
-|------|------|------|
-| ASSERT | ~40 | `assert(X && Y)` 中 X/Y 的 false 方向 |
-| DEAD (for循环跳过) | ~10 | `for(l=levels; l>=0; --l)` 首次 `l>=0` 为 false 不可达 |
-| ERROR (NULL/OOM) | ~35 | `if(!C)`、`ptP_alloc` 返回 NULL 等防御路径 |
-| LOGIC | ~15 | 算法边角分支 |
+| 类别               | 数量 | 说明                                                   |
+| ------------------ | ---- | ------------------------------------------------------ |
+| ASSERT             | ~40  | `assert(X && Y)` 中 X/Y 的 false 方向                  |
+| DEAD (for循环跳过) | ~10  | `for(l=levels; l>=0; --l)` 首次 `l>=0` 为 false 不可达 |
+| ERROR (NULL/OOM)   | ~35  | `if(!C)`、`ptP_alloc` 返回 NULL 等防御路径             |
+| LOGIC              | ~15  | 算法边角分支                                           |
 
 **有效覆盖率**（排除ASSERT+DEAD）：~93%
 
@@ -86,36 +86,36 @@ OOM 测试脆弱：pool 页大小 512 字节，节点数量依赖树结构，难
 
 #### 导航/读
 
-| 行 | 函数 | 分支 | 如何触发 |
-|----|------|------|----------|
-| L596 | pt_next | `poff == bytes[i]` 为 true | 游标恰好在某 piece 末尾时调 pt_next |
-| L600 | pt_next | `l < 0` 返回 NULL | 从最后 piece 调 pt_next（已覆盖，GCOV 假阳） |
-| L619 | pt_prev | `plen == NULL` | pt_prev 从 piece 边界返回且 plen=NULL（已覆盖） |
+| 行   | 函数    | 分支                       | 如何触发                                        |
+| ---- | ------- | -------------------------- | ----------------------------------------------- |
+| L596 | pt_next | `poff == bytes[i]` 为 true | 游标恰好在某 piece 末尾时调 pt_next             |
+| L600 | pt_next | `l < 0` 返回 NULL          | 从最后 piece 调 pt_next（已覆盖，GCOV 假阳）    |
+| L619 | pt_prev | `plen == NULL`             | pt_prev 从 piece 边界返回且 plen=NULL（已覆盖） |
 
 #### 编辑
 
-| 行 | 函数 | 分支 | 如何触发 |
-|----|------|------|----------|
-| L918 | pt_edit | 前邻 hole 合并 | 在 hole 后面插入、前一 piece 是 hole 且有空间 |
-| L909 | pt_edit | ptH_reserve 失败 | OOM，需要 hole 池耗尽 |
-| L910 | pt_edit | 内部 pt_remove 失败 | OOM，remove 途中分配失败 |
+| 行   | 函数    | 分支                | 如何触发                                      |
+| ---- | ------- | ------------------- | --------------------------------------------- |
+| L918 | pt_edit | 前邻 hole 合并      | 在 hole 后面插入、前一 piece 是 hole 且有空间 |
+| L909 | pt_edit | ptH_reserve 失败    | OOM，需要 hole 池耗尽                         |
+| L910 | pt_edit | 内部 pt_remove 失败 | OOM，remove 途中分配失败                      |
 
 #### 删除
 
-| 行 | 函数 | 分支 | 如何触发 |
-|----|------|------|----------|
-| L1164 | ptD_stitch | 零字节尾 piece 清理 | 删除后产生空 piece（整 piece 被删且清空洞） |
-| L1175 | ptD_stitch | stitch 后游标边界修正 | 深层 stitch 后游标在最后 piece 之后 |
-| L1037 | ptD_backwardnode | `d > i` 跨节点回溯 | stitch 时需跳过超过当前节点容量的 piece |
-| L1040 | ptD_backwardnode | 下降循环体 | 同上，回溯后定位到父节点末尾 |
-| L1126-1127 | ptD_stitchnode | findroom 链构建 | 深层 stitch 中节点全满，需 makeroom |
-| L1220-1223 | ptD_rmleaf | mid literal 裂树 | 全满树中删除字面量中间部分（非边界） |
-| L1240 | ptD_cowpaths | COW 共享路径内循环 | 深层 committed 树中同子树跨叶删除 |
+| 行         | 函数             | 分支                  | 如何触发                                    |
+| ---------- | ---------------- | --------------------- | ------------------------------------------- |
+| L1164      | ptD_stitch       | 零字节尾 piece 清理   | 删除后产生空 piece（整 piece 被删且清空洞） |
+| L1175      | ptD_stitch       | stitch 后游标边界修正 | 深层 stitch 后游标在最后 piece 之后         |
+| L1037      | ptD_backwardnode | `d > i` 跨节点回溯    | stitch 时需跳过超过当前节点容量的 piece     |
+| L1040      | ptD_backwardnode | 下降循环体            | 同上，回溯后定位到父节点末尾                |
+| L1126-1127 | ptD_stitchnode   | findroom 链构建       | 深层 stitch 中节点全满，需 makeroom         |
+| L1220-1223 | ptD_rmleaf       | mid literal 裂树      | 全满树中删除字面量中间部分（非边界）        |
+| L1240      | ptD_cowpaths     | COW 共享路径内循环    | 深层 committed 树中同子树跨叶删除           |
 
 #### 事务
 
-| 行 | 函数 | 分支 | 如何触发 |
-|----|------|------|----------|
+| 行   | 函数      | 分支                            | 如何触发                  |
+| ---- | --------- | ------------------------------- | ------------------------- |
 | L685 | pt_commit | arena 预留不足或 literal 不连续 | OOM 或 reserve 被中途打断 |
 
 ---
@@ -188,15 +188,15 @@ editV(&c, offset, levels, root_expr)
 ### 断言
 
 ```c
-pt_asserttree(blob, levels, root_expr)  // 精确树比对（优先用）
-pt_checktree(blob)                      // 不变式校验
+pt_asserttree(buffer, levels, root_expr)  // 精确树比对（优先用）
+pt_checktree(buffer)                      // 不变式校验
 pt_checkcursor(&c, expected_offset)     // 游标不变式
 ```
 
 ### 调试
 
 ```c
-pt_dumptree(blob, "tag")    // 打印树结构
+pt_dumptree(buffer, "tag")    // 打印树结构
 pt_log("fmt", ...)          // fprintf(stderr, ...)
 ```
 

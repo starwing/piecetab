@@ -6,7 +6,7 @@
 ## 内存回收：分代 Arena
 
 让 piecetab 在保持 immutable/COW/zero-copy 核心的同时，支持
-"当可变数据结构使用"并具备 blob 级内存回收能力。
+"当可变数据结构使用"并具备 Buffer 级内存回收能力。
 设计推导与接口草案见本地设计文档（未随仓库发布）。
 
 ## Mark 系统：marktree

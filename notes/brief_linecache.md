@@ -177,9 +177,9 @@ grep '^static' linecache.h
 ## 十、测试
 
 ```bash
-just dbg              # 编译运行 lc_test4 (FANOUT=4, ASAN+UBSAN)
-just dbg <prefix>     # 运行名称以 prefix 开头的测试
-just dbg8             # 编译运行 lc_test8 (FANOUT=62)
+just lc               # 编译运行 lc_test4 (FANOUT=4, ASAN+UBSAN)
+just lc <prefix>      # 运行名称以 prefix 开头的测试
+just lc8              # 编译运行 lc_test8 (FANOUT=8)
 just cov              # 全量覆盖率（编译、运行、lcov 报告、未覆盖列表）
 ```
 
@@ -199,9 +199,9 @@ grep '^    X(' tests/lc_test4.c
 | `notes/design_splice.md`              | Splice 区间删除三段法设计         |
 | `notes/history_range_delete.md`       | 区间删除算法演进史                |
 | `notes/brief_tests.md`                | 测试结构笔记                      |
-| `notes/lessons_trimnode_mergenode.md` | trimnode/mergenode 重构教训       |
+| `notes/brief_refine.md`               | 代码精炼经验教训                  |
 | `notes/uncovered_branches.md`         | 未覆盖分支详细映射                |
-| `linecache.md`                        | 面向用户的 API 参考手册           |
+| `docs/linecache.zh.md`                | 面向用户的 API 参考手册           |
 
 ## 十二、编码铁律 (AGENTS.md)
 

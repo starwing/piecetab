@@ -72,7 +72,7 @@ existing tests.
   `notes/brief_linecache.md` and `notes/brief_piecetab.md` for a project
   overview before diving into the code.
 - Update comments only when necessary; detailed semantics belong in
-  `README.md` / `linecache.md`.
+  `README.md` / `docs/`.
 
 ## Testing Notes
 
