@@ -1,6 +1,15 @@
 .opencode
 .codegraph
 .sync.ffs_db
+.DS_Store
+.claude/
+.github/copilot-instructions.md
+.vscode/settings.json
+AGENTS.md
+editor.md
+chat.json
+notes/archive/
+notes/plans/
 *.info
 *.gcda
 *.gcno
@@ -9,6 +18,7 @@
 *.dSYM/
 *.o
 lc_insert_demo
+tests/pt_bench.c
 tests/lc_test4
 tests/lc_test8
 tests/pt_test4
