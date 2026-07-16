@@ -12,7 +12,7 @@
 
 static void test_lifecycle(void) {
     pt_State *S;
-    pt_Blob   b, b2;
+    pt_Buffer b, b2;
 
     S = pt_open(NULL, NULL);
     assert(S != NULL);
@@ -61,7 +61,7 @@ static void test_seek_empty(void) {
 
 static void test_insert_basic(void) {
     pt_State *S = pt_open(NULL, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     int       r;
 
@@ -88,7 +88,7 @@ static void test_insert_basic(void) {
 
 static void test_insert_before(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_insert(&c, "hello", 5);               /* ["hello"], cursor stays pos 0 */
@@ -103,7 +103,7 @@ static void test_insert_before(void) {
 
 static void test_insert_after(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_insert(&c, "hello", 5);
@@ -119,7 +119,7 @@ static void test_insert_after(void) {
 
 static void test_insert_mid(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_insert(&c, "abcdef", 6);
@@ -137,7 +137,7 @@ static void test_insert_mid(void) {
 
 static void test_insert_split_root(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_append(&c, "aa", 2);
@@ -160,8 +160,8 @@ static void test_insert_split_root(void) {
 
 static void test_insert_locend(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
-    pt_Blob   a;
+    pt_Buffer b = pt_empty(S);
+    pt_Buffer a;
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_append(&c, "foo", 3);
@@ -182,7 +182,7 @@ static void test_insert_locend(void) {
 
 static void test_insert_split_leaf(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_append(&c, "aa", 2);
@@ -209,7 +209,7 @@ static void test_insert_split_leaf(void) {
 static void test_insert_deep(void) {
     static char buf[300];
     pt_State   *S = pt_open(&test_alloc, NULL);
-    pt_Blob     b = pt_empty(S);
+    pt_Buffer   b = pt_empty(S);
     pt_Cursor   c;
     int         k, n = 60;
     size_t      pos = 0;
@@ -232,8 +232,8 @@ static void test_insert_deep(void) {
 
 static void test_insert_cow(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
-    pt_Blob   a;
+    pt_Buffer b = pt_empty(S);
+    pt_Buffer a;
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_append(&c, "aa", 2), pt_append(&c, "bb", 2), pt_append(&c, "cc", 2);
@@ -257,12 +257,12 @@ static void test_insert_cow(void) {
     pt_close(S);
 }
 
-/* T3h: two cursors fork from one blob into independent versions */
+/* T3h: two cursors fork from one buffer into independent versions */
 
 static void test_insert_multiversion(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
-    pt_Blob   a;
+    pt_Buffer b = pt_empty(S);
+    pt_Buffer a;
     pt_Cursor c1, c2;
     pt_seek(&c1, b, 0);
     pt_append(&c1, "aa", 2), pt_append(&c1, "bb", 2), pt_append(&c1, "cc", 2);
@@ -299,7 +299,7 @@ static void test_insert_multiversion(void) {
 static void test_insert_oom_reserve(void) {
     int       cnt = 1000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     cnt = 0; /* next pool page alloc fails */
@@ -316,7 +316,7 @@ static void test_insert_oom_reserve(void) {
 static void test_insert_oom_fork(void) {
     int       cnt = 1000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     cnt = 0; /* nodes reserve fails (pt_empty is sentinel, no freelist entry;
@@ -335,7 +335,7 @@ static void test_insert_oom_fork(void) {
 static void test_merge_right(void) {
     static const char buf[] = "abcdef";
     pt_State         *S = pt_open(&test_alloc, NULL);
-    pt_Blob           b = pt_empty(S);
+    pt_Buffer         b = pt_empty(S);
     pt_Cursor         c;
     pt_seek(&c, b, 0);
     pt_insert(&c, buf + 3, 3);                  /* ["def"] */
@@ -351,7 +351,7 @@ static void test_merge_right(void) {
 static void test_merge_left(void) {
     static const char buf[] = "abcdef";
     pt_State         *S = pt_open(&test_alloc, NULL);
-    pt_Blob           b = pt_empty(S);
+    pt_Buffer         b = pt_empty(S);
     pt_Cursor         c;
     pt_seek(&c, b, 0);
     pt_insert(&c, buf + 0, 3); /* ["abc"] */
@@ -370,7 +370,7 @@ static void test_append_merge_left(void) {
     static const char buf[] = "ABCD";
     pt_State         *S = pt_open(&test_alloc, NULL);
     pt_Node          *lf = (pt_Node *)ptP_alloc(S, &S->nodes);
-    pt_Blob           b;
+    pt_Buffer         b;
     pt_Cursor         c;
     memset(lf, 0, sizeof(pt_Node));
     lf->children[0] = (pt_Node *)(buf + 0), lf->bytes[0] = 2;
@@ -401,8 +401,8 @@ static void test_append_merge_left(void) {
 static void test_advance_brute(void) {
     static char buf[300];
     pt_State   *S = pt_open(&test_alloc, NULL);
-    pt_Blob     b = pt_empty(S);
-    pt_Blob     a;
+    pt_Buffer   b = pt_empty(S);
+    pt_Buffer   a;
     pt_Cursor   c, ref;
     int         k, n = 40;
     size_t      from, to, total;
@@ -429,8 +429,8 @@ static void test_advance_brute(void) {
 
 static void test_null_params(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
-    pt_Blob   got;
+    pt_Buffer b = pt_empty(S);
+    pt_Buffer got;
     pt_Cursor c;
     assert(pt_version(NULL) == 0 && pt_bytes(NULL) == 0);
     pt_retain(NULL), pt_release(NULL), pt_rollback(NULL);
@@ -456,7 +456,7 @@ static void test_null_params(void) {
 
 static void test_insert_split_front(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_append(&c, "aa", 2), pt_append(&c, "bb", 2);
@@ -478,7 +478,7 @@ static void test_insert_split_front(void) {
 
 static void test_rollback(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_insert(&c, "hello", 5);
@@ -496,7 +496,7 @@ static void test_rollback(void) {
 static void test_insert_committed_split(void) {
     static char buf[500];
     pt_State   *S = pt_open(&test_alloc, NULL);
-    pt_Blob     a, b, e = pt_empty(S);
+    pt_Buffer   a, b, e = pt_empty(S);
     pt_Cursor   c;
     int         k;
     for (k = 0; k < 500; ++k) buf[k] = (char)('!' + (k % 90));
@@ -517,13 +517,13 @@ static void test_insert_committed_split(void) {
     pt_close(S);
 }
 
-/* T3p: COW lifetime — release the SOURCE blob while a forked transient
+/* T3p: COW lifetime — release the SOURCE buffer while a forked transient
  * still shares its nodes. The `from` field must keep the source alive until
  * the transient is released (exposes the pre-from use-after-free bug). */
 
 static void test_release_order(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   a, b, e = pt_empty(S);
+    pt_Buffer a, b, e = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, e, 0);
     pt_append(&c, "aa", 2), pt_append(&c, "bb", 2), pt_append(&c, "cc", 2);
@@ -546,8 +546,8 @@ static void test_release_order(void) {
 
 static void test_rollback_released_source(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
-    pt_Blob   a;
+    pt_Buffer b = pt_empty(S);
+    pt_Buffer a;
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_append(&c, "aa", 2), pt_append(&c, "bb", 2), pt_append(&c, "cc", 2);
@@ -563,13 +563,13 @@ static void test_rollback_released_source(void) {
     pt_close(S);
 }
 
-/* release order with two committed blobs (from-chain COW) */
+/* release order with two committed buffers (from-chain COW) */
 
 static void test_remove_release_order(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b0 = pt_from(S, "hello world foobar", 18);
+    pt_Buffer b0 = pt_from(S, "hello world foobar", 18);
     pt_Cursor c;
-    pt_Blob   b1;
+    pt_Buffer b1;
     pt_seek(&c, b0, 5);
     pt_insert(&c, "XYZ", 3);
     b1 = pt_commit(&c);
@@ -585,7 +585,7 @@ static void test_remove_release_order(void) {
 
 static void test_remove_same_mid(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(0, leafV(litV("abcdef")));
+    pt_Buffer b = treeV(0, leafV(litV("abcdef")));
     pt_Cursor c;
     pt_seek(&c, b, 2);
     assert(pt_remove(&c, 2) == PT_OK); /* delete "cd" -> split into two */
@@ -599,7 +599,7 @@ static void test_remove_same_mid(void) {
 
 static void test_remove_same_prefix(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(0, leafV(litV("abcdef")));
+    pt_Buffer b = treeV(0, leafV(litV("abcdef")));
     pt_Cursor c;
     pt_seek(&c, b, 0);
     assert(pt_remove(&c, 2) == PT_OK); /* delete prefix "ab" */
@@ -613,7 +613,7 @@ static void test_remove_same_prefix(void) {
 
 static void test_remove_same_suffix(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(0, leafV(litV("abcdef")));
+    pt_Buffer b = treeV(0, leafV(litV("abcdef")));
     pt_Cursor c;
     pt_seek(&c, b, 4);
     assert(pt_remove(&c, 2) == PT_OK); /* delete suffix "ef" */
@@ -627,7 +627,7 @@ static void test_remove_same_suffix(void) {
 
 static void test_remove_piece_whole(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));
+    pt_Buffer b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));
     pt_Cursor c;
     pt_seek(&c, b, 2);
     assert(pt_remove(&c, 2) == PT_OK); /* delete whole middle piece "bb" */
@@ -641,7 +641,7 @@ static void test_remove_piece_whole(void) {
 
 static void test_remove_cross(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(0, leafV(litV("aaa"), litV("bbb"), litV("ccc")));
+    pt_Buffer b = treeV(0, leafV(litV("aaa"), litV("bbb"), litV("ccc")));
     pt_Cursor c;
     pt_seek(&c, b, 2);
     assert(pt_remove(&c, 5) == PT_OK); /* [2,7): a|bbb|c across 3 pieces */
@@ -655,7 +655,7 @@ static void test_remove_cross(void) {
 
 static void test_remove_to_end(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));
+    pt_Buffer b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));
     pt_Cursor c;
     pt_seek(&c, b, 2);
     assert(pt_remove(&c, 4) == PT_OK); /* delete "bb"+"cc" to end */
@@ -669,7 +669,7 @@ static void test_remove_to_end(void) {
 
 static void test_remove_all(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(0, leafV(litV("aa"), litV("bb")));
+    pt_Buffer b = treeV(0, leafV(litV("aa"), litV("bb")));
     pt_Cursor c;
     pt_seek(&c, b, 0);
     assert(pt_remove(&c, 4) == PT_OK); /* delete everything */
@@ -683,7 +683,7 @@ static void test_remove_all(void) {
 
 static void test_remove_across_leaves(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(
+    pt_Buffer b = treeV(
             1, innerV(leafV(litV("aaa"), litV("bbb")),
                       leafV(litV("ccc"), litV("ddd"))));
     pt_Cursor c;
@@ -699,7 +699,7 @@ static void test_remove_across_leaves(void) {
 
 static void test_remove_deep_shrink(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(
+    pt_Buffer b = treeV(
             2, innerV(innerV(leafV(litV("aa")), leafV(litV("bb"))),
                       innerV(leafV(litV("cc")))));
     pt_Cursor c;
@@ -713,18 +713,19 @@ static void test_remove_deep_shrink(void) {
     pt_close(S);
 }
 
-/* §8.1 edit_cow: from committed blob, fork preserves source, hole in transient
+/* §8.1 edit_cow: from committed buffer, fork preserves source, hole in
+ * transient
  */
 
 static void test_edit_cow(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   a, b = pt_empty(S);
+    pt_Buffer a, b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     assert(pt_edit(&c, 0, "hello world", 11) == PT_OK);
     a = pt_commit(&c);
     assert(a != NULL && !c.dirty);
-    /* fork: edit on committed blob */
+    /* fork: edit on committed buffer */
     pt_seek(&c, a, 5);
     assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
     assert(c.dirty);
@@ -766,9 +767,9 @@ static void test_edit_cow(void) {
 static void test_edit_rollback(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
 
-    /* Path 1: source blob held externally → rollback lands on source */
+    /* Path 1: source buffer held externally → rollback lands on source */
     {
-        pt_Blob   b = pt_empty(S);
+        pt_Buffer b = pt_empty(S);
         pt_Cursor c;
         pt_seek(&c, b, 0);
         assert(pt_edit(&c, 0, "hello", 5) == PT_OK);
@@ -781,7 +782,7 @@ static void test_edit_rollback(void) {
 
     /* Path 2: source only via from → rollback returns to sentinel */
     {
-        pt_Blob   b = pt_empty(S);
+        pt_Buffer b = pt_empty(S);
         pt_Cursor c;
         pt_seek(&c, b, 0);
         assert(pt_edit(&c, 0, "hello", 5) == PT_OK);
@@ -800,7 +801,7 @@ static void test_edit_rollback(void) {
 static void test_edit_oom(void) {
     int       cnt = 1000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     int       r;
 
@@ -822,7 +823,7 @@ static void test_edit_oom(void) {
 /* ================= byte collection helper ================= */
 
 static size_t collect_bytes_r(
-        pt_Blob b, const pt_Node *n, unsigned l, char *buf) {
+        pt_Buffer b, const pt_Node *n, unsigned l, char *buf) {
     unsigned i;
     size_t   off = 0;
     if (l == b->levels) {
@@ -843,7 +844,7 @@ static size_t collect_bytes_r(
     return off;
 }
 
-static size_t collect_bytes(pt_Blob b, char *buf, size_t cap) {
+static size_t collect_bytes(pt_Buffer b, char *buf, size_t cap) {
     (void)cap;
     if (b->root.child_count == 0) return 0;
     return collect_bytes_r(b, &b->root, 0, buf);
@@ -948,7 +949,7 @@ static void test_insert_brute(void) {
 
 static void test_peekscratch_roundtrip(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     char     *h;
     size_t    cap, used;
@@ -1026,7 +1027,7 @@ static void test_peekscratch_roundtrip(void) {
 
 static void test_peekscratch_params(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     size_t    cap;
 
@@ -1051,7 +1052,7 @@ static void test_peekscratch_params(void) {
 
 static void test_peekscratch_adjacent(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     char     *h1, *h2;
     size_t    cap, used;
@@ -1101,7 +1102,7 @@ static void test_peekscratch_adjacent(void) {
 
 static void test_arena_lazy(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
 
     pt_seek(&c, b, 0);
@@ -1129,7 +1130,7 @@ static void test_arena_lazy(void) {
 
 static void test_arena_reserve_full(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
 
     pt_seek(&c, b, 0);
@@ -1164,7 +1165,7 @@ static void test_arena_reserve_full(void) {
 
 static void test_arena_dirty_break(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     size_t    cap;
 
@@ -1181,7 +1182,7 @@ static void test_arena_dirty_break(void) {
     assert(c.dirty);
     assert(c.tree != b);
 
-    /* Fork a second cursor from original blob: independent arena */
+    /* Fork a second cursor from original buffer: independent arena */
     {
         pt_Cursor c2;
         pt_seek(&c2, b, 0);
@@ -1201,7 +1202,7 @@ static void test_arena_reserve_reuse(void) {
     /* Exercise pt_reserve for-loop that traverses current chain and
        unlinks a non-head block with enough space (lines 742-750). */
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     size_t    n;
     char     *p;
@@ -1241,7 +1242,7 @@ static void test_arena_reserve_reuse(void) {
 static void test_arena_literal_cold(void) {
     /* pt_literal cold-start: arena not built, *plen < PT_ARENA_SIZE */
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     size_t    n;
     char     *p;
@@ -1265,7 +1266,7 @@ static void test_arena_literal_cold(void) {
 static void test_arena_literal_params(void) {
     /* pt_literal parameter validation returning NULL */
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     size_t    n;
 
@@ -1289,7 +1290,7 @@ static void test_arena_literal_params(void) {
 /* L750: pt_literal returns NULL when arena.current == NULL */
 static void test_literal_arena_empty(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     size_t    n;
     pt_seek(&c, b, 0);
@@ -1303,7 +1304,7 @@ static void test_literal_arena_empty(void) {
 /* L750: pt_literal returns NULL when arena has insufficient remainder */
 static void test_literal_arena_short(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     size_t    n;
     pt_seek(&c, b, 0);
@@ -1321,7 +1322,7 @@ static void test_literal_arena_short(void) {
 
 static void test_remove_params(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     assert(pt_remove(NULL, 5) == PT_ERRPARAM);
     pt_seek(&c, b, 0);
@@ -1334,7 +1335,7 @@ static void test_remove_params(void) {
 
 static void test_remove_hole_whole(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     assert(pt_edit(&c, 0, "hello", 5) == PT_OK); /* fork + hole in dirty tree */
@@ -1350,7 +1351,7 @@ static void test_remove_hole_whole(void) {
 
 static void test_remove_hole_mid(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_edit(&c, 0, "hello world", 11); /* fork + hole in dirty tree */
@@ -1377,7 +1378,7 @@ static void test_remove_hole_mid(void) {
 
 static void test_remove_hole_boundary(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     /* build dirty tree: lit("abc") + hole("DEF") + lit("ghi") = 9B */
     pt_seek(&c, b, 0);
@@ -1400,7 +1401,7 @@ static void test_remove_hole_boundary(void) {
 
 static void test_remove_hole_mixed(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     /* build dirty tree: lit("abc") + hole("DEF") + lit("ghi") = 9B */
     pt_seek(&c, b, 0);
@@ -1435,12 +1436,12 @@ static void test_remove_hole_mixed(void) {
 
 static void test_remove_cow(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
-    pt_Blob   a;
+    pt_Buffer b = pt_empty(S);
+    pt_Buffer a;
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_insert(&c, "abcdef", 6);
-    a = pt_commit(&c); /* committed blob */
+    a = pt_commit(&c); /* committed buffer */
     pt_seek(&c, a, 2);
     assert(pt_remove(&c, 2) == PT_OK); /* remove from committed tree */
     assert(pt_checktree(c.tree));
@@ -1457,8 +1458,8 @@ static void test_remove_cow(void) {
 static void test_remove_oom(void) {
     int       cnt = 1000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
-    pt_Blob   b = pt_empty(S);
-    pt_Blob   a;
+    pt_Buffer b = pt_empty(S);
+    pt_Buffer a;
     pt_Cursor c;
     int       r;
     /* Create a committed tree with content */
@@ -1485,7 +1486,7 @@ static void test_remove_oom(void) {
 
 static void test_remove_brute(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     size_t    total;
     size_t    pos, len;
@@ -1500,7 +1501,7 @@ static void test_remove_brute(void) {
     for (pos = 0; pos < total; ++pos) {
         size_t maxlen = total - pos;
         for (len = 1; len <= maxlen; ++len) {
-            pt_Blob   fresh = pt_empty(S);
+            pt_Buffer fresh = pt_empty(S);
             pt_Cursor cc;
             /* rebuild tree from scratch via one append */
             pt_seek(&cc, fresh, 0);
@@ -1527,7 +1528,7 @@ static void test_remove_stitch_full(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Cursor c;
     /* COW + cross-leaf eraserange: commit tree then remove across leaves */
-    pt_Blob b = treeV(
+    pt_Buffer b = treeV(
             1, innerV(leafV(litV("aa"), litV("bb")),
                       leafV(litV("cc"), litV("dd"))));
     pt_seek(&c, b, 2);
@@ -1545,7 +1546,7 @@ static void test_remove_fold_balance(void) {
     /* levels=1: inner(leaf("a"), leaf("x","y","z","w"))
        Remove "a" -> left leaf empty, foldnode tries merge but
        totals > FANOUT(4) -> triggers balancenode */
-    pt_Blob b = treeV(
+    pt_Buffer b = treeV(
             1, innerV(leafV(litV("a")),
                       leafV(litV("x"), litV("y"), litV("z"), litV("w"))));
     pt_seek(&c, b, 0);
@@ -1576,7 +1577,7 @@ static void test_remove_merge_literal(void) {
     {
         pt_State *S = pt_open(&test_alloc, NULL);
         pt_Node  *lf = (pt_Node *)ptP_alloc(S, &S->nodes);
-        pt_Blob   b;
+        pt_Buffer b;
         pt_Cursor c;
         memset(lf, 0, sizeof(pt_Node));
         lf->children[0] = (pt_Node *)(buf + 0), lf->bytes[0] = 3;
@@ -1597,7 +1598,7 @@ static void test_remove_merge_literal(void) {
         pt_State *S = pt_open(&test_alloc, NULL);
         pt_Node  *l0 = (pt_Node *)ptP_alloc(S, &S->nodes);
         pt_Node  *l1 = (pt_Node *)ptP_alloc(S, &S->nodes);
-        pt_Blob   b;
+        pt_Buffer b;
         pt_Cursor c;
         memset(l0, 0, sizeof(pt_Node)), memset(l1, 0, sizeof(pt_Node));
         l0->children[0] = (pt_Node *)(buf + 0), l0->bytes[0] = 3;
@@ -1620,7 +1621,7 @@ static void test_remove_merge_literal(void) {
         pt_State *S = pt_open(&test_alloc, NULL);
         pt_Node  *l0 = (pt_Node *)ptP_alloc(S, &S->nodes);
         pt_Node  *l1 = (pt_Node *)ptP_alloc(S, &S->nodes);
-        pt_Blob   b;
+        pt_Buffer b;
         pt_Cursor c;
         memset(l0, 0, sizeof(pt_Node)), memset(l1, 0, sizeof(pt_Node));
         l0->children[0] = (pt_Node *)(buf + 0), l0->bytes[0] = 3;
@@ -1707,7 +1708,7 @@ static void test_remove_merge_hole_partial(void) {
 
 static void test_remove_stitch_deep(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b;
+    pt_Buffer b;
     pt_Cursor c;
     /* levels=1: root with 3 leaves, each with 2 pieces.
        Delete 6 bytes across all 3 leaves → triggers stitch+backwardnode. */
@@ -1744,7 +1745,7 @@ static void test_remove_trim_hole(void) {
 
 static void test_remove_hole_eraseleaf(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_edit(&c, 0, "hole1", 5); /* hole("hole1") at pos 0 */
@@ -1767,7 +1768,7 @@ static void test_remove_hole_eraseleaf(void) {
 
 /* full levels=2 tree: 4 inners x 4 leaves x 4 pieces, 1B each, from
  * non-contiguous slices of src (stride 2 defeats literal merging) */
-static pt_Blob brute2_tree(pt_State *S, const char *src) {
+static pt_Buffer brute2_tree(pt_State *S, const char *src) {
     pt_Node *root = (pt_Node *)ptP_alloc(S, &S->nodes);
     int      a, b, ci;
     memset(root, 0, sizeof(pt_Node));
@@ -1802,7 +1803,7 @@ static void test_remove_brute2(void) {
     for (k = 0; k < 64; ++k) expect[k] = src[2 * k];
     for (pos = 0; pos <= 64; ++pos) {
         for (len = 1; len <= 64 - pos; ++len) {
-            pt_Blob   b = brute2_tree(S, src);
+            pt_Buffer b = brute2_tree(S, src);
             pt_Cursor c;
             pt_seek(&c, b, pos);
             assert(pt_remove(&c, len) == PT_OK);
@@ -1827,7 +1828,7 @@ static void test_remove_brute2(void) {
    (4+1 > FANOUT so balancenode path, tree stays legal) */
 static void test_remove_fold_balance2(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(
+    pt_Buffer b = treeV(
             2, innerV(innerV(leafV(litV("a"), litV("b")),
                              leafV(litV("c"), litV("d"))),
                       innerV(leafV(litV("e"), litV("f"), litV("g"), litV("h")),
@@ -1853,7 +1854,7 @@ static void test_remove_fold_balance2(void) {
    inner cc drops to 1 while root cc == 2; tree must stay legal */
 static void test_remove_fold_merge(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(
+    pt_Buffer b = treeV(
             2, innerV(innerV(leafV(litV("a"), litV("b")),
                              leafV(litV("c"), litV("d"))),
                       innerV(leafV(litV("g"), litV("h")),
@@ -1873,7 +1874,7 @@ static void test_remove_fold_merge(void) {
 static void test_remove_findroom(void) {
     pt_Node  *root, *inner0, *inner1, *leaf0, *leaf1, *leaf2, *leaf3, *leaf4;
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b;
+    pt_Buffer b;
     pt_Cursor c;
     /* levels=2: root → [inner0, inner1]; inner0 full (4 leaves), inner1: 1
        leaf. Total 18B. Remove 6 at offset 12 → crosses inner boundary. */
@@ -1896,7 +1897,7 @@ static void test_remove_findroom(void) {
 
 /* brute (pos,len) removals over mixed-shape levels=2 trees
  * (leaf cc 4/3/2 mixes stress fold/stitch/findroom paths) */
-static pt_Blob brute3_tree(pt_State *S, const char *src, const int *shape) {
+static pt_Buffer brute3_tree(pt_State *S, const char *src, const int *shape) {
     pt_Node *root = (pt_Node *)ptP_alloc(S, &S->nodes);
     int      a, b, ci, pi, si = 0, off = 0;
     memset(root, 0, sizeof(pt_Node));
@@ -1933,13 +1934,13 @@ static void test_remove_brute3(void) {
     int       si;
     for (k = 0; k < 1024; ++k) src[k] = (char)('A' + (int)k % 26);
     for (si = 0; si < 3; ++si) {
-        pt_Blob   b0 = brute3_tree(S, src, shapes[si]);
+        pt_Buffer b0 = brute3_tree(S, src, shapes[si]);
         pt_Cursor c;
         total = pt_bytes(b0);
         pt_release(b0);
         for (pos = 0; pos < total; ++pos) {
             for (len = 1; len <= total - pos; ++len) {
-                pt_Blob b = brute3_tree(S, src, shapes[si]);
+                pt_Buffer b = brute3_tree(S, src, shapes[si]);
                 pt_seek(&c, b, pos);
                 assert(pt_remove(&c, len) == PT_OK);
                 if (!pt_checktree_allow_empty(c.tree, 1)
@@ -1960,7 +1961,7 @@ static void test_remove_brute3(void) {
 
 static void test_splice_basic(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(0, leafV(litV("hello")));
+    pt_Buffer b = treeV(0, leafV(litV("hello")));
     pt_Cursor c;
     pt_seek(&c, b, 1);
     assert(pt_splice(&c, 3, "XYZ", 3) == PT_OK); /* del "ell", ins "XYZ" */
@@ -1974,7 +1975,7 @@ static void test_splice_basic(void) {
 
 static void test_splice_del0(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(0, leafV(litV("abc")));
+    pt_Buffer b = treeV(0, leafV(litV("abc")));
     pt_Cursor c;
     pt_seek(&c, b, 0);
     assert(pt_splice(&c, 0, "XYZ", 3) == PT_OK); /* del=0 → insert only */
@@ -1987,7 +1988,7 @@ static void test_splice_del0(void) {
 
 static void test_splice_null(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(0, leafV(litV("hello")));
+    pt_Buffer b = treeV(0, leafV(litV("hello")));
     pt_Cursor c;
     pt_seek(&c, b, 1);
     assert(pt_splice(&c, 3, NULL, 0) == PT_OK); /* del "ell", no insert */
@@ -2003,7 +2004,7 @@ static void test_splice_null(void) {
 
 static void test_remove_stitch_overflow(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(
+    pt_Buffer b = treeV(
             2, innerV(innerV(leafV(litV("a")), leafV(litV("b"))),
                       innerV(leafV(litV("c")), leafV(litV("d"))),
                       innerV(leafV(litV("e")))));
@@ -2020,7 +2021,7 @@ static void test_remove_stitch_overflow(void) {
 
 static void test_remove_foldnode_balance(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(
+    pt_Buffer b = treeV(
             3, innerV(innerV(innerV(leafV(litV("a")), leafV(litV("b"))),
                              innerV(leafV(litV("c")), leafV(litV("d")))),
                       innerV(innerV(leafV(litV("e"))))));
@@ -2038,7 +2039,7 @@ static void test_remove_foldnode_balance(void) {
    Removing that 1 piece → leaf cc=0 < 2, inner cc=2 > 1 → foldnode. */
 static void test_remove_foldnode(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(
+    pt_Buffer b = treeV(
             2, innerV(innerV(leafV(litV("a")),
                              leafV(litV("b"), litV("c"), litV("d"), litV("e"))),
                       innerV(leafV(litV("f")))));
@@ -2055,7 +2056,7 @@ static void test_remove_foldnode(void) {
 static void test_from_basic(void) {
     static const char buf[] = "hello world";
     pt_State         *S = pt_open(&test_alloc, NULL);
-    pt_Blob           b = pt_from(S, buf, (size_t)strlen(buf));
+    pt_Buffer         b = pt_from(S, buf, (size_t)strlen(buf));
     pt_Cursor         c;
     assert(b && pt_bytes(b) == 11);
     assert(pt_checktree(b));
@@ -2073,7 +2074,7 @@ static void test_from_basic(void) {
 
 static void test_edit_params(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     assert(pt_edit(NULL, 0, "x", 1) == PT_ERRPARAM);
     pt_seek(&c, b, 0);
@@ -2087,7 +2088,7 @@ static void test_edit_params(void) {
 
 static void test_edit_empty(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     assert(pt_edit(&c, 0, "hello", 5) == PT_OK);
@@ -2109,7 +2110,7 @@ static void test_edit_empty(void) {
 
 static void test_edit_fresh_lit_mid(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(0, leafV(litV("abcdef")));
+    pt_Buffer b = treeV(0, leafV(litV("abcdef")));
     pt_Cursor c;
     pt_seek(&c, b, 3);
     assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
@@ -2138,7 +2139,7 @@ static void test_edit_fresh_boundary(void) {
 
     /* poff==0: insert before piece */
     {
-        pt_Blob   b = treeV(0, leafV(litV("abcdef")));
+        pt_Buffer b = treeV(0, leafV(litV("abcdef")));
         pt_Cursor c;
         pt_seek(&c, b, 0);
         assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
@@ -2161,7 +2162,7 @@ static void test_edit_fresh_boundary(void) {
 
     /* poff==len: insert after piece */
     {
-        pt_Blob   b = treeV(0, leafV(litV("abcdef")));
+        pt_Buffer b = treeV(0, leafV(litV("abcdef")));
         pt_Cursor c;
         pt_seek(&c, b, 6);
         assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
@@ -2188,7 +2189,7 @@ static void test_edit_fresh_boundary(void) {
 
 static void test_edit_append_tail(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     assert(pt_edit(&c, 0, "hello", 5) == PT_OK);
@@ -2215,7 +2216,7 @@ static void test_edit_append_tail(void) {
 
 static void test_edit_append_full(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     int       i;
     /* hole with 14 bytes (close to PT_MAX_HOLESIZE=16), append 5 → overflow */
@@ -2253,7 +2254,7 @@ static void test_edit_append_full(void) {
 
 static void test_edit_prev_hole(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_edit(&c, 0, "hello", 5); /* hole("hello") at pos 0 */
@@ -2282,7 +2283,7 @@ static void test_edit_prev_hole(void) {
 
 static void test_edit_mid_fit(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     assert(pt_edit(&c, 0, "hello world", 11) == PT_OK);
@@ -2309,7 +2310,7 @@ static void test_edit_mid_fit(void) {
 
 static void test_edit_mid_split(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     int       i;
     /* hole with 12 bytes, insert 5 at middle → 17 > CAP → splitins */
@@ -2353,7 +2354,7 @@ static void test_edit_mid_split(void) {
 
 static void test_edit_del_then_ins(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_insert(&c, "hello world", 11);
@@ -2383,7 +2384,7 @@ static void test_edit_del_then_ins(void) {
 
 static void test_edit_del_only(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_insert(&c, "hello world", 11);
@@ -2400,7 +2401,7 @@ static void test_edit_del_only(void) {
 
 static void test_edit_type_sequence(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     int       k, n = 15;
     pt_seek(&c, b, 0);
@@ -2431,7 +2432,7 @@ static void test_edit_type_sequence(void) {
 
 static void test_edit_split_tree(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_append(&c, "aa", 2);
@@ -2446,10 +2447,10 @@ static void test_edit_split_tree(void) {
     /* expected: levels=1, inner(left: lit"aa", hole"ZZ", lit"bb",
        right: lit"cc", lit"dd") */
     {
-        pt_Node *exp_lf = leafV(litV("aa"), holeV("ZZ"), litV("bb"));
-        pt_Node *exp_rf = leafV(litV("cc"), litV("dd"));
-        pt_Node *exp_in = innerV(exp_lf, exp_rf);
-        pt_Blob  expected = treeV(1, exp_in);
+        pt_Node  *exp_lf = leafV(litV("aa"), holeV("ZZ"), litV("bb"));
+        pt_Node  *exp_rf = leafV(litV("cc"), litV("dd"));
+        pt_Node  *exp_in = innerV(exp_lf, exp_rf);
+        pt_Buffer expected = treeV(1, exp_in);
         assert(pt_comparetree(c.tree, expected));
         pt_release(expected);
     }
@@ -2460,7 +2461,7 @@ static void test_edit_split_tree(void) {
 
 static void test_edit_upmask(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b;
+    pt_Buffer b;
     pt_Cursor c;
     pt_Node  *r, *leaf0, *leaf1;
     pt_Hole  *hole;
@@ -2501,9 +2502,9 @@ static void test_edit_upmask(void) {
 
 static void test_commit_single_hole(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
-    pt_Blob   snap;
+    pt_Buffer snap;
     pt_seek(&c, b, 0);
     assert(pt_edit(&c, 0, "hello", 5) == PT_OK);
     assert(c.dirty);
@@ -2527,7 +2528,7 @@ static void test_commit_single_hole(void) {
  */
 static void test_commit_no_merge(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     int       i;
     pt_seek(&c, b, 0);
@@ -2560,7 +2561,7 @@ static void test_commit_no_merge(void) {
 
 static void test_commit_mixed(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     int       i;
     pt_seek(&c, b, 0);
@@ -2605,7 +2606,7 @@ static void test_commit_deep(void) {
  * the full list so pt_scratch stays valid afterwards */
 static void test_commit_fillblock(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     size_t    cap;
     pt_seek(&c, b, 0);
@@ -2626,7 +2627,7 @@ static void test_commit_fillblock(void) {
 static void test_commit_freshpage(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Cursor c;
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     /* Single edit → 1 hole; commit copies data into scratch */
     pt_seek(&c, b, 0);
     assert(pt_edit(&c, 0, "aaaaaaaaaaaaaaa", 15) == PT_OK);
@@ -2645,8 +2646,8 @@ static void test_commit_freshpage(void) {
 
 static void test_commit_clean(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
-    pt_Blob   snap;
+    pt_Buffer b = pt_empty(S);
+    pt_Buffer snap;
     pt_Cursor c;
     pt_seek(&c, b, 0);
     snap = pt_commit(&c);
@@ -2659,8 +2660,8 @@ static void test_commit_clean(void) {
 
 static void test_commit_then_reseek(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
-    pt_Blob   snap;
+    pt_Buffer b = pt_empty(S);
+    pt_Buffer snap;
     pt_Cursor c;
     pt_seek(&c, b, 0);
     assert(pt_edit(&c, 0, "abcdef", 6) == PT_OK);
@@ -2677,7 +2678,7 @@ static void test_commit_then_reseek(void) {
 /* E11/E12: bytes/levels/child_count unchanged by freeze */
 static void test_commit_bytes_invariant(void) {
     pt_State      *S = pt_open(&test_alloc, NULL);
-    pt_Blob        b = pt_empty(S);
+    pt_Buffer      b = pt_empty(S);
     pt_Cursor      c;
     size_t         bytes_before;
     unsigned       levels_before;
@@ -2723,7 +2724,7 @@ static void test_commit_reserve_pages(void) {
 static void test_commit_reservebuf_oom(void) {
     int       cnt = 10000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     size_t    bytes_before;
     int       i;
@@ -2752,9 +2753,9 @@ static void test_commit_reservebuf_oom(void) {
 /* §8.3 full round-trip: edit series → commit → content matches reference */
 static void test_edit_commit_roundtrip(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_from(S, "Hello World", 11);
+    pt_Buffer b = pt_from(S, "Hello World", 11);
     pt_Cursor c;
-    pt_Blob   snap;
+    pt_Buffer snap;
     pt_seek(&c, b, 5);
     assert(pt_edit(&c, 1, "XY", 2) == PT_OK); /* replace " " with "XY" */
     snap = pt_commit(&c);
@@ -2781,9 +2782,9 @@ static void test_edit_commit_roundtrip(void) {
 /* §8.3 commit then seek+edit (new transient), verify independent version */
 static void test_edit_commit_edit(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_from(S, "Hello", 5);
+    pt_Buffer b = pt_from(S, "Hello", 5);
     pt_Cursor c;
-    pt_Blob   snap;
+    pt_Buffer snap;
     pt_seek(&c, b, 2);
     assert(pt_edit(&c, 0, "XY", 2) == PT_OK); /* "HeXYlo" */
     snap = pt_commit(&c);
@@ -2833,8 +2834,8 @@ static void test_commit_deep2(void) {
        ptM_upmask propagates the hole bit to the root (leaf->root). */
     static char buf[200], exp0[128], exp1[128], got[128];
     pt_State   *S = pt_open(&test_alloc, NULL);
-    pt_Blob     b = pt_empty(S);
-    pt_Blob     a, a2;
+    pt_Buffer   b = pt_empty(S);
+    pt_Buffer   a, a2;
     pt_Cursor   c;
     size_t      len0, len1, gl;
     int         k, n = 30;
@@ -2880,7 +2881,7 @@ static void test_commit_deep2(void) {
 
 static void test_commit_reserve_leftover(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     int       i;
 
@@ -2939,7 +2940,7 @@ static void test_commit_reserve_leftover(void) {
 static void test_commit_reservebuf_oom_multi(void) {
     int       cnt = 10000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     int       i;
     size_t    bytes_before;
@@ -2972,7 +2973,7 @@ static void test_commit_reservebuf_oom_multi(void) {
 
 static void test_read_params(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_from(S, "hello", 5);
+    pt_Buffer b = pt_from(S, "hello", 5);
     pt_Cursor c;
     size_t    n;
     char      buf[8];
@@ -3043,7 +3044,7 @@ static void test_read_params(void) {
 
 static void test_piece_positions(void) {
     pt_State   *S = pt_open(&test_alloc, NULL);
-    pt_Blob     b = treeV(0, leafV(litV("hello"), litV("world"), litV("!!!")));
+    pt_Buffer   b = treeV(0, leafV(litV("hello"), litV("world"), litV("!!!")));
     pt_Cursor   c;
     const char *p;
     size_t      n;
@@ -3085,7 +3086,7 @@ static void test_piece_positions(void) {
 
 static void test_next_basic(void) {
     pt_State   *S = pt_open(&test_alloc, NULL);
-    pt_Blob     b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));
+    pt_Buffer   b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));
     pt_Cursor   c;
     const char *p;
     size_t      n;
@@ -3131,7 +3132,7 @@ static void test_next_basic(void) {
 
 static void test_prev_basic(void) {
     pt_State   *S = pt_open(&test_alloc, NULL);
-    pt_Blob     b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));
+    pt_Buffer   b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));
     pt_Cursor   c;
     const char *p;
     size_t      n;
@@ -3168,7 +3169,7 @@ static void test_prev_basic(void) {
 /* Single piece tree — pt_next/pt_prev edges */
 static void test_trav_single(void) {
     pt_State   *S = pt_open(&test_alloc, NULL);
-    pt_Blob     b = treeV(0, leafV(litV("hello")));
+    pt_Buffer   b = treeV(0, leafV(litV("hello")));
     pt_Cursor   c;
     const char *p;
     size_t      n;
@@ -3205,7 +3206,7 @@ static void test_trav_single(void) {
 /* Levels=1 forward traversal — exercises walk-up-then-down in pt_next */
 static void test_next_levels1(void) {
     pt_State   *S = pt_open(&test_alloc, NULL);
-    pt_Blob     b = pt_empty(S);
+    pt_Buffer   b = pt_empty(S);
     pt_Cursor   c;
     const char *p;
     size_t      n;
@@ -3240,7 +3241,7 @@ static void test_next_levels1(void) {
 /* Levels=1 backward traversal */
 static void test_prev_levels1(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(
+    pt_Buffer b = treeV(
             1, innerV(leafV(litV("aa"), litV("bb")),
                       leafV(litV("cc"), litV("dd"))));
     pt_Cursor   c;
@@ -3269,7 +3270,7 @@ static void test_prev_levels1(void) {
 
 static void test_read_basic(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(0, leafV(litV("hello world")));
+    pt_Buffer b = treeV(0, leafV(litV("hello world")));
     pt_Cursor c;
     char      buf[32];
     size_t    r;
@@ -3302,7 +3303,7 @@ static void test_read_basic(void) {
 
 static void test_read_cross(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(0, leafV(litV("aaaa"), litV("bbbb"), litV("cccc")));
+    pt_Buffer b = treeV(0, leafV(litV("aaaa"), litV("bbbb"), litV("cccc")));
     pt_Cursor c;
     char      buf[32];
     size_t    r;
@@ -3332,7 +3333,7 @@ static void test_read_cross(void) {
 static void test_read_full(void) {
     pt_State   *S = pt_open(&test_alloc, NULL);
     static char ref[128];
-    pt_Blob     b;
+    pt_Buffer   b;
     pt_Cursor   c;
     char        buf[256];
     size_t      r;
@@ -3351,7 +3352,7 @@ static void test_read_full(void) {
 
 static void test_read_empty(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     char      buf[8];
     size_t    r;
@@ -3377,7 +3378,7 @@ static void test_read_empty(void) {
 
 static void test_read_cursor_mid(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_from(S, "abcdefghij", 10);
+    pt_Buffer b = pt_from(S, "abcdefghij", 10);
     pt_Cursor c;
     char      buf[16];
     size_t    r;
@@ -3400,7 +3401,7 @@ static void test_read_cursor_mid(void) {
 
 static void test_trav_deep(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(
+    pt_Buffer b = treeV(
             2, innerV(innerV(leafV(litV("aa"), litV("bb")),
                              leafV(litV("cc"), litV("dd"))),
                       innerV(leafV(litV("ee"), litV("ff")),
@@ -3563,9 +3564,9 @@ static void test_splice_brute(void) {
 static void test_commit_deep_holes(void) {
     static char buf[300];
     pt_State   *S = pt_open(&test_alloc, NULL);
-    pt_Blob     b = pt_empty(S);
+    pt_Buffer   b = pt_empty(S);
     pt_Cursor   c;
-    pt_Blob     snap;
+    pt_Buffer   snap;
     int         k, n = 60;
     for (k = 0; k < 300; ++k) buf[k] = (char)('!' + (k % 90));
     pt_seek(&c, b, 0);
@@ -3593,7 +3594,7 @@ static void test_commit_deep_holes(void) {
 /* read fewer bytes than a piece — exercises pt_read m<n partial-read branch */
 static void test_read_partial(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     char      rd[16];
     size_t    nr;
@@ -3619,8 +3620,8 @@ static void test_read_partial(void) {
  * cursor at first leaf of its parent triggers the while(--l>=0) ascent */
 static void test_prev_cross_level(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b;
-    pt_Blob   a;
+    pt_Buffer b;
+    pt_Buffer a;
     pt_Cursor c;
     char      buf[300];
     int       k;
@@ -3656,7 +3657,7 @@ static void test_remove_findroom_deep(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
     /* build a levels=3 tree with small pieces so remove can
      * create the findroom scenario */
-    pt_Blob b = treeV(
+    pt_Buffer b = treeV(
             3,
             innerV(innerV(
                     innerV(leafV(litV("a"), litV("b"), litV("c"), litV("d"))),
@@ -3681,8 +3682,8 @@ static void test_remove_findroom_deep(void) {
 static void test_edit_cow_splitchild(void) {
     static char buf[300];
     pt_State   *S = pt_open(&test_alloc, NULL);
-    pt_Blob     b = pt_empty(S);
-    pt_Blob     a;
+    pt_Buffer   b = pt_empty(S);
+    pt_Buffer   a;
     pt_Cursor   c;
     int         k;
     for (k = 0; k < 300; ++k) buf[k] = (char)('!' + (k % 90));
@@ -3703,7 +3704,7 @@ static void test_edit_cow_splitchild(void) {
 /* error-return paths for public API null / invalid parameters */
 static void test_error_paths(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     size_t    cap;
 
@@ -3825,8 +3826,8 @@ static void test_error_paths(void) {
 static void test_remove_cow_deep(void) {
     static char buf[300];
     pt_State   *S = pt_open(&test_alloc, NULL);
-    pt_Blob     b = pt_empty(S);
-    pt_Blob     a;
+    pt_Buffer   b = pt_empty(S);
+    pt_Buffer   a;
     pt_Cursor   c;
     int         k;
     for (k = 0; k < 300; ++k) buf[k] = (char)('!' + (k % 90));
@@ -3854,7 +3855,7 @@ static void test_remove_cow_deep(void) {
 static void test_remove_literal_mid_fulltree(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
     /* build tree where every node (root to leaf) is full (cc=PT_FANOUT) */
-    pt_Blob b = treeV(
+    pt_Buffer b = treeV(
             2,
             innerV(innerV(leafV(litV("aa"), litV("bb"), litV("cc"), litV("dd")),
                           leafV(litV("ee"), litV("ff"), litV("gg"), litV("hh")),
@@ -3889,7 +3890,7 @@ static void test_remove_literal_mid_fulltree(void) {
 /* cov: ptD_rmleaf mid-literal split in a completely full tree */
 static void test_remove_cov_midsplit(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b;
+    pt_Buffer b;
     pt_Cursor c;
     b = treeV(
             1,
@@ -3913,7 +3914,7 @@ static void test_remove_cov_midsplit(void) {
 static void test_remove_stitch_zero(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
     /* remove that creates empty tail pieces that get cleaned up */
-    pt_Blob b = treeV(
+    pt_Buffer b = treeV(
             1, innerV(leafV(litV("a"), litV("bb"), litV("ccc"), litV("dddd")),
                       leafV(litV("e"), litV("ff"), litV("ggg"), litV("hhhh"))));
     pt_Cursor c;
@@ -3929,7 +3930,7 @@ static void test_remove_stitch_zero(void) {
 /* splice with del==0 and NULL s — triggers early return branch */
 static void test_splice_null_del0(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     assert(pt_splice(&c, 0, NULL, 0) == PT_OK);
@@ -3938,13 +3939,13 @@ static void test_splice_null_del0(void) {
     pt_close(S);
 }
 
-/* build a blob via pt_reserve+pt_literal+pt_append from empty;
+/* build a buffer via pt_reserve+pt_literal+pt_append from empty;
  * within one arena block (PT_ARENA_SIZE=1024) all pieces must
  * merge into a single-node tree because literals are contiguous */
 static void test_literal_single_node(void) {
     static char data[1024];
     pt_State   *S = pt_open(&test_alloc, NULL);
-    pt_Blob     b = pt_empty(S);
+    pt_Buffer   b = pt_empty(S);
     pt_Cursor   c;
     int         k;
     size_t      chunk, total = 0;
@@ -3995,15 +3996,15 @@ static void test_literal_single_node(void) {
 /* cov: parameter/NULL error branches */
 static void test_error_cov_params(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b = treeV(0, leafV(litV("ab")));
+    pt_Buffer b = treeV(0, leafV(litV("ab")));
     pt_Cursor c;
     char      buf[4];
     size_t    n;
-    {   /* pt_open allocf fails */
+    { /* pt_open allocf fails */
         int cnt0 = 0;
         assert(pt_open(&oom_alloc, &cnt0) == NULL);
     }
-    {   /* pt_from trees pool page alloc fails */
+    { /* pt_from trees pool page alloc fails */
         int       cnt1 = 1000;
         pt_State *S2 = pt_open(&oom_alloc, &cnt1);
         cnt1 = 0;
@@ -4050,7 +4051,7 @@ static void test_error_cov_params(void) {
 static void test_reserve_cov_oom(void) {
     int       cnt = 1000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
     cnt = 0;
@@ -4072,7 +4073,7 @@ static void test_reserve_cov_oom(void) {
 static void test_fork_cov_oom(void) {
     int       cnt = 1000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
-    pt_Blob   b;
+    pt_Buffer b;
     pt_Cursor c;
     void     *savedt, *savedn;
     b = pt_from(S, "abcd", 4);
@@ -4100,7 +4101,7 @@ static void test_fork_cov_oom(void) {
 static void test_edit_cov_holeoom(void) {
     int       cnt = 1000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
-    pt_Blob   b = pt_empty(S);
+    pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     void     *savedh;
     pt_seek(&c, b, 0);
@@ -4121,7 +4122,7 @@ static void test_edit_cov_holeoom(void) {
  * children that occurs when a levels=0 treeV tree is forked. */
 static void test_edit_cov_prevfull(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Blob   b;
+    pt_Buffer b;
     pt_Cursor c;
     b = pt_empty(S);
     pt_seek(&c, b, 0);

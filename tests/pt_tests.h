@@ -24,7 +24,7 @@
 
 #include "../piecetab.h"
 
-PT_STATIC void pt_dumptree(pt_Blob snap, const char *tag);
+PT_STATIC void pt_dumptree(pt_Buffer snap, const char *tag);
 PT_STATIC void pt_dumpcursor(const pt_Cursor *C, const char *tag);
 
 /* ================================================================ */
@@ -110,7 +110,7 @@ PT_STATIC int pt_checknode(const pt_Node *n, int rl, int mc, int *has_hole) {
     return 1;
 }
 
-PT_STATIC int pt_checktree_allow_empty(pt_Blob snap, int allow_empty) {
+PT_STATIC int pt_checktree_allow_empty(pt_Buffer snap, int allow_empty) {
     int hh = 0;
     pt_check(
             snap->root.child_count != 0 || snap->bytes == 0,
@@ -142,7 +142,7 @@ PT_STATIC int pt_checktree_allow_empty(pt_Blob snap, int allow_empty) {
     return 1;
 }
 
-PT_STATIC int pt_checktree(pt_Blob snap) {
+PT_STATIC int pt_checktree(pt_Buffer snap) {
     return pt_checktree_allow_empty(snap, 0);
 }
 
@@ -216,7 +216,8 @@ PT_STATIC void pt_dumpnode(const pt_Node *n, int idx, int l, int levels) {
                     pt_log("%02x", hd[ki]);
                 pt_log(" '");
                 for (ki = 0; ki < (unsigned)pt_min(n->bytes[i], 16); ++ki)
-                    pt_log("%c", hd[ki] >= 32 && hd[ki] < 127 ? (char)hd[ki] : '.');
+                    pt_log("%c",
+                           hd[ki] >= 32 && hd[ki] < 127 ? (char)hd[ki] : '.');
                 pt_log("'\n");
             } else {
                 pt_log("%*sL%u LIT bytes=%zu %.*s\n", (l + 1) * 2, "", i,
@@ -229,7 +230,7 @@ PT_STATIC void pt_dumpnode(const pt_Node *n, int idx, int l, int levels) {
     }
 }
 
-PT_STATIC void pt_dumptree(pt_Blob snap, const char *tag) {
+PT_STATIC void pt_dumptree(pt_Buffer snap, const char *tag) {
     pt_log("[TREE]\t %s: levels=%u root.cc=%u bytes=%zu\n", tag, snap->levels,
            snap->root.child_count, snap->bytes);
     pt_dumpnode(&snap->root, -1, 0, snap->levels);
@@ -270,7 +271,7 @@ PT_STATIC int pt_comparenode(
     return 1;
 }
 
-PT_STATIC int pt_comparetree(pt_Blob a, pt_Blob b) {
+PT_STATIC int pt_comparetree(pt_Buffer a, pt_Buffer b) {
     if (a->levels != b->levels) return 0;
     if (a->bytes != b->bytes) return 0;
     if (a->root.child_count != b->root.child_count) return 0;
@@ -293,7 +294,7 @@ PT_STATIC int pt_checkleaves_rec(
     return 0;
 }
 
-PT_STATIC int pt_checkleaves(const pt_Blob *S, unsigned **brs) {
+PT_STATIC int pt_checkleaves(const pt_Buffer *S, unsigned **brs) {
     (void)S;
     /* TODO */
     return (**brs == 0);
@@ -329,11 +330,11 @@ typedef struct {
 
 #define pt_nonnull(c) (assert(c), c)
 
-#define editV(c, off, l, root)             \
-    do {                                   \
-        pt_Blob _tv_ = treeV_(S, l, root); \
-        pt_seek((c), _tv_, (off));         \
-        (c)->dirty = 1;                    \
+#define editV(c, off, l, root)               \
+    do {                                     \
+        pt_Buffer _tv_ = treeV_(S, l, root); \
+        pt_seek((c), _tv_, (off));           \
+        (c)->dirty = 1;                      \
     } while (0)
 
 static pt_LeafValue litV_(const char *s, size_t len) {
@@ -393,7 +394,7 @@ PT_STATIC pt_Node *innerV_(pt_State *S, ...) {
     return n;
 }
 
-PT_STATIC pt_Blob treeV_(pt_State *S, unsigned levels, pt_Node *root) {
+PT_STATIC pt_Buffer treeV_(pt_State *S, unsigned levels, pt_Node *root) {
     pt_Tree *t = (pt_Tree *)pt_from(S, NULL, 0);
     unsigned i;
     assert(t && root->child_count <= PT_FANOUT);
@@ -411,7 +412,7 @@ PT_STATIC pt_Blob treeV_(pt_State *S, unsigned levels, pt_Node *root) {
 
 #define pt_asserttree(c, lvls, root)                                     \
     do {                                                                 \
-        pt_Blob __d = treeV_(S, lvls, root);                             \
+        pt_Buffer __d = treeV_(S, lvls, root);                           \
         if (!pt_comparetree((c), __d)) {                                 \
             fprintf(stderr, "pt_asserttree FAILED at %s:%d\n", __FILE__, \
                     __LINE__);                                           \

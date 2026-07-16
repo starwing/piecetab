@@ -49,7 +49,7 @@ PT_NS_BEGIN
 
 typedef struct pt_State       pt_State;
 typedef struct pt_Cursor      pt_Cursor;
-typedef const struct pt_Tree *pt_Blob;
+typedef const struct pt_Tree *pt_Buffer;
 
 typedef ptrdiff_t pt_Delta;
 
@@ -62,23 +62,23 @@ PT_API void      pt_reset(pt_State *S);
 PT_API void      pt_close(pt_State *S);
 PT_API pt_Alloc *pt_getallocf(pt_State *S, void **pud);
 
-PT_API unsigned pt_retain(pt_Blob b);
-PT_API unsigned pt_release(pt_Blob b);
+PT_API unsigned pt_retain(pt_Buffer b);
+PT_API unsigned pt_release(pt_Buffer b);
 
-/* blob */
+/* buffer */
 
 /* construction */
-PT_API pt_Blob pt_empty(pt_State *S);
-PT_API pt_Blob pt_from(pt_State *S, const char *s, size_t len);
+PT_API pt_Buffer pt_empty(pt_State *S);
+PT_API pt_Buffer pt_from(pt_State *S, const char *s, size_t len);
 
 /* query */
-PT_API unsigned pt_version(pt_Blob b);
-PT_API size_t   pt_bytes(pt_Blob b);
+PT_API unsigned pt_version(pt_Buffer b);
+PT_API size_t   pt_bytes(pt_Buffer b);
 
 /* cursor */
 
 /* construction */
-PT_API int pt_seek(pt_Cursor *C, pt_Blob b, size_t off);
+PT_API int pt_seek(pt_Cursor *C, pt_Buffer b, size_t off);
 
 /* navigate */
 PT_API int pt_locate(pt_Cursor *C, size_t off);
@@ -93,7 +93,7 @@ PT_API const char *pt_prev(pt_Cursor *C, size_t *plen);
 
 /* query */
 #define pt_offset(C) ((C)->off + (C)->poff)
-#define pt_blob(C)   ((C)->tree)
+#define pt_buffer(C) ((C)->tree)
 
 /* editing */
 
@@ -107,8 +107,8 @@ PT_API int pt_splice(pt_Cursor *C, size_t del, const char *s, size_t len);
 PT_API int pt_remove(pt_Cursor *C, size_t len);
 
 /* transaction */
-PT_API void    pt_rollback(pt_Cursor *C);
-PT_API pt_Blob pt_commit(pt_Cursor *C);
+PT_API void      pt_rollback(pt_Cursor *C);
+PT_API pt_Buffer pt_commit(pt_Cursor *C);
 
 /* literal scratch buffer (arena) */
 PT_API char *pt_reserve(pt_Cursor *C, size_t len);
@@ -122,7 +122,7 @@ PT_API const char *pt_literal(pt_Cursor *C, size_t len);
 
 struct pt_Cursor {
     struct pt_Node **paths[PT_MAX_LEVEL]; /* root-to-leaf child slot ptrs */
-    struct pt_Tree  *tree;                /* blob under navigation or edit */
+    struct pt_Tree  *tree;                /* buffer under navigation or edit */
     size_t           poff;                /* offset in current leaf piece */
     size_t           off;                 /* bytes before current piece */
     int              dirty;               /* non-zero during transient edit */
@@ -327,10 +327,12 @@ static int ptM_ishole(const pt_Node *n, int i)
 { return assert(i >= 0 && i < PT_FANOUT), (n->mask & ((pt_Mask)1 << i)) != 0; }
 /* clang-format on */
 
-PT_API unsigned pt_version(pt_Blob b) { return b ? b->root.version : 0; }
-PT_API size_t   pt_bytes(pt_Blob b) { return b ? b->bytes : 0; }
-PT_API unsigned pt_retain(pt_Blob b) { return b ? ++((pt_Tree *)b)->refc : 0; }
-PT_API pt_Blob  pt_empty(pt_State *S) { return S ? &S->empty : NULL; }
+PT_API unsigned pt_version(pt_Buffer b) { return b ? b->root.version : 0; }
+PT_API size_t   pt_bytes(pt_Buffer b) { return b ? b->bytes : 0; }
+PT_API unsigned pt_retain(pt_Buffer b) {
+    return b ? ++((pt_Tree *)b)->refc : 0;
+}
+PT_API pt_Buffer pt_empty(pt_State *S) { return S ? &S->empty : NULL; }
 
 static void ptM_sethole(pt_Node *n, int i, int h) {
     assert(i >= 0 && i < PT_FANOUT);
@@ -464,7 +466,7 @@ PT_API pt_Alloc *pt_getallocf(pt_State *S, void **pud) {
     return S->allocf;
 }
 
-PT_API pt_Blob pt_from(pt_State *S, const char *s, size_t len) {
+PT_API pt_Buffer pt_from(pt_State *S, const char *s, size_t len) {
     pt_Tree *t;
     if (!S || (!s && len > 0)) return NULL;
     if (!(t = (pt_Tree *)ptP_alloc(S, &S->trees))) return NULL;
@@ -478,7 +480,7 @@ PT_API pt_Blob pt_from(pt_State *S, const char *s, size_t len) {
     return t;
 }
 
-PT_API unsigned pt_release(pt_Blob b) {
+PT_API unsigned pt_release(pt_Buffer b) {
     pt_Tree *t = (pt_Tree *)b;
     if (t == NULL || t == &t->S->empty) return 0;
     if (t->refc > 1) return --t->refc;
@@ -518,7 +520,7 @@ static int ptK_locend(pt_Cursor *C) {
     return 1;
 }
 
-PT_API int pt_seek(pt_Cursor *C, pt_Blob b, size_t off) {
+PT_API int pt_seek(pt_Cursor *C, pt_Buffer b, size_t off) {
     if (C == NULL || b == NULL) return PT_ERRPARAM;
     memset(C, 0, sizeof(pt_Cursor)), C->tree = (pt_Tree *)b;
     if (off >= b->bytes) return ptK_locend(C), PT_OK;
@@ -675,7 +677,7 @@ static void ptC_freeze(pt_State *S, pt_Tree *tree, char *pos) {
     }
 }
 
-PT_API pt_Blob pt_commit(pt_Cursor *C) {
+PT_API pt_Buffer pt_commit(pt_Cursor *C) {
     size_t total;
     char  *buf;
     if (C == NULL || C->tree == NULL) return NULL;
