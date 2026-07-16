@@ -2588,7 +2588,8 @@ static void test_commit_deep(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Cursor c;
     editV(&c, 0, 1,
-          innerV(leafV(holeV("abc")), leafV(litV("def"), litV("ghi"))));
+          innerV(leafV(holeV("abc"), litV("x")),
+                 leafV(litV("def"), litV("ghi"))));
     assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
     assert(pt_commit(&c) != NULL);
     assert(pt_checktree(c.tree));

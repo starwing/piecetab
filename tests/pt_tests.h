@@ -92,6 +92,11 @@ PT_STATIC int pt_checknode(const pt_Node *n, int rl, int mc, int *has_hole) {
                 pt_check(
                         n->bytes[i] > 0, "[chk] LITERAL rl=%d i=%d bytes=%zu\n",
                         rl, i, n->bytes[i]);
+                if (i > 0 && !ptM_ishole(n, i - 1)
+                    && ptN_lit(n, i - 1) + n->bytes[i - 1] == ptN_lit(n, i)) {
+                    pt_log("[chk] ADJACENT literals i=%d,%d node=%p\n", i - 1,
+                           i, (void *)n);
+                }
             }
         } else {
             pt_Node *c = n->children[i];

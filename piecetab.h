@@ -910,7 +910,7 @@ PT_API int pt_edit(pt_Cursor *C, size_t del, const char *s, size_t len) {
     if (len == 0) return PT_OK;
     if (ptK_bytes(C) == 0) return ptI_onepiece(C, s, len, 1), PT_OK;
     l = ptK_levels(C), i = ptK_idx(C, p = ptK_parent(C, l), l);
-    if (C->poff && ptM_ishole(p, i) && ptH_fit(p, i, len)) {
+    if (ptM_ishole(p, i) && ptH_fit(p, i, len)) {
         ptH_append(p, i, C->poff, s, len), C->poff += len;
         return ptM_up(C, l - 1, (pt_Delta)len), PT_OK;
     }
