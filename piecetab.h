@@ -319,26 +319,6 @@ static void ptA_destroy(pt_State *S, pt_Arena *a) {
 
 #define ptM_mask(n) (((pt_Mask)1 << (n)) - 1)
 
-/* clang-format off */
-static size_t ptN_sumbytes(const pt_Node *n, int i, int end)
-{ size_t s = 0; for (; i < end; ++i) s += n->bytes[i]; return s; }
-
-static int ptM_ishole(const pt_Node *n, int i)
-{ return assert(i >= 0 && i < PT_FANOUT), (n->mask & ((pt_Mask)1 << i)) != 0; }
-/* clang-format on */
-
-PT_API unsigned pt_version(pt_Buffer b) { return b ? b->root.version : 0; }
-PT_API size_t   pt_bytes(pt_Buffer b) { return b ? b->bytes : 0; }
-PT_API unsigned pt_retain(pt_Buffer b) {
-    return b ? ++((pt_Tree *)b)->refc : 0;
-}
-PT_API pt_Buffer pt_empty(pt_State *S) { return S ? &S->empty : NULL; }
-
-static void ptM_sethole(pt_Node *n, int i, int h) {
-    assert(i >= 0 && i < PT_FANOUT);
-    n->mask ^= (-!!h ^ n->mask) & ((pt_Mask)1 << i);
-}
-
 static int ptM_ctz(pt_Mask m) {
     unsigned long i = 0;
     assert(m != 0);
@@ -354,23 +334,42 @@ static int ptM_ctz(pt_Mask m) {
 #endif
 }
 
-static int ptM_iterhole(pt_Mask *m, int *pi, int cc) {
-    if (*m == 0) return 0;
-    *pi = ptM_ctz(*m);
-    return *m &= *m - 1, *pi < cc;
+/* clang-format off */
+static size_t ptN_sumbytes(const pt_Node *n, int i, int end)
+{ size_t s = 0; for (; i < end; ++i) s += n->bytes[i]; return s; }
+
+static int ptM_ishole(const pt_Node *n, int i)
+{ return assert(i >= 0 && i < PT_FANOUT), (n->mask & ((pt_Mask)1 << i)) != 0; }
+
+static int ptM_iterhole(pt_Mask *m, int *pi, int cc)
+{ return *m ? (*pi = ptM_ctz(*m), *m &= *m - 1, *pi < cc) : 0; }
+/* clang-format on */
+
+PT_API unsigned pt_version(pt_Buffer b) { return b ? b->root.version : 0; }
+PT_API size_t   pt_bytes(pt_Buffer b) { return b ? b->bytes : 0; }
+PT_API unsigned pt_retain(pt_Buffer b) {
+    return b ? ++((pt_Tree *)b)->refc : 0;
+}
+PT_API pt_Buffer pt_empty(pt_State *S) { return S ? &S->empty : NULL; }
+
+static void ptM_sethole(pt_Node *n, int i, int h) {
+    assert(i >= 0 && i < PT_FANOUT);
+    n->mask ^= (-!!h ^ n->mask) & ((pt_Mask)1 << i);
+}
+
+static int ptM_remask(pt_Node *p, int i, int k) {
+    int h;
+    if (k == 0) return 1;
+    h = (p->children[i]->mask & ptM_mask(ptN_cc(p->children[i]))) != 0;
+    return ptM_ishole(p, i) == h ? 0 : (ptM_sethole(p, i, h), 1);
 }
 
 static void ptM_up(pt_Cursor *C, int l, pt_Delta db) {
     int      i;
     pt_Node *p;
     for (; l >= 0; --l) {
-        i = ptK_idx(C, p = ptK_parent(C, l), l);
-        if (db) p->bytes[i] += db;
-        if (l < ptK_levels(C)) {
-            int h = !!(p->children[i]->mask & ptM_mask(ptN_cc(p->children[i])));
-            if (db == 0 && h == ptM_ishole(p, i)) return;
-            ptM_sethole(p, i, h);
-        }
+        i = ptK_idx(C, p = ptK_parent(C, l), l), p->bytes[i] += db;
+        if (!ptM_remask(p, i, ptK_levels(C) - l) && !db) return;
     }
     if (db) C->tree->bytes += db;
 }
@@ -384,11 +383,9 @@ static void ptN_purge(pt_State *S, pt_Node *p, int k, int s, int e, pt_Ver v) {
             ptP_free(&S->holes, p->children[i]);
     } else {
         for (i = s; i < e; ++i) {
-            pt_Node *c = (pt_Node *)p->children[i];
-            if (c->version == v) {
-                ptN_purge(S, c, k - 1, 0, ptN_cc(c), v);
-                ptP_free(&S->nodes, c);
-            }
+            pt_Node *c = p->children[i];
+            if (c->version != v) continue;
+            ptN_purge(S, c, k - 1, 0, ptN_cc(c), v), ptP_free(&S->nodes, c);
         }
     }
 }
@@ -1110,16 +1107,19 @@ PT_STATIC int ptD_checkstitch(pt_Cursor *C)
 /* clang-format on */
 
 static void ptD_stitchnode(pt_Cursor *L, pt_Node *rt) {
-    int k, d = 0, l = ptK_levels(L);
+    int      k, i, d = 0, l = ptK_levels(L);
+    pt_Delta db = 0;
+    pt_Node *p, *r;
     for (k = 0; k <= ptK_levels(L); ++k) {
-        int      m, fl, kl = ptK_levels(L) - k, rtcc = ptN_cc(&rt[k]);
-        pt_Node *p = ptK_parent(L, kl);
-        ptN_setcc(&rt[k], 0);
+        int m, fl, kl = ptK_levels(L) - k, rtcc = ptN_cc(r = &rt[k]);
+        ptN_setcc(r, 0), i = ptK_idx(L, p = ptK_parent(L, kl), kl);
+        if (i < ptN_cc(p)) p->bytes[i] += db, ptM_remask(p, i, k);
         if ((m = pt_min(rtcc, PT_FANOUT - ptN_cc(p))) > 0) {
-            ptN_copy(p, ptN_cc(p), &rt[k], 0, m), ptN_setcc(p, ptN_cc(p) + m);
-            ptM_up(L, kl - 1, (pt_Delta)ptN_sumbytes(&rt[k], 0, m));
+            ptN_copy(p, ptN_cc(p), r, 0, m), ptN_setcc(p, ptN_cc(p) + m);
+            db += (pt_Delta)ptN_sumbytes(r, 0, m);
         }
         if (!(m < rtcc || kl == 0)) continue;
+        ptM_up(L, kl - 1, db), db = 0;
         if (kl == 0 && ptN_cc(&L->tree->root) == 1)
             ptD_rebalance(L, 0), l -= (k - ptK_levels(L));
         for (fl = kl; fl < l; ++fl) ptD_foldnode(L, (fl == kl), fl);
@@ -1127,8 +1127,8 @@ static void ptD_stitchnode(pt_Cursor *L, pt_Node *rt) {
         if (!(m < rtcc)) continue;
         p = ptK_parent(L, l = kl), d = k ? ptN_cc(p) - ptK_idx(L, p, l) : m;
         ptD_findroom(L, l), p = ptK_parent(L, l);
-        ptN_copy(p, 0, &rt[k], m, ptN_setcc(p, rtcc - m));
-        ptM_up(L, l - 1, (pt_Delta)ptN_sumbytes(&rt[k], m, rtcc));
+        ptN_copy(p, 0, r, m, ptN_setcc(p, rtcc - m));
+        db += (pt_Delta)ptN_sumbytes(r, m, rtcc);
     }
 }
 
