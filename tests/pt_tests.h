@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define pt_lu(x) ((unsigned long)(x))
 #define pt_log(...) fprintf(stderr, __VA_ARGS__)
 
 #define pt_check(e, ...)                         \
@@ -109,13 +110,13 @@ PT_STATIC int pt_checknode(const pt_Node *n, int rl, int mc, int *has_hole) {
             if (ptM_ishole(n, i)) {
                 pt_check(
                         n->bytes[i] > 0 && n->bytes[i] <= PT_MAX_HOLESIZE,
-                        "[chk] HOLE rl=%d i=%d bytes=%zu > %d\n", rl, i,
-                        n->bytes[i], (int)PT_MAX_HOLESIZE);
+                        "[chk] HOLE rl=%d i=%d bytes=%lu > %d\n", rl, i,
+                        pt_lu(n->bytes[i]), (int)PT_MAX_HOLESIZE);
                 *has_hole = 1;
             } else {
                 pt_check(
-                        n->bytes[i] > 0, "[chk] LITERAL rl=%d i=%d bytes=%zu\n",
-                        rl, i, n->bytes[i]);
+                        n->bytes[i] > 0, "[chk] LITERAL rl=%d i=%d bytes=%lu\n",
+                        rl, i, pt_lu(n->bytes[i]));
                 if (i > 0 && !ptM_ishole(n, i - 1)) {
                     pt_check(
                             ptN_lit(n, i - 1) + n->bytes[i - 1]
@@ -129,8 +130,8 @@ PT_STATIC int pt_checknode(const pt_Node *n, int rl, int mc, int *has_hole) {
             if (!pt_checknode(c, rl - 1, mc ? PT_FANOUT / 2 : 0, &hh)) return 0;
             pt_check(
                     n->bytes[i] == ptN_sumbytes(c, 0, c->child_count),
-                    "[chk] INNER rl=%d i=%d bytes=%zu sum=%zu node=%p\n", rl, i,
-                    n->bytes[i], ptN_sumbytes(c, 0, c->child_count), (void *)c);
+                    "[chk] INNER rl=%d i=%d bytes=%lu sum=%lu node=%p\n", rl, i,
+                    pt_lu(n->bytes[i]), pt_lu(ptN_sumbytes(c, 0, c->child_count)), (void *)c);
             pt_check(
                     (ptM_ishole(n, i) != 0) == (hh != 0),
                     "[chk] MASK rl=%d i=%d mask=%d has_hole=%d\n", rl, i,
@@ -145,11 +146,11 @@ PT_STATIC int pt_checktree_allow_empty(pt_Buffer snap, int allow_empty) {
     int hh = 0;
     pt_check(
             snap->root.child_count != 0 || snap->bytes == 0,
-            "[chk] EMPTY root but bytes=%zu\n", snap->bytes);
+            "[chk] EMPTY root but bytes=%lu\n", pt_lu(snap->bytes));
     if (snap->root.child_count == 0) {
         pt_check(
-                snap->bytes == 0, "[chk] EMPTY tree has bytes=%zu\n",
-                snap->bytes);
+                snap->bytes == 0, "[chk] EMPTY tree has bytes=%lu\n",
+                pt_lu(snap->bytes));
     } else if (snap->levels > 0 || snap->root.child_count > 1)
         return pt_checknode(
                 &snap->root, snap->levels, allow_empty ? 0 : 1, &hh);
@@ -158,18 +159,18 @@ PT_STATIC int pt_checktree_allow_empty(pt_Buffer snap, int allow_empty) {
             pt_check(
                     snap->root.bytes[0] > 0
                             && snap->root.bytes[0] <= PT_MAX_HOLESIZE,
-                    "[chk] SINGLE HOLE bytes=%zu > %d\n", snap->root.bytes[0],
+                    "[chk] SINGLE HOLE bytes=%lu > %d\n", pt_lu(snap->root.bytes[0]),
                     (int)PT_MAX_HOLESIZE);
         } else {
             pt_check(
-                    snap->root.bytes[0] > 0, "[chk] SINGLE LITERAL bytes=%zu\n",
-                    snap->root.bytes[0]);
+                    snap->root.bytes[0] > 0, "[chk] SINGLE LITERAL bytes=%lu\n",
+                    pt_lu(snap->root.bytes[0]));
         }
     }
     pt_check(
             snap->bytes == ptN_sumbytes(&snap->root, 0, snap->root.child_count),
-            "[chk] ROOT bytes=%zu sum=%zu\n", snap->bytes,
-            ptN_sumbytes(&snap->root, 0, snap->root.child_count));
+            "[chk] ROOT bytes=%lu sum=%lu\n", pt_lu(snap->bytes),
+            pt_lu(ptN_sumbytes(&snap->root, 0, snap->root.child_count)));
     return 1;
 }
 
@@ -187,12 +188,12 @@ PT_STATIC int pt_checkcursor(pt_Cursor *C, size_t expected_off) {
     pt_Node *p;
     pt_check(
             pt_offset(C) == expected_off,
-            "[chk] OFFSET mismatch off=%zu expected=%zu\n", pt_offset(C),
-            expected_off);
+            "[chk] OFFSET mismatch off=%lu expected=%lu\n", pt_lu(pt_offset(C)),
+            pt_lu(expected_off));
     if (C->tree->root.child_count == 0) {
         pt_check(
-                C->poff == 0 && C->off == 0, "[chk] EMPTY poff=%zu off=%zu\n",
-                C->poff, C->off);
+                C->poff == 0 && C->off == 0, "[chk] EMPTY poff=%lu off=%lu\n",
+                pt_lu(C->poff), pt_lu(C->off));
         pt_check(
                 C->paths[0] == &C->tree->root.children[0],
                 "[chk] EMPTY paths[0]=%p expected=%p\n", (void *)C->paths[0],
@@ -212,14 +213,14 @@ PT_STATIC int pt_checkcursor(pt_Cursor *C, size_t expected_off) {
         bsum += ptN_sumbytes(p, 0, i);
     }
     pt_check(
-            C->off == bsum, "[chk] OFF mismatch off=%zu sum=%zu\n", C->off,
-            bsum);
+            C->off == bsum, "[chk] OFF mismatch off=%lu sum=%lu\n", pt_lu(C->off),
+            pt_lu(bsum));
     p = ptK_parent(C, ptK_levels(C));
     i = ptK_idx(C, p, ptK_levels(C));
     pt_check(
             C->poff <= p->bytes[i],
-            "[chk] POFF out of bounds poff=%zu bytes[%d]=%zu\n", C->poff, i,
-            p->bytes[i]);
+            "[chk] POFF out of bounds poff=%lu bytes[%d]=%lu\n", pt_lu(C->poff), i,
+            pt_lu(p->bytes[i]));
     return 1;
 }
 
@@ -234,15 +235,15 @@ PT_STATIC void pt_dumpnode(const pt_Node *n, int idx, int l, int levels) {
     else
         pt_log("%*sN%u_%u(%p) cc=%u", l * 2, "", (unsigned)(l - 1),
                (unsigned)idx, (void *)n, cc);
-    for (i = 0; i < cc; ++i) pt_log(" b[%u]=%zu", i, n->bytes[i]);
+    for (i = 0; i < cc; ++i) pt_log(" b[%u]=%lu", i, pt_lu(n->bytes[i]));
     pt_log("\n");
     if ((unsigned)l == (unsigned)levels || levels == 0) {
         for (i = 0; i < cc; ++i) {
             if (ptM_ishole(n, i)) {
                 const unsigned char *hd = (const unsigned char *)n->children[i];
                 unsigned             ki;
-                pt_log("%*sL%u HOLE bytes=%zu data=", (l + 1) * 2, "", i,
-                       n->bytes[i]);
+                pt_log("%*sL%u HOLE bytes=%lu data=", (l + 1) * 2, "", i,
+                       pt_lu(n->bytes[i]));
                 for (ki = 0; ki < (unsigned)pt_min(n->bytes[i], 16); ++ki)
                     pt_log("%02x", hd[ki]);
                 pt_log(" '");
@@ -251,8 +252,8 @@ PT_STATIC void pt_dumpnode(const pt_Node *n, int idx, int l, int levels) {
                            hd[ki] >= 32 && hd[ki] < 127 ? (char)hd[ki] : '.');
                 pt_log("'\n");
             } else {
-                pt_log("%*sL%u LIT bytes=%zu %.*s\n", (l + 1) * 2, "", i,
-                       n->bytes[i], (int)n->bytes[i],
+                pt_log("%*sL%u LIT bytes=%lu %.*s\n", (l + 1) * 2, "", i,
+                       pt_lu(n->bytes[i]), (int)n->bytes[i],
                        (const char *)n->children[i]);
             }
         }
@@ -262,8 +263,8 @@ PT_STATIC void pt_dumpnode(const pt_Node *n, int idx, int l, int levels) {
 }
 
 PT_STATIC void pt_dumptree(pt_Buffer snap, const char *tag) {
-    pt_log("[TREE]\t %s: levels=%u root.cc=%u bytes=%zu\n", tag, snap->levels,
-           snap->root.child_count, snap->bytes);
+    pt_log("[TREE]\t %s: levels=%u root.cc=%u bytes=%lu\n", tag, snap->levels,
+           snap->root.child_count, pt_lu(snap->bytes));
     pt_dumpnode(&snap->root, -1, 0, snap->levels);
 }
 

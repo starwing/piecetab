@@ -4,7 +4,7 @@ CC := "gcc"
 CFLAGS := "-Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic -std=c89 -Wno-variadic-macros"
 INCS := "-I. -Itests"
 
-cov: clean-gcda (cov-run "lc_test4") (cov-run "lc_test8") (cov-run "pt_test4") (cov-show "linecache.h") (cov-show "piecetab.h linecache.h")
+cov: clean-gcda (cov-run "lc_test4") (cov-run "lc_test8") (cov-run "pt_test4") (cov-show "piecetab.h linecache.h")
 
 dbg-run t *tests='':
     {{ CC }} {{ CFLAGS }} {{ INCS }} -g -O0 -fsanitize=address,undefined -o tests/{{ t }} tests/{{ t }}.c && ./tests/{{ t }} {{ tests }}

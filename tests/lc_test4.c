@@ -466,7 +466,13 @@ static void test_advance_brute(void) {
 
     S = lc_open(&test_alloc, NULL), assert(S);
     c = lc_newcache(S);
-    lc_rscanV(c, n, 2);
+    {
+        unsigned buf[] = {0, 0, 0};
+        unsigned *p;
+        buf[0] = (unsigned)n, buf[1] = 2;
+        p = buf;
+        lc_scan(c, lc_rscanner, &p);
+    }
     assert(lc_checktree(c));
 
     for (pos = 0; pos <= nb + 1; ++pos)
@@ -475,8 +481,8 @@ static void test_advance_brute(void) {
             lc_advance(&C, delta);
             dst = pos + delta < 0 ? 0 : pos + delta;
             if (!lc_checkcursor(&C, dst)) {
-                lc_log("advance pos=%d delta=%d off=%zu exp=%d\n", pos, delta,
-                       lc_offset(&C), dst);
+                lc_log("advance pos=%d delta=%d off=%lu exp=%d\n", pos, delta,
+                       lc_lu(lc_offset(&C)), dst);
                 lc_dumpcursor(&C, "after advance");
                 abort();
             }
@@ -602,7 +608,13 @@ static void test_advline_brute(void) {
 
     S = lc_open(&test_alloc, NULL), assert(S);
     c = lc_newcache(S);
-    lc_rscanV(c, n, 2);
+    {
+        unsigned buf[] = {0, 0, 0};
+        unsigned *p;
+        buf[0] = (unsigned)n, buf[1] = 2;
+        p = buf;
+        lc_scan(c, lc_rscanner, &p);
+    }
     assert(lc_checktree(c));
 
     for (pos = 0; pos <= nb + 1; ++pos)
@@ -612,8 +624,8 @@ static void test_advline_brute(void) {
             dst = (pos + delta * 2) & ~1;
             dst = dst < 0 ? 0 : dst > n * 2 ? n * 2 : dst;
             if (!lc_checkcursor(&C, dst)) {
-                lc_log("advance pos=%d delta=%d off=%zu failed exp=%d\n", pos,
-                       delta, lc_offset(&C), dst);
+                lc_log("advance pos=%d delta=%d off=%lu failed exp=%d\n", pos,
+                       delta, lc_lu(lc_offset(&C)), dst);
                 lc_dumpcursor(&C, "after advance");
                 abort();
             }
@@ -1300,7 +1312,13 @@ static void test_splice_brute(void) {
         for (del = 0; del <= nb + 1; ++del)
             for (ins = 0; ins <= 1; ++ins) {
                 c = lc_newcache(S);
-                lc_rscanV(c, n, 2);
+                {
+                    unsigned buf[] = {0, 0, 0};
+                    unsigned *p;
+                    buf[0] = (unsigned)n, buf[1] = 2;
+                    p = buf;
+                    lc_scan(c, lc_rscanner, &p);
+                }
                 assert(lc_checktree(c));
                 lc_seek(&C, c, pos);
                 lc_splice(&C, del, ins);
@@ -1310,8 +1328,8 @@ static void test_splice_brute(void) {
                     abort();
                 }
                 if (!lc_checkcursor(&C, pos + ins)) {
-                    lc_log("splice pos=%d del=%d ins=%d off=%zu exp=%d\n", pos,
-                           del, ins, lc_offset(&C), pos + ins);
+                    lc_log("splice pos=%d del=%d ins=%d off=%lu exp=%d\n", pos,
+                           del, ins, lc_lu(lc_offset(&C)), pos + ins);
                     lc_dumpcursor(&C, "after splice");
                     abort();
                 }
@@ -1380,9 +1398,9 @@ static void test_splice_brute3(void) {
                 if (!lc_checktree_allow_empty(c, 1)
                     || lc_bytes(c) != total - len - hang
                     || !lc_checkcursor(&C, pos)) {
-                    lc_log("FAIL brute3 s=%d pos=%zu len=%zu bytes=%zu "
-                           "exp=%zu\n",
-                           si, pos, len, lc_bytes(c), total - len - hang);
+                    lc_log("FAIL brute3 s=%d pos=%lu len=%lu bytes=%lu "
+                           "exp=%lu\n",
+                           si, lc_lu(pos), lc_lu(len), lc_lu(lc_bytes(c)), lc_lu(total - len - hang));
                     lc_dumptree(c, "after splice");
                     lc_dumpcursor(&C, "after splice");
                     abort();

@@ -422,13 +422,13 @@ static void ptN_remove(pt_State *S, pt_Node *p, int k, int s, int e) {
     assert(s <= e && e <= ptN_cc(p));
     ptN_purge(S, p, k, s, e, p->version);
     ptN_move(p, s, e, ptN_cc(p) - e);
-    p->child_count -= e - s;
+    ptN_setcc(p, ptN_cc(p) - (e - s));
 }
 
 static void ptN_makespace(pt_Node *p, int i, int n) {
     assert(ptN_cc(p) + n <= PT_FANOUT && i <= ptN_cc(p));
     ptN_move(p, i + n, i, ptN_cc(p) - i);
-    p->child_count += n;
+    ptN_setcc(p, ptN_cc(p) + n);
 }
 
 /* lifetime */
@@ -593,7 +593,7 @@ PT_API const char *pt_piece(pt_Cursor *C, size_t *plen) {
     int      i;
     if (C == NULL || C->tree == NULL) return NULL;
     i = ptK_idx(C, p = ptK_parent(C, ptK_levels(C)), ptK_levels(C));
-    if (C->poff >= p->bytes[i]) return plen && (*plen = 0), (const char *)NULL;
+    if (C->poff >= p->bytes[i]) return (void)(plen && (*plen = 0)), NULL;
     if (plen) *plen = p->bytes[i] - C->poff;
     return ptN_lit(p, i) + C->poff;
 }
@@ -604,7 +604,7 @@ PT_API const char *pt_next(pt_Cursor *C, size_t *plen) {
     pt_Node *p;
     if (C == NULL || C->tree == NULL) return NULL;
     l = ptK_levels(C), i = ptK_idx(C, p = ptK_parent(C, l), l);
-    if (C->poff == p->bytes[i]) return plen && (*plen = 0), (const char *)NULL;
+    if (C->poff == p->bytes[i]) return (void)(plen && (*plen = 0)), NULL;
     bc = p->bytes[i] - C->poff;
     while (i + 1 >= ptN_cc(p) && --l >= 0)
         i = ptK_idx(C, p = ptK_parent(C, l), l);
@@ -620,14 +620,14 @@ PT_API const char *pt_prev(pt_Cursor *C, size_t *plen) {
     if (C == NULL || C->tree == NULL) return NULL;
     l = ptK_levels(C), i = ptK_idx(C, p = ptK_parent(C, l), l);
     if (C->poff > 0)
-        return plen && (*plen = C->poff), C->poff = 0, ptN_lit(p, i);
-    if (C->off == 0) return plen && (*plen = 0), (const char *)NULL;
+        return (void)(plen && (*plen = C->poff)), C->poff = 0, ptN_lit(p, i);
+    if (C->off == 0) return (void)(plen && (*plen = 0)), NULL;
     while (i <= 0 && --l >= 0) i = ptK_idx(C, p = ptK_parent(C, l), l);
     assert(l >= 0 && i > 0), C->paths[l] -= 1, i -= 1;
     while (++l <= ptK_levels(C))
         p = ptK_parent(C, l), C->paths[l] = &p->children[i = ptN_cc(p) - 1];
     C->off -= p->bytes[i], C->poff = 0;
-    return plen && (*plen = p->bytes[i]), ptN_lit(p, i);
+    return (void)(plen && (*plen = p->bytes[i])), ptN_lit(p, i);
 }
 
 PT_API size_t pt_read(pt_Cursor *C, char *buf, size_t len) {
@@ -814,10 +814,10 @@ static void ptI_fillrt(pt_Cursor *C, const char *s, size_t len, int h) {
 
 static void ptI_splitins(pt_Cursor *C, const char *s, size_t len, int h) {
     pt_Node *p, *rt = &C->tree->S->rt[0];
-    int      l, ph, cc, need, m, i;
+    int      l, cc, need, m, i;
     size_t   n, po = C->poff;
     l = ptK_levels(C), i = ptK_idx(C, p = ptK_parent(C, l), l);
-    n = p->bytes[i], ph = ptM_ishole(p, i), cc = ptN_cc(p);
+    n = p->bytes[i], cc = ptN_cc(p);
     assert(po <= n), need = 1 + (po > 0 && po < n);
     rt->mask = 0, rt->version = C->tree->root.version;
     ptI_fillrt(C, s, len, h), i = ptK_idx(C, p, l);
@@ -1017,7 +1017,7 @@ static int ptD_foldnode(pt_Cursor *C, int lfirst, int l) {
     ns[0] = ptK_cow(C, l, -(*ns != o)), ns[1] = ptK_cow(C, l, *ns == o);
     if ((cL = ptN_cc(ns[0])) + (cR = ptN_cc(ns[1])) <= PT_FANOUT) {
         ptN_copy(ns[0], cL, ns[1], 0, cR);
-        ns[0]->child_count += cR, ns[1]->child_count -= cR;
+        ptN_setcc(*ns, ptN_cc(*ns) + cR), ptN_setcc(ns[1], ptN_cc(ns[1]) - cR);
         p->bytes[i] += p->bytes[i + 1], ns[0]->mask |= ns[1]->mask << cL;
         ptM_sethole(p, i, !!(ns[0]->mask & ptM_mask(cL + cR)));
         if (*ns != o)
@@ -1107,7 +1107,7 @@ static void ptD_stitch(pt_Cursor *L, pt_Node *rt) {
     size_t   d = 0;
     int      i, cc, l = ptK_levels(L);
     pt_Node *p = ptK_parent(L, l);
-    assert(L->tree->S->nodes.freed_obj >= ptK_levels(L) + 2);
+    assert(L->tree->S->nodes.freed_obj >= (size_t)(ptK_levels(L) + 2));
     if ((cc = ptN_cc(p)) && p->bytes[cc - 1] == 0)
         ptN_remove(L->tree->S, p, 0, cc - 1, cc), cc -= 1;
     if (cc && ptN_cc(&rt[0])) d = (size_t)ptD_mergeleaf(L, rt);

@@ -896,7 +896,7 @@ static void test_edit_brute(void) {
             pt_checktree(C.tree), assert(0);
         }
         if (!pt_checkcursor(&C, (size_t)pos + 2)) {
-            pt_log("edit_brute cursor pos=%d off=%zu\n", pos, pt_offset(&C));
+            pt_log("edit_brute cursor pos=%d off=%lu\n", pos, pt_lu(pt_offset(&C)));
             assert(0);
         }
         memcpy(expected, ref, (size_t)pos);
@@ -905,7 +905,7 @@ static void test_edit_brute(void) {
         pt_seek(&C, C.tree, 0);
         nread = pt_read(&C, actual, 290);
         if (nread != 290 || memcmp(actual, expected, 290) != 0) {
-            pt_log("edit_brute content fail pos=%d nread=%zu\n", pos, nread);
+            pt_log("edit_brute content fail pos=%d nread=%lu\n", pos, pt_lu(nread));
             assert(0);
         }
         pt_release(C.tree);
@@ -933,7 +933,7 @@ static void test_insert_brute(void) {
             pt_checktree(C.tree), assert(0);
         }
         if (!pt_checkcursor(&C, (size_t)pos)) {
-            pt_log("insert_brute cursor pos=%d off=%zu\n", pos, pt_offset(&C));
+            pt_log("insert_brute cursor pos=%d off=%lu\n", pos, pt_lu(pt_offset(&C)));
             assert(0);
         }
         memcpy(expected, ref, (size_t)pos);
@@ -942,7 +942,7 @@ static void test_insert_brute(void) {
         pt_seek(&C, C.tree, 0);
         nread = pt_read(&C, actual, 290);
         if (nread != 290 || memcmp(actual, expected, 290) != 0) {
-            pt_log("insert_brute content fail pos=%d nread=%zu\n", pos, nread);
+            pt_log("insert_brute content fail pos=%d nread=%lu\n", pos, pt_lu(nread));
             assert(0);
         }
         pt_release(C.tree);
@@ -1517,7 +1517,7 @@ static void test_remove_brute(void) {
             pt_locate(&cc, pos);
             assert(pt_remove(&cc, len) == PT_OK);
             if (!pt_checktree(cc.tree)) {
-                pt_log("FAIL: remove_brute pos=%zu len=%zu\n", pos, len);
+                pt_log("FAIL: remove_brute pos=%lu len=%lu\n", pt_lu(pos), pt_lu(len));
                 assert(0);
             }
             assert(pt_bytes(cc.tree) == total - len);
@@ -1814,7 +1814,7 @@ static void test_remove_brute2(void) {
             assert(pt_remove(&c, len) == PT_OK);
             if (!pt_checktree_allow_empty(c.tree, 1)
                 || pt_bytes(c.tree) != 64 - len || !pt_checkcursor(&c, pos)) {
-                pt_log("FAIL: brute2 pos=%zu len=%zu\n", pos, len);
+                pt_log("FAIL: brute2 pos=%lu len=%lu\n", pt_lu(pos), pt_lu(len));
                 pt_dumptree(c.tree, "brute2");
                 assert(0);
             }
@@ -1951,7 +1951,7 @@ static void test_remove_brute3(void) {
                 if (!pt_checktree_allow_empty(c.tree, 1)
                     || pt_bytes(c.tree) != total - len
                     || !pt_checkcursor(&c, pos)) {
-                    pt_log("FAIL brute3 s=%d pos=%zu len=%zu\n", si, pos, len);
+                    pt_log("FAIL brute3 s=%d pos=%lu len=%lu\n", si, pt_lu(pos), pt_lu(len));
                     assert(0);
                 }
                 pt_release(c.tree), pt_release(b);
@@ -3615,8 +3615,8 @@ static void test_splice_brute(void) {
                 }
 
                 if (!pt_checkcursor(&C, cursor_exp)) {
-                    pt_log("splice pos=%d del=%d ins=%d off=%zu exp=%zu\n", pos,
-                           del, ins, pt_offset(&C), cursor_exp);
+                    pt_log("splice pos=%d del=%d ins=%d off=%lu exp=%lu\n", pos,
+                           del, ins, pt_lu(pt_offset(&C)), pt_lu(cursor_exp));
                     assert(0);
                 }
 
@@ -3636,8 +3636,8 @@ static void test_splice_brute(void) {
                 if (nread != expect_len
                     || memcmp(actual, expected, expect_len) != 0) {
                     pt_log("splice pos=%d del=%d ins=%d content fail"
-                           " nread=%zu exp=%zu\n",
-                           pos, del, ins, nread, expect_len);
+                           " nread=%lu exp=%lu\n",
+                           pos, del, ins, pt_lu(nread), pt_lu(expect_len));
                     assert(0);
                 }
 

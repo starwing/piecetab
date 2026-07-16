@@ -16,6 +16,7 @@
 #include <string.h>
 
 #define lc_log(...) fprintf(stderr, __VA_ARGS__)
+#define lc_lu(x)    ((unsigned long)(x))
 
 #define lc_check(e, ...)                         \
     do {                                         \
@@ -114,14 +115,14 @@ LC_STATIC int lc_checknode(const lc_Node *n, int rl, int mc) {
             lc_check(
                     n->breaks[i] >= (mc ? LC_LEAF_FANOUT / 2 : 0)
                             && n->breaks[i] <= LC_LEAF_FANOUT,
-                    "[chk] LEAF rl=%d i=%d cc=%d brs=%zu bytes=%zu leaf=%p\n",
-                    rl, i, n->child_count, n->breaks[i], n->bytes[i],
+                    "[chk] LEAF rl=%d i=%d cc=%d brs=%lu bytes=%lu leaf=%p\n",
+                    rl, i, n->child_count, lc_lu(n->breaks[i]), lc_lu(n->bytes[i]),
                     (void *)c);
             lc_check(
                     n->bytes[i] == bsum,
-                    "[chk] BOTV rl=%d i=%d cc=%d brs=%zu bytes=%zu sum=%zu "
+                    "[chk] BOTV rl=%d i=%d cc=%d brs=%lu bytes=%lu sum=%lu "
                     "leaf=%p\n",
-                    rl, i, n->child_count, n->breaks[i], n->bytes[i], bsum,
+                    rl, i, n->child_count, lc_lu(n->breaks[i]), lc_lu(n->bytes[i]), lc_lu(bsum),
                     (void *)c);
         } else {
             if (!lc_checknode(c, rl - 1, mc ? LC_FANOUT / 2 : 0)) return 0;
@@ -129,10 +130,10 @@ LC_STATIC int lc_checknode(const lc_Node *n, int rl, int mc) {
             lsum = lcN_sumbreaks(c, 0, c->child_count);
             lc_check(
                     n->bytes[i] == bsum && n->breaks[i] == lsum,
-                    "[chk] INNER rl=%d i=%d cc=%d bytes=%zu sum=%zu "
-                    "brs=%zu sum=%zu node=%p\n",
-                    rl, i, n->child_count, n->bytes[i], bsum, n->breaks[i],
-                    lsum, (void *)c);
+                    "[chk] INNER rl=%d i=%d cc=%d bytes=%lu sum=%lu "
+                    "brs=%lu sum=%lu node=%p\n",
+                    rl, i, n->child_count, lc_lu(n->bytes[i]), lc_lu(bsum), lc_lu(n->breaks[i]),
+                    lc_lu(lsum), (void *)c);
         }
     }
     return 1;
@@ -143,8 +144,8 @@ LC_STATIC int lc_checktree_allow_empty(const lc_Cache *c, int allow_empty) {
     if (c->root.child_count == 0) {
         lc_check(
                 c->bytes == 0 && c->breaks == 0,
-                "[chk] EMPTY tree has bytes=%zu brs=%zu\n", c->bytes,
-                c->breaks);
+                "[chk] EMPTY tree has bytes=%lu brs=%lu\n", lc_lu(c->bytes),
+                lc_lu(c->breaks));
     } else if (c->levels > 0 || c->root.child_count > 1)
         return lc_checknode(&c->root, c->levels, allow_empty ? 0 : 1);
     else {
@@ -152,15 +153,15 @@ LC_STATIC int lc_checktree_allow_empty(const lc_Cache *c, int allow_empty) {
         bsum = lcL_sumbytes(lf, 0, (int)c->root.breaks[0]);
         lc_check(
                 c->root.bytes[0] == bsum,
-                "[chk] SINGLE LEAF tree has breaks=%zu bytes=%zu sum=%zu\n",
-                c->root.breaks[0], c->root.bytes[0], bsum);
+                "[chk] SINGLE LEAF tree has breaks=%lu bytes=%lu sum=%lu\n",
+                lc_lu(c->root.breaks[0]), lc_lu(c->root.bytes[0]), lc_lu(bsum));
     }
     bsum = lcN_sumbytes(&c->root, 0, c->root.child_count);
     lsum = lcN_sumbreaks(&c->root, 0, c->root.child_count);
     lc_check(
             c->bytes == bsum && c->breaks == lsum,
-            "[chk] ROOT bytes=%zu sum=%zu brs=%zu sum=%zu\n", c->bytes, bsum,
-            c->breaks, lsum);
+            "[chk] ROOT bytes=%lu sum=%lu brs=%lu sum=%lu\n", lc_lu(c->bytes), lc_lu(bsum),
+            lc_lu(c->breaks), lc_lu(lsum));
     return 1;
 }
 
@@ -178,13 +179,13 @@ LC_STATIC int lc_checkcursor(lc_Cursor *C, size_t expected_off) {
     lc_Node *p;
     lc_check(
             lc_offset(C) == expected_off,
-            "[chk] OFFSET mismatch off=%zu expected=%zu\n", lc_offset(C),
-            expected_off);
+            "[chk] OFFSET mismatch off=%lu expected=%lu\n", lc_lu(lc_offset(C)),
+            lc_lu(expected_off));
     if (C->tree->root.child_count == 0) {
         lc_check(
                 C->lnu == 0 && C->loff == 0 && C->nu == 0 && C->off == 0,
-                "[chk] EMPTY lnu=%d loff=%zu nu=%zu off=%zu\n", C->lnu, C->loff,
-                C->nu, C->off);
+                "[chk] EMPTY lnu=%d loff=%lu nu=%lu off=%lu\n", C->lnu, lc_lu(C->loff),
+                lc_lu(C->nu), lc_lu(C->off));
         lc_check(
                 C->paths[0] == &C->tree->root.children[0],
                 "[chk] EMPTY paths[0]=%p expected=%p\n", (void *)C->paths[0],
@@ -204,17 +205,17 @@ LC_STATIC int lc_checkcursor(lc_Cursor *C, size_t expected_off) {
         lsum += lcN_sumbreaks(p, 0, i);
     }
     lc_check(
-            C->off == bsum, "[chk] OFF mismatch off=%zu sum=%zu\n", C->off,
-            bsum);
-    lc_check(C->nu == lsum, "[chk] NU mismatch nu=%zu sum=%zu\n", C->nu, lsum);
+            C->off == bsum, "[chk] OFF mismatch off=%lu sum=%lu\n", lc_lu(C->off),
+            lc_lu(bsum));
+    lc_check(C->nu == lsum, "[chk] NU mismatch nu=%lu sum=%lu\n", lc_lu(C->nu), lc_lu(lsum));
     p = lcK_parent(C, lcK_levels(C)), i = lcK_idx(C, p, lcK_levels(C));
     bsum = lcL_sumbytes(lcK_leaf(C), 0, C->lnu);
     lc_check(
-            C->loff == bsum, "[chk] LOFF mismatch loff=%zu sum=%zu lnu=%d\n",
-            C->loff, bsum, C->lnu);
+            C->loff == bsum, "[chk] LOFF mismatch loff=%lu sum=%lu lnu=%d\n",
+            lc_lu(C->loff), lc_lu(bsum), C->lnu);
     lc_check(
             (size_t)C->lnu <= p->breaks[i],
-            "[chk] LNU out of bounds lnu=%d brs=%zu\n", C->lnu, p->breaks[i]);
+            "[chk] LNU out of bounds lnu=%d brs=%lu\n", C->lnu, lc_lu(p->breaks[i]));
     lc_check(
             (size_t)C->lnu == p->breaks[i]
                     || C->col < lcK_leaf(C)->bytes[C->lnu],
@@ -234,7 +235,7 @@ LC_STATIC void lc_dumpnode(const lc_Node *n, int idx, int l, int levels) {
     else
         lc_log("%*sN%u_%u(%p) cc=%u", l * 2, "", l - 1, idx, (void *)n, cc);
     for (i = 0; i < cc; ++i)
-        lc_log(" b[%u]=%zu l[%u]=%zu", i, n->bytes[i], i, n->breaks[i]);
+        lc_log(" b[%u]=%lu l[%u]=%lu", i, lc_lu(n->bytes[i]), i, lc_lu(n->breaks[i]));
     lc_log("\n");
     if (l == levels || levels == 0) {
         for (i = 0; i < cc; ++i) {
@@ -251,21 +252,21 @@ LC_STATIC void lc_dumpnode(const lc_Node *n, int idx, int l, int levels) {
 }
 
 LC_STATIC void lc_dumptree(const lc_Cache *c, const char *tag) {
-    lc_log("[TREE]\t %s: levels=%u root.cc=%u bytes=%zu breaks=%zu\n", tag,
-           c->levels, c->root.child_count, c->bytes, c->breaks);
+    lc_log("[TREE]\t %s: levels=%u root.cc=%u bytes=%lu breaks=%lu\n", tag,
+           c->levels, c->root.child_count, lc_lu(c->bytes), lc_lu(c->breaks));
     lc_dumpnode(&c->root, -1, 0, c->levels);
 }
 
 LC_STATIC void lc_dumpcursor(const lc_Cursor *C, const char *tag) {
     int l;
-    lc_log("[CURSOR] %s: col=%u lnu=%d loff=%zu nu=%zu off=%zu\n", tag, C->col,
-           C->lnu, C->loff, C->nu, C->off);
+    lc_log("[CURSOR] %s: col=%u lnu=%d loff=%lu nu=%lu off=%lu\n", tag, C->col,
+           C->lnu, lc_lu(C->loff), lc_lu(C->nu), lc_lu(C->off));
     for (l = 0; l <= lcK_levels(C); ++l) {
         lc_Node *p = lcK_parent(C, l);
         int      i = lcK_idx(C, p, l);
-        lc_log("  paths[%d]=%p p(%p)[%d/%u]=%p b=%zu l=%zu\n", l,
+        lc_log("  paths[%d]=%p p(%p)[%d/%u]=%p b=%lu l=%lu\n", l,
                (void *)C->paths[l], (void *)p, i, p->child_count,
-               (void *)*C->paths[l], p->bytes[i], p->breaks[i]);
+               (void *)*C->paths[l], lc_lu(p->bytes[i]), lc_lu(p->breaks[i]));
     }
 }
 
