@@ -4,7 +4,7 @@ CC := "gcc"
 CFLAGS := "-Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic -std=c89 -Wno-variadic-macros"
 INCS := "-I. -Itests"
 
-cov: lc-cov cov-uncovered lc-lines
+cov: clean-gcda (cov-run "lc_test4") (cov-run "lc_test8") (cov-run "pt_test4") (cov-show "linecache.h") (cov-show "piecetab.h linecache.h")
 
 dbg-run t *tests='':
     {{ CC }} {{ CFLAGS }} {{ INCS }} -g -O0 -fsanitize=address,undefined -o tests/{{ t }} tests/{{ t }}.c && ./tests/{{ t }} {{ tests }}
@@ -21,7 +21,7 @@ clean: clean-gcda
 
 cov-show src:
     lcov --capture --directory . --rc branch_coverage=1 --output-file coverage.info --no-external --ignore-errors unsupported
-    lcov --extract coverage.info '*/{{ src }}' --rc branch_coverage=1  --output-file lcov.info
+    lcov --extract coverage.info {{ src }} --rc branch_coverage=1  --output-file lcov.info
     @echo ""
     @echo "=== {{ src }} coverage ==="
     lcov --list --rc branch_coverage=1  lcov.info

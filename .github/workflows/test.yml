@@ -2,8 +2,9 @@ name: test
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
+    branches: [master]
 
 jobs:
   test:
@@ -28,7 +29,9 @@ jobs:
       - uses: extractions/setup-just@v3
       - name: install lcov
         run: sudo apt-get update && sudo apt-get install -y lcov
-      - name: linecache coverage
-        run: just lc-cov
-      - name: piecetab coverage
-        run: just pt-cov
+      - name: coverage
+        run: just cov
+      - name: Coveralls
+        uses: coverallsapp/github-action@master
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
