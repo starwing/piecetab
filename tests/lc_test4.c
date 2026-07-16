@@ -30,6 +30,16 @@ static void test_lifecycle(void) {
     lc_reset(NULL);
     lc_close(NULL);
 
+    /* default allocator (allocf == NULL) */
+    {
+        lc_State *s3 = lc_open(NULL, NULL);
+        lc_Cache *c3;
+        assert(s3 != NULL);
+        c3 = lc_newcache(s3);
+        assert(c3 != NULL && lc_breaks(c3) == 0);
+        lc_delcache(s3, c3);
+        lc_close(s3);
+    }
     /* lc_open OOM */
     {
         int z = 0;

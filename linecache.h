@@ -331,8 +331,19 @@ LC_API void lc_close(lc_State *S)
 { if (S) lc_reset(S), S->allocf(S->alloc_ud, S, sizeof(lc_State), 0); }
 /* clang-format on */
 
+static void *lcS_defallocf(void *ud, void *p, size_t osize, size_t nsize) {
+    void *np;
+    (void)ud, (void)osize;
+    if (nsize == 0) return free(p), (void *)NULL;
+    np = realloc(p, nsize);
+    if (np == NULL) abort(); /* failure is unrecoverable by default */
+    return np;
+}
+
 LC_API lc_State *lc_open(lc_Alloc *allocf, void *ud) {
-    lc_State *S = (lc_State *)allocf(ud, NULL, 0, sizeof(lc_State));
+    lc_State *S;
+    if (allocf == NULL) allocf = &lcS_defallocf;
+    S = (lc_State *)allocf(ud, NULL, 0, sizeof(lc_State));
     if (S == NULL) return NULL;
     S->alloc_ud = ud, S->allocf = allocf;
     lcP_init(&S->nodes, sizeof(lc_Node));
