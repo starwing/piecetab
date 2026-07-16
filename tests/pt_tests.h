@@ -64,7 +64,31 @@ PT_STATIC void pt_localfill(pt_Pool *pool, void **op, void *buf, size_t count) {
         *(void **)(base + (i - 1) * sz) = (void *)(base + i * sz);
     *(void **)(base + (count - 1) * sz) = NULL;
     pool->freed = (void *)base;
+    pool->freed_obj = count; /* old chain parked in *op, not reachable */
     ptP_stat(pool->live_obj += count);
+}
+
+/* pt_drainpool / pt_refillpool — detach the entire freelist (with its
+ * count) so the next ptP_alloc must take the page-alloc path (combine
+ * with oom_alloc cnt=0 to force failure).  Refill splices the detached
+ * chain back in front of anything freed meanwhile. */
+typedef struct {
+    void  *chain;
+    size_t count;
+} pt_Drain;
+
+PT_STATIC pt_Drain pt_drainpool(pt_Pool *p) {
+    pt_Drain d;
+    d.chain = p->freed, d.count = p->freed_obj;
+    p->freed = NULL, p->freed_obj = 0;
+    return d;
+}
+
+PT_STATIC void pt_refillpool(pt_Pool *p, pt_Drain d) {
+    void **pp = &d.chain;
+    while (*pp) pp = (void **)*pp;
+    *pp = p->freed;
+    p->freed = d.chain, p->freed_obj += d.count;
 }
 
 /* ================================================================ */
@@ -92,10 +116,12 @@ PT_STATIC int pt_checknode(const pt_Node *n, int rl, int mc, int *has_hole) {
                 pt_check(
                         n->bytes[i] > 0, "[chk] LITERAL rl=%d i=%d bytes=%zu\n",
                         rl, i, n->bytes[i]);
-                if (i > 0 && !ptM_ishole(n, i - 1)
-                    && ptN_lit(n, i - 1) + n->bytes[i - 1] == ptN_lit(n, i)) {
-                    pt_log("[chk] ADJACENT literals i=%d,%d node=%p\n", i - 1,
-                           i, (void *)n);
+                if (i > 0 && !ptM_ishole(n, i - 1)) {
+                    pt_check(
+                            ptN_lit(n, i - 1) + n->bytes[i - 1]
+                                    != ptN_lit(n, i),
+                            "[chk] ADJACENT literals i=%d,%d node=%p\n", i - 1,
+                            i, (void *)n);
                 }
             }
         } else {
@@ -335,11 +361,11 @@ typedef struct {
 
 #define pt_nonnull(c) (assert(c), c)
 
-#define editV(c, off, l, root)               \
-    do {                                     \
-        pt_Buffer _tv_ = treeV_(S, l, root); \
-        pt_seek((c), _tv_, (off));           \
-        (c)->dirty = 1;                      \
+#define editV(c, off, l, root)                 \
+    do {                                       \
+        pt_Buffer _tv_ = treeV_(S, l, root);   \
+        pt_seek((c), pt_nonnull(_tv_), (off)); \
+        (c)->dirty = 1;                        \
     } while (0)
 
 static pt_LeafValue litV_(const char *s, size_t len) {

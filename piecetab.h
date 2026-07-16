@@ -107,7 +107,7 @@ PT_API int pt_splice(pt_Cursor *C, size_t del, const char *s, size_t len);
 PT_API int pt_remove(pt_Cursor *C, size_t len);
 
 /* transaction */
-PT_API void      pt_rollback(pt_Cursor *C);
+PT_API pt_Buffer pt_rollback(pt_Cursor *C);
 PT_API pt_Buffer pt_commit(pt_Cursor *C);
 
 /* literal scratch buffer (arena) */
@@ -210,9 +210,10 @@ typedef struct pt_Tree {
 } pt_Tree;
 
 typedef struct pt_Pool {
-    size_t obj_size; /* size of each object in this pool */
-    void  *freed;    /* freelist head */
-    void  *pages;    /* linked list of allocated pages */
+    size_t obj_size;  /* size of each object in this pool */
+    void  *freed;     /* freelist head */
+    void  *pages;     /* linked list of allocated pages */
+    size_t freed_obj; /* number of objects in freelist */
 #ifdef PT_POOL_STATS
     size_t live_obj;
 #endif
@@ -237,11 +238,6 @@ struct pt_State {
 # define ptP_stat(stmt) ((void)0)
 #endif
 
-/* clang-format off */
-static void ptP_free(pt_Pool *pool, void *obj)
-{ ptP_stat(pool->live_obj-=1); *(void **)obj = pool->freed, pool->freed = obj; }
-/* clang-format on */
-
 static void ptP_init(pt_Pool *p, size_t obj_size) {
     memset(p, 0, sizeof(pt_Pool)), p->obj_size = obj_size;
     assert(obj_size > sizeof(void *) && obj_size < PT_PAGE_SIZE / 2);
@@ -258,34 +254,36 @@ static void ptP_destroy(pt_State *S, pt_Pool *p) {
 
 static void *ptP_ralloc(pt_Pool *p) {
     void *obj = p->freed;
-    assert(obj), ptP_stat(p->live_obj += 1);
+    assert(obj), ptP_stat(p->live_obj += 1), p->freed_obj -= 1;
     return (p->freed = *(void **)obj), (void *)obj;
+}
+
+static void ptP_free(pt_Pool *p, void *obj) {
+    ptP_stat(p->live_obj -= 1), p->freed_obj += 1;
+    *(void **)obj = p->freed, p->freed = obj;
 }
 
 static void *ptP_alloc(pt_State *S, pt_Pool *p) {
     size_t sz = p->obj_size;
-    char  *page, *end, *obj = (char *)p->freed;
-    if (obj) return ptP_ralloc(p);
+    char  *page, *end;
+    if (p->freed_obj) return ptP_ralloc(p);
     page = (char *)S->allocf(S->alloc_ud, NULL, 0, PT_PAGE_SIZE);
     if (page == NULL) return NULL;
     end = &page[PT_PAGE_SIZE - sizeof(void *)], *(void **)end = p->pages;
-    p->pages = (void *)(obj = page), page += sz, end -= sz;
-    while ((page += sz) < end) *(void **)(page - sz) = page;
-    *(void **)(page - sz) = NULL, ptP_stat(p->live_obj += 1);
-    return (p->freed = (void *)(obj + sz)), (void *)obj;
+    p->pages = (void *)page, page += sz, end -= sz;
+    while ((page += sz) <= end) *(void **)(page - sz) = page;
+    *(void **)(page - sz) = p->freed, ptP_stat(p->live_obj += 1);
+    p->freed_obj = (end - (char *)p->pages) / sz;
+    return (p->freed = (void *)((char *)p->pages + sz)), p->pages;
 }
 
 static int ptP_reserve(pt_State *S, pt_Pool *p, size_t n) {
-    void  *freed = p->freed, **t = &freed;
-    size_t c;
-    for (c = 0; c < n && *t; ++c) t = (void **)*t;
-    if (c >= n) return PT_OK;
-    for (p->freed = NULL; c < n; ++c) {
-        void *obj = ptP_alloc(S, p);
-        if (obj == NULL) break;
-        ptP_stat(p->live_obj -= 1), *t = obj, t = (void **)obj;
-    }
-    return *t = NULL, (p->freed = freed), c < n ? PT_ERRMEM : PT_OK;
+    size_t avail = p->freed_obj;
+    void  *obj;
+    if (avail >= n) return PT_OK;
+    while (p->freed_obj = 0, (obj = ptP_alloc(S, p)))
+        if (ptP_free(p, obj), (avail += p->freed_obj) >= n) break;
+    return (p->freed_obj = avail) >= n ? PT_OK : PT_ERRMEM;
 }
 
 static pt_Block *ptA_alloc(pt_State *S, size_t sz) {
@@ -633,67 +631,6 @@ PT_API size_t pt_read(pt_Cursor *C, char *buf, size_t len) {
     return total;
 }
 
-/* commit */
-
-static size_t ptC_holebytes(pt_Node *n, int k) {
-    pt_Mask m = n->mask;
-    size_t  total = 0;
-    int     i;
-    while (ptM_iterhole(&m, &i, ptN_cc(n)))
-        total += k ? ptC_holebytes(n->children[i], k - 1) : n->bytes[i];
-    return total;
-}
-
-static void ptC_freezeleaf(pt_State *S, pt_Node *n, char **ppos) {
-    pt_Mask m = n->mask;
-    int     i;
-    while (ptM_iterhole(&m, &i, ptN_cc(n))) {
-        pt_Hole *h = (pt_Hole *)n->children[i];
-        memcpy(*ppos, h->data, n->bytes[i]);
-        n->children[i] = (pt_Node *)*ppos, *ppos += n->bytes[i];
-        ptP_free(&S->holes, h);
-    }
-    n->mask = 0;
-}
-
-static void ptC_freeze(pt_State *S, pt_Tree *tree, char *pos) {
-    int       i, l = 0;
-    pt_Node  *p;
-    pt_Cursor C;
-    C.tree = tree, C.paths[0] = tree->root.children;
-    for (;;) {
-        p = ptK_parent(&C, l);
-        while (l > 0 && p->mask == 0) --l, p = ptK_parent(&C, l);
-        if (p->mask == 0) break;
-        if (l >= tree->levels)
-            ptC_freezeleaf(S, p, &pos);
-        else {
-            ptM_iterhole(&p->mask, &i, ptN_cc(p)), C.paths[l] = &p->children[i];
-            C.paths[++l] = p->children[i]->children;
-        }
-    }
-}
-
-PT_API pt_Buffer pt_commit(pt_Cursor *C) {
-    size_t total;
-    char  *buf;
-    if (C == NULL || C->tree == NULL) return NULL;
-    if (!C->dirty) return pt_retain(C->tree), C->tree;
-    if ((total = ptC_holebytes(&C->tree->root, C->tree->levels)) > 0) {
-        buf = pt_reserve(C, total);
-        if (buf == NULL || pt_literal(C, total) != buf) return NULL;
-        ptC_freeze(C->tree->S, C->tree, buf);
-    }
-    return C->dirty = 0, C->tree;
-}
-
-PT_API void pt_rollback(pt_Cursor *C) {
-    pt_Tree *from;
-    if (C == NULL || C->tree == NULL || !C->dirty) return;
-    if ((from = C->tree->from) != NULL && from->refc == 1) from = NULL;
-    pt_release(C->tree), C->tree = from, C->dirty = 0;
-}
-
 /* literal */
 
 static int ptK_markdirty(pt_Cursor *C) {
@@ -940,6 +877,10 @@ PT_API int pt_append(pt_Cursor *C, const char *s, size_t len) {
         p->bytes[i] += len, C->poff += len;
         return ptM_up(C, ptK_levels(C) - 1, (pt_Delta)len), PT_OK;
     }
+    if (C->poff == 0 && !ptM_ishole(p, i) && s + len == ptN_lit(p, i)) {
+        p->children[i] = (pt_Node *)s, p->bytes[i] += len, C->poff = len;
+        return ptM_up(C, ptK_levels(C) - 1, (pt_Delta)len), PT_OK;
+    }
     return ptI_splitins(C, s, len, 0), PT_OK;
 }
 
@@ -1101,11 +1042,6 @@ static void ptD_rebalance(pt_Cursor *C, int l) {
     }
 }
 
-/* clang-format off */
-PT_STATIC int ptD_checkstitch(pt_Cursor *C)
-{ return ptP_reserve(C->tree->S, &C->tree->S->nodes, ptK_levels(C) + 2); }
-/* clang-format on */
-
 static void ptD_stitchnode(pt_Cursor *L, pt_Node *rt) {
     int      k, i, d = 0, l = ptK_levels(L);
     pt_Delta db = 0;
@@ -1162,7 +1098,7 @@ static void ptD_stitch(pt_Cursor *L, pt_Node *rt) {
     size_t   d = 0;
     int      i, cc, l = ptK_levels(L);
     pt_Node *p = ptK_parent(L, l);
-    assert(ptD_checkstitch(L) == PT_OK);
+    assert(L->tree->S->nodes.freed_obj >= ptK_levels(L) + 2);
     if ((cc = ptN_cc(p)) && p->bytes[cc - 1] == 0)
         ptN_remove(L->tree->S, p, 0, cc - 1, cc), cc -= 1;
     if (cc && ptN_cc(&rt[0])) d = (size_t)ptD_mergeleaf(L, rt);
@@ -1270,6 +1206,93 @@ PT_API int pt_splice(pt_Cursor *C, size_t del, const char *s, size_t len) {
     if (r != PT_OK || (r = pt_remove(C, del)) != PT_OK) return r;
     if (s != NULL && len > 0) return pt_append(C, s, len);
     return PT_OK;
+}
+
+/* commit */
+
+static size_t ptC_holebytes(pt_Node *n, int k) {
+    pt_Mask m = n->mask;
+    size_t  total = 0;
+    int     i;
+    while (ptM_iterhole(&m, &i, ptN_cc(n)))
+        total += k ? ptC_holebytes(n->children[i], k - 1) : n->bytes[i];
+    return total;
+}
+
+static int ptC_nexthole(pt_Cursor *C, int l) {
+    for (; l >= 0; --l) {
+        pt_Node *p = ptK_parent(C, l);
+        pt_Mask  m;
+        int      i;
+        while (m = p->mask, ptM_iterhole(&m, &i, ptN_cc(p))) {
+            C->paths[l] = &p->children[i];
+            if (l++ == ptK_levels(C)) return 1;
+            p = p->children[i];
+        }
+    }
+    return 0;
+}
+
+static void ptC_freezeleaf(pt_State *S, pt_Node *n, char **ppos) {
+    pt_Mask m = n->mask;
+    int     i;
+    while (ptM_iterhole(&m, &i, ptN_cc(n))) {
+        pt_Hole *h = (pt_Hole *)n->children[i];
+        memcpy(*ppos, h->data, n->bytes[i]);
+        n->children[i] = (pt_Node *)*ppos, *ppos += n->bytes[i];
+        ptP_free(&S->holes, h);
+    }
+    n->mask = 0;
+}
+
+static int ptC_freeze(pt_Cursor *C, char **ppos) {
+    pt_State *S = C->tree->S;
+    int       r, w, l = ptK_levels(C);
+    pt_Node  *p = ptK_parent(C, l);
+    for (;;) {
+        if (ptP_reserve(S, &S->nodes, 2 * l + 2)) return PT_ERRMEM;
+        if (p->mask) ptC_freezeleaf(S, p, ppos);
+        for (r = 1, w = 0; r < ptN_cc(p); ++r) {
+            if (ptN_lit(p, w) + p->bytes[w] == ptN_lit(p, r))
+                p->bytes[w] += p->bytes[r];
+            else
+                ++w, p->children[w] = p->children[r], p->bytes[w] = p->bytes[r];
+        }
+        ptN_setcc(p, w + 1), C->paths[l] = &p->children[0], ptM_up(C, l - 1, 0);
+        if (l == 0 || ptN_cc(p) >= PT_FANOUT / 2) return PT_OK;
+        ptD_rebalance(C, l - 1), l = ptK_levels(C), p = ptK_parent(C, l);
+    }
+}
+
+PT_API pt_Buffer pt_commit(pt_Cursor *C) {
+    size_t    total;
+    char     *buf;
+    pt_Buffer b;
+    if (C == NULL || C->tree == NULL) return NULL;
+    if (!C->dirty) return b = C->tree, pt_retain(b), C->tree = NULL, b;
+    if ((total = ptC_holebytes(&C->tree->root, C->tree->levels)) > 0) {
+        pt_Cursor sC;
+        int       r;
+        if (!(buf = pt_reserve(C, total)) || pt_literal(C, total) != buf)
+            return NULL;
+        sC.tree = C->tree, sC.off = sC.poff = 0, sC.dirty = 0;
+        sC.paths[0] = C->tree->root.children;
+        if (!ptC_nexthole(&sC, 0)) return PT_OK;
+        while ((r = ptC_freeze(&sC, &buf)) == PT_OK)
+            if (!ptC_nexthole(&sC, ptK_levels(&sC) - 1)) break;
+        if (r != PT_OK) return pt_locate(C, pt_offset(C)), (pt_Buffer)NULL;
+    }
+    return C->dirty = 0, b = C->tree, C->tree = NULL, b;
+}
+
+PT_API pt_Buffer pt_rollback(pt_Cursor *C) {
+    pt_Buffer b;
+    if (C == NULL || C->tree == NULL) return NULL;
+    if (!C->dirty) return b = C->tree, pt_retain(b), C->tree = NULL, b;
+    /* the fork's from-retain is consumed by pt_release's chain walk; the
+     * caller's reference must be added first or a sole-owned from dies */
+    b = C->tree->from, assert(b != NULL), pt_retain(b);
+    return pt_release(C->tree), C->tree = NULL, C->dirty = 0, b;
 }
 
 PT_NS_END

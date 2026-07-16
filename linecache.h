@@ -180,6 +180,7 @@ typedef struct lc_Pool {
     size_t obj_size; /* size of each object in this pool */
     void  *freed;    /* freelist head */
     void  *pages;    /* linked list of allocated pages */
+    size_t freed_obj; /* number of objects in freelist */
 #ifdef LC_POOL_STATS
     size_t live_obj;
 #endif
@@ -201,10 +202,10 @@ struct lc_State {
 # define lcP_stat(stmt) ((void)0)
 #endif
 
-/* clang-format off */
-static void lcP_free(lc_Pool *p, void *obj)
-{ lcP_stat(p->live_obj -= 1), *(void **)obj = p->freed, p->freed = obj; }
-/* clang-format on */
+static void lcP_free(lc_Pool *p, void *obj) {
+    lcP_stat(p->live_obj -= 1), p->freed_obj += 1;
+    *(void **)obj = p->freed, p->freed = obj;
+}
 
 static void lcP_init(lc_Pool *p, size_t obj_size) {
     memset(p, 0, sizeof(lc_Pool)), p->obj_size = obj_size;
@@ -222,34 +223,31 @@ static void lcP_destroy(lc_State *S, lc_Pool *p) {
 
 static void *lcP_ralloc(lc_Pool *p) {
     char *obj = (char *)p->freed;
-    assert(obj), lcP_stat(p->live_obj += 1);
+    assert(obj), lcP_stat(p->live_obj += 1), p->freed_obj -= 1;
     return (p->freed = *(void **)obj), (void *)obj;
 }
 
 static void *lcP_alloc(lc_State *S, lc_Pool *p) {
     size_t sz = p->obj_size;
-    char  *page, *end, *obj = (char *)p->freed;
-    if (obj) return lcP_ralloc(p);
+    char  *page, *end;
+    if (p->freed_obj) return lcP_ralloc(p);
     page = (char *)S->allocf(S->alloc_ud, NULL, 0, LC_PAGE_SIZE);
     if (page == NULL) return NULL;
     end = &page[LC_PAGE_SIZE - sizeof(void *)], *(void **)end = p->pages;
-    p->pages = (void *)(obj = page), page += sz, end -= sz;
-    while ((page += sz) < end) *(void **)(page - sz) = page;
-    *(void **)(page - sz) = NULL, lcP_stat(p->live_obj += 1);
-    return (p->freed = (void *)(obj + sz)), (void *)obj;
+    p->pages = (void *)page, page += sz, end -= sz;
+    while ((page += sz) <= end) *(void **)(page - sz) = page;
+    *(void **)(page - sz) = p->freed, lcP_stat(p->live_obj += 1);
+    p->freed_obj = (end - (char *)p->pages) / sz;
+    return (p->freed = (void *)((char *)p->pages + sz)), p->pages;
 }
 
 static int lcP_reserve(lc_State *S, lc_Pool *p, size_t n) {
-    void  *freed = p->freed, **t = &freed;
-    size_t c;
-    for (c = 0; c < n && *t; ++c) t = (void **)*t;
-    if (c >= n) return LC_OK;
-    for (p->freed = NULL; c < n; ++c) {
-        void *obj = lcP_alloc(S, p);
-        if (obj == NULL) break;
-        lcP_stat(p->live_obj -= 1), *t = obj, t = (void **)obj;
-    }
-    return *t = NULL, (p->freed = freed), c < n ? LC_ERRMEM : LC_OK;
+    size_t avail = p->freed_obj;
+    void  *obj;
+    if (avail >= n) return LC_OK;
+    while (p->freed_obj = 0, (obj = lcP_alloc(S, p)))
+        if (lcP_free(p, obj), (avail += p->freed_obj) >= n) break;
+    return (p->freed_obj = avail) >= n ? LC_OK : LC_ERRMEM;
 }
 
 /* utils */

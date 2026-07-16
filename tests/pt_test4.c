@@ -341,7 +341,7 @@ static void test_merge_right(void) {
     pt_insert(&c, buf + 3, 3);                  /* ["def"] */
     assert(pt_insert(&c, buf + 0, 3) == PT_OK); /* "abc" before, contiguous */
     assert(pt_checktree(c.tree));
-    pt_asserttree(c.tree, 0, leafV(litV("abc"), litV("def")));
+    pt_asserttree(c.tree, 0, leafV(litV("abcdef")));
     assert(pt_checkcursor(&c, 0));
     pt_release(c.tree), pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
@@ -368,13 +368,14 @@ static void test_merge_left(void) {
 /* L936-937: pt_append LEFT merge (poff==0, i>0, prev literal contiguous) */
 static void test_append_merge_left(void) {
     static const char buf[] = "ABCD";
+    static const char sep[] = "XY";
     pt_State         *S = pt_open(&test_alloc, NULL);
     pt_Node          *lf = (pt_Node *)ptP_alloc(S, &S->nodes);
     pt_Buffer         b;
     pt_Cursor         c;
     memset(lf, 0, sizeof(pt_Node));
     lf->children[0] = (pt_Node *)(buf + 0), lf->bytes[0] = 2;
-    lf->children[1] = (pt_Node *)(buf + 2), lf->bytes[1] = 2;
+    lf->children[1] = (pt_Node *)(sep + 0), lf->bytes[1] = 2;
     lf->child_count = 2;
     b = treeV(0, lf);
     pt_seek(&c, b, 2);
@@ -383,13 +384,13 @@ static void test_append_merge_left(void) {
     assert(pt_checktree(c.tree));
     assert(pt_checkcursor(&c, 4));
     assert(pt_bytes(c.tree) == 6);
-    pt_asserttree(c.tree, 0, leafV(litV("ABCD"), litV("CD")));
+    pt_asserttree(c.tree, 0, leafV(litV("ABCD"), litV("XY")));
     {
         char   rd[16];
         size_t nr;
         pt_seek(&c, c.tree, 0);
         nr = pt_read(&c, rd, 6);
-        assert(nr == 6 && memcmp(rd, "ABCDCD", 6) == 0);
+        assert(nr == 6 && memcmp(rd, "ABCDXY", 6) == 0);
     }
     pt_release(c.tree), pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
@@ -483,8 +484,9 @@ static void test_rollback(void) {
     pt_seek(&c, b, 0);
     pt_insert(&c, "hello", 5);
     assert(c.dirty && pt_bytes(c.tree) == 5);
-    pt_rollback(&c);
-    assert(!c.dirty && c.tree == b && pt_bytes(c.tree) == 0);
+    assert(pt_rollback(&c) == b);
+    assert(!c.dirty && c.tree == NULL && pt_bytes(b) == 0);
+    pt_release(b); /* balance the rollback retain */
     pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
@@ -541,13 +543,13 @@ static void test_release_order(void) {
 }
 
 /* T3q: rollback when the source is kept alive only by the transient's `from`
- * (external released it after fork). rollback must release cleanly and leave
- * the cursor invalidated (b==NULL) — no dangling into the freed source. */
+ * (external released it after fork). rollback's return value revives the
+ * source: no dangling, caller owns the returned reference. */
 
 static void test_rollback_released_source(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
-    pt_Buffer a;
+    pt_Buffer a, back;
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_append(&c, "aa", 2), pt_append(&c, "bb", 2), pt_append(&c, "cc", 2);
@@ -556,8 +558,10 @@ static void test_rollback_released_source(void) {
     pt_seek(&c, a, 0);
     assert(pt_insert(&c, "ZZ", 2) == PT_OK); /* fork; retain(a) via from */
     pt_release(a);          /* external drops a; only from holds it */
-    pt_rollback(&c);        /* transient + a released; cursor invalidated */
-    assert(c.tree == NULL); /* no dangling: cursor no longer borrows a */
+    back = pt_rollback(&c); /* return value keeps a alive */
+    assert(back == a && c.tree == NULL);
+    assert(pt_checktree(back) && pt_bytes(back) == 10);
+    pt_release(back);
     pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
@@ -762,34 +766,35 @@ static void test_edit_cow(void) {
     pt_close(S);
 }
 
-/* §8.1 edit_rollback: rollback discards holes, cursor returns to source */
+/* §8.1 edit_rollback: rollback discards holes, returns source buffer */
 
 static void test_edit_rollback(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
 
-    /* Path 1: source buffer held externally → rollback lands on source */
+    /* Path 1: source buffer held externally → rollback returns source */
     {
         pt_Buffer b = pt_empty(S);
         pt_Cursor c;
         pt_seek(&c, b, 0);
         assert(pt_edit(&c, 0, "hello", 5) == PT_OK);
         assert(c.dirty && pt_bytes(c.tree) == 5);
-        pt_rollback(&c);
-        assert(!c.dirty && c.tree == b && pt_bytes(c.tree) == 0);
+        assert(pt_rollback(&c) == b);
+        assert(!c.dirty && c.tree == NULL && pt_bytes(b) == 0);
+        pt_release(b); /* balance the rollback retain */
         pt_release(b);
         assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     }
 
-    /* Path 2: source only via from → rollback returns to sentinel */
+    /* Path 2: source only via from → rollback returns sentinel */
     {
         pt_Buffer b = pt_empty(S);
         pt_Cursor c;
         pt_seek(&c, b, 0);
         assert(pt_edit(&c, 0, "hello", 5) == PT_OK);
         pt_release(b); /* external drops source; sentinel stays alive */
-        pt_rollback(&c);
-        assert(c.tree == b); /* sentinel, not NULL */
-        assert(!c.dirty && pt_bytes(c.tree) == 0);
+        assert(pt_rollback(&c) == b); /* sentinel, not NULL */
+        assert(!c.dirty && c.tree == NULL && pt_bytes(b) == 0);
+        pt_release(b);
         assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     }
 
@@ -1467,17 +1472,16 @@ static void test_remove_oom(void) {
     assert(pt_insert(&c, "abcd", 4) == PT_OK);
     a = pt_commit(&c); /* c.tree == a, refcount remains 1 */
     assert(pt_bytes(a) == 4);
-    /* Clear freelist so reserve must allocate a new page */
+    /* Drain freelist so reserve must allocate a new page */
     {
-        void *saved_freed = S->nodes.freed;
-        S->nodes.freed = NULL;
+        pt_Drain d = pt_drainpool(&S->nodes);
         cnt = 0; /* next alloc fails */
         pt_seek(&c, a, 1);
         r = pt_remove(&c, 2);
         assert(r == PT_ERRMEM);
         assert(!c.dirty);
         cnt = 1000;
-        S->nodes.freed = saved_freed; /* restore freelist */
+        pt_refillpool(&S->nodes, d);
     }
     pt_release(a), pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
@@ -2510,25 +2514,26 @@ static void test_commit_single_hole(void) {
     assert(c.dirty);
     snap = pt_commit(&c);
     assert(snap != NULL);
-    assert(!c.dirty);
+    assert(!c.dirty && c.tree == NULL);
     assert(pt_checktree(snap));
     {
-        pt_Node *r = &c.tree->root;
+        const pt_Node *r = &snap->root;
         assert(r->child_count == 1);
         assert(!ptM_ishole(r, 0));
         assert(r->bytes[0] == 5);
         assert(memcmp(r->children[0], "hello", 5) == 0);
     }
-    pt_release(c.tree), pt_release(b);
+    pt_release(snap), pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
 
-/* E11: consecutive holes → adjacent literals, NOT merged, child_count unchanged
- */
-static void test_commit_no_merge(void) {
+/* E11: consecutive holes → adjacent literals frozen contiguously → merged
+ * into a single literal slot */
+static void test_commit_merge(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
+    pt_Buffer snap;
     pt_Cursor c;
     int       i;
     pt_seek(&c, b, 0);
@@ -2545,16 +2550,16 @@ static void test_commit_no_merge(void) {
         assert(r->child_count == 2);
         assert(ptM_ishole(r, 0) && ptM_ishole(r, 1));
     }
-    assert(pt_commit(&c) != NULL);
-    assert(pt_checktree(c.tree));
+    snap = pt_commit(&c);
+    assert(snap != NULL);
+    assert(pt_checktree(snap));
     {
-        pt_Node *r = &c.tree->root;
-        assert(r->child_count == 2);
-        assert(!ptM_ishole(r, 0) && !ptM_ishole(r, 1));
-        assert(r->bytes[0] == PT_MAX_HOLESIZE);
-        assert(r->bytes[1] == 2);
+        const pt_Node *r = &snap->root;
+        assert(r->child_count == 1);
+        assert(!ptM_ishole(r, 0));
+        assert(r->bytes[0] == PT_MAX_HOLESIZE + 2);
     }
-    pt_release(c.tree), pt_release(b);
+    pt_release(snap), pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -2562,6 +2567,7 @@ static void test_commit_no_merge(void) {
 static void test_commit_mixed(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
+    pt_Buffer snap;
     pt_Cursor c;
     int       i;
     pt_seek(&c, b, 0);
@@ -2573,32 +2579,35 @@ static void test_commit_mixed(void) {
     pt_release(b);
     pt_locate(&c, 0);
     assert(pt_edit(&c, 0, "x", 1) == PT_OK);
-    assert(pt_commit(&c) != NULL);
-    assert(pt_checktree(c.tree));
+    snap = pt_commit(&c);
+    assert(snap != NULL);
+    assert(pt_checktree(snap));
     {
-        pt_Node *r = &c.tree->root;
+        const pt_Node *r = &snap->root;
         for (i = 0; i < (int)r->child_count; ++i) assert(!ptM_ishole(r, i));
     }
-    pt_release(c.tree);
+    pt_release(snap);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
 
 static void test_commit_deep(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Buffer snap;
     pt_Cursor c;
     editV(&c, 0, 1,
           innerV(leafV(holeV("abc"), litV("x")),
                  leafV(litV("def"), litV("ghi"))));
     assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
-    assert(pt_commit(&c) != NULL);
-    assert(pt_checktree(c.tree));
+    snap = pt_commit(&c);
+    assert(snap != NULL);
+    assert(pt_checktree(snap));
     {
-        pt_Node *r = &c.tree->root;
-        int      i;
+        const pt_Node *r = &snap->root;
+        int            i;
         for (i = 0; i < (int)r->child_count; ++i) assert(!ptM_ishole(r, i));
     }
-    pt_release(c.tree);
+    pt_release(snap);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -2608,6 +2617,7 @@ static void test_commit_deep(void) {
 static void test_commit_fillblock(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
+    pt_Buffer snap;
     pt_Cursor c;
     size_t    cap;
     pt_seek(&c, b, 0);
@@ -2615,11 +2625,13 @@ static void test_commit_fillblock(void) {
     assert(pt_scratch(&c, &cap) != NULL);
     assert(pt_literal(&c, cap - 8) != NULL);        /* leave exactly 8 bytes */
     assert(pt_edit(&c, 0, "12345678", 8) == PT_OK); /* 8-byte hole */
-    assert(pt_commit(&c) != NULL); /* freeze consumes the last 8 bytes */
-    assert(pt_checktree(c.tree) && !c.dirty);
-    assert(c.tree->arena.full != NULL && c.tree->arena.current == NULL);
+    snap = pt_commit(&c); /* freeze consumes the last 8 bytes */
+    assert(snap != NULL && !c.dirty);
+    assert(pt_checktree(snap));
+    assert(snap->arena.full != NULL && snap->arena.current == NULL);
+    pt_seek(&c, snap, 0);
     assert(pt_scratch(&c, &cap) == NULL && cap == 0);
-    pt_release(c.tree), pt_release(b);
+    pt_release(snap), pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -2629,18 +2641,20 @@ static void test_commit_freshpage(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Cursor c;
     pt_Buffer b = pt_empty(S);
+    pt_Buffer snap;
     /* Single edit → 1 hole; commit copies data into scratch */
     pt_seek(&c, b, 0);
     assert(pt_edit(&c, 0, "aaaaaaaaaaaaaaa", 15) == PT_OK);
-    assert(pt_commit(&c) != NULL);
-    assert(pt_checktree(c.tree) && !c.dirty);
+    snap = pt_commit(&c);
+    assert(snap != NULL && !c.dirty);
+    assert(pt_checktree(snap));
     {
-        pt_Node *r = &c.tree->root;
+        const pt_Node *r = &snap->root;
         assert(r->child_count == 1);
         assert(!ptM_ishole(r, 0));
         assert(r->bytes[0] == 15);
     }
-    pt_release(c.tree), pt_release(b);
+    pt_release(snap), pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -2676,10 +2690,11 @@ static void test_commit_then_reseek(void) {
     pt_close(S);
 }
 
-/* E11/E12: bytes/levels/child_count unchanged by freeze */
+/* E11/E12: bytes/levels unchanged by freeze (single hole, no merge) */
 static void test_commit_bytes_invariant(void) {
     pt_State      *S = pt_open(&test_alloc, NULL);
     pt_Buffer      b = pt_empty(S);
+    pt_Buffer      snap;
     pt_Cursor      c;
     size_t         bytes_before;
     unsigned       levels_before;
@@ -2689,23 +2704,27 @@ static void test_commit_bytes_invariant(void) {
     assert(pt_edit(&c, 0, "DE", 2) == PT_OK);  /* appends hole("DE") */
     pt_release(b);
     pt_locate(&c, 0);
-    assert(pt_edit(&c, 0, "XY", 2) == PT_OK); /* add hole("XY") at front */
+    assert(pt_edit(&c, 0, "XY", 2) == PT_OK); /* front-insert into hole */
     bytes_before = pt_bytes(c.tree);
     levels_before = c.tree->levels;
     cc_before = c.tree->root.child_count;
-    assert(pt_commit(&c) != NULL);
-    assert(pt_bytes(c.tree) == bytes_before);
-    assert(c.tree->levels == levels_before);
-    assert(c.tree->root.child_count == cc_before);
-    pt_release(c.tree);
+    snap = pt_commit(&c);
+    assert(snap != NULL);
+    assert(pt_bytes(snap) == bytes_before);
+    assert(snap->levels == levels_before);
+    assert(snap->root.child_count == cc_before);
+    pt_release(snap);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
 
-/* multi-page reserve chain (levels=1, 3 leaves with holes) */
+/* multi-page reserve chain (levels=1, 3 leaves with holes); freeze merges
+ * the whole run into one literal and collapses the tree */
 static void test_commit_reserve_pages(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Buffer snap;
     pt_Cursor c;
+    int       i;
     editV(&c, 0, 1,
           innerV(leafV(holeV("aaaaaaaaaaaaaaaa"), holeV("aaaaaaaaaaaaaaaa"),
                        holeV("aaaaaaaaaaaaaaaa"), holeV("aaaaaaaaaaaaaaaa")),
@@ -2714,9 +2733,19 @@ static void test_commit_reserve_pages(void) {
                  leafV(holeV("aaaaaaaaaaaaaaaa"), holeV("aaaaaaaaaaaaaaaa"),
                        holeV("aaaaaaaaaaaaaaaa"), holeV("aaaaaaaaaaaaaaaa"))));
     assert(pt_edit(&c, 0, ".", 1) == PT_OK);
-    assert(pt_commit(&c) != NULL);
-    assert(pt_checktree(c.tree));
-    pt_release(c.tree);
+    snap = pt_commit(&c);
+    assert(snap != NULL);
+    assert(pt_checktree(snap));
+    assert(snap->levels == 0 && snap->root.child_count == 1);
+    assert(pt_bytes(snap) == 193);
+    {
+        char rd[200];
+        pt_seek(&c, snap, 0);
+        assert(pt_read(&c, rd, 193) == 193);
+        assert(rd[0] == '.');
+        for (i = 1; i < 193; ++i) assert(rd[i] == 'a');
+    }
+    pt_release(snap);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -2765,7 +2794,7 @@ static void test_edit_commit_roundtrip(void) {
     assert(pt_checktree(snap));
     assert(pt_bytes(snap) == 12);
     {
-        pt_Node *r = &c.tree->root;
+        const pt_Node *r = &snap->root;
         assert(r->child_count == 3);
         assert(!ptM_ishole(r, 0) && !ptM_ishole(r, 1) && !ptM_ishole(r, 2));
         assert(r->bytes[0] == 5);
@@ -2785,7 +2814,7 @@ static void test_edit_commit_edit(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_from(S, "Hello", 5);
     pt_Cursor c;
-    pt_Buffer snap;
+    pt_Buffer snap, snap2;
     pt_seek(&c, b, 2);
     assert(pt_edit(&c, 0, "XY", 2) == PT_OK); /* "HeXYlo" */
     snap = pt_commit(&c);
@@ -2794,12 +2823,13 @@ static void test_edit_commit_edit(void) {
     pt_seek(&c, snap, 4);
     assert(pt_edit(&c, 0, "!", 1) == PT_OK);
     assert(c.dirty && pt_bytes(c.tree) == 8);
-    assert(pt_commit(&c) != NULL);
-    assert(!c.dirty && pt_checktree(c.tree) && pt_bytes(c.tree) == 8);
+    snap2 = pt_commit(&c);
+    assert(snap2 != NULL);
+    assert(!c.dirty && pt_checktree(snap2) && pt_bytes(snap2) == 8);
     {
-        pt_Node *r = &c.tree->root;
-        int      i;
-        size_t   total = 0;
+        const pt_Node *r = &snap2->root;
+        int            i;
+        size_t         total = 0;
         for (i = 0; i < (int)r->child_count; ++i) {
             assert(!ptM_ishole(r, i));
             total += r->bytes[i];
@@ -2808,8 +2838,8 @@ static void test_edit_commit_edit(void) {
     }
     /* first snapshot unchanged (bytes before 2nd edit) */
     assert(pt_bytes(snap) == 7 && pt_checktree(snap));
-    /* cleanup: release c.tree (2nd committed) → cascades to snap, then b */
-    pt_release(c.tree), pt_release(snap), pt_release(b);
+    /* cleanup: release snap2 (2nd committed) → cascades to snap, then b */
+    pt_release(snap2), pt_release(snap), pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -2883,6 +2913,7 @@ static void test_commit_deep2(void) {
 static void test_commit_reserve_leftover(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
+    pt_Buffer snap;
     pt_Cursor c;
     int       i;
 
@@ -2894,26 +2925,20 @@ static void test_commit_reserve_leftover(void) {
         assert(pt_edit(&c, 0, bigbuf, 16) == PT_OK);
     }
     assert(c.dirty);
-    /* Commit: freeze hole data into tree arena */
-    assert(pt_commit(&c) != NULL);
-    assert(!c.dirty);
-
-    /* Verify: all holes frozen to literals, mask=0 */
-    {
-        pt_Node *r = &c.tree->root;
-        int      j;
-        for (j = 0; j < (int)r->child_count; ++j) {
-            assert(!ptM_ishole(r, j));
-        }
-    }
-    assert(pt_checktree(c.tree));
-    assert(pt_bytes(c.tree) == 31 * 16);
+    /* Commit: freeze hole data into tree arena; the contiguous run
+     * merges into a single literal and the tree collapses */
+    snap = pt_commit(&c);
+    assert(snap != NULL && !c.dirty);
+    assert(pt_checktree(snap));
+    assert(snap->levels == 0 && snap->root.child_count == 1);
+    assert(!ptM_ishole(&snap->root, 0));
+    assert(pt_bytes(snap) == 31 * 16);
 
     /* Verify data content via pt_read */
     {
         char   buf[512];
         size_t n;
-        pt_seek(&c, c.tree, 0);
+        pt_seek(&c, snap, 0);
         n = pt_read(&c, buf, sizeof(buf));
         assert(n == 31 * 16);
         for (i = 0; i < 31; ++i) {
@@ -2925,13 +2950,13 @@ static void test_commit_reserve_leftover(void) {
 
     /* Arena block exists with used == total */
     {
-        pt_Block *ab = c.tree->arena.current;
+        pt_Block *ab = snap->arena.current;
         assert(ab != NULL);
         assert(ab->used == 31 * 16);
     }
 
     /* Release: arena freed, live_obj zero */
-    pt_release(c.tree), pt_release(b);
+    pt_release(snap), pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -2966,6 +2991,72 @@ static void test_commit_reservebuf_oom_multi(void) {
     /* Cleanup: tree still has holes, release normally */
     cnt = 10000;
     pt_release(c.tree), pt_release(b);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+/* freeze fold pulls the right sibling (with unfrozen holes) into the
+ * underfull leaf; second fixpoint round freezes them and merges the
+ * arena seam into one literal */
+static void test_commit_stitch_seam(void) {
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Buffer snap;
+    pt_Cursor c;
+    editV(&c, 0, 1,
+          innerV(leafV(holeV("ab"), holeV("cd")),
+                 leafV(holeV("ef"), litV("XY"))));
+    snap = pt_commit(&c);
+    assert(snap != NULL && c.tree == NULL && !c.dirty);
+    assert(pt_checktree(snap));
+    pt_asserttree(snap, 0, leafV(litV("abcdef"), litV("XY")));
+    pt_release(snap);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+/* holes in the LAST leaf: after merge the underfull tail folds into its
+ * left sibling (foldnode picks the left pair) and the root collapses */
+static void test_commit_seam_left(void) {
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Buffer snap;
+    pt_Cursor c;
+    editV(&c, 0, 1,
+          innerV(leafV(litV("ab"), litV("cd")),
+                 leafV(holeV("ef"), holeV("gh"))));
+    snap = pt_commit(&c);
+    assert(snap != NULL && c.tree == NULL);
+    assert(pt_checktree(snap));
+    pt_asserttree(snap, 0, leafV(litV("ab"), litV("cd"), litV("efgh")));
+    pt_release(snap);
+    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    pt_close(S);
+}
+
+/* OOM inside ptC_freeze node reserve: commit returns NULL, tree stays
+ * legal and dirty, cursor position survives, retry succeeds */
+static void test_commit_freeze_oom(void) {
+    int       cnt = 1000;
+    pt_State *S = pt_open(&oom_alloc, &cnt);
+    pt_Cursor c;
+    pt_Drain  d;
+    editV(&c, 0, 1,
+          innerV(leafV(holeV("ab"), holeV("cd")),
+                 leafV(holeV("ef"), litV("XY"))));
+    pt_locate(&c, 3);
+    d = pt_drainpool(&S->nodes);
+    cnt = 1; /* arena block alloc ok; freezestep node reserve fails */
+    assert(pt_commit(&c) == NULL);
+    assert(c.dirty && c.tree != NULL);
+    assert(pt_checktree(c.tree));
+    assert(pt_offset(&c) == 3 && pt_checkcursor(&c, 3));
+    pt_refillpool(&S->nodes, d), cnt = 1000;
+    {
+        pt_Buffer snap = pt_commit(&c);
+        assert(snap != NULL && c.tree == NULL);
+        assert(pt_checktree(snap));
+        pt_asserttree(snap, 0, leafV(litV("abcdef"), litV("XY")));
+        pt_release(snap);
+    }
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -3596,13 +3687,14 @@ static void test_commit_deep_holes(void) {
 static void test_read_partial(void) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
+    pt_Buffer a;
     pt_Cursor c;
     char      rd[16];
     size_t    nr;
     pt_seek(&c, b, 0);
     pt_append(&c, "ABCD", 4);
-    pt_commit(&c);
-    pt_locate(&c, 1);
+    a = pt_commit(&c);
+    pt_seek(&c, a, 1);
     nr = pt_read(&c, rd, 2);
     assert(nr == 2 && memcmp(rd, "BC", 2) == 0);
     assert(pt_checkcursor(&c, 3));
@@ -3612,7 +3704,7 @@ static void test_read_partial(void) {
         p = pt_piece(&c, &n);
         assert(memcmp(p, "D", n) == 0);
     }
-    pt_release(c.tree), pt_release(b);
+    pt_release(a), pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
 }
@@ -3637,7 +3729,7 @@ static void test_prev_cross_level(void) {
         const pt_Node *r = &a->root;
         size_t         inner0_bytes = ptN_sumbytes(
                 r->children[0], 0, r->children[0]->child_count);
-        pt_locate(&c, inner0_bytes); /* start of first leaf in inner[1] */
+        pt_seek(&c, a, inner0_bytes); /* start of first leaf in inner[1] */
         assert(pt_offset(&c) == inner0_bytes && c.poff == 0);
         {
             const char *p;
@@ -3756,8 +3848,10 @@ static void test_error_paths(void) {
     assert(pt_splice(&c, 1, "x", 1) == PT_ERRPARAM);
     c.tree = (pt_Tree *)b;
 
-    /* pt_rollback: not dirty */
-    pt_rollback(&c);
+    /* pt_rollback: not dirty → returns retained buffer, cursor detached */
+    assert(pt_rollback(&c) == b);
+    assert(c.tree == NULL);
+    pt_release(b); /* balance the rollback retain */
 
     /* pt_piece/pt_next/pt_prev NULL cursor */
     assert(pt_piece(NULL, NULL) == NULL);
@@ -3787,24 +3881,25 @@ static void test_error_paths(void) {
 
     pt_seek(&c, b, 0);                          /* back to empty */
     assert(pt_append(&c, "hello", 5) == PT_OK); /* piece for prev test */
-    assert(pt_commit(&c) != NULL);              /* commit to test prev */
     {
+        pt_Buffer   a = pt_commit(&c); /* commit to test prev */
         const char *p;
         size_t      n;
-        pt_locate(&c, 5);    /* end */
+        assert(a != NULL);
+        pt_seek(&c, a, 5);   /* end */
         p = pt_prev(&c, &n); /* "hello" */
         assert(p && memcmp(p, "hello", 5) == 0);
         assert(n == 5);
         p = pt_prev(&c, &n); /* before start → NULL */
         assert(p == NULL && n == 0);
+        /* plen=NULL variants for pt_piece/pt_next/pt_prev */
+        pt_locate(&c, 0);
+        pt_piece(&c, NULL); /* current piece, no len */
+        pt_next(&c, NULL);  /* past end → NULL */
+        pt_advance(&c, -1);
+        pt_prev(&c, NULL); /* back to "hell", no len */
+        pt_release(a);
     }
-    /* plen=NULL variants for pt_piece/pt_next/pt_prev */
-    pt_locate(&c, 0);
-    pt_piece(&c, NULL); /* current piece, no len */
-    pt_next(&c, NULL);  /* past end → NULL */
-    pt_advance(&c, -1);
-    pt_prev(&c, NULL); /* back to "hell", no len */
-    pt_release(c.tree);
 
     /* pt_from NULL S / bad s */
     assert(pt_from(NULL, NULL, 0) == NULL);
@@ -4019,7 +4114,7 @@ static void test_error_cov_params(void) {
     assert(pt_advance(&c, 1) == PT_ERRPARAM);
     assert(pt_locate(&c, 0) == PT_ERRPARAM);
     assert(pt_commit(&c) == NULL);
-    pt_rollback(&c);
+    assert(pt_rollback(&c) == NULL);
     assert(pt_scratch(&c, &n) == NULL);
     assert(pt_literal(&c, 1) == NULL);
     assert(pt_reserve(&c, 1) == NULL);
@@ -4042,7 +4137,7 @@ static void test_error_cov_params(void) {
     assert(pt_splice(&c, 0, NULL, 5) == PT_OK);
     assert(pt_splice(&c, 1, "x", 0) == PT_OK);
     assert(pt_checktree(c.tree));
-    pt_rollback(&c);
+    pt_release(pt_rollback(&c)); /* returns retained b */
     pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
     pt_close(S);
@@ -4076,22 +4171,23 @@ static void test_fork_cov_oom(void) {
     pt_State *S = pt_open(&oom_alloc, &cnt);
     pt_Buffer b;
     pt_Cursor c;
-    void     *savedt, *savedn;
+    pt_Drain  td, nd;
     b = pt_from(S, "abcd", 4);
     pt_seek(&c, b, 0);
     assert(pt_insert(&c, "x", 1) == PT_OK);
-    pt_rollback(&c);
-    assert(c.tree == (pt_Tree *)b);
-    savedt = S->trees.freed, S->trees.freed = NULL;
+    assert(pt_rollback(&c) == b);
+    pt_release(b); /* balance the rollback retain */
+    td = pt_drainpool(&S->trees);
     cnt = 0;
     pt_seek(&c, b, 1);
     assert(pt_insert(&c, "y", 1) == PT_ERRMEM);
     assert(pt_remove(&c, 2) == PT_ERRMEM);
     assert(pt_splice(&c, 2, "z", 1) == PT_ERRMEM);
     assert(!c.dirty);
-    savedn = S->nodes.freed, S->nodes.freed = NULL;
+    nd = pt_drainpool(&S->nodes);
     assert(pt_splice(&c, 2, "z", 1) == PT_ERRMEM);
-    S->nodes.freed = savedn, S->trees.freed = savedt;
+    pt_refillpool(&S->nodes, nd);
+    pt_refillpool(&S->trees, td);
     cnt = 1000;
     pt_release(b);
     assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
@@ -4104,13 +4200,13 @@ static void test_edit_cov_holeoom(void) {
     pt_State *S = pt_open(&oom_alloc, &cnt);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
-    void     *savedh;
+    pt_Drain  d;
     pt_seek(&c, b, 0);
     assert(pt_edit(&c, 0, "x", 1) == PT_OK);
-    savedh = S->holes.freed, S->holes.freed = NULL;
+    d = pt_drainpool(&S->holes);
     cnt = 0;
     assert(pt_edit(&c, 0, "y", 1) == PT_ERRMEM);
-    S->holes.freed = savedh;
+    pt_refillpool(&S->holes, d);
     cnt = 1000;
     assert(pt_edit(&c, 0, "y", 1) == PT_OK);
     pt_release(c.tree), pt_release(b);
@@ -4158,11 +4254,14 @@ static void test_edit_cov_prevfull(void) {
     X(commit_fillblock)            \
     X(commit_freshpage)            \
     X(commit_mixed)                \
-    X(commit_no_merge)             \
+    X(commit_merge)                \
     X(commit_reserve_leftover)     \
     X(commit_reserve_pages)        \
     X(commit_reservebuf_oom)       \
     X(commit_reservebuf_oom_multi) \
+    X(commit_freeze_oom)           \
+    X(commit_stitch_seam)          \
+    X(commit_seam_left)            \
     X(commit_single_hole)          \
     X(commit_then_reseek)          \
     X(edit_append_full)            \

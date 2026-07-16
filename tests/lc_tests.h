@@ -66,7 +66,31 @@ LC_STATIC void lc_localfill(lc_Pool *pool, void **op, void *buf, size_t count) {
         *(void **)(base + (i - 1) * sz) = (void *)(base + i * sz);
     *(void **)(base + (count - 1) * sz) = NULL;
     pool->freed = (void *)base;
+    pool->freed_obj = count; /* old chain parked in *op, not reachable */
     lcP_stat(pool->live_obj += count);
+}
+
+/* lc_Drain / lc_drainpool / lc_refillpool — detach the entire freelist
+ * (with its count) so the next lcP_alloc takes the page-alloc path.
+ * Refill splices the detached chain back in front of anything freed
+ * meanwhile. */
+typedef struct {
+    void  *chain;
+    size_t count;
+} lc_Drain;
+
+LC_STATIC lc_Drain lc_drainpool(lc_Pool *p) {
+    lc_Drain d;
+    d.chain = p->freed, d.count = p->freed_obj;
+    p->freed = NULL, p->freed_obj = 0;
+    return d;
+}
+
+LC_STATIC void lc_refillpool(lc_Pool *p, lc_Drain d) {
+    void **pp = &d.chain;
+    while (*pp) pp = (void **)*pp;
+    *pp = p->freed;
+    p->freed = d.chain, p->freed_obj += d.count;
 }
 
 /* ================================================================ */

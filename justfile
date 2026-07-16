@@ -9,8 +9,8 @@ cov: lc-cov cov-uncovered lc-lines
 dbg-run t *tests='':
     {{ CC }} {{ CFLAGS }} {{ INCS }} -g -O0 -fsanitize=address,undefined -o tests/{{ t }} tests/{{ t }}.c && ./tests/{{ t }} {{ tests }}
 
-cov-run t:
-    {{ CC }} {{ CFLAGS }} {{ INCS }} --coverage -Wno-unused-function -O0 -o tests/{{ t }} tests/{{ t }}.c && ./tests/{{ t }}
+cov-run t *tests='':
+    {{ CC }} {{ CFLAGS }} {{ INCS }} --coverage -Wno-unused-function -O0 -o tests/{{ t }} tests/{{ t }}.c && ./tests/{{ t }} {{ tests }}
 
 clean-gcda:
     rm -f tests/*.gcda tests/*.gcno ./*.gcda ./*.gcno *.info

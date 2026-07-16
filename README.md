@@ -33,7 +33,12 @@ complex content:
 
 - **Immutable buffers + COW**: `pt_Buffer` is a refcounted snapshot; the first
   edit on a cursor forks a private transient tree, `pt_commit` freezes it
-  into a new buffer, `pt_rollback` discards it
+  into a new buffer, `pt_rollback` discards it and returns the source buffer
+  (retained for the caller). Both detach the cursor (`C->tree = NULL`);
+  re-attach with `pt_seek` on the returned buffer
+- **Compacting freeze**: `pt_commit` merges physically adjacent literals
+  produced by freezing contiguous holes and rebalances the tree, so long
+  typing runs collapse into single pieces instead of fragmenting the tree
 - **Two piece kinds**: zero-copy *literal* pieces referencing user memory,
   and pooled mutable *hole* pieces absorbing small edits in place
 - **Transactional OOM safety**: edits pre-reserve pool objects; on
