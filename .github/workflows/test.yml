@@ -8,6 +8,7 @@ on:
 
 jobs:
   test:
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip ci]')"
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -23,6 +24,7 @@ jobs:
         run: just pt
 
   coverage:
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip ci]')"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

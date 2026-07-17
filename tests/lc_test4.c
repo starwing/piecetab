@@ -1951,6 +1951,7 @@ static void test_append_oom_normal(void) {
     int       oom = 0;
     void     *lf;
     lc_Drain  ld, nd;
+    void     *pl, *pn;
 
     assert(S);
     c = cacheV(S, 0, botV(leafV(5, 5)));
@@ -1958,6 +1959,7 @@ static void test_append_oom_normal(void) {
 
     ld = lc_drainpool(&S->leaves);
     nd = lc_drainpool(&S->nodes);
+    pl = S->leaves.pages, pn = S->nodes.pages;
     S->leaves.pages = NULL;
     S->nodes.pages = NULL;
     lc_localfill(&S->leaves, &lf, &lfdum, 1);
@@ -1977,6 +1979,7 @@ static void test_append_oom_normal(void) {
     (void)lc_drainpool(&S->leaves);
     lc_refillpool(&S->leaves, ld);
     lc_refillpool(&S->nodes, nd);
+    lc_restorepages(&S->leaves, pl), lc_restorepages(&S->nodes, pn);
     lc_delcache(S, c);
     lc_close(S);
 }
@@ -2033,6 +2036,7 @@ static void test_append_oom_shiftup(void) {
     int       oom = 0;
     void     *lf;
     lc_Drain  ld, nd;
+    void     *pl, *pn;
 
     assert(S);
     c = cacheV(
@@ -2042,6 +2046,7 @@ static void test_append_oom_shiftup(void) {
 
     ld = lc_drainpool(&S->leaves);
     nd = lc_drainpool(&S->nodes);
+    pl = S->leaves.pages, pn = S->nodes.pages;
     S->leaves.pages = NULL;
     S->nodes.pages = NULL;
     lc_localfill(&S->leaves, &lf, &lfdum, 1);
@@ -2059,6 +2064,7 @@ static void test_append_oom_shiftup(void) {
         assert(S->nodes.live_obj == snb);
     }
 
+    lc_restorepages(&S->leaves, pl), lc_restorepages(&S->nodes, pn);
     (void)lc_drainpool(&S->leaves);
     lc_refillpool(&S->leaves, ld);
     lc_refillpool(&S->nodes, nd);
@@ -2073,6 +2079,7 @@ static void test_append_oom_rootpush(void) {
     lc_Node  *b[4];
     int       oom = 0, i;
     lc_Drain  nd;
+    void     *pn;
 
     assert(S);
     for (i = 0; i < 4; i++) b[i] = botV(leafV(1), leafV(1), leafV(1), leafV(1));
@@ -2080,6 +2087,7 @@ static void test_append_oom_rootpush(void) {
     assert(lc_checktree_allow_empty(c, 1));
 
     nd = lc_drainpool(&S->nodes);
+    pn = S->nodes.pages;
     S->nodes.pages = NULL;
 
     {
@@ -2096,6 +2104,7 @@ static void test_append_oom_rootpush(void) {
         assert(S->nodes.live_obj == snb);
     }
 
+    lc_restorepages(&S->nodes, pn);
     lc_refillpool(&S->nodes, nd);
     lc_delcache(S, c);
     lc_close(S);
@@ -2107,6 +2116,7 @@ static void test_append_oom_deroot(void) {
     lc_Cursor C;
     int       oom = 0;
     lc_Drain  nd;
+    void     *pn;
 
     assert(S);
     c = cacheV(
@@ -2125,6 +2135,7 @@ static void test_append_oom_deroot(void) {
         }
         lc_refillpool(&S->nodes, nd);
     }
+    pn = S->nodes.pages;
     S->nodes.pages = NULL;
 
     {
@@ -2139,6 +2150,7 @@ static void test_append_oom_deroot(void) {
         assert(S->nodes.live_obj == snb);
     }
 
+    lc_restorepages(&S->nodes, pn);
     lc_delcache(S, c);
     lc_close(S);
 }
@@ -2147,11 +2159,13 @@ static void test_append_oom_rollback(void) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     lc_Cursor C;
+    void     *pn;
 
     assert(S);
     c = cacheV(S, 0, botV(leafV(1, 0), leafV(1, 0), leafV(1, 0), leafV(1, 0)));
 
     (void)lc_drainpool(&S->nodes);
+    pn = S->nodes.pages;
     S->nodes.pages = NULL;
 
     {
@@ -2171,6 +2185,7 @@ static void test_append_oom_rollback(void) {
                 c, 0, botV(leafV(1, 0), leafV(1, 0), leafV(1, 0), leafV(1, 0)));
     }
 
+    lc_restorepages(&S->nodes, pn);
     lc_delcache(S, c);
     lc_close(S);
 }
@@ -2338,7 +2353,9 @@ static void test_markbreak_oom_makeroom(void) {
     lc_Cache *c = cacheV(S, 0, botV(leafV(3, 3, 3, 3)));
     lc_Cursor C;
     int       r, oom = 0;
+    void     *pl;
     assert(c && c->breaks == 4);
+    pl = S->leaves.pages;
     (void)lc_drainpool(&S->leaves);
     S->leaves.pages = NULL;
     lc_seek(&C, c, 0);
@@ -2348,6 +2365,7 @@ static void test_markbreak_oom_makeroom(void) {
     S->allocf = test_alloc;
     S->alloc_ud = NULL;
     assert(r == LC_ERRMEM);
+    lc_restorepages(&S->leaves, pl);
     lc_delcache(S, c);
     lc_close(S);
 }
@@ -2360,6 +2378,8 @@ static void test_append_oom_cutleaf(void) {
     lc_Cursor C;
     unsigned  zero[] = {0}, *pz = zero;
     int       r, oom = 0;
+    void     *pl;
+    pl = S->leaves.pages;
     (void)lc_drainpool(&S->leaves);
     S->leaves.pages = NULL;
     lc_seek(&C, c, 5);
@@ -2371,6 +2391,7 @@ static void test_append_oom_cutleaf(void) {
     assert(r == LC_ERRMEM);
     assert(lc_checktree(c));
     assert(lc_checkcursor(&C, 5));
+    lc_restorepages(&S->leaves, pl);
     lc_delcache(S, c);
     lc_close(S);
 }

@@ -94,6 +94,20 @@ LC_STATIC void lc_refillpool(lc_Pool *p, lc_Drain d) {
     p->freed = d.chain, p->freed_obj += d.count;
 }
 
+/* lc_restorepages — merge saved page chain in front of pool's current
+ * pages, so pages allocated during a test are not leaked.
+ * Each page stores its next link at page + LC_PAGE_SIZE - sizeof(void *). */
+LC_STATIC void lc_restorepages(lc_Pool *p, void *saved) {
+    char *cur, **tail;
+    if (saved == NULL) return;
+    cur = (char *)saved;
+    do {
+        tail = (char **)(cur + LC_PAGE_SIZE - sizeof(void *));
+        cur = *tail;
+    } while (cur);
+    *tail = (char *)p->pages, p->pages = saved;
+}
+
 /* ================================================================ */
 /*  tree invariant checker                                           */
 /* ================================================================ */
