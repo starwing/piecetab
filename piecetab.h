@@ -94,6 +94,7 @@ PT_API const char *pt_prev(pt_Cursor *C, size_t *plen);
 
 /* query */
 #define pt_offset(C) ((C)->off + (C)->poff)
+#define pt_valid(C)  ((C)->tree != NULL)
 #define pt_buffer(C) ((C)->tree)
 
 /* editing */

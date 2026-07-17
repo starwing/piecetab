@@ -58,3 +58,18 @@ pt *tests='': (dbg-run "pt_test4" tests)
 pt-cov: clean-gcda (cov-run "pt_test4") (cov-show "piecetab.h")
 pt-lines: (cov-lines "piecetab.h")
 pt-unbranched: (cov-unbranched "piecetab.h")
+
+# lua binding (endpoints: PUC 5.5 + LuaJIT 2.1/5.1 cover the compat range)
+
+LUAFLAGS := "-Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -std=c89 -Wno-variadic-macros"
+LUA55_INC := "-I/opt/homebrew/include/lua5.5"
+LUAJIT_INC := "-I/opt/homebrew/include/luajit-2.1"
+
+lua-build:
+    mkdir -p build/lua55 build/luajit
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} -g -O0 -bundle -undefined dynamic_lookup -o build/lua55/piecetab.so piecetab.c
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} -g -O0 -bundle -undefined dynamic_lookup -o build/luajit/piecetab.so piecetab.c
+
+lua-test *t: lua-build
+    lua tests/lua/test_pt.lua {{ t }}
+    luajit tests/lua/test_pt.lua {{ t }}

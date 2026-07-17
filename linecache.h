@@ -87,6 +87,7 @@ LC_API int lc_advline(lc_Cursor *C, lc_Delta d);
 #define lc_col(C)        ((C)->col)
 #define lc_lineoffset(C) ((C)->off + (C)->loff)
 #define lc_offset(C)     (lc_lineoffset(C) + (C)->col)
+#define lc_valid(C)      ((C)->tree != NULL)
 
 LC_API unsigned lc_linelen(const lc_Cursor *C);
 

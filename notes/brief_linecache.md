@@ -201,6 +201,9 @@ grep '^    X(' tests/lc_test4.c
 | `notes/brief_tests.md`                | 测试结构笔记                      |
 | `notes/brief_refine.md`               | 代码精炼经验教训                  |
 | `notes/uncovered_branches.md`         | 未覆盖分支详细映射                |
+| `notes/research_marktree.md`          | neovim marktree 调研（对比参考）  |
+| `notes/design_spantree.md`            | spantree 设计决议（字节属性段树） |
+| `notes/research_highlighter.md`       | 语法高亮器输出与增量更新调研      |
 | `docs/linecache.zh.md`                | 面向用户的 API 参考手册           |
 
 ## 十二、编码铁律 (AGENTS.md)
