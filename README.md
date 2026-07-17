@@ -1,6 +1,6 @@
 # piecetab
 
-<!-- BADGES: add badges here -->
+[![Build](https://github.com/starwing/piecetab/actions/workflows/test.yml/badge.svg)](https://github.com/starwing/piecetab/actions/workflows/test.yml) [![Coverage Status](https://coveralls.io/repos/github/starwing/piecetab/badge.svg?branch=master)](https://coveralls.io/github/starwing/piecetab?branch=master)
 
 **English** | [中文](README.zh.md)
 
@@ -166,14 +166,14 @@ See [`docs/piecetab.md`](docs/piecetab.md) and
 
 Override before including the implementation:
 
-| Macro                           | Default | Meaning                  |
-| ------------------------------- | ------- | ------------------------ |
-| `PT_FANOUT` / `LC_FANOUT`       | 62      | max children per node    |
-| `LC_LEAF_FANOUT`                | 62      | max lines per leaf       |
-| `PT_MAX_HOLESIZE`               | 64      | hole piece capacity      |
-| `PT_MAX_LEVEL` / `LC_MAX_LEVEL` | 16      | max tree depth           |
-| `PT_PAGE_SIZE` / `LC_PAGE_SIZE` | 65536   | pool allocator page size |
-| `PT_ARENA_SIZE`                 | 1024    | arena block minimum size |
+| Macro                           | Default | Meaning                              |
+| ------------------------------- | ------- | ------------------------------------ |
+| `PT_FANOUT` / `LC_FANOUT`       | 62      | max children per node                |
+| `LC_LEAF_FANOUT`                | 62      | max lines per leaf                   |
+| `PT_MAX_HOLESIZE`               | 64      | hole piece capacity                  |
+| `PT_MAX_LEVEL` / `LC_MAX_LEVEL` | 16      | max tree depth                       |
+| `PT_PAGE_SIZE` / `LC_PAGE_SIZE` | 65536   | pool allocator page size             |
+| `PT_ARENA_SIZE`                 | 1024    | arena block minimum size             |
 | `PT_COMPACT_RANGES`             | 64      | compact range array initial capacity |
 
 Both libraries accept a custom allocator (`lc_Alloc` / `pt_Alloc`,

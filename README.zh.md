@@ -1,6 +1,6 @@
 # piecetab
 
-<!-- BADGES: add badges here -->
+[![Build](https://github.com/starwing/piecetab/actions/workflows/test.yml/badge.svg)](https://github.com/starwing/piecetab/actions/workflows/test.yml) [![Coverage Status](https://coveralls.io/repos/github/starwing/piecetab/badge.svg?branch=master)](https://coveralls.io/github/starwing/piecetab?branch=master)
 
 [English](README.md) | **中文**
 
@@ -153,14 +153,14 @@ int main(void) {
 
 在包含实现之前覆盖以下宏：
 
-| 宏                              | 默认  | 含义             |
-| ------------------------------- | ----- | ---------------- |
-| `PT_FANOUT` / `LC_FANOUT`       | 62    | 节点最大子数     |
-| `LC_LEAF_FANOUT`                | 62    | 叶最大行数       |
-| `PT_MAX_HOLESIZE`               | 64    | hole piece 容量  |
-| `PT_MAX_LEVEL` / `LC_MAX_LEVEL` | 16    | 最大树深         |
-| `PT_PAGE_SIZE` / `LC_PAGE_SIZE` | 65536 | 池分配器页大小   |
-| `PT_ARENA_SIZE`                 | 1024  | arena 块最小容量 |
+| 宏                              | 默认  | 含义                     |
+| ------------------------------- | ----- | ------------------------ |
+| `PT_FANOUT` / `LC_FANOUT`       | 62    | 节点最大子数             |
+| `LC_LEAF_FANOUT`                | 62    | 叶最大行数               |
+| `PT_MAX_HOLESIZE`               | 64    | hole piece 容量          |
+| `PT_MAX_LEVEL` / `LC_MAX_LEVEL` | 16    | 最大树深                 |
+| `PT_PAGE_SIZE` / `LC_PAGE_SIZE` | 65536 | 池分配器页大小           |
+| `PT_ARENA_SIZE`                 | 1024  | arena 块最小容量         |
 | `PT_COMPACT_RANGES`             | 64    | compact 区间数组初始容量 |
 
 两库均可在 `*_open` 时传入自定义分配器（`lc_Alloc` / `pt_Alloc`，
