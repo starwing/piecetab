@@ -1,4 +1,4 @@
-# piecetab
+# ![Piecetab](logo.svg)
 
 [![Build](https://github.com/starwing/piecetab/actions/workflows/test.yml/badge.svg)](https://github.com/starwing/piecetab/actions/workflows/test.yml) [![Coverage Status](https://coveralls.io/repos/github/starwing/piecetab/badge.svg?branch=master)](https://coveralls.io/github/starwing/piecetab?branch=master)
 
