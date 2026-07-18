@@ -221,7 +221,7 @@ int pt_edit(pt_Cursor *C, size_t del, const char *s, size_t len);
 但插入的数据经 **hole piece**（内部分配定容缓存并 memcpy），是**拷贝语义**。
 
 - `len` **必须** `≤ PT_MAX_HOLESIZE`，否则返回 `PT_ERRPARAM`
-- 插入前先 `pt_remove(C, del)`（见下文编辑非原子语义）
+- 插入前先 `pt_remove(C, del)`（事务性，见 5.2）
 - 插入时优先合并尾追已有的相邻 hole：若游标所在或左侧 piece 是 hole 且容量充足
   （`ptH_fit`），直接 `memmove` 局部追加而不分裂叶——快速路径
 - 否则走 `ptI_splitins` 裂叶插入新 hole
@@ -409,14 +409,15 @@ typedef struct pt_Arena {
    清 dirty，返回已冻结的 buffer。
 5. **Rollback**: 丢弃内部新 tree（`pt_release`），返回已 retain 的 `from` buffer 并 detach 游标。
 
-### 5.2 编辑非原子语义
+### 5.2 编辑事务性（ERRMEM）
 
-编辑操作在内存不足时**不是原子的**。若 `pt_edit`/`pt_append`/`pt_insert`/`pt_splice`/
-`pt_remove` 返回 `PT_ERRMEM`：
-- 已完成的部分（已插入/已删除的字节）**仍可见**于游标的内部 tree 中
-- 数据结构保持一致性（不变式——cc 半满/bytes 和/mask 一致——不变）
-- 游标仍有效，位于最后成功编辑的位置
-- 调用方可选择 `pt_rollback` 丢弃部分编辑，或继续补充编辑后 `pt_commit`
+编辑操作在动树**之前**预留全部可能需要的池对象
+（`ptK_beginedit`/`ptP_reserve`/`ptH_reserve`）——分配失败严格
+发生在任何修改之前。若 `pt_edit`/`pt_append`/`pt_insert`/
+`pt_splice`/`pt_remove` 返回 `PT_ERRMEM`：
+- buffer 内容**未改变**（事务性失败）
+- 游标仍有效，停在原位置
+- 调用方可直接重试该编辑，或继续其他编辑，照常 `pt_rollback`/`pt_commit`
 
 ### 5.3 裂叶与插入 (ptI_splitins)
 

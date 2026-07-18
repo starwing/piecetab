@@ -1075,9 +1075,8 @@ LC_API int lc_scan(lc_Cache *c, lc_Scanner *sc, void *ud) {
             if (lcN_cc(lcK_parent(&C, l)) < LC_FANOUT) break;
         if ((r = lcD_makechain(&C, l, lcK_levels(&C), 0)) < 0) break;
     }
-    if (r < 0) return r;
     for (l = 0; l < lcK_levels(&C); ++l) lcD_foldnode(&C, 0, l);
-    return lcD_foldleaf(&C), lcD_rebalance(&C, 0), LC_OK;
+    return lcD_foldleaf(&C), lcD_rebalance(&C, 0), r;
 }
 
 static int lcB_cutleaf(lc_Cursor *C, lc_Node *rt) {

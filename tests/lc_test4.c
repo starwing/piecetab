@@ -181,6 +181,7 @@ static void test_scan_oom_items(void) {
     c = lc_newcache(S);
     r = lc_scan(c, lc_scanner, &pbrs);
     assert(r == LC_ERRMEM);
+    assert(lc_checktree(c));
     lc_delcache(S, c);
     lc_close(S);
 }
@@ -195,6 +196,7 @@ static void test_scan_oom_flush(void) {
     c = lc_newcache(S);
     r = lc_scan(c, lc_rscanner, &pbrs);
     assert(r == LC_ERRMEM);
+    assert(lc_checktree(c));
     lc_delcache(S, c);
     lc_close(S);
 }
@@ -209,6 +211,31 @@ static void test_scan_oom_build(void) {
     c = lc_newcache(S);
     r = lc_scan(c, lc_rscanner, &pbrs);
     assert(r == LC_ERRMEM);
+    assert(lc_checktree(c));
+    lc_delcache(S, c);
+    lc_close(S);
+}
+
+/* scan OOM after makechain: makechain deepens root, then lcL_new fails
+ * → lc_scan returns ERRMEM without fold/rebalance → underfilled node */
+static void test_scan_oom_unfolded(void) {
+    int       oom = 100, r;
+    lc_State *S = lc_open(&oom_alloc, &oom);
+    lc_Cache *c;
+    unsigned  brs[] = {10, 0}, *pbrs = brs;
+    lc_Drain  d;
+
+    c = cacheV(
+            S, 0,
+            botV(leafV(1, 1, 1, 1), leafV(1, 1, 1, 1), leafV(1, 1, 1, 1),
+                 leafV(1, 1, 1, 1)));
+    assert(c);
+    oom = 0, S->alloc_ud = &oom;
+    d = lc_drainpool(&S->leaves);
+    r = lc_scan(c, lc_scanner, &pbrs);
+    assert(r == LC_ERRMEM);
+    assert(lc_checktree(c));
+    lc_refillpool(&S->leaves, d);
     lc_delcache(S, c);
     lc_close(S);
 }
@@ -467,7 +494,7 @@ static void test_advance_brute(void) {
     S = lc_open(&test_alloc, NULL), assert(S);
     c = lc_newcache(S);
     {
-        unsigned buf[] = {0, 0, 0};
+        unsigned  buf[] = {0, 0, 0};
         unsigned *p;
         buf[0] = (unsigned)n, buf[1] = 2;
         p = buf;
@@ -609,7 +636,7 @@ static void test_advline_brute(void) {
     S = lc_open(&test_alloc, NULL), assert(S);
     c = lc_newcache(S);
     {
-        unsigned buf[] = {0, 0, 0};
+        unsigned  buf[] = {0, 0, 0};
         unsigned *p;
         buf[0] = (unsigned)n, buf[1] = 2;
         p = buf;
@@ -1313,7 +1340,7 @@ static void test_splice_brute(void) {
             for (ins = 0; ins <= 1; ++ins) {
                 c = lc_newcache(S);
                 {
-                    unsigned buf[] = {0, 0, 0};
+                    unsigned  buf[] = {0, 0, 0};
                     unsigned *p;
                     buf[0] = (unsigned)n, buf[1] = 2;
                     p = buf;
@@ -1400,7 +1427,8 @@ static void test_splice_brute3(void) {
                     || !lc_checkcursor(&C, pos)) {
                     lc_log("FAIL brute3 s=%d pos=%lu len=%lu bytes=%lu "
                            "exp=%lu\n",
-                           si, lc_lu(pos), lc_lu(len), lc_lu(lc_bytes(c)), lc_lu(total - len - hang));
+                           si, lc_lu(pos), lc_lu(len), lc_lu(lc_bytes(c)),
+                           lc_lu(total - len - hang));
                     lc_dumptree(c, "after splice");
                     lc_dumpcursor(&C, "after splice");
                     abort();
@@ -2202,8 +2230,8 @@ static void test_append_oom_full(void) {
     lc_Cursor C;
     int       oom, r;
 
-    /* oom=3: cutleaf(1 leaf) + findroom reserve(1 node) + stitch reserve(2 node) = 4.
-     * 4th allocf fails → OOM → rollback. */
+    /* oom=3: cutleaf(1 leaf) + findroom reserve(1 node) + stitch reserve(2
+     * node) = 4. 4th allocf fails → OOM → rollback. */
     S = lc_open(&test_alloc, NULL);
     c = lc_newcache(S);
     lc_rscanV(c, 256, 1);
@@ -2768,6 +2796,7 @@ static void test_locline_crossleaf(void) {
     X(scan_oom_items)             \
     X(scan_oom_flush)             \
     X(scan_oom_build)             \
+    X(scan_oom_unfolded)          \
     X(scan_deepen_root)           \
     X(scan_edge_makechain_empty)  \
     X(seek_params)                \

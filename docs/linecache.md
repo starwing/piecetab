@@ -89,7 +89,7 @@ int lc_scan(lc_Cache *c, lc_Scanner *sc, void *ud);
 
 **Behavior**: Repeatedly calls `scanner(ud, current_byte_offset)` to obtain line length (including `\n`); a return value of 0 signals scan termination. Lines are appended left-to-right to the tail of the tree. **Multiple `lc_scan` calls are additive** — subsequent scans append after existing data.
 
-**Return values**: `LC_OK` (success), `LC_ERRPARAM` (null pointer), `LC_ERRMEM` (OOM).
+**Return values**: `LC_OK` (success), `LC_ERRPARAM` (null pointer), `LC_ERRMEM` (OOM). On `LC_ERRMEM`, already-scanned lines remain in the tree (partial completion); the caller may retry after freeing memory.
 
 **Constraints**: The scanner must return a line length ≥ 1 (including newline). Cursor operations may be interleaved between multiple scans on the same tree.
 
@@ -149,6 +149,8 @@ int lc_markbreak(lc_Cursor *C, unsigned len);
   - If `len > remaining line length`: first inserts `len` bytes to the end of the line, then breaks at `len` (see `lc_markbreak`'s splice fallback logic)
   - Empty tree: directly builds a single-line tree with `len`
   - After return, `C` is positioned at the start of the new line after the break (`col=0`, `lnu+=1`, `loff`/`off/nu` updated)
+
+**Semantics**: The line break is placed at `lc_offset(C) + len`, splitting the line at that byte boundary. The cursor ends at the beginning of the line *after* the break (offset = original offset + len, col = 0). When the cursor is in the trailing virtual region (beyond tree tail), `lc_markbreak` calls `lcB_oneline` to build a single-line tree, **pinning** the virtual column as actual content — the trailing position becomes a real line.
 - `lc_clearbreaks`: Deletes all line breaks within `len` bytes from the cursor position (segments are joined into one line). Equivalent to the `lc_splice(C, len, len)` macro. The cursor ends up at column position within the merged line.
   - A macro wrapper around `lc_splice`. Parameter validation is delegated to `lc_splice`.
 

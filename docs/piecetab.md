@@ -221,7 +221,7 @@ Deletes `del` bytes at the cursor then inserts `s` (`len` bytes), equivalent to 
 but the inserted data goes through a **hole piece** (internally allocated fixed-capacity buffer, memcpy'd), giving **copy semantics**.
 
 - `len` **must** be `≤ PT_MAX_HOLESIZE`, else returns `PT_ERRPARAM`
-- Calls `pt_remove(C, del)` before insertion (see non-atomic edit semantics below)
+- Calls `pt_remove(C, del)` before insertion (transactional, see 5.2)
 - Insertion tries to merge with an adjacent trailing hole first: if the current or left-side piece is a hole with sufficient capacity
   (`ptH_fit`), appends locally via `memmove` without splitting the leaf — fast path
 - Otherwise goes through `ptI_splitins` to split the leaf and insert a new hole
@@ -408,14 +408,16 @@ Lazily initialized — blocks are allocated only on first `pt_reserve`/`pt_liter
    Clears dirty, returns the frozen buffer.
 5. **Rollback**: Discards the internal new tree (`pt_release`), returns the retained `from` buffer and detaches the cursor.
 
-### 5.2 Non-Atomic Edit Semantics
+### 5.2 Edit Transactionality (ERRMEM)
 
-Edit operations are **not atomic** under memory pressure. If `pt_edit`/`pt_append`/`pt_insert`/`pt_splice`/
-`pt_remove` returns `PT_ERRMEM`:
-- Partially completed changes (already inserted/deleted bytes) **remain visible** in the cursor's internal tree
-- Data structure invariants (child_count, half-full, bytes sum, mask consistency) are preserved
-- The cursor remains valid, positioned at the last successful edit
-- The caller may choose `pt_rollback` to discard partial edits, or continue editing and then `pt_commit`
+Edit operations pre-reserve every pool object they may need
+(`ptK_beginedit`/`ptP_reserve`/`ptH_reserve`) **before** mutating the tree —
+allocation failure happens strictly before any mutation. If `pt_edit`/
+`pt_append`/`pt_insert`/`pt_splice`/`pt_remove` returns `PT_ERRMEM`:
+- The buffer content is **unchanged** (transactional failure)
+- The cursor remains valid at its original position
+- The caller may simply retry the edit, continue with other edits, or
+  `pt_rollback`/`pt_commit` as usual
 
 ### 5.3 Leaf Split & Insert (ptI_splitins)
 

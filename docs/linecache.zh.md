@@ -89,7 +89,7 @@ int lc_scan(lc_Cache *c, lc_Scanner *sc, void *ud);
 
 **行为**: 反复调用 `scanner(ud, 当前字节偏移)` 获取行长度（含 `\n`），返回值 0 表示扫描终止。各行自左向右追加至树尾。**允许多次 `lc_scan` 叠加**——后续扫描在已有数据之后追加。
 
-**返回值**: `LC_OK` (成功), `LC_ERRPARAM` (空指针), `LC_ERRMEM` (OOM)。
+**返回值**: `LC_OK` (成功), `LC_ERRPARAM` (空指针), `LC_ERRMEM` (OOM)。OOM 时已扫描的行仍保留在树中（部分完成），调用方可释放内存后重试。
 
 **约束**: scanner 必须返回 ≥1 的行长度（含换行符）。同一树多次扫描之间可穿插游标操作。
 
@@ -149,6 +149,8 @@ int lc_markbreak(lc_Cursor *C, unsigned len);
   - 若 `len > 行剩余长度`: 先将 `len` 字节插入至行尾，再在 `len` 处断（见 `lc_markbreak` 的 splice 回退逻辑）
   - 空树时：直接以 `len` 建立单行树
   - 返回后 `C` 定位断后新行之首（`col=0`, `lnu+=1`, `loff`/`off/nu` 已更新）
+
+**语义**: 断点落于 `lc_offset(C) + len` 字节边界，`len` 为断点前行长（含 `\n`）。游标结束于断点*之后*的行首（偏移量 = 原偏移量 + len，列 = 0）。当游标在 trailing 虚拟区（超越树尾）时，`lc_markbreak` 调用 `lcB_oneline` 构建单行树，将虚拟列号**定格**为实际内容——trailing 位置变为真实行。
 - `lc_clearbreaks`: 删除从游标位置起 `len` 字节内的所有行断点（各段连接为一行）。等价于 `lc_splice(C, len, len)` 的宏。游标位于合并后行之 col 位置。
   - `lc_splice` 的宏包装。参数校验委托给 `lc_splice`。
 
