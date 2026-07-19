@@ -340,12 +340,12 @@ UT_API void ut_deltree(ut_State *S, ut_Tree *T) {
 }
 
 UT_API const ut_Hunk *ut_hunks(ut_Tree *T, size_t *pn) {
-    if (T == NULL || pn == NULL) return NULL;
+    if (T == NULL) return NULL;
     if (T->diffhn < 0) {
-        if (T->current == NULL) return *pn = 0, NULL;
-        return *pn = utV_len(T->current->h), T->current->h;
+        if (T->current == NULL) return (void)(pn && (*pn = 0)), NULL;
+        return (void)(pn && (*pn = utV_len(T->current->h))), T->current->h;
     }
-    return *pn = T->diffhn, T->S->scratch;
+    return (void)(pn && (*pn = T->diffhn)), T->S->scratch;
 }
 
 UT_API int ut_record(ut_Tree *T, size_t off, size_t del, size_t ins) {
@@ -622,7 +622,7 @@ UT_API int ut_freshdiff(ut_Tree *T, int i, int j) {
     if (r != UT_OK) return r;
     if (utV_len(T->S->scratch) == 0)
         return utV_free(T->S, T->S->scratch), T->diffhn = 0, UT_OK;
-    return T->diffhn = (int)utV_len(T->S->scratch), UT_OK;
+    return T->diffhn = (int)utV_len(T->S->scratch);
 }
 
 UT_NS_END

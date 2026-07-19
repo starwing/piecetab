@@ -302,7 +302,8 @@ Get the current hunk list. If a pending diff exists (`diffhn ≥ 0`),
 returns `S->scratch`; otherwise returns `current->h` (the committed
 changeset from `current`'s parent to `current`).
 
-Writes the hunk count to `*pn`. Returns `NULL` if `T` or `pn` is `NULL`.
+Writes the hunk count to `*pn` (if `pn` is non-NULL). Returns `NULL` if
+`T` is `NULL`.
 
 ---
 

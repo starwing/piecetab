@@ -410,7 +410,7 @@ parent.last_child → [youngest=N] → [N-1] → ... → [1=oldest] ─┐
 
 ## 十一、测试
 
-`tests/ut_test.c`（76 个测试）：
+`tests/ut_test.c`（79 个测试）：
 
 覆盖生命周期、journal、commit、switch/discard、branch、LCA、深链、
 OOM 路径、normalize merge/overlap/no-op、compose 各分支、diff 各种组合、

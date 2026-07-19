@@ -280,7 +280,7 @@ UT_API const ut_Hunk *ut_hunks(ut_Tree *T, size_t *pn);
 获取当前 hunk 列表。若存在待命 diff（`diffhn ≥ 0`），返回 `S->scratch`；
 否则返回 `current->h`（当前节点到 parent 的已提交 changeset）。
 
-hunk 数写入 `*pn`。`T` 或 `pn` 为 NULL 返回 `NULL`。
+hunk 数写入 `*pn`（`pn` 为 NULL 时略过写入）。`T` 为 NULL 返回 `NULL`。
 
 ---
 
