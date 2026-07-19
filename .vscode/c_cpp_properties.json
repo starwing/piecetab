@@ -9,6 +9,7 @@
                 "PT_IMPLEMENTATION",
                 "MK_IMPLEMENTATION",
                 "LC_IMPLEMENTATION",
+                "UT_IMPLEMENTATION",
                 "LC_POOL_STATS"
             ],
             "compilerPath": "/usr/bin/clang",

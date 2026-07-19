@@ -60,6 +60,7 @@ typedef void *pt_Alloc(void *ud, void *ptr, size_t osize, size_t nsize);
 PT_API pt_State *pt_open(pt_Alloc *allocf, void *ud);
 PT_API void      pt_reset(pt_State *S);
 PT_API void      pt_close(pt_State *S);
+
 PT_API pt_Alloc *pt_getallocf(pt_State *S, void **pud);
 
 PT_API unsigned pt_retain(pt_Buffer b);
@@ -264,7 +265,7 @@ static void ptP_destroy(pt_State *S, pt_Pool *p) {
         next = *(void **)((char *)page + PT_PAGE_SIZE - sizeof(void *));
         S->allocf(S->alloc_ud, page, PT_PAGE_SIZE, 0);
     }
-    ptP_stat(p->live_obj = 0), ptP_init(p, p->obj_size);
+    ptP_init(p, p->obj_size);
 }
 
 static void *ptP_ralloc(pt_Pool *p) {
@@ -442,10 +443,8 @@ PT_API void pt_close(pt_State *S)
 static void *ptS_defallocf(void *ud, void *p, size_t osize, size_t nsize) {
     void *np;
     (void)ud, (void)osize;
-    if (nsize == 0) return free(p), (void *)NULL;
-    np = realloc(p, nsize);
-    if (np == NULL) abort(); /* failure is unrecoverable by default */
-    return np;
+    if (nsize == 0) return (void)free(p), NULL;
+    return (np = realloc(p, nsize)) ? np : ((void)abort(), NULL);
 }
 
 PT_API pt_State *pt_open(pt_Alloc *allocf, void *ud) {

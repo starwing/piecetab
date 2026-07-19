@@ -4,18 +4,21 @@
 
 **English** | [中文](README.zh.md)
 
-Two lightweight, stb-style single-header C89 libraries for building
+Three lightweight, stb-style single-header C89 libraries for building
 high-performance text editor buffers:
 
 - **`piecetab.h`** — a byte-level piece table backed by a B+ tree, with
   copy-on-write snapshots, transactional editing, and zero-copy reads.
 - **`linecache.h`** — a metric B+ tree mapping byte offsets to line
   numbers, maintaining a line-number cache under heavy edits.
+- **`undotree.h`** — a version tree + edit journal + diff service based on
+  interval algebra, riding on top of `pt_Buffer` COW snapshots.
 
-The two libraries are independent and composable: piecetab stores bytes
+The three libraries are independent and composable: piecetab stores bytes
 ("clean octets" — no line or encoding awareness), linecache tracks line
-breaks. Combine them to get a full editor buffer with O(log n) offset ↔
-line navigation.
+breaks, undotree manages the version graph and computes diffs between any
+two versions. Combine them to get a full editor buffer with O(log n)
+offset ↔ line navigation and undo/redo.
 
 ## Motivation
 
@@ -61,9 +64,21 @@ complex content:
   (`lc_remove`), splice (`lc_splice`), and mid-tree text insertion
   (`lc_insert` / `lc_append`) with full OOM rollback
 
+### undotree.h
+
+- **Version graph**: tree of immutable snapshots (`ut_Node`), each carrying a
+  changeset (hunk list) from its parent and an opaque payload (e.g. `pt_Buffer`)
+- **Edit journal**: uncommitted edits stored as `(off, del, ins)` triples,
+  normalised into a hunk list on commit
+- **Hunk algebra**: compose (X→Y ∘ Y→Z → X→Z), invert, and normalise operations
+  on interval-change hunks
+- **Fresh-vid protocol**: `ut_freshvid(S)` sentinel represents the
+  uncommitted state; `ut_diff(from, to)` handles any combination of
+  committed versions + fresh endpoints via four-phase compose
+
 ## Quick Start
 
-Both are stb-style: include the header anywhere, define the
+All three are stb-style: include the header anywhere, define the
 `*_IMPLEMENTATION` macro in exactly one translation unit.
 
 ### piecetab.h
@@ -159,8 +174,22 @@ the caller must keep the memory alive while any buffer references it.
 | Query     | `lc_offset`, `lc_line`, `lc_col`, `lc_lineoffset`, `lc_linelen`                      |
 | Edit      | `lc_markbreak`, `lc_clearbreaks`, `lc_remove`, `lc_splice`, `lc_insert`, `lc_append` |
 
-See [`docs/piecetab.md`](docs/piecetab.md) and
-[`docs/linecache.md`](docs/linecache.md) for the full API references.
+### undotree.h
+
+| Category  | Functions                                                                       |
+| --------- | ------------------------------------------------------------------------------- |
+| Lifecycle | `ut_open`, `ut_close`, `ut_setcleaner`                                          |
+| Tree      | `ut_newtree`, `ut_deltree`                                                      |
+| Journal   | `ut_record`, `ut_unrecord`, `ut_freshcount`, `ut_discard`                       |
+| Version   | `ut_commit`, `ut_switch`                                                        |
+| Navigate  | `ut_root`, `ut_current`, `ut_parent`, `ut_payload`, `ut_childcount`       |
+| Navigate  | `ut_firstchild`, `ut_lastchild`, `ut_nextsib`, `ut_younger`, `ut_older`   |
+| Navigate  | `ut_ancestor`                                                                   |
+| Diff      | `ut_freshvid`, `ut_diff`, `ut_hunks`                                            |
+
+See [`docs/piecetab.md`](docs/piecetab.md),
+[`docs/linecache.md`](docs/linecache.md), and
+[`docs/undotree.md`](docs/undotree.md) for the full API references.
 
 ## Configuration
 
@@ -175,9 +204,10 @@ Override before including the implementation:
 | `PT_PAGE_SIZE` / `LC_PAGE_SIZE` | 65536   | pool allocator page size             |
 | `PT_ARENA_SIZE`                 | 1024    | arena block minimum size             |
 | `PT_COMPACT_RANGES`             | 64      | compact range array initial capacity |
+| `UT_PAGE_SIZE`                  | 65536   | undotree: pool allocator page size    |
 
-Both libraries accept a custom allocator (`lc_Alloc` / `pt_Alloc`,
-Lua-style realloc signature) at `*_open`.
+All three libraries accept a custom allocator (`lc_Alloc` / `pt_Alloc`
+/ `ut_Alloc`, Lua-style realloc signature) at `*_open`.
 
 ## Documentation
 
@@ -185,6 +215,8 @@ Lua-style realloc signature) at `*_open`.
   implementation notes ([中文](docs/piecetab.zh.md))
 - [`docs/linecache.md`](docs/linecache.md) — linecache API reference &
   implementation notes ([中文](docs/linecache.zh.md))
+- [`docs/undotree.md`](docs/undotree.md) — undotree API reference &
+  integration guide ([中文](docs/undotree.zh.md))
 - [`notes/`](notes/) — design documents: architecture overviews
   (`brief_*.md`), algorithm designs (`design_*.md`), and the range-delete
   algorithm evolution history
@@ -192,12 +224,13 @@ Lua-style realloc signature) at `*_open`.
 ## Testing
 
 Tests run with tiny fanout (4) under ASan/UBSan to force tree splits, plus
-coverage builds via lcov. Both headers maintain **100% line / function
+coverage builds via lcov. All three headers maintain **100% line / function
 coverage** and ~90% branch coverage.
 
 ```sh
 just lc     # linecache tests
 just pt     # piecetab tests
+just ut     # undotree tests
 just cov    # coverage report
 ```
 

@@ -4,7 +4,7 @@ CC := "gcc"
 CFLAGS := "-Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic -std=c89 -Wno-variadic-macros"
 INCS := "-I. -Itests"
 
-cov: clean-gcda (cov-run "lc_test4") (cov-run "lc_test8") (cov-run "pt_test4") (cov-show "piecetab.h linecache.h")
+cov: clean-gcda (cov-run "lc_test4") (cov-run "lc_test8") (cov-run "pt_test4") (cov-run "ut_test") (cov-show "piecetab.h linecache.h undotree.h")
 
 dbg-run t *tests='':
     {{ CC }} {{ CFLAGS }} {{ INCS }} -g -O0 -fsanitize=address,undefined -o tests/{{ t }} tests/{{ t }}.c && ./tests/{{ t }} {{ tests }}
@@ -16,7 +16,7 @@ clean-gcda:
     rm -f tests/*.gcda tests/*.gcno ./*.gcda ./*.gcno *.info
 
 clean: clean-gcda
-    rm -f tests/lc_test4 tests/lc_test8 tests/pt_test4
+    rm -f tests/lc_test4 tests/lc_test8 tests/pt_test4 tests/ut_test tests/ut_test
     rm -fr tests/*.dSYM
 
 cov-show src:
@@ -58,6 +58,11 @@ pt *tests='': (dbg-run "pt_test4" tests)
 pt-cov: clean-gcda (cov-run "pt_test4") (cov-show "piecetab.h")
 pt-lines: (cov-lines "piecetab.h")
 pt-unbranched: (cov-unbranched "piecetab.h")
+
+# undotree tests
+ut *tests='': (dbg-run "ut_test" tests)
+ut-cov: clean-gcda (cov-run "ut_test") (cov-show "undotree.h")
+ut-lines: (cov-lines "undotree.h")
 
 # lua binding (endpoints: PUC 5.5 + LuaJIT 2.1/5.1 cover the compat range)
 

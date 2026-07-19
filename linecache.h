@@ -219,7 +219,7 @@ static void lcP_destroy(lc_State *S, lc_Pool *p) {
         next = *(void **)((char *)page + LC_PAGE_SIZE - sizeof(void *));
         S->allocf(S->alloc_ud, page, LC_PAGE_SIZE, 0);
     }
-    lcP_stat(p->live_obj = 0), lcP_init(p, p->obj_size);
+    lcP_init(p, p->obj_size);
 }
 
 static void *lcP_ralloc(lc_Pool *p) {
@@ -333,10 +333,8 @@ LC_API void lc_close(lc_State *S)
 static void *lcS_defallocf(void *ud, void *p, size_t osize, size_t nsize) {
     void *np;
     (void)ud, (void)osize;
-    if (nsize == 0) return free(p), (void *)NULL;
-    np = realloc(p, nsize);
-    if (np == NULL) abort(); /* failure is unrecoverable by default */
-    return np;
+    if (nsize == 0) return (void)free(p), NULL;
+    return (np = realloc(p, nsize)) ? np : ((void)abort(), NULL);
 }
 
 LC_API lc_State *lc_open(lc_Alloc *allocf, void *ud) {
