@@ -87,8 +87,8 @@ UT_API ut_Vid ut_ancestor(ut_Vid a, ut_Vid b);
 
 #define ut_freshcount(T) ((T) ? (int)utV_len((T)->journal) : 0)
 
-UT_API int ut_record(ut_Tree *T, size_t off, size_t del, size_t ins);
-UT_API int ut_unrecord(ut_Tree *T);
+UT_API int  ut_record(ut_Tree *T, size_t off, size_t del, size_t ins);
+UT_API void ut_unrecord(ut_Tree *T, unsigned n);
 
 UT_API ut_Vid ut_commit(ut_Tree *T, ut_Payload *p);
 UT_API int    ut_discard(ut_Tree *T);
@@ -99,8 +99,9 @@ UT_API int    ut_discard(ut_Tree *T);
 
 UT_API int ut_switch(ut_Tree *T, ut_Vid v);
 UT_API int ut_diff(ut_Tree *T, ut_Vid from, ut_Vid to);
+UT_API int ut_freshdiff(ut_Tree *T, int i, int j);
 
-UT_API const ut_Hunk *ut_hunks(ut_Tree *T, int *pn);
+UT_API const ut_Hunk *ut_hunks(ut_Tree *T, size_t *pn);
 
 /* private struction definition */
 
@@ -149,6 +150,7 @@ UT_NS_END
 #define ut_implemented
 
 #include <assert.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -156,7 +158,10 @@ UT_NS_END
 # define UT_PAGE_SIZE 65536
 #endif /* UT_PAGE_SIZE */
 
+#define UT_MAX_VECLEN INT_MAX
+
 #define ut_min(a, b) ((a) < (b) ? (a) : (b))
+#define ut_max(a, b) ((a) > (b) ? (a) : (b))
 
 UT_NS_BEGIN
 
@@ -219,7 +224,7 @@ static int utV_grow_(ut_State *S, void **pA, unsigned need, size_t objsz) {
     hdr = (*pA ? (utV_Header *)(*pA) - 1 : NULL);
     if (hdr) c = hdr->cap, e += hdr->len;
     if (c < e) {
-        while (nc < e && nc < (~(unsigned)0 - 100u) / objsz) nc += nc >> 1;
+        while (nc < e && nc < (UT_MAX_VECLEN / objsz)) nc += nc >> 1;
         if (nc < e) return UT_ERRMEM;
         return utV_resize_(S, pA, nc, objsz);
     }
@@ -280,9 +285,6 @@ UT_API void ut_close(ut_State *S)
 
 UT_API void ut_setcleaner(ut_State *S, ut_Cleaner *f, void *ud)
 { if (S) S->cleaner = f, S->cud = ud; }
-
-UT_API int ut_unrecord(ut_Tree *T)
-{ return (void)(T && utV_pop(T->journal)), UT_OK; }
 /* clang-format on */
 
 static void *utS_defallocf(void *ud, void *p, size_t osize, size_t nsize) {
@@ -337,11 +339,13 @@ UT_API void ut_deltree(ut_State *S, ut_Tree *T) {
     utV_free(S, T->root.h), S->allocf(S->ud, T, sizeof(ut_Tree), 0);
 }
 
-UT_API const ut_Hunk *ut_hunks(ut_Tree *T, int *pn) {
+UT_API const ut_Hunk *ut_hunks(ut_Tree *T, size_t *pn) {
     if (T == NULL || pn == NULL) return NULL;
-    if (T->diffhn >= 0) return *pn = T->diffhn, T->S->scratch;
-    if (T->current == NULL) return *pn = 0, NULL;
-    return *pn = (int)utV_len(T->current->h), T->current->h;
+    if (T->diffhn < 0) {
+        if (T->current == NULL) return *pn = 0, NULL;
+        return *pn = utV_len(T->current->h), T->current->h;
+    }
+    return *pn = T->diffhn, T->S->scratch;
 }
 
 UT_API int ut_record(ut_Tree *T, size_t off, size_t del, size_t ins) {
@@ -351,6 +355,12 @@ UT_API int ut_record(ut_Tree *T, size_t off, size_t del, size_t ins) {
     e.off = off, e.del = del, e.ins = ins;
     utOK(utV_push(T->S, T->journal, e), 0);
     return UT_OK;
+}
+
+UT_API void ut_unrecord(ut_Tree *T, unsigned n) {
+    unsigned len;
+    if (T == NULL || (len = utV_len(T->journal)) == 0) return;
+    utV_hdr(T->journal)->len = len >= n ? len - n : 0;
 }
 
 /* hunk algebra helpers */
@@ -418,8 +428,7 @@ static int utH_emitcross(ut_Merge *M, int i, int j) {
 }
 
 static int utH_mergewalk(ut_Merge *M) {
-    int i = 0, j = 0;
-    int an = (int)utV_len(M->x2y), bn = (int)utV_len(M->y2z);
+    int i = 0, j = 0, an = (int)utV_len(M->x2y), bn = (int)utV_len(M->y2z);
     while (i < an && j < bn) {
         size_t ae = M->x2y[i].ca + M->x2y[i].cins;
         size_t be = M->y2z[j].pa + M->y2z[j].pdel;
@@ -438,7 +447,7 @@ static int utH_mergewalk(ut_Merge *M) {
 }
 
 static int utH_compose(ut_State *S, ut_HunkCV a, ut_HunkCV b, ut_Hunk **out) {
-    int i, an = (int)utV_len(a), bn = (int)utV_len(b), r = UT_OK;
+    int i, r = UT_OK, an = utV_len(a), bn = utV_len(b);
     assert(S != NULL && out != NULL);
     utV_init(*out);
     if (bn == 0) {
@@ -454,11 +463,11 @@ static int utH_compose(ut_State *S, ut_HunkCV a, ut_HunkCV b, ut_Hunk **out) {
 }
 
 static int utH_invert(ut_State *S, const ut_Hunk *h, ut_Hunk **out) {
-    ut_Hunk inv;
-    int     i, len;
+    ut_Hunk  inv;
+    unsigned i, len;
     assert(S != NULL && out != NULL);
     utV_init(*out);
-    for (i = 0, len = (int)utV_len(h); i < len; i++) {
+    for (i = 0, len = utV_len(h); i < len; i++) {
         inv.pa = h[i].ca, inv.ca = h[i].pa;
         inv.pdel = h[i].cins, inv.cins = h[i].pdel;
         utOK(utV_push(S, *out, inv), 0);
@@ -466,29 +475,28 @@ static int utH_invert(ut_State *S, const ut_Hunk *h, ut_Hunk **out) {
     return UT_OK;
 }
 
-static int utH_normalize(ut_State *S, ut_Hunk **h, const ut_Entry *journal) {
+static int utH_normalize(ut_Tree *T, ut_Hunk **out, int s, int e) {
     /* clang-format off */
     struct { utV_Header hdr; ut_Hunk vec[1]; } sv;
     /* clang-format on */
     ut_Hunk *next, *cur = NULL, *single = sv.vec;
-    int      r, i, len;
-    sv.hdr.len = 1, sv.hdr.cap = 1;
-    for (i = 0, len = (int)utV_len(journal); i < len; ++i) {
-        single->pa = journal[i].off, single->ca = journal[i].off;
-        single->pdel = journal[i].del, single->cins = journal[i].ins;
-        r = utH_compose(S, cur, single, &next);
-        if (utV_free(S, cur), cur = next, r != UT_OK)
-            return utV_free(S, cur), *h = NULL, r;
+    int      r, i;
+    assert(T != NULL && out != NULL), sv.hdr.len = 1, sv.hdr.cap = 1;
+    for (i = s; i < e; i++) {
+        single->pa = T->journal[i].off, single->ca = T->journal[i].off;
+        single->pdel = T->journal[i].del, single->cins = T->journal[i].ins;
+        r = utH_compose(T->S, cur, single, &next);
+        if (utV_free(T->S, cur), cur = next, r != UT_OK)
+            return utV_free(T->S, cur), *out = NULL, r;
     }
-    return *h = cur, UT_OK;
+    return *out = cur, UT_OK;
 }
 
 UT_API ut_Vid ut_commit(ut_Tree *T, ut_Payload *pl) {
     ut_Node *n, *p;
     ut_Hunk *h = NULL;
     if (T == NULL || T->current == NULL) return NULL;
-    if (utV_len(T->journal) > 0 && utH_normalize(T->S, &h, T->journal) != UT_OK)
-        return NULL;
+    if (utH_normalize(T, &h, 0, utV_len(T->journal)) != UT_OK) return NULL;
     if ((n = utN_alloc(T->S)) == NULL) return utV_free(T->S, h), NULL;
     memset(n, 0, sizeof(ut_Node));
     n->payload = pl, n->h = h, p = T->current;
@@ -545,34 +553,36 @@ UT_API ut_Vid ut_older(ut_Vid v) {
 }
 
 typedef struct ut_DX {
-    ut_State *S;
-    ut_Hunk  *cur, *fresh;
-    ut_Vid   *nodes, anc;
-    int       hasfrom, hasto;
+    ut_Tree *T;
+    ut_Hunk *cur, *fresh;
+    ut_Vid  *nodes, anc;
+    int      hasfrom, hasto;
 } ut_DX;
 
-static int utD_calc(ut_DX *x, ut_Vid fn, ut_Vid tn, ut_Entry *j) {
-    ut_Vid   v;
-    ut_Hunk *next, *inv;
-    int      r, i;
-    if (x->hasfrom || x->hasto) utOK(utH_normalize(x->S, &x->fresh, j), 0);
+static int utD_calc(ut_DX *X, ut_Vid fn, ut_Vid tn) {
+    ut_State *S = X->T->S;
+    ut_Vid    v;
+    ut_Hunk  *next, *inv;
+    int       r, i;
+    if (X->hasfrom || X->hasto)
+        utOK(utH_normalize(X->T, &X->fresh, 0, utV_len(X->T->journal)), 0);
     /* four-phase compose: [inv(fresh)] + fn→anc⁻¹ + anc→tn + [fresh] */
-    if (x->hasfrom && (r = utH_invert(x->S, x->fresh, &x->cur)) != UT_OK)
-        return utV_free(x->S, x->fresh), r;
-    for (v = fn; v != x->anc; v = v->parent) { /* phase 2: fn→anc, inverted */
-        utOK(utH_invert(x->S, v->h, &inv), 0);
-        r = utH_compose(x->S, x->cur, inv, &next), utV_free(x->S, inv);
-        if (utV_free(x->S, x->cur), x->cur = next, r != UT_OK) return r;
+    if (X->hasfrom && (r = utH_invert(S, X->fresh, &X->cur)) != UT_OK)
+        return utV_free(S, X->fresh), r;
+    for (v = fn; v != X->anc; v = v->parent) { /* phase 2: fn→anc, inverted */
+        utOK(utH_invert(S, v->h, &inv), 0);
+        r = utH_compose(S, X->cur, inv, &next), utV_free(S, inv);
+        if (utV_free(S, X->cur), X->cur = next, r != UT_OK) return r;
     }
-    for (v = tn; v != x->anc; v = v->parent) /* phase 3: anc→tn, forward path */
-        utOK(utV_push(x->S, x->nodes, v), 0);
-    for (i = (int)utV_len(x->nodes) - 1; i >= 0; i--) {
-        v = x->nodes[i], r = utH_compose(x->S, x->cur, v->h, &next);
-        if (utV_free(x->S, x->cur), x->cur = next, r != UT_OK) return r;
+    for (v = tn; v != X->anc; v = v->parent) /* phase 3: anc→tn, forward path */
+        utOK(utV_push(S, X->nodes, v), 0);
+    for (i = utV_len(X->nodes) - 1; i >= 0; i--) {
+        v = X->nodes[i], r = utH_compose(S, X->cur, v->h, &next);
+        if (utV_free(S, X->cur), X->cur = next, r != UT_OK) return r;
     }
-    if (utV_free(x->S, x->nodes), x->hasto) { /* phase 4: to-fresh, forward */
-        r = utH_compose(x->S, x->cur, x->fresh, &next);
-        if (utV_free(x->S, x->cur), x->cur = next, r != UT_OK) return r;
+    if (utV_free(S, X->nodes), X->hasto) { /* phase 4: to-fresh, forward */
+        r = utH_compose(S, X->cur, X->fresh, &next);
+        if (utV_free(S, X->cur), X->cur = next, r != UT_OK) return r;
     }
     return UT_OK;
 }
@@ -581,17 +591,38 @@ UT_API int ut_diff(ut_Tree *T, ut_Vid from, ut_Vid to) {
     ut_DX x;
     int   r;
     if (T == NULL) return UT_ERRPARAM;
-    memset(&x, 0, sizeof(x)), x.S = T->S;
-    if ((x.hasfrom = (from == ut_freshvid(x.S)))) from = T->current;
-    if ((x.hasto = (to == ut_freshvid(x.S)))) to = T->current;
+    memset(&x, 0, sizeof(x)), x.T = T;
+    if ((x.hasfrom = (from == ut_freshvid(T->S)))) from = T->current;
+    if ((x.hasto = (to == ut_freshvid(T->S)))) to = T->current;
     if ((x.anc = ut_ancestor(from, to)) == NULL) return UT_ERRPARAM;
-    if ((r = utD_calc(&x, from, to, T->journal)) != UT_OK) {
-        utV_free(x.S, x.cur), utV_free(x.S, x.fresh), utV_free(x.S, x.nodes);
+    if ((r = utD_calc(&x, from, to)) != UT_OK) {
+        utV_free(T->S, x.cur), utV_free(T->S, x.fresh), utV_free(T->S, x.nodes);
         return r;
     }
-    utV_free(x.S, x.fresh), utV_free(x.S, x.S->scratch);
-    if (utV_len(x.cur) == 0) return utV_free(x.S, x.cur), T->diffhn = 0;
-    return x.S->scratch = x.cur, T->diffhn = (int)utV_len(x.cur);
+    utV_free(T->S, x.fresh), utV_free(T->S, T->S->scratch);
+    if (utV_len(x.cur) == 0) return utV_free(T->S, x.cur), T->diffhn = 0;
+    return T->S->scratch = x.cur, T->diffhn = (int)utV_len(x.cur);
+}
+
+UT_API int ut_freshdiff(ut_Tree *T, int i, int j) {
+    ut_Hunk *h = NULL;
+    int      r, len;
+    if (T == NULL) return UT_ERRPARAM;
+    len = (int)utV_len(T->journal);
+    i = ut_max(0, ut_min(i, len)), j = ut_max(0, ut_min(j, len));
+    if (i == j) return T->diffhn = 0, UT_OK;
+    utV_free(T->S, T->S->scratch), T->diffhn = -1;
+    if (i < j)
+        r = utH_normalize(T, &T->S->scratch, i, j);
+    else {
+        r = utH_normalize(T, &h, j, i);
+        if (r == UT_OK) r = utH_invert(T->S, h, &T->S->scratch);
+        utV_free(T->S, h);
+    }
+    if (r != UT_OK) return r;
+    if (utV_len(T->S->scratch) == 0)
+        return utV_free(T->S, T->S->scratch), T->diffhn = 0, UT_OK;
+    return T->diffhn = (int)utV_len(T->S->scratch), UT_OK;
 }
 
 UT_NS_END

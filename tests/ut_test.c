@@ -60,11 +60,11 @@ static void test_record_fresh(void) {
     assert(ut_freshcount(T) == 1);
     assert(ut_record(T, 10, 3, 7) == UT_OK);
     assert(ut_freshcount(T) == 2);
-    ut_unrecord(T);
+    ut_unrecord(T, 1);
     assert(ut_freshcount(T) == 1);
-    ut_unrecord(T);
+    ut_unrecord(T, 1);
     assert(ut_freshcount(T) == 0);
-    ut_unrecord(T); /* no-op */
+    ut_unrecord(T, 1); /* no-op */
     assert(ut_freshcount(T) == 0);
     ut_deltree(S, T);
     ut_close(S);
@@ -76,7 +76,7 @@ static void test_commit_simple(void) {
     ut_Tree       *T = ut_newtree(S, NULL);
     ut_Vid         root, child;
     const ut_Hunk *hunks;
-    int            hn;
+    size_t         hn;
 
     root = ut_root(T);
     assert(ut_record(T, 10, 3, 7) == UT_OK);
@@ -199,7 +199,7 @@ static void test_normalize_merge(void) {
     ut_Tree       *T = ut_newtree(S, NULL);
     ut_Vid         v;
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
 
     /* adjacent inserts should merge: (0,0,5) + (5,0,3) → (0,0,8) one hunk */
     ut_record(T, 0, 0, 5);
@@ -218,7 +218,7 @@ static void test_normalize_overlap(void) {
     ut_State      *S = ut_open(NULL, NULL);
     ut_Tree       *T = ut_newtree(S, NULL);
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
     assert(T);
 
     /* delete 4 at 10, then insert 3 at offset 12 (after deletion) */
@@ -240,7 +240,7 @@ static void test_invert_identity(void) {
     ut_Tree       *T = ut_newtree(S, NULL);
     ut_Vid         c1, c2;
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
 
     /* c1: (5,2,7), c2: empty commit on root → diff from c1 to c2 */
     ut_record(T, 5, 2, 7);
@@ -267,7 +267,7 @@ static void test_compose_assoc(void) {
     ut_Vid         root = ut_root(T);
     ut_Vid         c1, c2;
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
 
     /* chain: root → c1 (3,0,5) → c2 (2,3,1) */
     ut_record(T, 3, 0, 5);
@@ -281,7 +281,6 @@ static void test_compose_assoc(void) {
         n = ut_diff(T, root, c2);
         assert(n >= 0);
         h = ut_hunks(T, &hn);
-        assert(hn >= 0);
         (void)h;
     }
 
@@ -304,7 +303,7 @@ static void test_diff_fresh(void) {
     ut_Tree       *T = ut_newtree(S, NULL);
     ut_Vid         root = ut_root(T);
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
 
     ut_record(T, 10, 3, 7);
     {
@@ -325,7 +324,7 @@ static void test_compose_noop(void) {
     ut_Tree       *T = ut_newtree(S, NULL);
     ut_Vid         v;
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
 
     ut_record(T, 0, 0, 5);
     ut_record(T, 0, 5, 0);
@@ -344,7 +343,7 @@ static void test_compose_emit_b(void) {
     ut_Tree       *T = ut_newtree(S, NULL);
     ut_Vid         v;
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
 
     ut_record(T, 10, 0, 5); /* insert 5 at 10 */
     ut_record(T, 0, 3, 0);  /* delete 3 at 0   */
@@ -364,7 +363,7 @@ static void test_compose_emit_a(void) {
     ut_Tree       *T = ut_newtree(S, NULL);
     ut_Vid         v;
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
 
     ut_record(T, 0, 3, 5);  /* insert+delete at 0 */
     ut_record(T, 20, 1, 0); /* delete at 20       */
@@ -459,7 +458,7 @@ static void test_diff_fresh_to(void) {
     ut_Tree       *T = ut_newtree(S, NULL);
     ut_Vid         root = ut_root(T);
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
 
     ut_record(T, 0, 2, 4);
     {
@@ -481,7 +480,7 @@ static void test_hunks_after_diff(void) {
     ut_Tree       *T = ut_newtree(S, NULL);
     ut_Vid         root = ut_root(T);
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
 
     ut_record(T, 10, 3, 7);
     {
@@ -501,7 +500,7 @@ static void test_hunks_current(void) {
     ut_Tree       *T = ut_newtree(S, NULL);
     ut_Vid         v;
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
 
     /* without any commit, root has NULL hunk list → 0 hunks */
     h = ut_hunks(T, &hn);
@@ -524,7 +523,7 @@ static void test_discard_diffhn(void) {
     ut_State      *S = ut_open(NULL, NULL);
     ut_Tree       *T = ut_newtree(S, NULL);
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
 
     ut_record(T, 0, 1, 1);
     ut_diff(T, ut_root(T), ut_freshvid(S));
@@ -580,7 +579,154 @@ static void test_diff_x_tree(void) {
 }
 
 /* T33: ut_unrecord with NULL T */
-static void test_unrecord_null(void) { assert(ut_unrecord(NULL) == UT_OK); }
+static void test_unrecord_null(void) { ut_unrecord(NULL, 1); }
+
+/* T34: ut_unrecord with n parameter */
+static void test_unrecord_n(void) {
+    ut_State *S = ut_open(NULL, NULL);
+    ut_Tree  *T = ut_newtree(S, NULL);
+    ut_unrecord(T, 0);
+    assert(ut_record(T, 0, 5, 10) == UT_OK);
+    assert(ut_record(T, 10, 3, 7) == UT_OK);
+    assert(ut_record(T, 20, 1, 4) == UT_OK);
+    assert(ut_freshcount(T) == 3);
+    ut_unrecord(T, 2);
+    assert(ut_freshcount(T) == 1);
+    ut_unrecord(T, 10);
+    assert(ut_freshcount(T) == 0);
+    ut_deltree(S, T);
+    ut_close(S);
+}
+
+/* T35: ut_freshdiff with NULL T */
+static void test_freshdiff_null(void) {
+    assert(ut_freshdiff(NULL, 0, 0) == UT_ERRPARAM);
+}
+
+/* T36: ut_freshdiff empty journal (i==j) */
+static void test_freshdiff_empty(void) {
+    ut_State *S = ut_open(NULL, NULL);
+    ut_Tree  *T = ut_newtree(S, NULL);
+    size_t    hn;
+    assert(ut_freshdiff(T, 0, 0) == UT_OK);
+    assert(ut_hunks(T, &hn) == NULL && hn == 0);
+    ut_deltree(S, T);
+    ut_close(S);
+}
+
+/* T37: ut_freshdiff forward (i<j) */
+static void test_freshdiff_forward(void) {
+    ut_State      *S = ut_open(NULL, NULL);
+    ut_Tree       *T = ut_newtree(S, NULL);
+    const ut_Hunk *h;
+    size_t         hn;
+    assert(ut_record(T, 0, 0, 5) == UT_OK);  /* insert at 0 */
+    assert(ut_record(T, 10, 3, 0) == UT_OK); /* delete at 10 */
+    assert(ut_record(T, 20, 2, 7) == UT_OK); /* replace at 20 */
+    assert(ut_freshdiff(T, 0, 1) == UT_OK);
+    h = ut_hunks(T, &hn);
+    assert(hn == 1);
+    assert(h[0].pa == 0 && h[0].ca == 0 && h[0].pdel == 0 && h[0].cins == 5);
+    assert(ut_freshdiff(T, 1, 2) == UT_OK);
+    h = ut_hunks(T, &hn);
+    assert(hn == 1);
+    assert(h[0].pa == 10 && h[0].ca == 10 && h[0].pdel == 3 && h[0].cins == 0);
+    assert(ut_freshdiff(T, 2, 3) == UT_OK);
+    h = ut_hunks(T, &hn);
+    assert(hn == 1);
+    assert(h[0].pa == 20 && h[0].ca == 20 && h[0].pdel == 2 && h[0].cins == 7);
+    ut_deltree(S, T);
+    ut_close(S);
+}
+
+/* T38: ut_freshdiff reverse (i>j) */
+static void test_freshdiff_reverse(void) {
+    ut_State      *S = ut_open(NULL, NULL);
+    ut_Tree       *T = ut_newtree(S, NULL);
+    const ut_Hunk *h;
+    size_t         hn;
+    assert(ut_record(T, 0, 0, 5) == UT_OK);
+    assert(ut_record(T, 10, 3, 0) == UT_OK);
+    assert(ut_freshdiff(T, 2, 0) == UT_OK);
+    h = ut_hunks(T, &hn);
+    assert(hn == 2);
+    /* inverse of forward compose: two hunks in order */
+    assert(h[0].pa == 0 && h[0].ca == 0 && h[0].pdel == 5 && h[0].cins == 0);
+    assert(h[1].pa == 10 && h[1].ca == 5 && h[1].pdel == 0 && h[1].cins == 3);
+    assert(ut_freshdiff(T, 1, 0) == UT_OK);
+    h = ut_hunks(T, &hn);
+    assert(hn == 1);
+    assert(h[0].pa == 0 && h[0].ca == 0 && h[0].pdel == 5 && h[0].cins == 0);
+    ut_deltree(S, T);
+    ut_close(S);
+}
+
+/* T39: ut_freshdiff OOB clamp */
+static void test_freshdiff_clamp(void) {
+    ut_State      *S = ut_open(NULL, NULL);
+    ut_Tree       *T = ut_newtree(S, NULL);
+    const ut_Hunk *h;
+    size_t         hn;
+    assert(ut_record(T, 0, 0, 5) == UT_OK);
+    assert(ut_record(T, 10, 3, 0) == UT_OK);
+    assert(ut_freshdiff(T, -5, 1) == UT_OK);
+    h = ut_hunks(T, &hn);
+    assert(hn == 1);
+    assert(h[0].pa == 0 && h[0].cins == 5);
+    assert(ut_freshdiff(T, 1, 999) == UT_OK);
+    h = ut_hunks(T, &hn);
+    assert(hn == 1);
+    assert(h[0].pa == 10 && h[0].pdel == 3);
+    assert(ut_freshdiff(T, 999, 1) == UT_OK);
+    h = ut_hunks(T, &hn);
+    assert(hn == 1);
+    assert(h[0].pa == 10 && h[0].ca == 10 && h[0].pdel == 0 && h[0].cins == 3);
+    assert(ut_freshdiff(T, -1, -1) == UT_OK);
+    h = ut_hunks(T, &hn);
+    assert(hn == 0);
+    ut_deltree(S, T);
+    ut_close(S);
+}
+
+/* T40: ut_freshdiff entries cancel to no-op (empty hunks) */
+static void test_freshdiff_noop(void) {
+    ut_State      *S = ut_open(NULL, NULL);
+    ut_Tree       *T = ut_newtree(S, NULL);
+    const ut_Hunk *h;
+    size_t         hn;
+    assert(ut_record(T, 0, 0, 3) == UT_OK);
+    assert(ut_record(T, 0, 3, 0) == UT_OK);
+    assert(ut_freshdiff(T, 0, 2) == 0);
+    h = ut_hunks(T, &hn);
+    assert(hn == 0 && h == NULL);
+    assert(ut_freshdiff(T, 2, 0) == 0);
+    h = ut_hunks(T, &hn);
+    assert(hn == 0 && h == NULL);
+    ut_deltree(S, T);
+    ut_close(S);
+}
+
+/* T41: ut_freshdiff OOM in normalize forward path */
+static void test_oom_freshdiff_norm(void) {
+    int       oom = 3;
+    ut_State *S = ut_open(&oom_alloc, &oom);
+    ut_Tree  *T = ut_newtree(S, NULL);
+    assert(T);
+    ut_record(T, 0, 1, 1);
+    assert(ut_freshdiff(T, 0, 1) < 0);
+    ut_deltree(S, T), ut_close(S);
+}
+
+/* T41: ut_freshdiff OOM in normalize+invert reverse path */
+static void test_oom_freshdiff_inv(void) {
+    int       oom = 4;
+    ut_State *S = ut_open(&oom_alloc, &oom);
+    ut_Tree  *T = ut_newtree(S, NULL);
+    assert(T);
+    ut_record(T, 0, 1, 1);
+    assert(ut_freshdiff(T, 1, 0) < 0);
+    ut_deltree(S, T), ut_close(S);
+}
 
 /* T34: ut_record with NULL T */
 static void test_record_null(void) {
@@ -600,7 +746,7 @@ static void test_hunks_current_null(void) {
     ut_State      *S = ut_open(NULL, NULL);
     ut_Tree       *T = ut_newtree(S, NULL);
     const ut_Hunk *h;
-    int            hn = -1;
+    size_t         hn = ~(size_t)0;
     T->diffhn = -1;
     T->current = NULL;
     h = ut_hunks(T, &hn);
@@ -650,7 +796,7 @@ static void test_mergewalk_taila(void) {
     ut_Tree       *T = ut_newtree(S, NULL);
     ut_Vid         v;
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
 
     /* cur=[{100,3,0}], single=[{200,0,5}] → emitX2Y → next has 2 hunks */
     ut_record(T, 100, 3, 0);
@@ -661,7 +807,7 @@ static void test_mergewalk_taila(void) {
     v = ut_commit(T, NULL);
     assert(v);
     h = ut_hunks(T, &hn);
-    ut_log("mergewalk_taila: hn=%d\n", hn);
+    ut_log("mergewalk_taila: hn=%lu\n", ut_lu(hn));
     if (hn >= 1)
         ut_log("  h[0]: pa=%lu ca=%lu del=%lu ins=%lu\n", ut_lu(h[0].pa),
                ut_lu(h[0].ca), ut_lu(h[0].pdel), ut_lu(h[0].cins));
@@ -685,7 +831,7 @@ static void test_diff_cross(void) {
     ut_Vid         root = ut_root(T);
     ut_Vid         c1, gc, c2;
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
 
     /* branch 1: root → c1 (insert at 5) → gc (delete at 0) */
     ut_record(T, 5, 0, 3);
@@ -700,7 +846,6 @@ static void test_diff_cross(void) {
      * (root→c2) */
     assert(ut_diff(T, gc, c2) >= 0);
     h = ut_hunks(T, &hn);
-    assert(hn >= 0);
     (void)c1, (void)h;
     ut_deltree(S, T), ut_close(S);
 }
@@ -712,7 +857,7 @@ static void test_diff_empty_node(void) {
     ut_Vid         root = ut_root(T);
     ut_Vid         c1, c2;
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
 
     /* c1: non-empty commit, c2: empty commit */
     ut_record(T, 5, 2, 3);
@@ -723,7 +868,6 @@ static void test_diff_empty_node(void) {
      */
     assert(ut_diff(T, c1, c2) >= 0);
     h = ut_hunks(T, &hn);
-    assert(hn >= 0);
     (void)h;
     ut_deltree(S, T), ut_close(S);
 }
@@ -774,7 +918,7 @@ static void test_diff_empty_result(void) {
     ut_Tree       *T = ut_newtree(S, NULL);
     ut_Vid         c;
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
 
     ut_record(T, 0, 1, 2);
     c = ut_commit(T, NULL);
@@ -861,7 +1005,7 @@ static void test_diff_multilevel(void) {
     ut_Vid         root = ut_root(T);
     ut_Vid         c1, c2, c3;
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
 
     /* chain: root → c1 → c2 → c3 */
     ut_record(T, 0, 1, 2);
@@ -873,7 +1017,6 @@ static void test_diff_multilevel(void) {
     /* diff c3 to root: phase2: c3→c2→c1→root (3 levels up, invert at each) */
     assert(ut_diff(T, c3, root) >= 0);
     h = ut_hunks(T, &hn);
-    assert(hn >= 0);
     (void)c1, (void)c2, (void)h;
     ut_deltree(S, T), ut_close(S);
 }
@@ -892,7 +1035,7 @@ static void test_diff_hasto(void) {
     ut_Tree       *T = ut_newtree(S, NULL);
     ut_Vid         root = ut_root(T);
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
 
     /* commit a node, then diff from root to freshvid WITH journal */
     ut_record(T, 10, 3, 0);
@@ -902,7 +1045,6 @@ static void test_diff_hasto(void) {
     /* diff root to freshvid: hasfrom=false, hasto=true, normalize fresh */
     assert(ut_diff(T, root, ut_freshvid(S)) >= 0);
     h = ut_hunks(T, &hn);
-    assert(hn >= 0);
     (void)h;
     ut_deltree(S, T), ut_close(S);
 }
@@ -941,7 +1083,7 @@ static void test_mergewalk_tailb(void) {
     ut_Vid         root = ut_root(T);
     ut_Vid         c1, c2;
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
 
     /* c1: single hunk at 100, c2: two hunks (0 and 200) */
     ut_record(T, 100, 3, 0);
@@ -954,7 +1096,6 @@ static void test_mergewalk_tailb(void) {
     /* A=1 hunk (inv), B=2 hunks → A consumed, B tail loop enters */
     assert(ut_diff(T, c1, c2) >= 0);
     h = ut_hunks(T, &hn);
-    assert(hn >= 0);
     (void)c1, (void)c2, (void)h;
     ut_deltree(S, T), ut_close(S);
 }
@@ -999,7 +1140,7 @@ static void test_emitcross_neg(void) {
     ut_Tree       *T = ut_newtree(S, NULL);
     ut_Vid         v;
     const ut_Hunk *h;
-    int            hn;
+    size_t         hn;
 
     /* insert 3 at 0, then delete 5 at 0 → overlap, surv = 3-5 = -2 < 0 */
     ut_record(T, 0, 0, 3);
@@ -1189,6 +1330,15 @@ static void test_oom_invert_push(void) {
     X(diff_null)                \
     X(diff_x_tree)              \
     X(unrecord_null)            \
+    X(unrecord_n)               \
+    X(freshdiff_null)           \
+    X(freshdiff_empty)          \
+    X(freshdiff_forward)        \
+    X(freshdiff_reverse)        \
+    X(freshdiff_clamp)          \
+    X(freshdiff_noop)           \
+    X(oom_freshdiff_norm)       \
+    X(oom_freshdiff_inv)        \
     X(record_null)              \
     X(discard_nojournal)        \
     X(hunks_current_null)       \

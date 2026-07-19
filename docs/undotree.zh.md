@@ -153,10 +153,10 @@ UT_API int ut_record(ut_Tree *T, size_t off, size_t del, size_t ins);
 ### ut_unrecord
 
 ```c
-UT_API int ut_unrecord(ut_Tree *T);
+UT_API void ut_unrecord(ut_Tree *T, unsigned n);
 ```
 
-弹出最近一条 journal 条目。journal 为空时无操作。始终返回 `UT_OK`。
+弹出最近 n 条 journal 条目。n == 0 或 journal 为空时无操作。n 超出 journal 长度时清空所有条目。`T` 为 NULL 无操作。
 
 ### ut_freshcount
 
@@ -257,10 +257,24 @@ UT_API int ut_diff(ut_Tree *T, ut_Vid from, ut_Vid to);
 内部四阶段 compose：
 `[inv(journal)] + from→LCA⁻¹ + LCA→to + [journal]`
 
+### ut_freshdiff
+
+```c
+UT_API int ut_freshdiff(ut_Tree *T, int i, int j);
+```
+
+计算 journal [i, j) 区间内编辑的差分。`i`/`j` 为 journal 快照索引：
+`fresh(i)` = 应用了 `journal[0..i)` 后的状态。`i < j` 时正向计算推进
+diff；`i > j` 时反向计算回退 diff（对 `journal[j..i)` 归一化后取逆）。
+`i`/`j` 超出 `[0, journal_len]` 时自动 clamp。
+
+返回 hunk 数（≥0）或负错误码。结果存入 `S->scratch`，可通过 `ut_hunks`
+获取。与 `ut_diff` 共用 scratch。
+
 ### ut_hunks
 
 ```c
-UT_API const ut_Hunk *ut_hunks(ut_Tree *T, int *pn);
+UT_API const ut_Hunk *ut_hunks(ut_Tree *T, size_t *pn);
 ```
 
 获取当前 hunk 列表。若存在待命 diff（`diffhn ≥ 0`），返回 `S->scratch`；
@@ -280,7 +294,7 @@ pt_splice(...)                 -- 在 buffer 上执行编辑
 ut_commit(T, new_buffer)       -- 冻结为版本节点
 ```
 
-`pt_splice` 失败时：`ut_unrecord(T)` 弹出失败条目。
+`pt_splice` 失败时：`ut_unrecord(T, 1)` 弹出失败条目。
 
 ### 消费者流程（如 linecache）
 

@@ -160,11 +160,12 @@ Append an edit to the journal. No side effects on failure. Returns
 ### ut_unrecord
 
 ```c
-UT_API int ut_unrecord(ut_Tree *T);
+UT_API void ut_unrecord(ut_Tree *T, unsigned n);
 ```
 
-Pop the most recent journal entry. No-op if journal is empty. Always
-returns `UT_OK`.
+Pop the most recent `n` journal entries. No-op if `n == 0` or journal
+is empty. Clears all remaining entries if `n` exceeds journal length.
+No-op if `T` is NULL.
 
 ### ut_freshcount
 
@@ -276,10 +277,25 @@ The result is stored in `S->scratch` and remains valid until the next
 Internally: four-phase compose:
 `[inv(journal)] + from→LCA⁻¹ + LCA→to + [journal]`
 
+### ut_freshdiff
+
+```c
+UT_API int ut_freshdiff(ut_Tree *T, int i, int j);
+```
+
+Compute the diff spanned by journal entries in `[i, j)`. `i` and `j` are
+journal snapshot indices: `fresh(i)` = state after applying `journal[0..i)`.
+`i < j` computes a forward diff (push state from i to j); `i > j` computes
+a reverse diff (normalise `journal[j..i)` then invert). Out-of-range `i`/`j`
+are clamped to `[0, journal_len]`.
+
+Returns the hunk count (≥0) or a negative error code. Result is stored in
+`S->scratch`; retrieve it via `ut_hunks`. Shares scratch with `ut_diff`.
+
 ### ut_hunks
 
 ```c
-UT_API const ut_Hunk *ut_hunks(ut_Tree *T, int *pn);
+UT_API const ut_Hunk *ut_hunks(ut_Tree *T, size_t *pn);
 ```
 
 Get the current hunk list. If a pending diff exists (`diffhn ≥ 0`),
@@ -300,7 +316,7 @@ pt_splice(...)                 -- perform the edit on the buffer
 ut_commit(T, new_buffer)      -- freeze into a version node
 ```
 
-On `pt_splice` failure: `ut_unrecord(T)` to pop the failed entry.
+On `pt_splice` failure: `ut_unrecord(T, 1)` to pop the failed entry.
 
 ### Consumer Flow (e.g. linecache)
 

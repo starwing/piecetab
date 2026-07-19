@@ -107,7 +107,7 @@ grep '^UT_API' undotree.h
 | 导航     | `ut_parent`, `ut_payload`, `ut_childcount`, `ut_firstchild`   | 树遍历（宏）                      |
 | 导航     | `ut_nextsib`, `ut_younger`, `ut_older`                        | 兄弟/时间序跳转（宏）             |
 | 导航     | `ut_root`, `ut_current`, `ut_ancestor`                        | 根/head/LCA                       |
-| diff     | `ut_freshvid`, `ut_diff`, `ut_hunks`                          | 差分计算 + 结果查询               |
+| diff     | `ut_freshvid`, `ut_diff`, `ut_freshdiff`, `ut_hunks`          | 差分计算 + 结果查询               |
 
 ### ut_younger / ut_older（:earlier/:later 跳转）
 
@@ -203,7 +203,7 @@ just ut-cov       # 覆盖率
 just ut-lines     # 未覆盖行源码
 ```
 
-14 个测试：lifecycle / record / commit / switch-discard / branch / LCA / deep-chain / OOM / normalize-merge / normalize-overlap / invert / compose / diff-identity / diff-fresh。
+76 个测试。
 
 ## 九、相关文档
 

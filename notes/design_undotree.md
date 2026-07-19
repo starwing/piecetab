@@ -202,7 +202,7 @@ UT_API void     ut_deltree(ut_State *S, ut_Tree *T);
 /* journal */
 #define ut_freshcount(T)  ((T) ? (int)utV_len((T)->journal) : 0)
 UT_API int    ut_record(ut_Tree *T, size_t off, size_t del, size_t ins);
-UT_API int    ut_unrecord(ut_Tree *T);
+UT_API void   ut_unrecord(ut_Tree *T, unsigned n);
 
 /* versioning */
 UT_API ut_Vid ut_commit(ut_Tree *T, ut_Payload *p);
@@ -227,7 +227,8 @@ UT_API ut_Vid ut_older(ut_Vid v);
 /* diff */
 #define ut_freshvid(S)    ((ut_Vid)(S))
 UT_API int               ut_diff(ut_Tree *T, ut_Vid from, ut_Vid to);
-UT_API const ut_Hunk    *ut_hunks(ut_Tree *T, int *pn);
+UT_API int               ut_freshdiff(ut_Tree *T, int i, int j);
+UT_API const ut_Hunk    *ut_hunks(ut_Tree *T, size_t *pn);
 ```
 
 ### ut_younger / ut_older（:earlier / :later 导航）
@@ -241,7 +242,7 @@ UT_API const ut_Hunk    *ut_hunks(ut_Tree *T, int *pn);
 ### 5.1 规范化（journal → hunk list）
 
 逐条 journal entry `{ off, del, ins }` 转为单一 hunk，链式 compose
-归并。`utH_normalize` 调用 `utH_compose` 逐条合并。
+归并。`utH_normalize(T, out, s, e)` 对 `T->journal[s..e)` 子范围逐条合并。
 
 ### 5.2 取逆
 
@@ -409,7 +410,7 @@ parent.last_child → [youngest=N] → [N-1] → ... → [1=oldest] ─┐
 
 ## 十一、测试
 
-`tests/ut_test.c`（60 个测试）：
+`tests/ut_test.c`（76 个测试）：
 
 覆盖生命周期、journal、commit、switch/discard、branch、LCA、深链、
 OOM 路径、normalize merge/overlap/no-op、compose 各分支、diff 各种组合、
