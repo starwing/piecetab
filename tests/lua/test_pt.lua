@@ -1,8 +1,8 @@
 -- piecetab Lua binding tests. run: just lua-test (cwd = repo root)
 local dir = arg[0]:match("^(.*)[/\\]") or "."
 package.path = dir .. "/?.lua;" .. package.path
-package.cpath = (jit and "build/luajit/?.so;" or "build/lua55/?.so;")
-                    .. package.cpath
+package.cpath = (_G["jit"] and "build/luajit/?.so;" or "build/lua55/?.so;")
+    .. package.cpath
 
 local lu = require "luaunit"
 local pt = require "piecetab"
@@ -27,6 +27,11 @@ function TestBuffer:testEmpty()
     local b = pt.empty()
     lu.assertEquals(#b, 0)
     lu.assertEquals(b:read(0), "")
+end
+
+function TestBuffer:testFromEmpty()
+    local b = pt.from("")
+    lu.assertEquals(#b, 0)
 end
 
 function TestBuffer:testReadRange()
@@ -196,7 +201,7 @@ end
 function TestCursor:testSplice()
     local b = pt.from("hello world")
     local c = b:cursor(0)
-    c:splice(5, ", big")  -- delete "hello", insert ", big"
+    c:splice(5, ", big") -- delete "hello", insert ", big"
     local b2 = c:commit()
     lu.assertEquals(b2:read(0), ", big world")
 end
@@ -205,7 +210,7 @@ function TestCursor:testSpliceLong()
     local long = string.rep("ab", 100)
     local b = pt.from("hix")
     local c = b:cursor(2)
-    c:splice(0, long)  -- insert long at position (no delete)
+    c:splice(0, long) -- insert long at position (no delete)
     local b2 = c:commit()
     lu.assertEquals(b2:read(0), "hi" .. long .. "x")
     lu.assertEquals(#b2, #("hi" .. long .. "x"))
@@ -214,7 +219,7 @@ end
 function TestCursor:testSpliceRemove()
     local b = pt.from("hello world")
     local c = b:cursor(0)
-    c:splice(6, "")  -- delete "hello " (equiv to remove(6))
+    c:splice(6, "") -- delete "hello " (equiv to remove(6))
     local b2 = c:commit()
     lu.assertEquals(b2:read(0), "world")
 end
@@ -233,6 +238,13 @@ end
 
 function TestModule:testHolesizeConst()
     lu.assertEquals(pt.MAX_HOLESIZE, 64)
+end
+
+function TestCursor:testLocate()
+    local b = pt.from("hello\nworld")
+    local c = b:cursor(3)
+    c:locate(6)
+    lu.assertEquals(c:offset(), 6)
 end
 
 -- Doc tests
@@ -282,6 +294,25 @@ function TestDoc:testSeekEnd()
     lu.assertEquals(d:seek("end", -3), 2)
 end
 
+function TestDoc:testSeekEndPos()
+    local d = pt.doc("hello world")
+    d:seek("end", 3) -- positive offset from end = absolute position 3
+    lu.assertEquals(d:offset(), 3)
+end
+
+function TestDoc:testSeekBadWhence()
+    -- unknown whence falls through to return current position (no-op)
+    local d = pt.doc("hi")
+    d:seek("set", 1)
+    ---@diagnostic disable-next-line: param-type-mismatch
+    d:seek("xyz")
+    lu.assertEquals(d:offset(), 1)
+    -- string starting with 's' but not "se" falls through
+    ---@diagnostic disable-next-line: param-type-mismatch
+    d:seek("sx")
+    lu.assertEquals(d:offset(), 1)
+end
+
 function TestDoc:testOffset()
     local d = pt.doc("hello world")
     lu.assertEquals(d:offset(), 0)
@@ -297,9 +328,9 @@ function TestDoc:testColumn()
     d:seek("set", 2)
     lu.assertEquals(d:column(), 2)
     d:seek("set", 6)
-    lu.assertEquals(d:column(), 0)  -- start of line 2
+    lu.assertEquals(d:column(), 0) -- start of line 2
     d:seek("set", 9)
-    lu.assertEquals(d:column(), 3)  -- "rld"
+    lu.assertEquals(d:column(), 3) -- "rld"
 end
 
 function TestDoc:testColumnAfterEdit()
@@ -309,7 +340,7 @@ function TestDoc:testColumnAfterEdit()
     d:insert(",\n")
     -- insert doesn't advance; cursor stays at comma (col 5 of "hello,")
     lu.assertEquals(d:column(), 5)
-    d:seek("set", 7)  -- after \n, start of " world"
+    d:seek("set", 7) -- after \n, start of " world"
     lu.assertEquals(d:column(), 0)
 end
 
@@ -317,7 +348,7 @@ function TestDoc:testOffsetAfterWrite()
     local d = pt.doc("heo")
     d:seek("set", 2)
     d:write("ll")
-    lu.assertEquals(d:offset(), 4)  -- write advances
+    lu.assertEquals(d:offset(), 4) -- write advances
 end
 
 function TestDoc:testReadN()
@@ -380,15 +411,16 @@ function TestDoc:testInsert()
     local d = pt.doc("hllo")
     d:seek("set", 1)
     d:insert("e")
-    lu.assertEquals(d:seek(), 1)  -- insert doesn't advance
+    lu.assertEquals(d:seek(), 1) -- insert doesn't advance
     d:seek("set", 0)
     lu.assertEquals(d:read("a"), "hello")
 end
 
 function TestDoc:testAppend()
     local d = pt.doc("hello")
+    d:seek("end")
     d:append(" world")
-    -- append positions at end, rewind to read
+    -- append positions at insertion end, rewind to read
     d:seek("set", 0)
     lu.assertEquals(d:read("a"), "hello world")
 end
@@ -421,28 +453,27 @@ end
 function TestDoc:testLineLen()
     -- lc stores line lengths including \n for terminated lines
     local d = pt.doc("hello\nworld\n!")
-    lu.assertEquals(d:linelen(0), 6)  -- "hello\n" = 6
-    lu.assertEquals(d:linelen(1), 6)  -- "world\n" = 6
-    lu.assertEquals(d:linelen(2), 1)  -- "!" = 1
+    lu.assertEquals(d:linelen(0), 6) -- "hello\n" = 6
+    lu.assertEquals(d:linelen(1), 6) -- "world\n" = 6
+    lu.assertEquals(d:linelen(2), 1) -- "!" = 1
 end
 
 function TestDoc:testLineLenCurrent()
     local d = pt.doc("hello\nlonger\n")
     d:seek("set", 0)
-    lu.assertEquals(d:linelen(), 6)  -- "hello\n"
+    lu.assertEquals(d:linelen(), 6) -- "hello\n"
     d:seek("set", 6)
-    lu.assertEquals(d:linelen(), 7)  -- "longer\n"
+    lu.assertEquals(d:linelen(), 7) -- "longer\n"
 end
 
 function TestDoc:testCommit()
     local d = pt.doc("hello")
     local v1 = d:commit()
     lu.assertIsNumber(v1)
-    lu.assertEquals(v1, 1)
     d:seek("end")
     d:write(" world")
     local v2 = d:commit()
-    lu.assertEquals(v2, 2)
+    lu.assertTrue(v2 > v1)
     d:seek("set", 0)
     lu.assertEquals(d:read("a"), "hello world")
 end
@@ -450,27 +481,27 @@ end
 function TestDoc:testCommitNoop()
     local d = pt.doc("hi")
     local v1 = d:commit()
-    lu.assertEquals(v1, 1)
-    local v2 = d:commit()  -- no edits
-    lu.assertEquals(v2, 1)  -- still at vid 1
+    local v2 = d:commit() -- no edits
+    lu.assertEquals(v2, v1)
 end
 
 function TestDoc:testUndoRedo()
     local d = pt.doc("")
-    d:seek("end"); d:write("hello"); d:commit()
-    d:seek("end"); d:write(" world"); d:commit()
+    local v0 = d:commit()
+    d:seek("end"); d:write("hello"); local v1 = d:commit()
+    d:seek("end"); d:write(" world"); local v2 = d:commit()
     -- now "hello world"
     d:seek("set", 0)
     lu.assertEquals(d:read("a"), "hello world")
-    -- undo
+    -- undo to parent
     local vid = d:undo()
-    lu.assertEquals(vid, 2)
-    -- after undo, cursor at 0, reads full "hello"
+    lu.assertEquals(vid, v1)
+    d:seek("set", 0)
     lu.assertEquals(d:read("a"), "hello")
-    -- redo
+    -- redo to first child
     d:seek("set", 0)
     vid = d:redo()
-    lu.assertEquals(vid, 3)
+    lu.assertEquals(vid, v2)
     d:seek("set", 0)
     lu.assertEquals(d:read("a"), "hello world")
 end
@@ -482,7 +513,7 @@ function TestDoc:testUndoMultiple()
     d:seek("end"); d:write("c"); d:commit()
     -- "abc"
     d:undo(); d:undo()
-    -- cursor at 0, reads "a"
+    d:seek("set", 0)
     lu.assertEquals(d:read("a"), "a")
     d:redo()
     d:seek("set", 0)
@@ -491,22 +522,59 @@ end
 
 function TestDoc:testUndoBranch()
     local d = pt.doc("")
-    d:seek("end"); d:write("hello"); d:commit()
-    d:seek("end"); d:write(" world"); d:commit()  -- "hello world"
-    d:undo()  -- back to "hello"
-    d:seek("end"); d:write(" there"); d:commit()  -- "hello there" (branch)
+    local v0 = d:commit()
+    d:seek("end"); d:write("hello"); local v1 = d:commit()
+    d:seek("end"); d:write(" world"); local v2 = d:commit() -- "hello world"
+    d:undo()                                                -- back to "hello"
+    d:seek("end"); d:write(" there"); local vb = d:commit() -- "hello there" (branch)
     d:seek("set", 0)
     lu.assertEquals(d:read("a"), "hello there")
     -- undo twice: back to root, then forward to child[0]
-    d:undo()  -- back to "hello"
-    d:redo()  -- redo takes first child = "hello world"
+    d:undo() -- back to "hello"
+    d:redo() -- redo takes first child = "hello world"
     d:seek("set", 0)
     lu.assertEquals(d:read("a"), "hello world")
     -- confirm undo(vid) can jump directly to any version
-    d:undo(); d:undo()  -- back to root (vid 1, "")
-    d:undo(4)  -- jump to vid 4 ("hello there")
+    d:undo(); d:undo() -- back to root (vid v0, "")
+    d:undo(vb)         -- jump to branch version
     d:seek("set", 0)
     lu.assertEquals(d:read("a"), "hello there")
+end
+
+function TestDoc:testUndoTree()
+    -- Build: root("") -> A("abc") -> B("abcXYZ") -> C("abcXYZ!")
+    -- Then undo to B, branch: D("abcXYZ123") as child of B
+    -- Tree: B has kids [C, D], ut_firstchild → C (oldest)
+    local d = pt.doc("")
+    d:commit()
+    d:seek("end"); d:write("abc"); d:commit()            -- A "abc"
+    d:seek("end"); d:write("XYZ"); local vB = d:commit() -- B "abcXYZ"
+    d:seek("end"); d:write("!"); local vC = d:commit()   -- C "abcXYZ!"
+    -- Undo to B, branch
+    d:undo()                                             -- -> B, cursor at 6 (end of "abcXYZ")
+    lu.assertEquals(d:offset(), 6)
+    lu.assertEquals(d:dump(), "abcXYZ")
+    d:write("123"); local vD = d:commit() -- D "abcXYZ123"
+    d:seek("set", 0)
+    lu.assertEquals(d:read("a"), "abcXYZ123")
+    -- Jump C -> B -> redo(C)
+    d:undo(vC) -- jump D -> C
+    lu.assertEquals(d:dump(), "abcXYZ!")
+    lu.assertEquals(d:offset(), 7)
+    d:undo() -- C -> B
+    lu.assertEquals(d:dump(), "abcXYZ")
+    lu.assertEquals(d:offset(), 6)
+    d:redo() -- B -> firstchild = C (oldest)
+    lu.assertEquals(d:dump(), "abcXYZ!")
+    lu.assertEquals(d:offset(), 7)
+    -- undo(C) + redo → still C, cursor preserved
+    d:undo(); d:redo()
+    lu.assertEquals(d:dump(), "abcXYZ!")
+    lu.assertEquals(d:offset(), 7)
+    -- Jump back to D via vid
+    d:undo(vD)
+    lu.assertEquals(d:dump(), "abcXYZ123")
+    lu.assertEquals(d:offset(), 9)
 end
 
 function TestDoc:testBufferExport()
@@ -522,13 +590,13 @@ function TestDoc:testBufferExportVid()
     local d = pt.doc("hello")
     d:seek("end")
     d:write(" world")
-    d:commit()
+    local v2 = d:commit()
     d:seek("end")
     d:write(" and more")
-    d:commit()
-    local b = d:buffer(2)
+    local v3 = d:commit()
+    local b = d:buffer(v2)
     lu.assertEquals(b:read(0), "hello world")
-    local b2 = d:buffer(3)
+    local b2 = d:buffer(v3)
     lu.assertEquals(b2:read(0), "hello world and more")
 end
 
@@ -547,7 +615,7 @@ function TestDoc:testDumpPreservesCursor()
     d:seek("set", 6)
     local s = d:dump()
     lu.assertEquals(s, "hello world")
-    lu.assertEquals(d:offset(), 6)  -- cursor unchanged
+    lu.assertEquals(d:offset(), 6) -- cursor unchanged
 end
 
 function TestDoc:testWriteChain()
@@ -573,7 +641,7 @@ end
 function TestDoc:testReadLineEmptyLastLine()
     local d = pt.doc("line1\n")
     lu.assertEquals(d:read("l"), "line1")
-    d:read("l")  -- last empty line
+    d:read("l") -- last empty line
     lu.assertNil(d:read("l"))
 end
 
@@ -601,6 +669,13 @@ function TestDoc:testFreshUndoCannotRedo()
     lu.assertEquals(d:dump(), "hello")
 end
 
+function TestDoc:testRedoFreshError()
+    local d = pt.doc("hello")
+    d:write(" world") -- uncommitted
+    lu.assertErrorMsgContains("uncommitted",
+        function() d:redo() end)
+end
+
 function TestDoc:testLineCount()
     local d = pt.doc("a\nb\nc")
     lu.assertEquals(d:linecount(), 3)
@@ -617,7 +692,7 @@ function TestDoc:testLines()
     local d = pt.doc("a\nb\nc")
     local lines = {}
     for lnum, text in d:lines() do
-        table.insert(lines, {lnum, text})
+        table.insert(lines, { lnum, text })
     end
     lu.assertEquals(#lines, 3)
     lu.assertEquals(lines[1][1], 0); lu.assertEquals(lines[1][2], "a")
@@ -638,8 +713,363 @@ function TestDoc:testLinesTrailingNL()
     for lnum, text in d:lines() do
         table.insert(lines, text)
     end
-    lu.assertEquals(#lines, 1)
+    lu.assertEquals(#lines, 2)
     lu.assertEquals(lines[1], "x")
+    lu.assertEquals(lines[2], "")
 end
 
-os.exit(lu.LuaUnit.run())
+function TestDoc:testPieceBoundaryNewline()
+    -- [abc](lit)+[def](hole)+[zzz\n](lit): \n crosses piece boundary
+    local d = pt.doc("")
+    d:append("1231231234")
+    lu.assertEquals(d:linecount(), 1)
+    d:seek(0); d:remove(10)
+    d:append("abc")
+    d:edit(0, "def")
+    d:append("zzz\n")
+    lu.assertEquals(d:dump(), "abcdefzzz\n")
+    lu.assertEquals(d:linecount(), 2)
+    lu.assertEquals(d:linelen(0), 10)
+end
+
+function TestDoc:testScannerCrossPiece()
+    local d = pt.doc("abc")
+    d:seek("set", 3)
+    d:write("def")
+    d:write("ghi")
+    d:seek("set", 0)
+    -- Trigger lc_scan with UNL end → crosses piece boundaries
+    lu.assertEquals(d:linecount(), 1)
+    lu.assertEquals(d:dump(), "abcdefghi")
+end
+
+function TestDoc:testScannerNewlineInPiece()
+    local d = pt.doc("hello\nworld")
+    d:seek("end")
+    d:write("\nmore")
+    lu.assertEquals(d:linecount(), 3)
+end
+
+-- Buffer delete + error tests
+
+function TestBuffer:testDeleteError()
+    local b = pt.from("hi")
+    b:delete()
+    lu.assertErrorMsgContains("invalid Buffer",
+        function() b:read(0) end)
+    lu.assertErrorMsgContains("invalid Buffer",
+        function() b:cursor(0) end)
+end
+
+-- Negative arg triggers
+
+function TestBuffer:testReadNegLen()
+    local b = pt.from("hi")
+    lu.assertErrorMsgContains("length must be non-negative",
+        function() b:read(0, -5) end)
+end
+
+function TestCursor:testReadNegLen()
+    local c = pt.from("hi"):cursor(0)
+    lu.assertErrorMsgContains("length must be non-negative",
+        function() c:read(-1) end)
+end
+
+function TestDoc:testUndoCursorPosition()
+    local d = pt.doc("hello")
+    d:commit()
+    d:seek("set", 3) -- at second 'l'
+    d:write("xxx")   -- insert "xxx" at pos 3
+    d:commit()       -- "helxxxlo", cursor at 6
+    d:undo()         -- back to "hello"; cursor should map to edit origin
+    lu.assertEquals(d:dump(), "hello")
+    lu.assertEquals(d:offset(), 3)
+end
+
+function TestDoc:testRedoCursorPosition()
+    local d = pt.doc("hello")
+    d:commit()
+    d:seek("set", 3)
+    d:write("xxx")
+    d:commit() -- "helxxxlo", cursor at 6
+    d:undo()   -- back to "hello", cursor at 3
+    d:redo()   -- forward to "helxxxlo"
+    lu.assertEquals(d:dump(), "helxxxlo")
+    lu.assertEquals(d:offset(), 6)
+end
+
+function TestDoc:testFreshUndoCursorPosition()
+    local d = pt.doc("hello")
+    d:commit()
+    d:seek("set", 2)
+    d:write("yyy") -- "heyyyllo", cursor at 5, uncommitted
+    d:undo()       -- discard fresh edits
+    lu.assertEquals(d:dump(), "hello")
+    lu.assertEquals(d:offset(), 2)
+end
+
+function TestDoc:testNewBadArg()
+    lu.assertErrorMsgContains("expected nil, Buffer, or string",
+        ---@diagnostic disable-next-line: param-type-mismatch
+        function() pt.doc(true) end)
+end
+
+function TestDoc:testReadBadArg()
+    local d = pt.doc("hi")
+    lu.assertErrorMsgContains("bad read argument",
+        ---@diagnostic disable-next-line: param-type-mismatch
+        function() d:read({}) end)
+end
+
+function TestDoc:testReadBadFormat()
+    local d = pt.doc("hi")
+    lu.assertErrorMsgContains("bad read format",
+        ---@diagnostic disable-next-line: param-type-mismatch
+        function() d:read("x") end)
+end
+
+function TestDoc:testSeekLineToBreaks()
+    -- doc "hello\nworld": breaks=1, seek("line", 0) = line 0 start
+    -- seek("line", 1) = residual row start (lnum == breaks)
+    local d = pt.doc("hello\nworld")
+    d:seek("line", 0)
+    lu.assertEquals(d:offset(), 0)
+    lu.assertEquals(d:read(5), "hello")
+    d:seek("line", 1)
+    lu.assertEquals(d:offset(), 6)
+    lu.assertEquals(d:read("a"), "world")
+end
+
+function TestDoc:testLineLenTrailing()
+    -- trailing line: doc "ab" has no \n, linelen() at cursor = 2
+    local d = pt.doc("ab")
+    lu.assertEquals(d:linelen(0), 2) -- arg form
+    d:seek("set", 0)
+    lu.assertEquals(d:linelen(), 2)  -- current line at trailing
+end
+
+-- branch coverage: negative offset / empty-string errors
+
+function TestBuffer:testReadNegOffset()
+    local b = pt.from("hi")
+    lu.assertErrorMsgContains("offset must be non-negative",
+        function() b:read(-1) end)
+end
+
+function TestCursor:testLocateNeg()
+    local c = pt.from("hi"):cursor(0)
+    lu.assertErrorMsgContains("offset must be non-negative",
+        function() c:locate(-1) end)
+end
+
+function TestDoc:testEditTooLong()
+    local d = pt.doc("hello")
+    d:seek("set", 1)
+    lu.assertErrorMsgContains("string too long for hole",
+        function() d:edit(0, string.rep("x", 65)) end)
+    lu.assertEquals(d:dump(), "hello") -- unchanged after error
+end
+
+function TestDoc:testErrorAndRecover()
+    local d = pt.doc("hello world")
+    -- edit with oversized hole string
+    lu.assertErrorMsgContains("string too long for hole",
+        function() d:edit(0, string.rep("x", 65)) end)
+    lu.assertEquals(d:dump(), "hello world")
+    -- commit no-op still works
+    d:commit()
+    d:seek("set", 0)
+    lu.assertEquals(d:read("a"), "hello world")
+end
+
+function TestCursor:testEmptyStringOps()
+    local c = pt.from("hello"):cursor(3)
+    c:insert("")
+    c:append("")
+    c:splice(0, "")
+    lu.assertEquals(c:offset(), 3)
+end
+
+function TestCursor:testErrorPaths()
+    local c = pt.from("hi"):cursor(0)
+    -- edit with oversized hole string
+    lu.assertErrorMsgContains("bad argument",
+        function() c:edit(0, string.rep("x", 65)) end)
+    lu.assertEquals(c:offset(), 0)
+end
+
+function TestCursor:testDetachMore()
+    local b = pt.from("original")
+    local c = b:cursor(0)
+    c:commit()
+    lu.assertErrorMsgContains("invalid Cursor", function() c:read(1) end)
+    lu.assertErrorMsgContains("invalid Cursor", function() c:offset() end)
+    lu.assertErrorMsgContains("invalid Cursor", function() c:locate(0) end)
+end
+
+-- Buffer error paths
+
+function TestDoc:testNewNil()
+    local d = pt.doc(nil)
+    lu.assertEquals(#d, 0)
+end
+
+function TestDoc:testSeekNumericNeg()
+    local d = pt.doc("hi")
+    lu.assertErrorMsgContains("offset must be non-negative",
+        function() d:seek(-1) end)
+end
+
+function TestDoc:testEmptyEdits()
+    local d = pt.doc("hello")
+    d:insert(""):write(""):splice(0, "")
+    lu.assertEquals(d:dump(), "hello")
+end
+
+function TestDoc:testSeekLineOutOfRange()
+    local d = pt.doc("a\nb")
+    lu.assertErrorMsgContains("line out of range",
+        function() d:seek("line", 999) end)
+end
+
+function TestDoc:testLineLenOutOfRange()
+    local d = pt.doc("a\nb")
+    lu.assertErrorMsgContains("line number out of range",
+        function() d:linelen(999) end)
+end
+
+function TestDoc:testUndoAtRoot()
+    local d = pt.doc("hello")
+    -- undo at root (no parent) is no-op
+    local v = d:undo()
+    lu.assertEquals(v, d:commit())
+    lu.assertEquals(d:dump(), "hello")
+end
+
+function TestDoc:testBufferInvalidVid()
+    local d = pt.doc("hello")
+    d:commit()
+    lu.assertErrorMsgContains("invalid vid",
+        function() d:buffer(99999) end)
+end
+
+function TestDoc:testUndoInvalidVid()
+    local d = pt.doc("hello")
+    d:commit()
+    lu.assertErrorMsgContains("invalid vid",
+        function() d:undo(99999) end)
+end
+
+-- earlier / later time-travel
+
+function TestDoc:testEariler()
+    local d = pt.doc("")
+    d:commit()
+    d:seek("end"); d:write("A"); local vA = d:commit()
+    d:seek("end"); d:write("B"); local vB = d:commit()
+    d:seek("end"); d:write("C"); local vC = d:commit()
+    -- cursor at end of "ABC" (offset=3)
+    local vid = d:earlier() -- -> "AB"
+    lu.assertEquals(vid, vB)
+    lu.assertEquals(d:dump(), "AB")
+    lu.assertEquals(d:offset(), 2)
+    vid = d:earlier() -- -> "A"
+    lu.assertEquals(vid, vA)
+    lu.assertEquals(d:dump(), "A")
+    lu.assertEquals(d:offset(), 1)
+end
+
+function TestDoc:testLater()
+    local d = pt.doc("")
+    d:commit()
+    d:seek("end"); d:write("A"); local vA = d:commit()
+    d:seek("end"); d:write("B"); local vB = d:commit()
+    d:seek("end"); d:write("C"); local vC = d:commit()
+    d:earlier(); d:earlier() -- at "A", offset=1
+    local vid = d:later()    -- -> "AB"
+    lu.assertEquals(vid, vB)
+    lu.assertEquals(d:dump(), "AB")
+    lu.assertEquals(d:offset(), 2)
+    vid = d:later() -- -> "ABC"
+    lu.assertEquals(vid, vC)
+    lu.assertEquals(d:dump(), "ABC")
+    lu.assertEquals(d:offset(), 3)
+end
+
+function TestDoc:testEarilerAtRoot()
+    local d = pt.doc("hello")
+    d:commit()
+    local vid = d:earlier()
+    lu.assertEquals(vid, d:commit())
+    lu.assertEquals(d:dump(), "hello")
+end
+
+function TestDoc:testLaterAtNewest()
+    local d = pt.doc("hello")
+    d:commit()
+    local vid = d:later()
+    lu.assertEquals(vid, d:commit())
+    lu.assertEquals(d:dump(), "hello")
+end
+
+function TestDoc:testEarilerFreshError()
+    local d = pt.doc("hello")
+    d:seek("end"); d:write(" world")
+    lu.assertErrorMsgContains("uncommitted",
+        function() d:earlier() end)
+end
+
+function TestDoc:testLaterFreshError()
+    local d = pt.doc("hello")
+    d:seek("end"); d:write(" world")
+    lu.assertErrorMsgContains("uncommitted",
+        function() d:later() end)
+end
+
+function TestDoc:testTreeEarilerLater()
+    -- tree: "" → "A" → "AB" → "ABC", then undo to "AB", branch "ABD"
+    -- chronological order: "", "A", "AB", "ABC", "ABD"
+    local d = pt.doc("")
+    d:commit()
+    d:write("A"); local vA = d:commit() -- "A"
+    d:write("B"); local vB = d:commit() -- "AB"
+    d:write("C"); local vC = d:commit() -- "ABC"
+    d:undo()                            -- back to "AB"
+    d:write("D"); local vD = d:commit() -- "ABD"
+    lu.assertEquals(d:dump(), "ABD")
+    lu.assertEquals(d:offset(), 3)
+    -- earlier: vD → vC (time order, cross-branch)
+    local vid = d:earlier()
+    lu.assertEquals(vid, vC)
+    lu.assertEquals(d:dump(), "ABC")
+    lu.assertEquals(d:offset(), 3)
+    -- earlier: vC → vB
+    vid = d:earlier()
+    lu.assertEquals(vid, vB)
+    lu.assertEquals(d:dump(), "AB")
+    lu.assertEquals(d:offset(), 2)
+    -- later: vB → vC
+    vid = d:later()
+    lu.assertEquals(vid, vC)
+    lu.assertEquals(d:dump(), "ABC")
+    lu.assertEquals(d:offset(), 3)
+    -- later: vC → vD
+    vid = d:later()
+    lu.assertEquals(vid, vD)
+    lu.assertEquals(d:dump(), "ABD")
+    lu.assertEquals(d:offset(), 3)
+    -- navigate to root: vD→vB(undo), vB→vA(earlier), vA→root(earlier)
+    d:undo(); d:earlier(); d:earlier()
+    lu.assertEquals(d:dump(), "")
+    vid = d:earlier()
+    lu.assertEquals(vid, d:commit())
+    lu.assertEquals(d:dump(), "")
+    -- at newest (vD), later is no-op
+    d:undo(vD)
+    lu.assertEquals(d:dump(), "ABD")
+    vid = d:later()
+    lu.assertEquals(vid, d:commit())
+    lu.assertEquals(d:dump(), "ABD")
+end
+
+os.exit(lu.LuaUnit.run(), true)

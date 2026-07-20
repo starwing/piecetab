@@ -13,7 +13,7 @@ cov-run t *tests='':
     {{ CC }} {{ CFLAGS }} {{ INCS }} --coverage -Wno-unused-function -O0 -o tests/{{ t }} tests/{{ t }}.c && ./tests/{{ t }} {{ tests }}
 
 clean-gcda:
-    rm -f tests/*.gcda tests/*.gcno ./*.gcda ./*.gcno *.info
+    rm -f tests/*.gcda tests/*.gcno ./*.gcda ./*.gcno *.info build/*/*.gcda build/*/*.gcno
 
 clean: clean-gcda
     rm -f tests/lc_test4 tests/lc_test8 tests/pt_test4 tests/ut_test tests/ut_test
@@ -72,9 +72,24 @@ LUAJIT_INC := "-I/opt/homebrew/include/luajit-2.1"
 
 lua-build:
     mkdir -p build/lua55 build/luajit
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} -g -O0 -bundle -undefined dynamic_lookup -o build/lua55/piecetab.so piecetab.c
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} -g -O0 -bundle -undefined dynamic_lookup -o build/luajit/piecetab.so piecetab.c
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o build/lua55/piecetab.so piecetab.c
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o build/luajit/piecetab.so piecetab.c
 
 lua-test *t: lua-build
     lua tests/lua/test_pt.lua {{ t }}
     luajit tests/lua/test_pt.lua {{ t }}
+
+lua-cov: clean-gcda
+    mkdir -p build/lua55 build/luajit
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o build/lua55/piecetab.so piecetab.c
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o build/luajit/piecetab.so piecetab.c
+    lua tests/lua/test_pt.lua && luajit tests/lua/test_pt.lua
+    lcov --capture --directory build --rc branch_coverage=1 --output-file lua_coverage.info --ignore-errors mismatch
+    lcov --extract lua_coverage.info '*/piecetab.c' --rc branch_coverage=1 --output-file lcov.info
+    @echo ""
+    @echo "=== piecetab.c coverage ==="
+    lcov --list --rc branch_coverage=1 lcov.info
+
+lua-lines:
+    @awk '/^DA:/ && /,0$/ {gsub(/DA:|,0/,""); print $0}' lcov.info \
+    | sort -n | while read ln; do echo "L$ln: $(sed -n ${ln}p piecetab.c)"; done

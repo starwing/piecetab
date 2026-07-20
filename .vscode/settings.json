@@ -1,0 +1,11 @@
+{
+    "chat.tools.terminal.terminalProfile.osx": {
+        "path": "/bin/bash"
+    },
+    "[c]": {
+        "editor.defaultFormatter": "xaver.clang-format",
+    },
+    "json.schemaDownload.trustedDomains": {
+        "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json": true
+    }
+}
