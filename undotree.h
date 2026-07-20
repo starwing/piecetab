@@ -591,6 +591,7 @@ UT_API int ut_diff(ut_Tree *T, ut_Vid from, ut_Vid to) {
     ut_DX x;
     int   r;
     if (T == NULL) return UT_ERRPARAM;
+    if (from == to) return T->diffhn = 0, UT_OK;
     memset(&x, 0, sizeof(x)), x.T = T;
     if ((x.hasfrom = (from == ut_freshvid(T->S)))) from = T->current;
     if ((x.hasto = (to == ut_freshvid(T->S)))) to = T->current;
