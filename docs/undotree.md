@@ -302,8 +302,26 @@ Get the current hunk list. If a pending diff exists (`diffhn ≥ 0`),
 returns `S->scratch`; otherwise returns `current->h` (the committed
 changeset from `current`'s parent to `current`).
 
-Writes the hunk count to `*pn` (if `pn` is non-NULL). Returns `NULL` if
-`T` is `NULL`.
+Writes the hunk count to `*pn` (if `pn` is non-NULL). Returns `NULL`
+with `*pn = 0` if `T` is `NULL`.
+
+### ut_mapoffset
+
+```c
+UT_API size_t ut_mapoffset(ut_Tree *T, size_t offset);
+```
+
+Map an offset from the parent (from) coordinate to the child (to)
+coordinate, based on the most recent `ut_diff` or `ut_freshdiff` result.
+
+Returns the mapped offset. If no diff result is available (`diffhn < 0`),
+or if `T` is `NULL`, returns `offset` unchanged.
+
+If the offset falls inside a deleted region `[pa, pa+pdel)`, returns `ca`
+(the start of the corresponding inserted region in the child).
+
+Primary use case: restore cursor position after undo/redo by mapping
+the cursor offset from the previous version to the current version.
 
 ---
 

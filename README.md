@@ -185,7 +185,7 @@ the caller must keep the memory alive while any buffer references it.
 | Navigate  | `ut_root`, `ut_current`, `ut_parent`, `ut_payload`, `ut_childcount`       |
 | Navigate  | `ut_firstchild`, `ut_lastchild`, `ut_nextsib`, `ut_younger`, `ut_older`   |
 | Navigate  | `ut_ancestor`                                                                   |
-| Diff      | `ut_freshvid`, `ut_diff`, `ut_hunks`                                            |
+| Diff      | `ut_freshvid`, `ut_diff`, `ut_freshdiff`, `ut_hunks`, `ut_mapoffset`    |
 
 See [`docs/piecetab.md`](docs/piecetab.md),
 [`docs/linecache.md`](docs/linecache.md), and

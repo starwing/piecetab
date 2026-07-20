@@ -103,6 +103,8 @@ UT_API int ut_freshdiff(ut_Tree *T, int i, int j);
 
 UT_API const ut_Hunk *ut_hunks(ut_Tree *T, size_t *pn);
 
+UT_API size_t ut_mapoffset(ut_Tree *T, size_t offset);
+
 /* private struction definition */
 
 #define utV_len(A) ((A) ? utV_hdr(A)->len : 0u)
@@ -340,7 +342,7 @@ UT_API void ut_deltree(ut_State *S, ut_Tree *T) {
 }
 
 UT_API const ut_Hunk *ut_hunks(ut_Tree *T, size_t *pn) {
-    if (T == NULL) return NULL;
+    if (T == NULL) return (void)(pn && (*pn = 0)), NULL;
     if (T->diffhn < 0) {
         if (T->current == NULL) return (void)(pn && (*pn = 0)), NULL;
         return (void)(pn && (*pn = utV_len(T->current->h))), T->current->h;
@@ -624,6 +626,17 @@ UT_API int ut_freshdiff(ut_Tree *T, int i, int j) {
     if (utV_len(T->S->scratch) == 0)
         return utV_free(T->S, T->S->scratch), T->diffhn = 0, UT_OK;
     return T->diffhn = (int)utV_len(T->S->scratch);
+}
+
+UT_API size_t ut_mapoffset(ut_Tree *T, size_t offset) {
+    size_t         hn, i;
+    const ut_Hunk *h = ut_hunks(T, &hn);
+    ptrdiff_t      shift = 0;
+    for (i = 0; i < hn && offset >= h[i].pa; ++i) {
+        if (offset < h[i].pa + h[i].pdel) return h[i].ca;
+        shift += (ptrdiff_t)h[i].cins - (ptrdiff_t)h[i].pdel;
+    }
+    return (size_t)((ptrdiff_t)offset + shift);
 }
 
 UT_NS_END

@@ -107,7 +107,7 @@ grep '^UT_API' undotree.h
 | 导航     | `ut_parent`, `ut_payload`, `ut_childcount`, `ut_firstchild`   | 树遍历（宏）                      |
 | 导航     | `ut_nextsib`, `ut_younger`, `ut_older`                        | 兄弟/时间序跳转（宏）             |
 | 导航     | `ut_root`, `ut_current`, `ut_ancestor`                        | 根/head/LCA                       |
-| diff     | `ut_freshvid`, `ut_diff`, `ut_freshdiff`, `ut_hunks`          | 差分计算 + 结果查询               |
+| diff     | `ut_freshvid`, `ut_diff`, `ut_freshdiff`, `ut_hunks`, `ut_mapoffset`     | 差分计算 + 结果查询                |
 
 ### ut_younger / ut_older（:earlier/:later 跳转）
 
@@ -228,7 +228,8 @@ just ut-lines     # 未覆盖行源码
 | `ut_switch(T, v)` | v==NULL→ERRPARAM；v==freshvid→ERRPARAM；journal 非空→ERRPARAM；v==T->current 允许（no-op） |
 | `ut_diff(T, from, to)` | from/to 可是 freshvid 哨兵；返回 UT_OK/ERRPARAM/ERRMEM；hunk 数通过 ut_hunks 获取 |
 | `ut_freshdiff(T, i, j)` | [i,j) 半开区间；i==j→空 diff；i>j→取逆 |
-| `ut_hunks(T, &nh)` | T==NULL 返回 NULL；返回内部指针（下次 diff 覆盖）；diffhn<0 时返回 current->h |
+| `ut_hunks(T, &nh)` | T==NULL 返回 NULL 且 *pn=0；返回内部指针（下次 diff 覆盖）；diffhn<0 时返回 current->h |
+| `ut_mapoffset(T, off)` | T==NULL 或无 diff→返回 off 原值；off 在删除区域→返回 ca；否则累加偏移 |
 | `ut_deltree(S, T)` | T==NULL 直接返回；非递归释放所有节点+payload（通过 cleaner） |
 | `ut_setcleaner(S, f, ud)` | S==NULL 不操作 |
 | `ut_close(S)` | S==NULL 直接返回；**不调用 ut_deltree**（调用者责任） |

@@ -280,7 +280,23 @@ UT_API const ut_Hunk *ut_hunks(ut_Tree *T, size_t *pn);
 获取当前 hunk 列表。若存在待命 diff（`diffhn ≥ 0`），返回 `S->scratch`；
 否则返回 `current->h`（当前节点到 parent 的已提交 changeset）。
 
-hunk 数写入 `*pn`（`pn` 为 NULL 时略过写入）。`T` 为 NULL 返回 `NULL`。
+hunk 数写入 `*pn`（`pn` 为 NULL 时略过写入）。`T` 为 NULL 返回 `NULL` 并置 `*pn = 0`。
+
+### ut_mapoffset
+
+```c
+UT_API size_t ut_mapoffset(ut_Tree *T, size_t offset);
+```
+
+基于最近一次 `ut_diff` / `ut_freshdiff` 的结果，将 parent（from）坐标系的
+offset 映射到 child（to）坐标系。
+
+返回映射后的 offset。若无有效 diff 结果（`diffhn < 0`）或 `T` 为 NULL，
+返回 `offset` 原值。
+
+若 offset 落入删除区域 `[pa, pa+pdel)` 内，返回 `ca`（插入区域的起始位置）。
+
+典型场景：undo/redo 后恢复光标位置，将光标从旧版本映射到当前版本。
 
 ---
 

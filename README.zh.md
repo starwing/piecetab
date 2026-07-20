@@ -170,7 +170,7 @@ int main(void) {
 | 导航     | `ut_root`, `ut_current`, `ut_parent`, `ut_payload`, `ut_childcount`       |
 | 导航     | `ut_firstchild`, `ut_lastchild`, `ut_nextsib`, `ut_younger`, `ut_older`   |
 | 导航     | `ut_ancestor`                                                              |
-| Diff     | `ut_freshvid`, `ut_diff`, `ut_hunks`                                       |
+| Diff     | `ut_freshvid`, `ut_diff`, `ut_freshdiff`, `ut_hunks`, `ut_mapoffset`    |
 
 完整 API 参考见 [`docs/piecetab.zh.md`](docs/piecetab.zh.md)、
 [`docs/linecache.zh.md`](docs/linecache.zh.md) 与
