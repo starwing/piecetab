@@ -330,3 +330,31 @@ rg '\b<name>\b' linecache.h | head
 # 查某前缀函数清单
 grep '^static.*lcX_' linecache.h
 ```
+
+## 十四、边界行为速查表（供绑定层胶水参考）
+
+### 14.1 越界 / 零参数 / 空树
+
+| 函数 | 越界 | 零参数 | 空树 | OOM |
+|------|------|--------|------|-----|
+| `lc_scan` | — | c==NULL→ERRPARAM | 从尾部开始追加 | 返回ERRMEM |
+| `lc_append` | — | C==NULL→ERRPARAM | 正常追加 | 回滚sC→ERRMEM |
+| `lc_insert` | — | 同 append | 同 append | 同 append |
+| `lc_splice` | off≥bytes→仅col+=ins | del=0,ins=0→完全无操作 | col+=ins | 委托 remove |
+| `lc_remove` | L≥R→无操作 | NULL/非同树→ERRPARAM | 无操作 | assert 预留 |
+| `lc_seek` | **软 clamp**, col=excess | C/c==NULL→ERRPARAM | 跳 locend, col=n | 无分配 |
+| `lc_seekline` | **硬 ERR_PARAM** | C/c==NULL→ERRPARAM | paths[0]=root.children | 无分配 |
+| `lc_advance` | clamp 到端 | C/tree==NULL→ERRPARAM | — | 无分配 |
+| `lc_advline` | clamp 到最后行末 | C/tree==NULL→ERRPARAM | bytes==0→无操作 | 无分配 |
+
+### 14.2 关键语义
+
+- **lc_seek 越界软 clamp** vs **lc_seekline 越界硬 ERR_PARAM**（不一致，已知摩擦）
+- **lc_seek 到 off > lc_bytes 时 col = off - lc_bytes**（尾后区域，excess）。后续
+  `lc_col(C)` 返回该 excess 值，`lc_linelen(C)` 也返回该值。
+- **尾后区域的语义**：`lc_linelen` 在 lnu >= breaks[i] 时返回 `C->col`。
+  残段不存树（设计目的），通过 lc_seek 定位到尾后 + lc_col 获取残段长度。
+- **lc_splice(C, 0, 0) → 完全无操作**。绑定层不需要包 `if (del > 0)` 守卫。
+- **lc_append(C, 0, NULL, NULL)** → 仅 `lcD_addbytes(C, 0)`，全无操作（`!e` 提前 return）。
+- **Scanner 回调返回 0 = eof**（不是空行）。linecache 不支持零长行。
+- **`lc_remove` 用双游标定区间**，非长度参数。两游标同位置 → 无操作。

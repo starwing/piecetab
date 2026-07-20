@@ -303,3 +303,34 @@ just pt-lines         # 未覆盖行源码
 | `nd`     | node destination（cow 后当前节点） | `ptI_splitchild`             |
 | `nw`     | new right node（分裂右半）         | `splitroot`/`splitchild`     |
 | `pp`     | 分裂后左半 / pt_Block** 游走指针   | `splitroot` / `pt_reserve`   |
+
+## 十四、边界行为速查表（供绑定层胶水参考）
+
+### 14.1 零参数 / NULL / 越界
+
+| 函数 | del/len=0 | s=NULL | 越界 | dirty 影响 |
+|------|-----------|--------|------|------------|
+| `pt_seek` | — | — | clamp 到尾 | **清 dirty** (memset) |
+| `pt_locate` | — | — | clamp 到尾 | 不改变 |
+| `pt_insert` | PT_OK | ERRPARAM | — | 设 dirty |
+| `pt_append` | PT_OK | ERRPARAM | — | 设 dirty |
+| `pt_splice` | del=0且(s=NULL或len=0)→PT_OK | del=0且len=0→OK | remove clamp | 设 dirty |
+| `pt_edit` | PT_OK | ERRPARAM (len>0) | len>MAX→ERR | 设 dirty |
+| `pt_remove` | PT_OK | — | clamp 到尾 | 设 dirty |
+| `pt_commit` | — | — | — | dirty→0, detach cursor |
+| `pt_rollback` | — | — | — | dirty→0, detach cursor |
+| `pt_read` | 返回 0 | 返回 0 | — | 不改变 |
+| `pt_advance` | 无移动 | — | clamp | 不改变 |
+
+### 14.2 关键语义区分
+
+- **pt_seek vs pt_locate**：seek 是构造器（memset 重置 dirty 标志 + 绑 buffer），
+  locate 是纯导航（保留 dirty，cursor 须已有 tree）。dirty cursor 上调用
+  pt_seek 会丢失 transient 树→泄漏。切换版本时应先 pt_release(pt_rollback())
+  再 pt_seek 到目标 buffer。
+- **pt_splice(C, 0, NULL, 0)** 返回 PT_OK 不做任何事。绑定层不需要先检查
+  `if (del > 0)` 或 `if (len > 0)`。
+- **pt_insert = pt_append + pt_advance(-len)** — append 推进光标，insert 退回。
+- **pt_commit/pt_rollback 都 detach cursor**（C->tree = NULL），clean cursor
+  也 detach。返回的 buffer 调用者持有引用。
+- **pt_bytes/pt_version 对 NULL buffer 返回 0**（安全）。

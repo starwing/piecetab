@@ -213,3 +213,34 @@ just ut-lines     # 未覆盖行源码
 | `docs/undotree.md`            | API 参考手册           |
 | `notes/brief_piecetab.md`     | 姊妹库 piecetab 总览   |
 | `notes/brief_linecache.md`    | 姊妹库 linecache 总览  |
+
+## 十、边界行为速查表（供绑定层胶水参考）
+
+### 10.1 零参数 / NULL / 空 journal
+
+| 函数 | 零/NULL 行为 |
+|------|-------------|
+| `ut_record(T, off, 0, 0)` | 返回 UT_OK，**不记录 entry**（no-op 不产生 journal） |
+| `ut_unrecord(T, 0)` | 安全 no-op（len - 0 = len） |
+| `ut_freshcount(T)` | T==NULL 返回 0 |
+| `ut_discard(T)` | T==NULL→ERRPARAM；否则清除 journal（len=0，不释放内存） |
+| `ut_commit(T, p)` | journal 空也**创建新节点**（快照节点）；失败返回 NULL |
+| `ut_switch(T, v)` | v==NULL→ERRPARAM；v==freshvid→ERRPARAM；journal 非空→ERRPARAM；v==T->current 允许（no-op） |
+| `ut_diff(T, from, to)` | from/to 可是 freshvid 哨兵；返回 UT_OK/ERRPARAM/ERRMEM；hunk 数通过 ut_hunks 获取 |
+| `ut_freshdiff(T, i, j)` | [i,j) 半开区间；i==j→空 diff；i>j→取逆 |
+| `ut_hunks(T, &nh)` | T==NULL 返回 NULL；返回内部指针（下次 diff 覆盖）；diffhn<0 时返回 current->h |
+| `ut_deltree(S, T)` | T==NULL 直接返回；非递归释放所有节点+payload（通过 cleaner） |
+| `ut_setcleaner(S, f, ud)` | S==NULL 不操作 |
+| `ut_close(S)` | S==NULL 直接返回；**不调用 ut_deltree**（调用者责任） |
+
+### 10.2 关键语义
+
+- **ut_record 的 no-op 过滤**：del=0 && ins=0 时不产生条目。绑定层不需要先判断
+  `if (del > 0 || len > 0)`。
+- **ut_switch 在 journal 非空时拒绝**。undo 丢弃草稿必须先 ut_discard。
+- **freshvid 哨兵**：`ut_freshvid(S) = (ut_Vid)(S)`，在 ut_diff 中表"当前+journal"，
+  ut_switch 拒绝之。
+- **ut_hunks 返回内部指针**：life 到下次 diff/freshdiff 调用。调用者应立即消费。
+- **payload cleaner**：签名 `void (*)(void *ud, ut_Payload *p)`，ud 来自 ut_setcleaner。
+- **ut_deltree 释放 payload**（通过 cleaner），再释放 journal 和 T 自身。
+- **ut_close 不调 ut_deltree**：调用者必须先 deltree 再 close，否则 payload 泄露。
