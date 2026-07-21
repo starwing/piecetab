@@ -1,4 +1,10 @@
 If:
+  PathMatch: deps/lua-termkey/.*
+CompileFlags:
+  Add: [-std=c99, -Wno-unused-parameter]
+  Remove: [-std=c89]
+---
+If:
   PathMatch: '.*\.h'
 CompileFlags:
   Add: [-x, c]

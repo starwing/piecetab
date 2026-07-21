@@ -6,6 +6,7 @@ package.cpath = package.cpath ..
     ";./build/lua55/?.so;./build/luajit/?.so;/opt/homebrew/lib/lua/5.5/?.so;/opt/homebrew/lib/lua/5.4/?.so"
 local pt = require("piecetab")
 local utf8 = require("lua-utf8")
+local termkey = require("termkey")
 
 -- ================================================================
 -- Logging (writes to editor.log for debugging)
@@ -26,20 +27,25 @@ local function edlog(fmt, ...)
 end
 
 -- ================================================================
--- Section 1: Terminal control
+-- Section 1: Terminal control (powered by termkey)
 -- ================================================================
 
 local term = {}
+local tk_instance = nil
 
 function term.init()
   io.write("\27[?1049h") -- alt screen
   io.write("\27[?25l")   -- hide cursor
   io.flush()
-  os.execute("stty raw -echo min 1 time 1")
+  tk_instance = termkey.new(0)
+  tk_instance:start()
 end
 
 function term.shutdown()
-  os.execute("stty -raw echo 2>/dev/null")
+  if tk_instance then
+    tk_instance:stop()
+    tk_instance:delete()
+  end
   io.write("\27[?25h")   -- show cursor
   io.write("\27[2J")     -- clear alt screen
   io.write("\27[?1049l") -- exit alt screen
@@ -75,85 +81,107 @@ term.REVERSE  = "\27[7m"
 term.DIM      = "\27[2m"
 term.RESET    = "\27[0m"
 
-local CSI_MAP = {
-  A = "up",
-  B = "down",
-  C = "right",
-  D = "left",
-  H = "home",
-  F = "end",
-  ["1~"] = "home",
-  ["4~"] = "end",
-  ["5~"] = "pageup",
-  ["6~"] = "pagedown",
-  ["3~"] = "delete",
+-- Key name mapping: termkey KEYSYM name -> editor key string
+local KEYSYM_MAP = {
+  Enter     = "enter",
+  Escape    = "escape",
+  Backspace = "backspace",
+  Tab       = "tab",
+  Space     = " ",
+  Delete    = "delete",
+  Home      = "home",
+  End       = "end",
+  PageUp    = "pageup",
+  PageDown  = "pagedown",
+  Up        = "up",
+  Down      = "down",
+  Left      = "left",
+  Right     = "right",
 }
 
-local function csi_read()
-  local seq = ""
-  while true do
-    local b = io.stdin:read(1)
-    if not b then return nil end
-    seq = seq .. b
-    local term = seq:match("[A-Za-z~]$")
-    if term then
-      local key = seq:match("^%[(.*)" .. term) or ""
-      local full = key .. term
-      return CSI_MAP[full] or ("csi:" .. full)
-    end
-  end
-end
-
-local pushback = nil
-
+--- Read one key (blocking). Returns key string for dispatch.
 function term.getkey()
-  if pushback then
-    local k = pushback
-    pushback = nil
-    return k
-  end
-  local c = io.stdin:read(1)
-  if not c then return nil end
-  local b = c:byte()
-  -- ESC
-  if b == 0x1b then
-    local next = io.stdin:read(1)
-    if not next then return "escape" end
-    if next:byte() == 0x5b then
-      local csi = csi_read()
-      return csi or "escape"
+  local tk = tk_instance
+  while true do
+    local r = tk:getkey("f")  -- blocking: wait for complete key sequence
+    if r == "KEY" then
+      local ktype = tk:key()
+      if ktype == "UNICODE" then
+        local str, cp = tk:data()
+        if cp == 13 then return "enter" end
+        if cp == 9  then return "tab" end
+        if cp == 8 or cp == 127 then return "backspace" end
+        if cp == 27 then return "escape" end
+        -- Ctrl+letter (A=1 .. Z=26)
+        if tk:mod("c") and cp >= 1 and cp <= 26 then
+          if cp == 12 then return "ctrl-l" end
+          if cp == 18 then return "ctrl-r" end
+          if cp == 3  then return "ctrl-c" end
+          return "ctrl-" .. string.char(cp + 96)
+        end
+        return str
+      elseif ktype == "KEYSYM" then
+        local name = tk:data()
+        if KEYSYM_MAP[name] then return KEYSYM_MAP[name] end
+        return "keysym:" .. name
+      elseif ktype == "FUNCTION" then
+        return "F" .. tk:data()
+      end
+    elseif r == "EOF" then
+      return nil
     end
-    pushback = next:byte() == 0x1b and "escape" or next
-    return "escape"
+    -- NONE/AGAIN/ERROR: keep polling
   end
-  -- control characters
-  if b == 0x0d or b == 0x0a then return "enter" end
-  if b == 0x08 or b == 0x7f then return "backspace" end
-  if b == 0x09 then return "tab" end
-  if b == 0x0c then return "ctrl-l" end
-  if b == 0x12 then return "ctrl-r" end
-  if b == 0x03 then return "ctrl-c" end
-  -- UTF-8 multibyte: read continuation bytes
-  if b >= 0xc0 and b <= 0xfd then
-    local n = 0
-    if b < 0xe0 then
-      n = 1
-    elseif b < 0xf0 then
-      n = 2
-    else
-      n = 3
-    end
-    for _ = 1, n do
-      local cb = io.stdin:read(1)
-      if not cb then break end
-      c = c .. cb
-    end
-  end
-  return c
 end
 
 -- ================================================================
--- Section 2: Editor engine
+-- Section 2: Highlight module (piece-based span coloring)
+-- ================================================================
+
+local hl = {}
+
+--- Build array of {offset, length, kind} from piece boundaries.
+--- Uses doc cursor (includes uncommitted edits), restores position.
+function hl.build_regions(doc)
+  local saved = doc:offset()
+  local regions = {}
+  local off = 0
+  local i = 0
+  local doclen = #doc
+  while off < doclen do
+    doc:seek("set", off)
+    local len = doc:piece("len")
+    if len <= 0 then break end
+    regions[#regions + 1] = {offset = off, length = len, kind = i % 2}
+    off = off + len
+    i = i + 1
+  end
+  doc:seek("set", saved)
+  return regions
+end
+
+--- Compute colored segments for one line.
+--- @param regions table array of {offset, length, kind}
+--- @param line_start integer byte offset of line start
+--- @param line_end   integer byte offset of line end (exclusive)
+--- @return table array of {start=1-based byte, len, kind}
+function hl.line_segments(regions, line_start, line_end)
+  local segs = {}
+  for _, r in ipairs(regions) do
+    local r_end = r.offset + r.length
+    if r.offset < line_end and r_end > line_start then
+      local s = math.max(r.offset, line_start) - line_start + 1
+      local e = math.min(r_end, line_end) - line_start
+      if e >= s then
+        segs[#segs + 1] = {start = s, len = e - s + 1, kind = r.kind}
+      end
+    end
+  end
+  return segs
+end
+
+-- ================================================================
+-- Section 3: Editor engine
 -- ================================================================
 
 local ed = {}
@@ -185,6 +213,40 @@ local function word_class(byte)
   if byte >= 97 and byte <= 122 then return 1 end -- lower
   if byte == 95 then return 1 end                 -- underscore
   return 0
+end
+
+-- UTF-8 helpers
+local function utf8_char_len(byte)
+  if byte < 0x80 then return 1 end
+  if byte < 0xc0 then return 0 end
+  if byte < 0xe0 then return 2 end
+  if byte < 0xf0 then return 3 end
+  return 4
+end
+
+-- Move cursor by n characters (-1 = left, +1 = right)
+local function cursor_move_char(doc, n)
+  local off = doc:offset()
+  if n < 0 and off <= 0 then return end
+  local buf, lnum = doc:buffer(), doc:line()
+  local saved = off
+  if n < 0 then
+    local p = off - 1
+    while p > 0 do
+      local b = buf:read(p, 1):byte()
+      if b >= 0xc0 or b < 0x80 then break end
+      p = p - 1
+    end
+    doc:seek("set", p)
+  elseif n > 0 then
+    if off >= #buf then return end
+    local clen = utf8_char_len(buf:read(off, 1):byte())
+    doc:seek("set", off + clen)
+  end
+  -- restore if seek didn't move (boundary clamp)
+  if doc:offset() == saved and n > 0 and off < #buf then
+    doc:seek("set", off + 1)
+  end
 end
 
 local function move_word_forward(doc)
@@ -225,6 +287,71 @@ end
 
 -- Rendering
 
+-- Expand tabs in raw line text, returning (display, mapping).
+-- mapping[i] = display column for original byte i (1-based).
+local function expand_tabs(text)
+  local display, col = "", 0
+  local mapping = {}
+  for i = 1, #text do
+    mapping[i] = col
+    local c = text:sub(i, i)
+    if c == "\t" then
+      local spaces = 4 - (col % 4)
+      display = display .. string.rep(" ", spaces)
+      col = col + spaces
+    else
+      display = display .. c
+      col = col + 1
+    end
+  end
+  mapping[#text + 1] = col
+  return display, mapping
+end
+
+-- Write text with ANSI bg color, truncating to display_width columns.
+local BG_GRAY = "\27[48;5;237m"
+local BG_RESET = "\27[0m"
+
+local function write_colored_text(text, segs, display_mapping, maxcol)
+  local col = 0
+  for _, seg in ipairs(segs) do
+    if col >= maxcol then break end
+    local seg_col_start = display_mapping[seg.start]
+    local seg_col_end = display_mapping[seg.start + seg.len] - 1
+    if not seg_col_start or seg_col_start >= maxcol then break end
+    -- Write text before this segment
+    if seg_col_start > col then
+      local to_write = seg_col_start - col
+      if col + to_write > maxcol then to_write = maxcol - col end
+      if to_write > 0 then
+        local gap = text:gsub("\t", "    "):sub(col + 1, col + to_write)
+        io.write(gap)
+        col = col + to_write
+      end
+      if col >= maxcol then break end
+    end
+    if seg.kind == 1 then io.write(BG_GRAY) end
+    if seg_col_end >= maxcol then seg_col_end = maxcol - 1 end
+    if seg_col_end >= seg_col_start then
+      local seg_text = text:gsub("\t", "    "):sub(seg_col_start + 1, seg_col_end + 1)
+      io.write(seg_text)
+      col = seg_col_end + 1
+    end
+    if seg.kind == 1 then io.write(BG_RESET) end
+  end
+  -- Write text after last segment
+  local total_cols = display_mapping[#text + 1]
+  if col < total_cols and col < maxcol then
+    local remaining = text:gsub("\t", "    "):sub(col + 1, maxcol)
+    io.write(remaining)
+    col = col + utf8.width(remaining)
+  end
+  -- Pad to maxcol
+  if col < maxcol then
+    io.write(string.rep(" ", maxcol - col))
+  end
+end
+
 function ed.render()
   io.write("\27[?25l")
   local saved_off = ed.doc:offset()
@@ -238,6 +365,9 @@ function ed.render()
     rows, cols, lnum_width, text_width, ed.scroll_line,
     ed.doc:line(), ed.doc:column(), total_lines)
 
+  -- Build piece regions for syntax highlighting
+  local regions = hl.build_regions(ed.doc)
+
   -- clamp scroll
   local cur_line = ed.doc:line()
   if cur_line < ed.scroll_line then
@@ -249,11 +379,14 @@ function ed.render()
 
   -- === text area (rows 1..rows-1) ===
   ed.doc:seek("line", ed.scroll_line)
+  local cur_off = ed.doc:offset()
   local line_idx = ed.scroll_line - 1
-  for line in ed.doc:lines() do
+  for line_text in ed.doc:lines() do
     line_idx = line_idx + 1
     if line_idx >= ed.scroll_line + visrows then break end
     local screen_row = line_idx - ed.scroll_line + 1
+    local line_start = cur_off
+    cur_off = cur_off + #line_text + 1
 
     term.move(screen_row, 1)
     term.clearline()
@@ -263,21 +396,25 @@ function ed.render()
     io.write(string.format("%" .. lnum_width .. "d ", line_idx + 1))
     io.write(term.RESET)
 
-    -- line content
-    local display = line:gsub("\t", "    ")
-    if #display > text_width then
-      display = display:sub(1, text_width)
+    -- line content with piece-based coloring
+    local display, mapping = expand_tabs(line_text)
+    local segs = hl.line_segments(regions, line_start, line_start + #line_text)
+    if #segs == 0 then
+      local trimmed = utf8.width(display) > text_width and display:sub(1, text_width) or display
+      io.write(trimmed)
+      if utf8.width(trimmed) < text_width then
+        io.write(string.rep(" ", text_width - utf8.width(trimmed)))
+      end
+    else
+      write_colored_text(line_text, segs, mapping, text_width)
     end
+
     if line_idx == 5 then
-      edlog("  render line %d: len=%d [%s]", line_idx, #display, display:sub(1, 60))
-    end
-    io.write(display)
-    if #display < text_width then
-      io.write(string.rep(" ", text_width - #display))
+      edlog("  render line %d: len=%d [%s]", line_idx, #line_text, line_text:sub(1, 60))
     end
   end
 
-  -- clear remaining text rows (beyond visible lines)
+  -- clear remaining text rows
   local drawn_rows = math.min(total_lines, ed.scroll_line + visrows)
   drawn_rows = drawn_rows - ed.scroll_line
   for row = drawn_rows + 1, visrows do
@@ -343,9 +480,9 @@ local function line_endcol(ed, lnum)
   return llen
 end
 
-function normal_cmds.h(ed) ed.doc:seek("cur", -1) end
+function normal_cmds.h(ed) cursor_move_char(ed.doc, -1) end
 
-function normal_cmds.l(ed) ed.doc:seek("cur", 1) end
+function normal_cmds.l(ed) cursor_move_char(ed.doc, 1) end
 
 function normal_cmds.j(ed)
   local lnum = ed.doc:line()
@@ -390,7 +527,7 @@ function normal_cmds.G(ed)
 end
 
 function normal_cmds.x(ed)
-  ed.doc:splice(1, "")
+  ed.doc:edit(1, "")
 end
 
 function normal_cmds.dd(ed)
@@ -403,20 +540,21 @@ end
 function normal_cmds.i(ed) ed.mode = "INSERT" end
 
 function normal_cmds.a(ed)
-  ed.doc:seek("cur", 1); ed.mode = "INSERT"
+  cursor_move_char(ed.doc, 1); ed.mode = "INSERT"
 end
 
 function normal_cmds.o(ed)
   local lnum = ed.doc:line()
   ed.doc:seek("line", lnum)
   ed.doc:seek("cur", line_endcol(ed, lnum))
-  ed.doc:append("\n")
+  ed.doc:edit(0, "\n")
   ed.mode = "INSERT"
 end
 
 function normal_cmds.O(ed)
   ed.doc:seek("line", ed.doc:line())
-  ed.doc:insert("\n")
+  ed.doc:edit(0, "\n")
+  ed.doc:seek("cur", -1)
   ed.mode = "INSERT"
 end
 
@@ -521,33 +659,64 @@ local function insert_key(ed, key)
   if key == "escape" then
     ed.mode = "NORMAL"
     ed.doc:commit()
-    ed.doc:seek("cur", -1)
+    if ed.doc:offset() > 0 then
+      cursor_move_char(ed.doc, -1)
+    end
     ed.dirty = true
-    edlog("insert: ESC -> NORMAL, commit")
+    edlog("insert: ESC -> NORMAL, commit off=%d", ed.doc:offset())
     ed.msg = ""
   elseif key == "backspace" then
     local off = ed.doc:offset()
     if off > 0 then
-      ed.doc:seek("cur", -1)
-      ed.doc:splice(1, "")
+      local buf = ed.doc:buffer()
+      local p = off - 1
+      while p > 0 do
+        local b = buf:read(p, 1):byte()
+        if b >= 0xc0 or b < 0x80 then break end
+        p = p - 1
+      end
+      local char_len = off - p
+      ed.doc:seek("set", p)
+      ed.doc:edit(char_len, "")
     end
   elseif key == "delete" then
-    ed.doc:splice(1, "")
+    local off = ed.doc:offset()
+    if off < #ed.doc:buffer() then
+      local buf = ed.doc:buffer()
+      local clen = utf8_char_len(buf:read(off, 1):byte())
+      ed.doc:edit(clen, "")
+    end
   elseif key == "enter" then
-    ed.doc:append("\n")
+    ed.doc:edit(0, "\n")
   elseif key == "tab" then
-    ed.doc:append("\t")
+    ed.doc:edit(0, "\t")
   elseif key == "ctrl-c" then
     ed.mode = "NORMAL"
     ed.msg = ""
+  elseif key == "up" then
+    normal_cmds.k(ed)
+  elseif key == "down" then
+    normal_cmds.j(ed)
+  elseif key == "left" then
+    cursor_move_char(ed.doc, -1)
+  elseif key == "right" then
+    cursor_move_char(ed.doc, 1)
+  elseif key == "home" then
+    ed.doc:seek("line", ed.doc:line())
+  elseif key == "end" then
+    local lnum = ed.doc:line()
+    ed.doc:seek("line", lnum)
+    ed.doc:seek("cur", line_endcol(ed, lnum))
+  elseif key == "pageup" then
+    local jump = (term.size() - 2)
+    for _ = 1, jump do normal_cmds.k(ed) end
+  elseif key == "pagedown" then
+    local jump = (term.size() - 2)
+    for _ = 1, jump do normal_cmds.j(ed) end
   elseif type(key) == "string" and #key > 0 then
-    -- printable character
     local b = key:byte(1)
-    if b >= 32 and b < 127 then
-      ed.doc:append(key)
-    elseif b >= 0xc0 then
-      -- UTF-8 multibyte
-      ed.doc:append(key)
+    if b >= 32 and b < 127 or b >= 0xc0 then
+      ed.doc:edit(0, key)
     end
   end
 end
@@ -598,7 +767,7 @@ function ed.dispatch(key)
 end
 
 -- ================================================================
--- Section 3: Main
+-- Section 4: Main
 -- ================================================================
 
 local function main(argv)
@@ -614,8 +783,7 @@ local function main(argv)
   local ok, err = pcall(function()
     while true do
       ed.render()
-      local key = term.getkey()
-      ed.dispatch(key)
+      ed.dispatch(term.getkey())
     end
   end)
 

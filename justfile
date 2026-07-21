@@ -64,6 +64,16 @@ ut *tests='': (dbg-run "ut_test" tests)
 ut-cov: clean-gcda (cov-run "ut_test") (cov-show "undotree.h")
 ut-lines: (cov-lines "undotree.h")
 
+# termkey binding
+
+TK_FLAGS := "-Wall -Wextra -Wno-unused-parameter"
+TK_DEPS := "deps/lua-termkey/ltermkey.c"
+
+tk-build:
+    mkdir -p build/lua55 build/luajit
+    {{ CC }} {{ TK_FLAGS }} -DNDEBUG -O2 {{ LUA55_INC }} -bundle -undefined dynamic_lookup -o build/lua55/termkey.so {{ TK_DEPS }}
+    {{ CC }} {{ TK_FLAGS }} -DNDEBUG -O2 {{ LUAJIT_INC }} -bundle -undefined dynamic_lookup -o build/luajit/termkey.so {{ TK_DEPS }}
+
 # lua binding (endpoints: PUC 5.5 + LuaJIT 2.1/5.1 cover the compat range)
 
 LUAFLAGS := "-Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -std=c89 -Wno-variadic-macros"

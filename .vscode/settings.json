@@ -7,5 +7,8 @@
     },
     "json.schemaDownload.trustedDomains": {
         "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json": true
+    },
+    "C_Cpp.files.exclude": {
+        "**/deps/**": true
     }
 }
