@@ -678,57 +678,209 @@ end
 
 function TestDoc:testLineCount()
     local d = pt.doc("a\nb\nc")
-    lu.assertEquals(d:linecount(), 3)
+    lu.assertEquals(d:breaks(), 3)
     d:seek("end"); d:write("\nd")
-    lu.assertEquals(d:linecount(), 4)
+    lu.assertEquals(d:breaks(), 4)
 end
 
 function TestDoc:testLineCountEmpty()
     local d = pt.doc("")
-    lu.assertEquals(d:linecount(), 1)
+    lu.assertEquals(d:breaks(), 1)
+end
+
+function TestDoc:testBreaksAfterAppend()
+    -- append at pos 0 should not change break count
+    local d = pt.doc("hello\nworld\n")
+    lu.assertEquals(d:breaks(), 3)
+    d:seek(0); d:append("X")
+    lu.assertEquals(d:breaks(), 3)
+end
+
+function TestDoc:testBreaksAfterAppendMiddle()
+    -- append in middle of first line
+    local d = pt.doc("hello\nworld\n")
+    lu.assertEquals(d:breaks(), 3)
+    d:seek(2); d:append("X")
+    lu.assertEquals(d:breaks(), 3)
+end
+
+function TestDoc:testBreaksAfterAppendPastNL()
+    -- append after \n (shifts \n position, line count unchanged)
+    local d = pt.doc("hello\nworld\n")
+    lu.assertEquals(d:breaks(), 3)
+    d:seek(6); d:append("X")  -- at "world"
+    lu.assertEquals(d:breaks(), 3)
+end
+
+function TestDoc:testLinesCorruptsSeekLine()
+    -- lines() iterates via read() which advances cursor, but
+    -- must not cause re-application of fresh hunks in lc.
+    local d = pt.doc("L0\nL1\nL2\nL3\nL4\nL5\nL6\n")
+    d:append("X")
+    d:breaks(); d:seek("line", 0)
+    for _ in d:lines() do end
+    d:seek("line", 4)
+    lu.assertEquals(d:offset(), 13)
+    lu.assertEquals(d:read("l"), "L4")
 end
 
 function TestDoc:testLines()
+    -- lines() with no args = iterator that calls read() until nil
+    -- (like io.lines: reads lines without \n)
     local d = pt.doc("a\nb\nc")
     local lines = {}
-    for lnum, text in d:lines() do
-        table.insert(lines, { lnum, text })
+    for text in d:lines() do
+        table.insert(lines, text)
     end
     lu.assertEquals(#lines, 3)
-    lu.assertEquals(lines[1][1], 0); lu.assertEquals(lines[1][2], "a")
-    lu.assertEquals(lines[2][1], 1); lu.assertEquals(lines[2][2], "b")
-    lu.assertEquals(lines[3][1], 2); lu.assertEquals(lines[3][2], "c")
+    lu.assertEquals(lines[1], "a")
+    lu.assertEquals(lines[2], "b")
+    lu.assertEquals(lines[3], "c")
 end
 
 function TestDoc:testLinesEmpty()
+    -- empty doc: read() returns nil immediately, 0 iterations
     local d = pt.doc("")
     local count = 0
     for _ in d:lines() do count = count + 1 end
-    lu.assertEquals(count, 1)
+    lu.assertEquals(count, 0)
 end
 
 function TestDoc:testLinesTrailingNL()
+    -- "x\n": lines() reads "x" then nil (trailing empty line not yielded)
     local d = pt.doc("x\n")
     local lines = {}
-    for lnum, text in d:lines() do
+    for text in d:lines() do
+        table.insert(lines, text)
+    end
+    lu.assertEquals(#lines, 1)
+    lu.assertEquals(lines[1], "x")
+end
+
+function TestDoc:testLinesFormatL()
+    -- lines("*l") = read("*l") each iteration
+    local d = pt.doc("a\nb\n")
+    local lines = {}
+    for text in d:lines("*l") do
         table.insert(lines, text)
     end
     lu.assertEquals(#lines, 2)
-    lu.assertEquals(lines[1], "x")
-    lu.assertEquals(lines[2], "")
+    lu.assertEquals(lines[1], "a")
+    lu.assertEquals(lines[2], "b")
+end
+
+function TestDoc:testLinesFormatNL()
+    -- lines("*L") = read("*L") each iteration (lines with \n)
+    local d = pt.doc("a\nb\n")
+    local lines = {}
+    for text in d:lines("*L") do
+        table.insert(lines, text)
+    end
+    lu.assertEquals(#lines, 2)
+    lu.assertEquals(lines[1], "a\n")
+    lu.assertEquals(lines[2], "b\n")
+end
+
+function TestDoc:testLinesBytes()
+    -- lines(3) = read(3) each iteration
+    local d = pt.doc("abcdefghi")
+    local chunks = {}
+    for text in d:lines(3) do
+        table.insert(chunks, text)
+    end
+    lu.assertEquals(#chunks, 3)
+    lu.assertEquals(chunks[1], "abc")
+    lu.assertEquals(chunks[2], "def")
+    lu.assertEquals(chunks[3], "ghi")
+end
+
+function TestDoc:testReadNoArg()
+    -- read() with no args = read line without \n (like io.read)
+    local d = pt.doc("hello\nworld")
+    lu.assertEquals(d:read(), "hello")
+    lu.assertEquals(d:read(), "world")
+    lu.assertNil(d:read())
+end
+
+function TestDoc:testReadlineMultiPiece()
+    -- append+edit+append: [aa(lit)]+[bb(hole)]+[cc\n(lit)]
+    local d = pt.doc("")
+    d:append("aa"); d:edit(0, "bb"); d:append("cc\n")
+    d:seek(0)
+    lu.assertEquals(d:read("l"), "aabbcc")
+    lu.assertNil(d:read("l"))
+end
+
+function TestDoc:testReadlineMultiPiece2()
+    -- \n mid-piece, line continues: [aa]+[bb]+[cc\ndd]
+    local d = pt.doc("")
+    d:append("aa"); d:edit(0, "bb"); d:append("cc\ndd")
+    d:seek(0)
+    lu.assertEquals(d:read("l"), "aabbcc")
+    lu.assertEquals(d:read("l"), "dd")
+end
+
+function TestDoc:testReadlineMultiPieceEmptyLine()
+    -- double \n in hole: [aa]+[\n\n]+[bb]
+    local d = pt.doc("")
+    d:append("aa"); d:edit(0, "\n\n"); d:append("bb")
+    d:seek(0)
+    lu.assertEquals(d:read("l"), "aa")
+    lu.assertEquals(d:read("l"), "")
+    lu.assertEquals(d:read("l"), "bb")
+    lu.assertNil(d:read("l"))
+end
+
+function TestDoc:testReadlineMultiPieceWithNL()
+    -- read("L") across pieces: [aa]+[bb]+[cc\n]
+    local d = pt.doc("")
+    d:append("aa"); d:edit(0, "bb"); d:append("cc\n")
+    d:seek(0)
+    lu.assertEquals(d:read("L"), "aabbcc\n")
+    lu.assertNil(d:read("L"))
+end
+
+function TestDoc:testReadlineMultiPieceNoNewline()
+    -- 3 pieces, no \n, EOF nil
+    local d = pt.doc("")
+    d:append("aa"); d:edit(0, "bb"); d:append("cc")
+    d:seek(0)
+    lu.assertEquals(d:read("l"), "aabbcc")
+    lu.assertNil(d:read("l"))
+end
+
+function TestDoc:testReadlineMultiPieceSeekMiddle()
+    -- seek mid-piece, cross boundary to \n in later piece
+    local d = pt.doc("")
+    d:append("aa"); d:edit(0, "bb"); d:append("cc\n")
+    d:seek(1)
+    lu.assertEquals(d:read("l"), "abbcc")
+end
+
+function TestDoc:testLinesMultiPiece()
+    -- lines() across append/edit/append/edit/append pieces
+    local d = pt.doc("")
+    d:append("aa\n"); d:edit(0, "bb"); d:append("\n"); d:edit(0, "cc")
+    d:seek(0)
+    local t = {}
+    for s in d:lines() do table.insert(t, s) end
+    lu.assertEquals(#t, 3)
+    lu.assertEquals(t[1], "aa")
+    lu.assertEquals(t[2], "bb")
+    lu.assertEquals(t[3], "cc")
 end
 
 function TestDoc:testPieceBoundaryNewline()
     -- [abc](lit)+[def](hole)+[zzz\n](lit): \n crosses piece boundary
     local d = pt.doc("")
     d:append("1231231234")
-    lu.assertEquals(d:linecount(), 1)
+    lu.assertEquals(d:breaks(), 1)
     d:seek(0); d:remove(10)
     d:append("abc")
     d:edit(0, "def")
     d:append("zzz\n")
     lu.assertEquals(d:dump(), "abcdefzzz\n")
-    lu.assertEquals(d:linecount(), 2)
+    lu.assertEquals(d:breaks(), 2)
     lu.assertEquals(d:linelen(0), 10)
 end
 
@@ -739,7 +891,7 @@ function TestDoc:testScannerCrossPiece()
     d:write("ghi")
     d:seek("set", 0)
     -- Trigger lc_scan with UNL end → crosses piece boundaries
-    lu.assertEquals(d:linecount(), 1)
+    lu.assertEquals(d:breaks(), 1)
     lu.assertEquals(d:dump(), "abcdefghi")
 end
 
@@ -747,7 +899,7 @@ function TestDoc:testScannerNewlineInPiece()
     local d = pt.doc("hello\nworld")
     d:seek("end")
     d:write("\nmore")
-    lu.assertEquals(d:linecount(), 3)
+    lu.assertEquals(d:breaks(), 3)
 end
 
 -- Buffer delete + error tests
@@ -816,14 +968,14 @@ end
 
 function TestDoc:testReadBadArg()
     local d = pt.doc("hi")
-    lu.assertErrorMsgContains("bad read argument",
+    lu.assertErrorMsgContains("string expected",
         ---@diagnostic disable-next-line: param-type-mismatch
         function() d:read({}) end)
 end
 
 function TestDoc:testReadBadFormat()
     local d = pt.doc("hi")
-    lu.assertErrorMsgContains("bad read format",
+    lu.assertErrorMsgContains("invalid format",
         ---@diagnostic disable-next-line: param-type-mismatch
         function() d:read("x") end)
 end
@@ -1070,6 +1222,134 @@ function TestDoc:testTreeEarilerLater()
     vid = d:later()
     lu.assertEquals(vid, d:commit())
     lu.assertEquals(d:dump(), "ABD")
+end
+
+-- Piece tests
+
+function TestDoc:testPieceLengthInvariant()
+    -- piece("len") is read-only, does not move cursor
+    local d = pt.doc("hello\nworld")
+    d:seek("set", 0)
+    local l1 = d:piece("len")
+    lu.assertNotEquals(l1, 0)
+    local off1 = d:offset()
+    local l2 = d:piece("len")
+    lu.assertEquals(l2, l1)
+    lu.assertEquals(d:offset(), off1)
+end
+
+function TestDoc:testPieceNextSum()
+    -- sum of all piece lengths = doc length
+    local d = pt.doc("hello")
+    d:seek("set", 0)
+    local total = d:piece("len")
+    local next = d:piece("next")
+    while next > 0 do
+        total = total + next
+        next = d:piece("next")
+    end
+    lu.assertEquals(total, 5)
+end
+
+function TestDoc:testPieceNextLast()
+    -- next from last piece = 0
+    local d = pt.doc("hello")
+    d:seek("end")
+    lu.assertEquals(d:piece("next"), 0)
+    -- cursor at end, piece len = 0
+    lu.assertEquals(d:piece("len"), 0)
+end
+
+function TestDoc:testPiecePrevFirst()
+    -- prev from first piece = 0
+    local d = pt.doc("hello")
+    d:seek("set", 0)
+    lu.assertEquals(d:piece("prev"), 0)
+end
+
+function TestDoc:testPieceMidRemaining()
+    -- cursor mid-piece: len = remaining bytes
+    local d = pt.doc("hello")
+    d:seek("set", 2)
+    local rem = d:piece("len")
+    lu.assertEquals(rem, 3)  -- "llo"
+    -- next after cursor mid-piece: skips remaining, starts next piece
+    local n = d:piece("next")
+    lu.assertEquals(rem + n, 3)  -- n=0 since only 1 piece
+end
+
+function TestDoc:testPieceSeekMidAdvance()
+    -- next from mid-piece skips remaining bytes of current piece
+    local d = pt.doc("")
+    d:append("aa"); d:edit(0, "bb"); d:append("cc")
+    d:seek("set", 2)
+    local rem = d:piece("len")
+    lu.assertNotEquals(rem, 0)
+    local n = d:piece("next")
+    lu.assertNotEquals(n, 0)
+    -- after advance, cursor at start of next piece: len = full piece
+    lu.assertEquals(d:piece("len"), n)
+end
+
+function TestDoc:testPieceNextAdvances()
+    -- each piece("next") moves cursor forward
+    local d = pt.doc("")
+    d:append("aa"); d:edit(0, "bb"); d:append("cc")
+    d:seek("set", 0)
+    local off0 = d:offset()
+    d:piece("next")
+    local off1 = d:offset()
+    lu.assertNotEquals(off1, off0)
+    d:piece("next")
+    local off2 = d:offset()
+    lu.assertNotEquals(off2, off1)
+    -- after last piece, next=0 and offset stays at end
+    local next2 = d:piece("next")
+    lu.assertEquals(next2, 0)
+    lu.assertEquals(d:offset(), #d)
+end
+
+function TestDoc:testPiecePrevAdvances()
+    -- piece("prev") moves cursor backward
+    local d = pt.doc("")
+    d:append("aa"); d:edit(0, "bb"); d:append("cc")
+    d:seek("end")
+    local prev = d:piece("prev")
+    lu.assertNotEquals(prev, 0)
+    -- iterate to first piece: prev=0 means no more before
+    local steps = 0
+    while prev > 0 do
+        steps = steps + 1
+        prev = d:piece("prev")
+    end
+    lu.assertEquals(d:offset(), 0)
+    lu.assertNotEquals(steps, 0)
+end
+
+function TestDoc:testPieceBoundaryPoff()
+    -- cursor at piece boundary: len = full piece (> 0)
+    local d = pt.doc("")
+    d:append("aa"); d:edit(0, "bb"); d:append("cc")
+    d:seek("set", 0)
+    lu.assertNotEquals(d:piece("len"), 0)
+    d:piece("next")
+    lu.assertNotEquals(d:piece("len"), 0)
+    -- next advances cursor: prove with offset
+    d:seek("set", 0)
+    local off0 = d:offset()
+    d:piece("next")
+    lu.assertNotEquals(d:offset(), off0)
+end
+
+function TestDoc:testPieceSingleLoop()
+    -- single piece: len > 0, next = 0, prev = 0
+    local d = pt.doc("x")
+    d:seek("set", 0)
+    lu.assertNotEquals(d:piece("len"), 0)
+    lu.assertEquals(d:piece("next"), 0)
+    -- reseek: prev from start = 0
+    d:seek("set", 0)
+    lu.assertEquals(d:piece("prev"), 0)
 end
 
 os.exit(lu.LuaUnit.run(), true)

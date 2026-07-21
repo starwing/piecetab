@@ -152,8 +152,8 @@ function Doc:seek() end
 
 ---Read from the current position. Position advances by bytes consumed.
 ---EOF returns `nil` (except `"a"` / `"*a"` which always returns a string).
----@param n integer  bytes to read (EOF returns nil)
----@return string?
+---@return string?                     -- no args: read one line without \n
+---@overload fun(self: piecetab.Doc, n: integer): string?
 ---@overload fun(self: piecetab.Doc, format: '"l"'|'"*l"'): string?
 ---@overload fun(self: piecetab.Doc, format: '"L"'|'"*L"'): string?
 ---@overload fun(self: piecetab.Doc, format: '"a"'|'"*a"'): string
@@ -214,19 +214,27 @@ function Doc:linelen(lnum) end
 
 ---Total lines in the document (always `breaks + 1`). Syncs linecache.
 ---@return integer
-function Doc:linecount() end
+function Doc:breaks() end
 
----Iterate over all lines with their 0-based index.
----Complete lines include trailing `\n`. The trailing line may be empty or
----a partial line (no `\n`).
----@return fun(): integer, string
+---Return an iterator that repeatedly calls `read(fmt, ...)` until nil.
+---No args = `read()` (line without `\n`), like `file:lines()`.
+---@return fun(): string?         -- no args
+---@overload fun(fmt: '"l"'|'"*l"'): fun(): string?
+---@overload fun(fmt: '"L"'|'"*L"'): fun(): string?
+---@overload fun(n: integer): fun(): string?
 ---@usage
 ---```lua
----for i, s in d:lines() do
----  -- i: 0-based line number, s: line content
+---for text in d:lines() do       -- lines without \n
+---  print(text)
+---end
+---for text in d:lines("*L") do   -- lines with \n
+---  print(text)
+---end
+---for chunk in d:lines(80) do    -- 80-byte chunks
+---  print(chunk)
 ---end
 ---```
-function Doc:lines() end
+function Doc:lines(fmt) end
 
 ---Commit fresh edits and create a new history version.
 ---@return integer  vid (version id, monotonically increasing)
@@ -260,6 +268,12 @@ function Doc:buffer(vid) end
 ---Position-independent: always reads from byte 0 to end.
 ---@return string
 function Doc:dump() end
+
+---Return the length of the current piece, or the next/previous piece length.
+---The cursor *IS* moved if called with "next" or "prev".
+--- @param opt "len"|"next"|"prev"
+--- @return integer
+function Doc:piece(opt) end
 
 --------------------------------------------------------------------------------
 -- Module exports (return value of `require "piecetab"`)
