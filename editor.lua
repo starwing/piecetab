@@ -31,13 +31,15 @@ end
 -- ================================================================
 
 local term = {}
+--- @type termkey.Termkey
 local tk_instance = nil
 
 function term.init()
   io.write("\27[?1049h") -- alt screen
   io.write("\27[?25l")   -- hide cursor
   io.flush()
-  tk_instance = termkey.new(0)
+  tk_instance = assert(termkey.new(0))
+  tk_instance:setcanonflags("delbs")
   tk_instance:start()
 end
 
@@ -77,57 +79,17 @@ function term.clearline()
 end
 
 -- style codes
-term.REVERSE  = "\27[7m"
-term.DIM      = "\27[2m"
-term.RESET    = "\27[0m"
+term.REVERSE     = "\27[7m"
+term.DIM         = "\27[2m"
+term.RESET       = "\27[0m"
 
--- Key name mapping: termkey KEYSYM name -> editor key string
-local KEYSYM_MAP = {
-  Enter     = "enter",
-  Escape    = "escape",
-  Backspace = "backspace",
-  Tab       = "tab",
-  Space     = " ",
-  Delete    = "delete",
-  Home      = "home",
-  End       = "end",
-  PageUp    = "pageup",
-  PageDown  = "pagedown",
-  Up        = "up",
-  Down      = "down",
-  Left      = "left",
-  Right     = "right",
-}
-
---- Read one key (blocking). Returns key string for dispatch.
+--- Read one key (blocking). Returns termkey-formatted key string for dispatch.
 function term.getkey()
   local tk = tk_instance
-  local r = tk:waitkey()  -- blocks until complete key or ESC timeout
+  local r = tk:waitkey()
   if r ~= "KEY" then return nil end
-  local ktype = tk:key()
-  if ktype == "UNICODE" then
-    local str, cp = tk:data()
-    if cp == 13 then return "enter" end
-    if cp == 9  then return "tab" end
-    if cp == 8 or cp == 127 then return "backspace" end
-    if cp == 27 then return "escape" end
-    if tk:mod("c") and cp >= 1 and cp <= 26 then
-      if cp == 12 then return "ctrl-l" end
-      if cp == 18 then return "ctrl-r" end
-      if cp == 3  then return "ctrl-c" end
-      return "ctrl-" .. string.char(cp + 96)
-    end
-    return str
-  elseif ktype == "KEYSYM" then
-    local name = tk:data()
-    if KEYSYM_MAP[name] then return KEYSYM_MAP[name] end
-    return "keysym:" .. name
-  elseif ktype == "FUNCTION" then
-    return "F" .. tk:data()
-  end
-  return nil
+  return tk:format(termkey.FORMAT_VIM)
 end
-
 
 -- ================================================================
 -- Section 2: Cell grid (frame buffer with scroll-aware diff)
@@ -169,15 +131,26 @@ Grid.__index = Grid
 
 local function row_fill(cols, cp, style)
   local ct, st = {}, {}
-  for c = 1, cols do ct[c] = cp; st[c] = style end
+  for c = 1, cols do
+    ct[c] = cp; st[c] = style
+  end
   return ct, st
 end
 
 function Grid:new()
   return setmetatable({
-    C = {}, S = {}, Bc = {}, Bs = {}, dirty = {},
-    B2D = {}, T = {}, TSC = {},
-    rows = 0, cols = 0, topline = 0, old_topline = 0,
+    C = {},
+    S = {},
+    Bc = {},
+    Bs = {},
+    dirty = {},
+    B2D = {},
+    T = {},
+    TSC = {},
+    rows = 0,
+    cols = 0,
+    topline = 0,
+    old_topline = 0,
     all_dirty = true,
   }, Grid)
 end
@@ -193,10 +166,10 @@ function Grid:begin_frame(topline, visrows, cols)
   if resized then
     local ct, bs = row_fill(cols, 0x20, 0)
     for r = 1, visrows do
-      self.C[r] = {table.unpack(ct)}
-      self.S[r] = {table.unpack(bs)}
-      self.Bc[r] = {table.unpack(ct)}
-      self.Bs[r] = {table.unpack(bs)}
+      self.C[r] = { table.unpack(ct) }
+      self.S[r] = { table.unpack(bs) }
+      self.Bc[r] = { table.unpack(ct) }
+      self.Bs[r] = { table.unpack(bs) }
       self.B2D[r] = nil
       self.T[r] = nil
       self.TSC[r] = nil
@@ -221,7 +194,7 @@ function Grid:begin_frame(topline, visrows, cols)
   if delta > 0 then
     for r = 1, visrows - delta do
       local ct = self.Bc[r + delta]
-      self.C[r] = ct and {table.unpack(ct)} or (row_fill(cols, 0x20, 0))
+      self.C[r] = ct and { table.unpack(ct) } or (row_fill(cols, 0x20, 0))
       self.S[r] = {}
       for c = 1, cols do self.S[r][c] = (self.Bs[r + delta] or {})[c] or 0 end
     end
@@ -232,7 +205,7 @@ function Grid:begin_frame(topline, visrows, cols)
     local n = -delta
     for r = 1, visrows - n do
       local ct = self.Bc[r]
-      self.C[r + n] = ct and {table.unpack(ct)} or (row_fill(cols, 0x20, 0))
+      self.C[r + n] = ct and { table.unpack(ct) } or (row_fill(cols, 0x20, 0))
       self.S[r + n] = {}
       for c = 1, cols do self.S[r + n][c] = (self.Bs[r] or {})[c] or 0 end
     end
@@ -244,8 +217,8 @@ function Grid:begin_frame(topline, visrows, cols)
   -- sync back = current (post-scroll baseline for put comparisons)
   local n = delta > 0 and delta or -delta
   for r = 1, visrows do
-    self.Bc[r] = {table.unpack(self.C[r])}
-    self.Bs[r] = {table.unpack(self.S[r])}
+    self.Bc[r] = { table.unpack(self.C[r]) }
+    self.Bs[r] = { table.unpack(self.S[r]) }
   end
 
   -- exposed rows dirty, shifted rows clean
@@ -345,7 +318,9 @@ function Grid:diff()
   end
   for r = 1, self.rows do
     for c = 1, self.cols do
-      if self.dirty[r][c] then d.rows[r] = true; break end
+      if self.dirty[r][c] then
+        d.rows[r] = true; break
+      end
     end
   end
   return d
@@ -353,8 +328,8 @@ end
 
 function Grid:snap()
   for r = 1, self.rows do
-    self.Bc[r] = {table.unpack(self.C[r])}
-    self.Bs[r] = {table.unpack(self.S[r])}
+    self.Bc[r] = { table.unpack(self.C[r]) }
+    self.Bs[r] = { table.unpack(self.S[r]) }
     self.dirty[r] = {}
   end
   self.all_dirty = false
@@ -431,8 +406,12 @@ function Grid:dcol_to_byte(r, dcol)
   for i = 1, #texts + 1 do
     local dc = map[i]
     if dc == nil then break end
-    if dc > dcol then bc = i - 2; break end
-    if dc == dcol then bc = i - 1; break end
+    if dc > dcol then
+      bc = i - 2; break
+    end
+    if dc == dcol then
+      bc = i - 1; break
+    end
   end
   while bc > 0 do
     local b = texts:byte(bc)
@@ -468,7 +447,7 @@ function hl.build_regions(doc)
     doc:seek("set", off)
     local len = doc:piece("len")
     if len <= 0 then break end
-    regions[#regions + 1] = {offset = off, length = len, kind = i % 2}
+    regions[#regions + 1] = { offset = off, length = len, kind = i % 2 }
     off = off + len
     i = i + 1
   end
@@ -489,7 +468,7 @@ function hl.line_segments(regions, line_start, line_end)
       local s = math.max(r.offset, line_start) - line_start + 1
       local e = math.min(r_end, line_end) - line_start
       if e >= s then
-        segs[#segs + 1] = {start = s, len = e - s + 1, kind = r.kind}
+        segs[#segs + 1] = { start = s, len = e - s + 1, kind = r.kind }
       end
     end
   end
@@ -513,12 +492,12 @@ function ed.init(filename)
   ed.doc = content ~= "" and pt.doc(content) or pt.doc(nil)
   ed.filename = filename
   ed.mode = "NORMAL"
-  ed.cmdline = ""    -- command-line buffer for ":" mode
-  ed.msg = ""        -- status message (transient)
-  ed.dirty = false   -- unsaved changes since last save
-  ed.pending_key = nil  -- for multi-key sequences (gg, dd)
-  ed.scroll_line = 0 -- first visible line (0-based)
-  ed.grid = Grid:new()  -- cell grid for diff-based rendering
+  ed.cmdline = ""      -- command-line buffer for ":" mode
+  ed.msg = ""          -- status message (transient)
+  ed.dirty = false     -- unsaved changes since last save
+  ed.pending_key = nil -- for multi-key sequences (gg, dd)
+  ed.scroll_line = 0   -- first visible line (0-based)
+  ed.grid = Grid:new() -- cell grid for diff-based rendering
   edlog("init: file=%s lines=%d bytes=%d",
     filename or "(new)", ed.doc:breaks(), #ed.doc)
 end
@@ -613,7 +592,7 @@ local BG_GRAY = "\27[48;5;237m"
 local function style_ansi(s)
   if s == 1 then return term.DIM end
   if s == 3 then return BG_GRAY end
-  return term.RESET  -- style 0 = normal, must clear any stale style
+  return term.RESET -- style 0 = normal, must clear any stale style
 end
 
 -- 0-based display column within text (before byte offset 'byte').
@@ -795,7 +774,11 @@ function ed.render()
   -- flush grid diff
   local diff = g:diff()
   local dirty_count, dirty_rows = 0, {}
-  for r = 1, visrows do if diff.rows[r] then dirty_count = dirty_count + 1; dirty_rows[#dirty_rows+1] = r end end
+  for r = 1, visrows do
+    if diff.rows[r] then
+      dirty_count = dirty_count + 1; dirty_rows[#dirty_rows + 1] = r
+    end
+  end
   edlog("  diff: scroll=%s dirty=%d rows=%s",
     diff.scroll and string.format("%d,%d,%d", diff.scroll.top, diff.scroll.bot, diff.scroll.n) or "nil",
     dirty_count, table.concat(dirty_rows, ","))
@@ -804,7 +787,9 @@ function ed.render()
     local gc = g.C[cur_line - ed.scroll_line + 1] or {}
     local gs = g.S[cur_line - ed.scroll_line + 1] or {}
     local cps, ss = {}, {}
-    for c = 1, math.min(cols, 40) do cps[#cps+1] = string.format("%04X", gc[c] or 0); ss[#ss+1] = gs[c] or 0 end
+    for c = 1, math.min(cols, 40) do
+      cps[#cps + 1] = string.format("%04X", gc[c] or 0); ss[#ss + 1] = gs[c] or 0
+    end
     edlog("  grid[%d]: cps=%s", cur_line - ed.scroll_line + 1, table.concat(cps, " "))
     edlog("  grid[%d]: sts=%s", cur_line - ed.scroll_line + 1, table.concat(ss, " "))
   end
@@ -845,7 +830,7 @@ function ed.render()
   ed.doc:seek("set", saved)
   local byte_col = ed.doc:column()
   edlog("cursor: saved_off=%d cur_line=%d line_text=[%s](%d) byte_col=%d",
-    saved_off, cur_line, cur_line_text:gsub("\n","\\n"), #cur_line_text, byte_col)
+    saved_off, cur_line, cur_line_text:gsub("\n", "\\n"), #cur_line_text, byte_col)
   local display_col = text_byte_to_dcol(cur_line_text, byte_col, 4)
 
   local cur_screen_col = display_col + lnum_width + 2
@@ -935,6 +920,7 @@ end
 
 function normal_cmds.x(ed)
   ed.doc:edit(1, "")
+  ed.doc:commit()
 end
 
 function normal_cmds.dd(ed)
@@ -942,6 +928,7 @@ function normal_cmds.dd(ed)
   local llen = ed.doc:linelen(lnum)
   ed.doc:seek("line", lnum)
   ed.doc:remove(llen)
+  ed.doc:commit()
 end
 
 function normal_cmds.i(ed) ed.mode = "INSERT" end
@@ -971,13 +958,13 @@ function normal_cmds.u(ed)
   ed.msg = ""
 end
 
-normal_cmds["ctrl-r"] = function(ed)
+normal_cmds["<C-r>"] = function(ed)
   ed.doc:redo()
   edlog("redo: offset=%d", ed.doc:offset())
   ed.msg = ""
 end
 
-normal_cmds["ctrl-l"] = function(ed)
+normal_cmds["<C-l>"] = function(ed)
   ed.grid:clear()
   ed.msg = ""
 end
@@ -987,10 +974,10 @@ normal_cmds[":"] = function(ed)
   ed.cmdline = ""
 end
 
-normal_cmds["up"] = function(ed) normal_cmds.k(ed) end
-normal_cmds["down"] = function(ed) normal_cmds.j(ed) end
-normal_cmds["left"] = function(ed) normal_cmds.h(ed) end
-normal_cmds["right"] = function(ed) normal_cmds.l(ed) end
+normal_cmds["<Up>"] = function(ed) normal_cmds.k(ed) end
+normal_cmds["<Down>"] = function(ed) normal_cmds.j(ed) end
+normal_cmds["<Left>"] = function(ed) normal_cmds.h(ed) end
+normal_cmds["<Right>"] = function(ed) normal_cmds.l(ed) end
 
 -- Command-line execution
 
@@ -1068,7 +1055,7 @@ end
 -- Insert mode handlers
 
 local function insert_key(ed, key)
-  if key == "escape" then
+  if key == "<Escape>" then
     ed.mode = "NORMAL"
     ed.doc:commit()
     if ed.doc:offset() > 0 then
@@ -1077,7 +1064,7 @@ local function insert_key(ed, key)
     ed.dirty = true
     edlog("insert: ESC -> NORMAL, commit off=%d", ed.doc:offset())
     ed.msg = ""
-  elseif key == "backspace" then
+  elseif key == "<Backspace>" then
     local off = ed.doc:offset()
     if off > 0 then
       local buf = ed.doc:buffer()
@@ -1091,41 +1078,42 @@ local function insert_key(ed, key)
       ed.doc:seek("set", p)
       ed.doc:edit(char_len, "")
     end
-  elseif key == "delete" then
+  elseif key == "<Delete>" then
     local off = ed.doc:offset()
     if off < #ed.doc:buffer() then
       local buf = ed.doc:buffer()
       local clen = utf8_char_len(buf:read(off, 1):byte())
       ed.doc:edit(clen, "")
     end
-  elseif key == "enter" then
+  elseif key == "<Enter>" then
     ed.doc:edit(0, "\n")
-  elseif key == "tab" then
+  elseif key == "<Tab>" then
     ed.doc:edit(0, "\t")
-  elseif key == "ctrl-c" then
+  elseif key == "<C-c>" then
     ed.mode = "NORMAL"
     ed.msg = ""
-  elseif key == "up" then
+  elseif key == "<Up>" then
     normal_cmds.k(ed)
-  elseif key == "down" then
+  elseif key == "<Down>" then
     normal_cmds.j(ed)
-  elseif key == "left" then
+  elseif key == "<Left>" then
     cursor_move_char(ed.doc, -1)
-  elseif key == "right" then
+  elseif key == "<Right>" then
     cursor_move_char(ed.doc, 1)
-  elseif key == "home" then
+  elseif key == "<Home>" then
     ed.doc:seek("line", ed.doc:line())
-  elseif key == "end" then
+  elseif key == "<End>" then
     local lnum = ed.doc:line()
     ed.doc:seek("line", lnum)
     ed.doc:seek("cur", line_endcol(ed, lnum))
-  elseif key == "pageup" then
+  elseif key == "<PageUp>" then
     local jump = (term.size() - 2)
     for _ = 1, jump do normal_cmds.k(ed) end
-  elseif key == "pagedown" then
+  elseif key == "<PageDown>" then
     local jump = (term.size() - 2)
     for _ = 1, jump do normal_cmds.j(ed) end
   elseif type(key) == "string" and #key > 0 then
+    if key:sub(1, 1) == "<" and key:sub(-1) == ">" then return end
     local b = key:byte(1)
     if b >= 32 and b < 127 or b >= 0xc0 then
       ed.doc:edit(0, key)
@@ -1155,7 +1143,7 @@ local function normal_key(ed, key)
   if handler then
     handler(ed)
     ed.msg = ""
-  elseif key == "escape" or key == "ctrl-c" then
+  elseif key == "<Escape>" or key == "<C-c>" then
     ed.msg = ""
   end
 end
@@ -1163,12 +1151,12 @@ end
 -- Command mode
 
 local function command_key(ed, key)
-  if key == "escape" or key == "ctrl-c" then
+  if key == "<Escape>" or key == "<C-c>" then
     ed.mode = "NORMAL"
     ed.cmdline = ""
-  elseif key == "enter" then
+  elseif key == "<Enter>" then
     exec_command(ed)
-  elseif key == "backspace" then
+  elseif key == "<Backspace>" then
     ed.cmdline = ed.cmdline:sub(1, -2)
   elseif type(key) == "string" and utf8.len(key) == 1 then
     local b = key:byte(1)

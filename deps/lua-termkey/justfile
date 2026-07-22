@@ -1,0 +1,40 @@
+# termkey shared library build
+# invoked from root as: just tk-build  ->  just -f deps/lua-termkey/justfile
+
+CC := "gcc"
+LUA55_INC := "-I/opt/homebrew/include/lua5.5"
+LUAJIT_INC := "-I/opt/homebrew/include/luajit-2.1"
+
+CFLAGS := "-Wall -DNDEBUG -O2 \
+    -DTERMINFO='\"TERMINFO\"' \
+    -DTERMINFO_DIRS='\"/opt/homebrew/share/terminfo:/usr/share/terminfo\"' \
+    -Iexternal/libtermkey -Iexternal/unibilium -DHAVE_UNIBILIUM"
+
+MAC-CFLAGS := "-undefined dynamic_lookup -bundle"
+
+H_IN := "external/libtermkey/termkey.h.in"
+
+SRCS := "ltermkey.c \
+    external/libtermkey/termkey.c \
+    external/libtermkey/driver-csi.c \
+    external/libtermkey/driver-ti.c \
+    external/unibilium/unibilium.c \
+    external/unibilium/uniutil.c \
+    external/unibilium/uninames.c"
+
+default: build
+
+build: _genheader lua55 luajit
+
+lua55: _genheader
+    mkdir -p ../../build/lua55
+    {{ CC }} {{ CFLAGS }} {{ LUA55_INC }} {{ MAC-CFLAGS }} \
+        -o ../../build/lua55/termkey.so {{ SRCS }}
+
+luajit: _genheader
+    mkdir -p ../../build/luajit
+    {{ CC }} {{ CFLAGS }} {{ LUAJIT_INC }} {{ MAC-CFLAGS }} \
+        -o ../../build/luajit/termkey.so {{ SRCS }}
+
+_genheader:
+    sed -e 's/@@VERSION_MAJOR@@/0/' -e 's/@@VERSION_MINOR@@/23/' {{ H_IN }} > termkey.h

@@ -2,86 +2,58 @@
 #include <lauxlib.h>
 #include <lua.h>
 
-typedef unsigned char u8;
-typedef unsigned int  u32;
+#include <assert.h>
+#include <string.h>
 
-/* clang-format off */
-#if GCC_VERSION >= 5004000 || CLANG_VERSION >= 4000000
-#define addu __builtin_add_overflow
-#else
-static int addu(size_t a, size_t b, size_t *c)
-{ return (~(size_t)0 - a < b) ? 0 : (*c = a + b), 1; }
-#endif
-
-static u8 utf8_sequence_length(u32 cp)
-{ return (cp >= 0x10000) + (cp >= 0x00800) + (cp >= 0x00080) + 1; }
-/* clang-format on */
-
-static u32 utf8_encode(u8 out[4], u32 cp) {
-    u32 result = 0;
-    if (cp <= 0x7F)
-        out[0] = cp & 0x7F, result = 1;
-    else if (cp <= 0x7FF) {
-        result = 2;
-        out[0] = ((cp >> 6) & 0x1F) | 0xC0;
-        out[1] = ((cp >> 0) & 0x3F) | 0x80;
-    } else if (cp <= 0xFFFF) {
-        result = 3;
-        out[0] = ((cp >> 12) & 0x0F) | 0xE0;
-        out[1] = ((cp >> 6) & 0x3F) | 0x80;
-        out[2] = ((cp >> 0) & 0x3F) | 0x80;
-    } else if (cp <= 0x10FFFF) {
-        result = 4;
-        out[0] = ((cp >> 18) & 0x07) | 0xF0;
-        out[1] = ((cp >> 12) & 0x3F) | 0x80;
-        out[2] = ((cp >> 6) & 0x3F) | 0x80;
-        out[3] = ((cp >> 0) & 0x3F) | 0x80;
-    }
-    return result;
-}
-
-#define TERMKEY_EXPORT static
-#include "external/termkey.c"
+#include <termkey.h>
+#include "external/libtermkey/termkey-internal.h"
 
 #define LTK_NAME "Termkey"
 
 typedef struct ltk_State {
-    TermKey    tk;
+    TermKey   *tk;
     TermKeyKey key;
 } ltk_State;
 
 static int Ltk_new(lua_State *L) {
     int         fd = (int)luaL_checkinteger(L, 1);
-    const char *term = luaL_optstring(L, 2, "");
     int         flags = lua_toboolean(L, 3) ? TERMKEY_FLAG_NOTERMIOS : 0;
     ltk_State  *S = (ltk_State *)lua_newuserdata(L, sizeof(ltk_State));
-    int         r = termkey_init_from_fd(&S->tk, fd, flags, (char *)term);
+    S->tk = termkey_new(fd, flags);
+    if (!S->tk) return 0;
     memset(&S->key, 0, sizeof(TermKeyKey));
     luaL_setmetatable(L, LTK_NAME);
-    return r ? 1 : 0;
+    return 1;
+}
+
+static int Ltk_new_abstract(lua_State *L) {
+    const char *term = luaL_checkstring(L, 1);
+    int         flags = lua_toboolean(L, 2) ? TERMKEY_FLAG_NOTERMIOS : 0;
+    ltk_State  *S = (ltk_State *)lua_newuserdata(L, sizeof(ltk_State));
+    S->tk = termkey_new_abstract(term, flags);
+    if (!S->tk) return 0;
+    memset(&S->key, 0, sizeof(TermKeyKey));
+    luaL_setmetatable(L, LTK_NAME);
+    return 1;
 }
 
 static int Ltk_delete(lua_State *L) {
     ltk_State *S = (ltk_State *)luaL_checkudata(L, 1, LTK_NAME);
-    if (S->tk.fd == -1) return 0;
-    return termkey_destroy(&S->tk), 0;
+    if (!S->tk) return 0;
+    termkey_destroy(S->tk);
+    S->tk = NULL;
+    return 0;
 }
 
 static int Ltk_start(lua_State *L) {
     ltk_State *S = (ltk_State *)luaL_checkudata(L, 1, LTK_NAME);
-    int        flags = lua_toboolean(L, 2) ? TERMKEY_FLAG_NOTERMIOS : 0;
-    int        r = termkey_start(&S->tk, flags);
+    int        r = termkey_start(S->tk);
     return r ? (lua_settop(L, 1), 1) : 0;
 }
 
 static int Ltk_stop(lua_State *L) {
     ltk_State *S = (ltk_State *)luaL_checkudata(L, 1, LTK_NAME);
-    return termkey_stop(&S->tk), lua_settop(L, 1), 1;
-}
-
-static int Ltk_release(lua_State *L) {
-    ltk_State *S = (ltk_State *)luaL_checkudata(L, 1, LTK_NAME);
-    return termkey_release(&S->tk), 0;
+    return termkey_stop(S->tk), lua_settop(L, 1), 1;
 }
 
 static int Ltk_setcanonflags(lua_State *L) {
@@ -91,7 +63,7 @@ static int Ltk_setcanonflags(lua_State *L) {
     switch (luaL_checkoption(L, 2, NULL, opts)) {
     case 0: f = TERMKEY_CANON_DELBS; break;
     }
-    termkey_set_canonflags(&S->tk, f);
+    termkey_set_canonflags(S->tk, f);
     return lua_settop(L, 1), 1;
 }
 
@@ -125,7 +97,7 @@ static int ltk_pushmouse(lua_State *L, ltk_State *S) {
     TermKeyMouseEvent evt;
     int               button, line, col;
     assert(S->key.type == TERMKEY_TYPE_MOUSE);
-    termkey_interpret_mouse(&S->tk, &S->key, &evt, &button, &line, &col);
+    termkey_interpret_mouse(S->tk, &S->key, &evt, &button, &line, &col);
     switch (evt) {
     case TERMKEY_MOUSE_PRESS: lua_pushliteral(L, "PRESS"); break;
     case TERMKEY_MOUSE_DRAG: lua_pushliteral(L, "DRAG"); break;
@@ -150,7 +122,7 @@ static int ltk_pushposition(lua_State *L, ltk_State *S) {
 static int ltk_pushmodereport(lua_State *L, ltk_State *S) {
     int initial, mode, value;
     assert(S->key.type == TERMKEY_TYPE_MODEREPORT);
-    termkey_interpret_modereport(&S->tk, &S->key, &initial, &mode, &value);
+    termkey_interpret_modereport(S->tk, &S->key, &initial, &mode, &value);
     lua_pushinteger(L, initial);
     lua_pushinteger(L, mode);
     lua_pushinteger(L, value);
@@ -162,7 +134,7 @@ static int ltk_pushunknowncsi(lua_State *L, ltk_State *S) {
     long          args[16];
     size_t        i, nargs = 16;
     assert(S->key.type == TERMKEY_TYPE_UNKNOWN_CSI);
-    termkey_interpret_csi(&S->tk, &S->key, args, &nargs, &cmd);
+    termkey_interpret_csi(S->tk, &S->key, args, &nargs, &cmd);
     lua_createtable(L, 3, nargs);
     if ((cmd >> 16))
         lua_pushinteger(L, cmd >> 16), lua_setfield(L, -2, "intermediate");
@@ -178,13 +150,13 @@ static int Ltk_getkey(lua_State *L) {
     ltk_State  *S = (ltk_State *)luaL_checkudata(L, 1, LTK_NAME);
     const char *force = luaL_optstring(L, 2, "");
     if (*force == 'f')
-        return ltk_pushresult(L, termkey_getkey_force(&S->tk, &S->key));
-    return ltk_pushresult(L, termkey_getkey(&S->tk, &S->key));
+        return ltk_pushresult(L, termkey_getkey_force(S->tk, &S->key));
+    return ltk_pushresult(L, termkey_getkey(S->tk, &S->key));
 }
 
 static int Ltk_advisereadable(lua_State *L) {
     ltk_State *S = (ltk_State *)luaL_checkudata(L, 1, LTK_NAME);
-    return ltk_pushresult(L, termkey_advisereadable(&S->tk));
+    return ltk_pushresult(L, termkey_advisereadable(S->tk));
 }
 
 static int Ltk_key(lua_State *L) {
@@ -202,7 +174,7 @@ static int Ltk_data(lua_State *L) {
     case TERMKEY_TYPE_FUNCTION:
         return lua_pushinteger(L, S->key.code.number), 1;
     case TERMKEY_TYPE_KEYSYM:
-        lua_pushstring(L, termkey_get_keyname(&S->tk, S->key.code.sym));
+        lua_pushstring(L, termkey_get_keyname(S->tk, S->key.code.sym));
         lua_pushinteger(L, S->key.code.sym);
         return 2;
     case TERMKEY_TYPE_MOUSE: return ltk_pushmouse(L, S);
@@ -261,7 +233,7 @@ static int Ltk_format(lua_State *L) {
     size_t      len;
     luaL_buffinit(L, &B);
     len = termkey_strfkey(
-            &S->tk, luaL_prepbuffer(&B), LUAL_BUFFERSIZE, &S->key, format);
+            S->tk, luaL_prepbuffer(&B), LUAL_BUFFERSIZE, &S->key, format);
     luaL_addsize(&B, len);
     return luaL_pushresult(&B), 1;
 }
@@ -270,43 +242,52 @@ static int Ltk_parse(lua_State *L) {
     ltk_State  *S = (ltk_State *)luaL_checkudata(L, 1, LTK_NAME);
     const char *s = luaL_checkstring(L, 2);
     int         format = (int)luaL_optinteger(L, 3, 0);
-    const char *e = termkey_strpkey(&S->tk, s, &S->key, format);
+    const char *e = termkey_strpkey(S->tk, s, &S->key, format);
     if (e == NULL) return 0;
     return lua_pushboolean(L, 1), lua_pushinteger(L, e - s + 1), 2;
 }
 
 static int Ltk_canonicalise(lua_State *L) {
     ltk_State *S = (ltk_State *)luaL_checkudata(L, 1, LTK_NAME);
-    termkey_canonicalise(&S->tk, &S->key);
+    termkey_canonicalise(S->tk, &S->key);
     return lua_settop(L, 1), 1;
 }
 
 static int Ltk_waitkey(lua_State *L) {
     ltk_State *S = (ltk_State *)luaL_checkudata(L, 1, LTK_NAME);
-    return ltk_pushresult(L, termkey_waitkey(&S->tk, &S->key));
+    return ltk_pushresult(L, termkey_waitkey(S->tk, &S->key));
 }
 
 static int Ltk_setwaittime(lua_State *L) {
     ltk_State *S = (ltk_State *)luaL_checkudata(L, 1, LTK_NAME);
     int msec = (int)luaL_checkinteger(L, 2);
-    termkey_set_waittime(&S->tk, msec);
+    termkey_set_waittime(S->tk, msec);
     return lua_settop(L, 1), 1;
 }
 
 static int Ltk_getwaittime(lua_State *L) {
     ltk_State *S = (ltk_State *)luaL_checkudata(L, 1, LTK_NAME);
-    return lua_pushinteger(L, termkey_get_waittime(&S->tk)), 1;
+    return lua_pushinteger(L, termkey_get_waittime(S->tk)), 1;
 }
 
 #ifndef _WIN32
 #include <fcntl.h>
 #endif
 
+static int Ltk_push_bytes(lua_State *L) {
+    ltk_State  *S = (ltk_State *)luaL_checkudata(L, 1, LTK_NAME);
+    size_t      len;
+    const char *bytes = luaL_checklstring(L, 2, &len);
+    lua_pushinteger(L, termkey_push_bytes(S->tk, bytes, len));
+    return 1;
+}
+
 static int Ltk_blocking(lua_State *L) {
     ltk_State *S = (ltk_State *)luaL_checkudata(L, 1, LTK_NAME);
 #ifndef _WIN32
-    int flags = fcntl(S->tk.fd, F_GETFL, 0);
-    fcntl(S->tk.fd, F_SETFL, flags & ~O_NONBLOCK);
+    int fd = termkey_get_fd(S->tk);
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
 #endif
     return lua_settop(L, 1), 1;
 }
@@ -315,11 +296,11 @@ LUALIB_API int luaopen_termkey(lua_State *L) {
     luaL_Reg libs[] = {
             {"__gc", Ltk_delete},
 #define ENTRY(name) {#name, Ltk_##name}
-            ENTRY(new),           ENTRY(delete),       ENTRY(start),
-            ENTRY(stop),          ENTRY(release),      ENTRY(setcanonflags),
+            ENTRY(new),            ENTRY(new_abstract), ENTRY(delete),       ENTRY(start),
+            ENTRY(stop),          ENTRY(setcanonflags),
             ENTRY(getkey),        ENTRY(waitkey),      ENTRY(setwaittime),
             ENTRY(getwaittime),   ENTRY(canonicalise), ENTRY(advisereadable),
-            ENTRY(blocking),      ENTRY(key),          ENTRY(data),
+            ENTRY(blocking),      ENTRY(push_bytes),  ENTRY(key),          ENTRY(data),
             ENTRY(mod),           ENTRY(formatflags),  ENTRY(format),
             ENTRY(parse),
 #undef ENTRY
@@ -328,10 +309,9 @@ LUALIB_API int luaopen_termkey(lua_State *L) {
         luaL_setfuncs(L, libs, 0);
         lua_pushvalue(L, -1), lua_setfield(L, -2, "__index");
     }
+    lua_pushinteger(L, TERMKEY_FORMAT_VIM);
+    lua_setfield(L, -2, "FORMAT_VIM");
+    lua_pushinteger(L, TERMKEY_FORMAT_URWID);
+    lua_setfield(L, -2, "FORMAT_URWID");
     return 1;
 }
-
-/*
- * maccc: flags+='-shared -fPIC -DNDEBUG -O2 -undefined dynamic_lookup'
- * cc: output='termkey.so'
- */

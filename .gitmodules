@@ -1,0 +1,6 @@
+[submodule "deps/lua-termkey/external/libtermkey"]
+	path = deps/lua-termkey/external/libtermkey
+	url = https://github.com/neovim/libtermkey.git
+[submodule "deps/lua-termkey/external/unibilium"]
+	path = deps/lua-termkey/external/unibilium
+	url = https://github.com/neovim/unibilium.git
