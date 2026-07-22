@@ -102,40 +102,356 @@ local KEYSYM_MAP = {
 --- Read one key (blocking). Returns key string for dispatch.
 function term.getkey()
   local tk = tk_instance
-  while true do
-    local r = tk:getkey("f")  -- blocking: wait for complete key sequence
-    if r == "KEY" then
-      local ktype = tk:key()
-      if ktype == "UNICODE" then
-        local str, cp = tk:data()
-        if cp == 13 then return "enter" end
-        if cp == 9  then return "tab" end
-        if cp == 8 or cp == 127 then return "backspace" end
-        if cp == 27 then return "escape" end
-        -- Ctrl+letter (A=1 .. Z=26)
-        if tk:mod("c") and cp >= 1 and cp <= 26 then
-          if cp == 12 then return "ctrl-l" end
-          if cp == 18 then return "ctrl-r" end
-          if cp == 3  then return "ctrl-c" end
-          return "ctrl-" .. string.char(cp + 96)
-        end
-        return str
-      elseif ktype == "KEYSYM" then
-        local name = tk:data()
-        if KEYSYM_MAP[name] then return KEYSYM_MAP[name] end
-        return "keysym:" .. name
-      elseif ktype == "FUNCTION" then
-        return "F" .. tk:data()
-      end
-    elseif r == "EOF" then
-      return nil
+  local r = tk:waitkey()  -- blocks until complete key or ESC timeout
+  if r ~= "KEY" then return nil end
+  local ktype = tk:key()
+  if ktype == "UNICODE" then
+    local str, cp = tk:data()
+    if cp == 13 then return "enter" end
+    if cp == 9  then return "tab" end
+    if cp == 8 or cp == 127 then return "backspace" end
+    if cp == 27 then return "escape" end
+    if tk:mod("c") and cp >= 1 and cp <= 26 then
+      if cp == 12 then return "ctrl-l" end
+      if cp == 18 then return "ctrl-r" end
+      if cp == 3  then return "ctrl-c" end
+      return "ctrl-" .. string.char(cp + 96)
     end
-    -- NONE/AGAIN/ERROR: keep polling
+    return str
+  elseif ktype == "KEYSYM" then
+    local name = tk:data()
+    if KEYSYM_MAP[name] then return KEYSYM_MAP[name] end
+    return "keysym:" .. name
+  elseif ktype == "FUNCTION" then
+    return "F" .. tk:data()
+  end
+  return nil
+end
+
+
+-- ================================================================
+-- Section 2: Cell grid (frame buffer with scroll-aware diff)
+-- ================================================================
+
+-- Cell char stored as Unicode codepoint (integer). 0 = continuation (skip).
+-- Style IDs: 0=normal, 1=dim, 3=gray bg
+
+local function char_to_cp(ch)
+  if #ch == 0 then return 0x20 end
+  local b = ch:byte()
+  if b < 0x80 then return b end
+  if b < 0xe0 then return ((b & 0x1f) << 6) | (ch:byte(2) & 0x3f) end
+  if b < 0xf0 then return ((b & 0x0f) << 12) | ((ch:byte(2) & 0x3f) << 6) | (ch:byte(3) & 0x3f) end
+  return ((b & 0x07) << 18) | ((ch:byte(2) & 0x3f) << 12) | ((ch:byte(3) & 0x3f) << 6) | (ch:byte(4) & 0x3f)
+end
+
+local function cp_to_utf8(cp)
+  if cp <= 0 then return "" end
+  if cp <= 0x7f then return string.char(cp) end
+  if cp <= 0x7ff then
+    return string.char(0xc0 | (cp >> 6), 0x80 | (cp & 0x3f))
+  end
+  if cp <= 0xffff then
+    return string.char(0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f))
+  end
+  return string.char(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f))
+end
+
+local function cp_width(cp)
+  if cp <= 0 then return 0 end
+  if cp < 0x100 then return 1 end
+  local ch = cp_to_utf8(cp)
+  return utf8.width(ch) or 1
+end
+
+local Grid = {}
+Grid.__index = Grid
+
+local function row_fill(cols, cp, style)
+  local ct, st = {}, {}
+  for c = 1, cols do ct[c] = cp; st[c] = style end
+  return ct, st
+end
+
+function Grid:new()
+  return setmetatable({
+    C = {}, S = {}, Bc = {}, Bs = {}, dirty = {},
+    B2D = {}, T = {}, TSC = {},
+    rows = 0, cols = 0, topline = 0, old_topline = 0,
+    all_dirty = true,
+  }, Grid)
+end
+
+function Grid:begin_frame(topline, visrows, cols)
+  local resized = (self.rows ~= visrows or self.cols ~= cols)
+  self.rows = visrows
+  self.cols = cols
+  self.old_topline = self.topline
+  self.topline = topline
+  local delta = topline - self.old_topline
+
+  if resized then
+    local ct, bs = row_fill(cols, 0x20, 0)
+    for r = 1, visrows do
+      self.C[r] = {table.unpack(ct)}
+      self.S[r] = {table.unpack(bs)}
+      self.Bc[r] = {table.unpack(ct)}
+      self.Bs[r] = {table.unpack(bs)}
+      self.B2D[r] = nil
+      self.T[r] = nil
+      self.TSC[r] = nil
+    end
+  end
+
+  if self.all_dirty then
+    for r = 1, visrows do
+      self.dirty[r] = {}
+      for c = 1, cols do self.dirty[r][c] = true end
+    end
+    return
+  end
+
+  if math.abs(delta) < 1 or math.abs(delta) >= visrows then
+    for r = 1, visrows do self.dirty[r] = {} end
+    return
+  end
+
+  -- scroll: shift current from back, then sync back = current
+  -- this ensures put() compares against correct post-scroll state
+  if delta > 0 then
+    for r = 1, visrows - delta do
+      local ct = self.Bc[r + delta]
+      self.C[r] = ct and {table.unpack(ct)} or (row_fill(cols, 0x20, 0))
+      self.S[r] = {}
+      for c = 1, cols do self.S[r][c] = (self.Bs[r + delta] or {})[c] or 0 end
+    end
+    for r = visrows - delta + 1, visrows do
+      self.C[r], self.S[r] = row_fill(cols, 0x20, 0)
+    end
+  else
+    local n = -delta
+    for r = 1, visrows - n do
+      local ct = self.Bc[r]
+      self.C[r + n] = ct and {table.unpack(ct)} or (row_fill(cols, 0x20, 0))
+      self.S[r + n] = {}
+      for c = 1, cols do self.S[r + n][c] = (self.Bs[r] or {})[c] or 0 end
+    end
+    for r = 1, n do
+      self.C[r], self.S[r] = row_fill(cols, 0x20, 0)
+    end
+  end
+
+  -- sync back = current (post-scroll baseline for put comparisons)
+  local n = delta > 0 and delta or -delta
+  for r = 1, visrows do
+    self.Bc[r] = {table.unpack(self.C[r])}
+    self.Bs[r] = {table.unpack(self.S[r])}
+  end
+
+  -- exposed rows dirty, shifted rows clean
+  for r = 1, visrows do self.dirty[r] = {} end
+  local first = delta > 0 and (visrows - n + 1) or 1
+  local last  = delta > 0 and visrows or n
+  for r = first, last do
+    for c = 1, cols do self.dirty[r][c] = true end
+  end
+end
+
+function Grid:clear()
+  self.all_dirty = true
+  for r = 1, self.rows do
+    for c = 1, self.cols do self.dirty[r][c] = true end
+    self.B2D[r] = nil
+    self.T[r] = nil
+    self.TSC[r] = nil
+  end
+end
+
+function Grid:clear_row(r)
+  local ct, bs = row_fill(self.cols, 0x20, 0)
+  self.C[r] = ct
+  self.S[r] = bs
+  for c = 1, self.cols do self.dirty[r][c] = true end
+  self.B2D[r] = nil
+  self.T[r] = nil
+  self.TSC[r] = nil
+end
+
+function Grid:put(r, c, ch, style)
+  if c < 1 or c > self.cols then return end
+  local cp = char_to_cp(ch)
+  local new_w = cp_width(cp)
+  local old_cp = self.Bc[r][c] or 0x20
+  local old_w = cp_width(old_cp)
+  self.C[r][c] = cp
+  self.S[r][c] = style
+  self.dirty[r][c] = (cp ~= old_cp) or (style ~= (self.Bs[r][c] or 0))
+  -- continuation columns
+  for j = 1, new_w - 1 do
+    local cc = c + j
+    if cc > self.cols then break end
+    self.C[r][cc] = 0
+    self.S[r][cc] = style
+    self.dirty[r][cc] = true
+  end
+  -- clear orphan columns (old wide char replaced by narrow)
+  if new_w < old_w then
+    for j = new_w, old_w - 1 do
+      local cc = c + j
+      if cc > self.cols then break end
+      self.C[r][cc] = 0x20
+      self.S[r][cc] = 0
+      self.dirty[r][cc] = true
+    end
+  end
+end
+
+function Grid:puts(r, c, text, style)
+  local col = c
+  local i = 1
+  while i <= #text do
+    local b = text:byte(i)
+    local ch, clen
+    if b >= 0xc0 then
+      clen = (b < 0xe0 and 2) or (b < 0xf0 and 3) or 4
+      ch = text:sub(i, i + clen - 1)
+    else
+      clen = 1
+      ch = text:sub(i, i)
+    end
+    local cp = char_to_cp(ch)
+    local w = cp_width(cp)
+    self:put(r, col, ch, style)
+    col = col + w
+    i = i + clen
+  end
+end
+
+function Grid:span(r, c, n, style)
+  for col = c, c + n - 1 do
+    if col > self.cols then break end
+    self.S[r][col] = style
+    self.dirty[r][col] = (style ~= (self.Bs[r][col] or 0))
+  end
+end
+
+function Grid:diff()
+  local d = { rows = {} }
+  if not self.all_dirty then
+    local delta = self.topline - self.old_topline
+    if math.abs(delta) > 0 and math.abs(delta) < self.rows then
+      d.scroll = { top = 1, bot = self.rows, n = delta }
+    end
+  end
+  for r = 1, self.rows do
+    for c = 1, self.cols do
+      if self.dirty[r][c] then d.rows[r] = true; break end
+    end
+  end
+  return d
+end
+
+function Grid:snap()
+  for r = 1, self.rows do
+    self.Bc[r] = {table.unpack(self.C[r])}
+    self.Bs[r] = {table.unpack(self.S[r])}
+    self.dirty[r] = {}
+  end
+  self.all_dirty = false
+end
+
+-- High-level put: raw text with tabs, UTF-8/width handled internally.
+-- Returns absolute column after text.
+function Grid:puts_raw(r, startcol, text, style, tabstop, pad_to)
+  self.B2D[r] = {}
+  self.T[r] = text
+  self.TSC[r] = startcol
+  local dc = 0
+  local i = 1
+  self.B2D[r][1] = 0
+  while i <= #text do
+    local b = text:byte(i)
+    if b == 9 then
+      local spaces = tabstop - (dc % tabstop)
+      for s = 1, spaces do
+        self:put(r, startcol + dc + s - 1, " ", style)
+      end
+      dc = dc + spaces
+      i = i + 1
+    elseif b >= 0xc0 then
+      local clen = (b < 0xe0 and 2) or (b < 0xf0 and 3) or 4
+      local ch = text:sub(i, i + clen - 1)
+      local w = cp_width(char_to_cp(ch))
+      self:put(r, startcol + dc, ch, style)
+      for j = 0, clen - 1 do self.B2D[r][i + j] = dc end
+      dc = dc + w
+      i = i + clen
+    else
+      self:put(r, startcol + dc, text:sub(i, i), style)
+      dc = dc + 1
+      i = i + 1
+    end
+    self.B2D[r][i] = dc
+  end
+  if pad_to then
+    while startcol + dc < pad_to do
+      self:put(r, startcol + dc, " ", 0)
+      dc = dc + 1
+    end
+  end
+  return startcol + dc
+end
+
+-- Highlight byte range [bytestart, byteend) (1-based, exclusive) with style.
+function Grid:highlight(r, bytestart, byteend, style)
+  local map = self.B2D[r]
+  local startcol = self.TSC[r]
+  if not map or not startcol then return end
+  local ds = map[bytestart]
+  local de = map[byteend]
+  if not ds or not de then return end
+  for col = startcol + ds, startcol + de - 1 do
+    self.S[r][col] = style
+    self.dirty[r][col] = true
+  end
+end
+
+-- 0-based byte offset -> 0-based display column within text (via B2D).
+function Grid:byte_to_dcol(r, byte)
+  local map = self.B2D[r]
+  return map and map[byte + 1]
+end
+
+-- 0-based display column within text -> 0-based byte offset (via B2D).
+function Grid:dcol_to_byte(r, dcol)
+  local map = self.B2D[r]
+  local texts = self.T[r]
+  if not map or not texts then return nil end
+  local bc = #texts
+  for i = 1, #texts + 1 do
+    local dc = map[i]
+    if dc == nil then break end
+    if dc > dcol then bc = i - 2; break end
+    if dc == dcol then bc = i - 1; break end
+  end
+  while bc > 0 do
+    local b = texts:byte(bc)
+    if not b or b < 0x80 or b >= 0xc0 then break end
+    bc = bc - 1
+  end
+  return bc
+end
+
+-- Pad row from col to targetcol with char and style.
+function Grid:pad_to(r, col, targetcol, ch, style)
+  while col < targetcol do
+    self:put(r, col, ch, style)
+    col = col + 1
   end
 end
 
 -- ================================================================
--- Section 2: Highlight module (piece-based span coloring)
+-- Section 3: Highlight module (piece-based span coloring)
 -- ================================================================
 
 local hl = {}
@@ -181,7 +497,7 @@ function hl.line_segments(regions, line_start, line_end)
 end
 
 -- ================================================================
--- Section 3: Editor engine
+-- Section 4: Editor engine
 -- ================================================================
 
 local ed = {}
@@ -200,7 +516,9 @@ function ed.init(filename)
   ed.cmdline = ""    -- command-line buffer for ":" mode
   ed.msg = ""        -- status message (transient)
   ed.dirty = false   -- unsaved changes since last save
+  ed.pending_key = nil  -- for multi-key sequences (gg, dd)
   ed.scroll_line = 0 -- first visible line (0-based)
+  ed.grid = Grid:new()  -- cell grid for diff-based rendering
   edlog("init: file=%s lines=%d bytes=%d",
     filename or "(new)", ed.doc:breaks(), #ed.doc)
 end
@@ -256,6 +574,8 @@ local function move_word_forward(doc)
   local line = doc:read("l") or ""
   doc:seek("set", saved)
   local col = doc:column()
+  edlog("w: saved=%d lnum=%d line=[%s](%d) col=%d",
+    saved, lnum, line, #line, col)
   local len = #line
   local i = col + 0
   -- skip current word or space
@@ -266,6 +586,7 @@ local function move_word_forward(doc)
     while i < len and word_class(line:byte(i + 1)) == 0 and line:byte(i + 1) == 32 do i = i + 1 end
   end
   doc:seek("cur", i - col)
+  edlog("w result: seek cur %d", i - col)
 end
 
 local function move_word_backward(doc)
@@ -285,91 +606,123 @@ local function move_word_backward(doc)
   doc:seek("cur", (i + 1) - col)
 end
 
--- Rendering
+-- Rendering helpers
 
--- Expand tabs in raw line text, returning (display, mapping).
--- mapping[i] = display column for original byte i (1-based).
-local function expand_tabs(text)
-  local display, col = "", 0
-  local mapping = {}
-  for i = 1, #text do
-    mapping[i] = col
-    local c = text:sub(i, i)
-    if c == "\t" then
-      local spaces = 4 - (col % 4)
-      display = display .. string.rep(" ", spaces)
-      col = col + spaces
-    else
-      display = display .. c
-      col = col + 1
-    end
-  end
-  mapping[#text + 1] = col
-  return display, mapping
+local BG_GRAY = "\27[48;5;237m"
+
+local function style_ansi(s)
+  if s == 1 then return term.DIM end
+  if s == 3 then return BG_GRAY end
+  return term.RESET  -- style 0 = normal, must clear any stale style
 end
 
--- Write text with ANSI bg color, truncating to display_width columns.
-local BG_GRAY = "\27[48;5;237m"
-local BG_RESET = "\27[0m"
-
-local function write_colored_text(text, segs, display_mapping, maxcol)
+-- 0-based display column within text (before byte offset 'byte').
+local function text_byte_to_dcol(text, byte, tabstop)
+  if byte <= 0 then return 0 end
   local col = 0
-  for _, seg in ipairs(segs) do
-    if col >= maxcol then break end
-    local seg_col_start = display_mapping[seg.start]
-    local seg_col_end = display_mapping[seg.start + seg.len] - 1
-    if not seg_col_start or seg_col_start >= maxcol then break end
-    -- Write text before this segment
-    if seg_col_start > col then
-      local to_write = seg_col_start - col
-      if col + to_write > maxcol then to_write = maxcol - col end
-      if to_write > 0 then
-        local gap = text:gsub("\t", "    "):sub(col + 1, col + to_write)
-        io.write(gap)
-        col = col + to_write
+  local i = 1
+  local blen = math.min(byte, #text)
+  while i <= blen do
+    local b = text:byte(i)
+    if b == 9 then
+      col = col + tabstop - (col % tabstop)
+      i = i + 1
+    elseif b >= 0xc0 then
+      local clen = (b < 0xe0 and 2) or (b < 0xf0 and 3) or 4
+      if i + clen - 1 <= blen then
+        local ch = text:sub(i, i + clen - 1)
+        col = col + (utf8.width(ch) or 1)
       end
-      if col >= maxcol then break end
+      i = i + clen
+    else
+      col = col + 1
+      i = i + 1
     end
-    if seg.kind == 1 then io.write(BG_GRAY) end
-    if seg_col_end >= maxcol then seg_col_end = maxcol - 1 end
-    if seg_col_end >= seg_col_start then
-      local seg_text = text:gsub("\t", "    "):sub(seg_col_start + 1, seg_col_end + 1)
-      io.write(seg_text)
-      col = seg_col_end + 1
+  end
+  return col
+end
+
+-- 0-based byte offset for display column 'dcol' within text.
+local function text_dcol_to_byte(text, dcol, tabstop)
+  if dcol <= 0 then return 0 end
+  local col = 0
+  local i = 1
+  while i <= #text do
+    local b = text:byte(i)
+    local nextcol
+    if b == 9 then
+      nextcol = col + tabstop - (col % tabstop)
+    elseif b >= 0xc0 then
+      local clen = (b < 0xe0 and 2) or (b < 0xf0 and 3) or 4
+      local ch = text:sub(i, i + clen - 1)
+      nextcol = col + (utf8.width(ch) or 1)
+    else
+      nextcol = col + 1
     end
-    if seg.kind == 1 then io.write(BG_RESET) end
+    if nextcol > dcol then return i - 1 end
+    col = nextcol
+    if b >= 0xc0 then
+      i = i + ((b < 0xe0 and 2) or (b < 0xf0 and 3) or 4)
+    else
+      i = i + 1
+    end
   end
-  -- Write text after last segment
-  local total_cols = display_mapping[#text + 1]
-  if col < total_cols and col < maxcol then
-    local remaining = text:gsub("\t", "    "):sub(col + 1, maxcol)
-    io.write(remaining)
-    col = col + utf8.width(remaining)
+  return #text
+end
+
+local function diff_flush(diff, g, cols)
+  if diff.scroll then
+    local s = diff.scroll
+    io.write(string.format("\27[%d;%dr", s.top, s.bot))
+    if s.n > 0 then
+      io.write(string.format("\27[%dS", s.n))
+    else
+      io.write(string.format("\27[%dT", -s.n))
+    end
+    io.write("\27[r")
   end
-  -- Pad to maxcol
-  if col < maxcol then
-    io.write(string.rep(" ", maxcol - col))
+  for r = 1, g.rows do
+    if diff.rows[r] then
+      term.move(r, 1)
+      local cps, styles = g.C[r], g.S[r]
+      local out_chars, out_st = {}, {}
+      for col = 1, cols do
+        local cp = cps[col] or 0x20
+        if cp ~= 0 then
+          out_chars[#out_chars + 1] = cp_to_utf8(cp)
+          out_st[#out_st + 1] = styles[col] or 0
+        end
+      end
+      local chars = table.concat(out_chars)
+      -- byte offset for each character index (1-based char → 1-based byte)
+      local boff = { 1 }
+      for ci = 1, #out_chars do
+        boff[ci + 1] = boff[ci] + #out_chars[ci]
+      end
+      local i = 1
+      while i <= #out_st do
+        local s = out_st[i]
+        io.write(style_ansi(s))
+        local j = i
+        while j <= #out_st and out_st[j] == s do j = j + 1 end
+        io.write(chars:sub(boff[i], boff[j] - 1))
+        i = j
+      end
+      io.write(term.RESET)
+    end
   end
 end
 
 function ed.render()
   io.write("\27[?25l")
-  local saved_off = ed.doc:offset()
   local rows, cols = term.size()
   local visrows = rows - 1
   local total_lines = ed.doc:breaks()
+  local cur_line = ed.doc:line()
   local lnum_width = math.max(3, tostring(total_lines):len())
   local text_width = cols - lnum_width - 2
-  if text_width < 1 then text_width = 1 end
-  edlog("render: size=%dx%d lnumw=%d textw=%d scroll=%d cur=%d,%d total=%d",
-    rows, cols, lnum_width, text_width, ed.scroll_line,
-    ed.doc:line(), ed.doc:column(), total_lines)
-
-  -- Build piece regions for syntax highlighting
-  local regions = hl.build_regions(ed.doc)
 
   -- clamp scroll
-  local cur_line = ed.doc:line()
   if cur_line < ed.scroll_line then
     ed.scroll_line = cur_line
   elseif cur_line >= ed.scroll_line + visrows then
@@ -377,52 +730,87 @@ function ed.render()
   end
   if ed.scroll_line < 0 then ed.scroll_line = 0 end
 
-  -- === text area (rows 1..rows-1) ===
+  edlog("render: size=%dx%d scroll=%d cur=%d,%d total=%d",
+    rows, cols, ed.scroll_line, cur_line, ed.doc:column(), total_lines)
+
+  local regions = hl.build_regions(ed.doc)
+  local saved_off = ed.doc:offset()
+  local g = ed.grid
+  g:begin_frame(ed.scroll_line, visrows, cols)
+
+  -- Pass 1: line numbers from breaks()
+  local lnum_fmt = "%" .. lnum_width .. "d "
+  for row = 1, visrows do
+    local line_idx = ed.scroll_line + row - 1
+    if line_idx < total_lines then
+      local s = string.format(lnum_fmt, line_idx + 1)
+      g:puts(row, 1, s, 1)
+      for c = #s + 1, cols do g:put(row, c, " ", 0) end
+    else
+      for c = 1, lnum_width + 1 do g:put(row, c, " ", 0) end
+      g:put(row, lnum_width + 2, "~", 1)
+      for c = lnum_width + 3, cols do g:put(row, c, " ", 0) end
+    end
+  end
+
+  -- Pass 2: content and highlights
   ed.doc:seek("line", ed.scroll_line)
+  local lines_data = {}
   local cur_off = ed.doc:offset()
   local line_idx = ed.scroll_line - 1
+
   for line_text in ed.doc:lines() do
     line_idx = line_idx + 1
     if line_idx >= ed.scroll_line + visrows then break end
-    local screen_row = line_idx - ed.scroll_line + 1
     local line_start = cur_off
     cur_off = cur_off + #line_text + 1
+    local row = line_idx - ed.scroll_line + 1
+    lines_data[#lines_data + 1] = {
+      row = row, text = line_text, start = line_start
+    }
+  end
 
-    term.move(screen_row, 1)
-    term.clearline()
+  local col_start = lnum_width + 2
+  local col_pad = col_start + text_width
 
-    -- line number
-    io.write(term.DIM)
-    io.write(string.format("%" .. lnum_width .. "d ", line_idx + 1))
-    io.write(term.RESET)
+  -- Pass 2a: text content
+  for _, ld in ipairs(lines_data) do
+    g:puts_raw(ld.row, col_start, ld.text, 0, 4, col_pad)
+    if ld.row == cur_line - ed.scroll_line + 1 then
+      edlog("  pass2 row=%d text_len=%d", ld.row, #ld.text)
+    end
+  end
 
-    -- line content with piece-based coloring
-    local display, mapping = expand_tabs(line_text)
-    local segs = hl.line_segments(regions, line_start, line_start + #line_text)
-    if #segs == 0 then
-      local trimmed = utf8.width(display) > text_width and display:sub(1, text_width) or display
-      io.write(trimmed)
-      if utf8.width(trimmed) < text_width then
-        io.write(string.rep(" ", text_width - utf8.width(trimmed)))
+  -- Pass 2b: highlights
+  for _, ld in ipairs(lines_data) do
+    local segs = hl.line_segments(regions, ld.start, ld.start + #ld.text)
+    for _, seg in ipairs(segs) do
+      if seg.kind == 1 then
+        g:highlight(ld.row, seg.start, seg.start + seg.len, 3)
       end
-    else
-      write_colored_text(line_text, segs, mapping, text_width)
-    end
-
-    if line_idx == 5 then
-      edlog("  render line %d: len=%d [%s]", line_idx, #line_text, line_text:sub(1, 60))
     end
   end
 
-  -- clear remaining text rows
-  local drawn_rows = math.min(total_lines, ed.scroll_line + visrows)
-  drawn_rows = drawn_rows - ed.scroll_line
-  for row = drawn_rows + 1, visrows do
-    term.move(row, 1)
-    term.clearline()
+  -- flush grid diff
+  -- flush grid diff
+  local diff = g:diff()
+  local dirty_count, dirty_rows = 0, {}
+  for r = 1, visrows do if diff.rows[r] then dirty_count = dirty_count + 1; dirty_rows[#dirty_rows+1] = r end end
+  edlog("  diff: scroll=%s dirty=%d rows=%s",
+    diff.scroll and string.format("%d,%d,%d", diff.scroll.top, diff.scroll.bot, diff.scroll.n) or "nil",
+    dirty_count, table.concat(dirty_rows, ","))
+  -- dump grid cells for cursor line
+  if diff.rows[cur_line - ed.scroll_line + 1] then
+    local gc = g.C[cur_line - ed.scroll_line + 1] or {}
+    local gs = g.S[cur_line - ed.scroll_line + 1] or {}
+    local cps, ss = {}, {}
+    for c = 1, math.min(cols, 40) do cps[#cps+1] = string.format("%04X", gc[c] or 0); ss[#ss+1] = gs[c] or 0 end
+    edlog("  grid[%d]: cps=%s", cur_line - ed.scroll_line + 1, table.concat(cps, " "))
+    edlog("  grid[%d]: sts=%s", cur_line - ed.scroll_line + 1, table.concat(ss, " "))
   end
+  diff_flush(diff, g, cols)
 
-  -- === status bar (last row) ===
+  -- status bar
   term.move(rows, 1)
   if ed.mode == "COMMAND" then
     io.write(term.REVERSE)
@@ -444,22 +832,21 @@ function ed.render()
     io.write(term.RESET)
   end
 
-  -- === cursor position ===
+  -- cursor
   ed.doc:seek("set", saved_off)
   cur_line = ed.doc:line()
   local cur_screen_row = cur_line - ed.scroll_line + 1
   if cur_screen_row < 1 then cur_screen_row = 1 end
   if cur_screen_row > rows - 1 then cur_screen_row = rows - 1 end
 
-  -- Compute display column for cursor
   local saved = ed.doc:offset()
   ed.doc:seek("line", cur_line)
   local cur_line_text = ed.doc:read("l") or ""
   ed.doc:seek("set", saved)
   local byte_col = ed.doc:column()
-  local pre_text = cur_line_text:sub(1, byte_col)
-  pre_text = pre_text:gsub("\t", "    ")
-  local display_col = utf8.width(pre_text)
+  edlog("cursor: saved_off=%d cur_line=%d line_text=[%s](%d) byte_col=%d",
+    saved_off, cur_line, cur_line_text:gsub("\n","\\n"), #cur_line_text, byte_col)
+  local display_col = text_byte_to_dcol(cur_line_text, byte_col, 4)
 
   local cur_screen_col = display_col + lnum_width + 2
   if cur_screen_col > cols then cur_screen_col = cols end
@@ -467,6 +854,8 @@ function ed.render()
   term.move(cur_screen_row, cur_screen_col)
   io.write("\27[?25h")
   io.flush()
+
+  g:snap()
 end
 
 -- Normal mode commands
@@ -480,6 +869,25 @@ local function line_endcol(ed, lnum)
   return llen
 end
 
+-- byte offset -> display column within current line
+local function byte_to_dcol(doc)
+  local saved = doc:offset()
+  local lnum = doc:line()
+  doc:seek("line", lnum)
+  local text = doc:read("l") or ""
+  doc:seek("set", saved)
+  return text_byte_to_dcol(text, doc:column(), 4)
+end
+
+-- display column -> byte offset within given line (clamp to char boundary)
+local function dcol_to_byte(doc, lnum, dcol)
+  local saved = doc:offset()
+  doc:seek("line", lnum)
+  local text = doc:read("l") or ""
+  doc:seek("set", saved)
+  return text_dcol_to_byte(text, dcol, 4)
+end
+
 function normal_cmds.h(ed) cursor_move_char(ed.doc, -1) end
 
 function normal_cmds.l(ed) cursor_move_char(ed.doc, 1) end
@@ -487,21 +895,20 @@ function normal_cmds.l(ed) cursor_move_char(ed.doc, 1) end
 function normal_cmds.j(ed)
   local lnum = ed.doc:line()
   if lnum >= ed.doc:breaks() - 1 then return end
-  local col = ed.doc:column()
+  local dcol = byte_to_dcol(ed.doc)
   ed.doc:seek("line", lnum + 1)
-  local nlen = ed.doc:linelen(lnum + 1)
-  if nlen > 0 and lnum + 1 < ed.doc:breaks() - 1 then nlen = nlen - 1 end
-  ed.doc:seek("cur", math.min(col, nlen))
+  local bc = dcol_to_byte(ed.doc, lnum + 1, dcol)
+  edlog("j: from L%d dcol=%d -> L%d bc=%d", lnum, dcol, lnum + 1, bc)
+  ed.doc:seek("cur", bc)
 end
 
 function normal_cmds.k(ed)
   local lnum = ed.doc:line()
   if lnum <= 0 then return end
-  local col = ed.doc:column()
+  local dcol = byte_to_dcol(ed.doc)
   ed.doc:seek("line", lnum - 1)
-  local plen = ed.doc:linelen(lnum - 1)
-  if plen > 0 and lnum - 1 < ed.doc:breaks() - 1 then plen = plen - 1 end
-  ed.doc:seek("cur", math.min(col, plen))
+  local bc = dcol_to_byte(ed.doc, lnum - 1, dcol)
+  ed.doc:seek("cur", bc)
 end
 
 function normal_cmds.w(ed) move_word_forward(ed.doc) end
@@ -567,6 +974,11 @@ end
 normal_cmds["ctrl-r"] = function(ed)
   ed.doc:redo()
   edlog("redo: offset=%d", ed.doc:offset())
+  ed.msg = ""
+end
+
+normal_cmds["ctrl-l"] = function(ed)
+  ed.grid:clear()
   ed.msg = ""
 end
 
@@ -724,6 +1136,21 @@ end
 -- Normal mode dispatch
 
 local function normal_key(ed, key)
+  if ed.pending_key then
+    local combo = ed.pending_key .. key
+    ed.pending_key = nil
+    local handler = normal_cmds[combo]
+    if handler then
+      handler(ed)
+      ed.msg = ""
+      return
+    end
+  end
+  if key == "g" or key == "d" then
+    ed.pending_key = key
+    return
+  end
+  ed.pending_key = nil
   local handler = normal_cmds[key]
   if handler then
     handler(ed)

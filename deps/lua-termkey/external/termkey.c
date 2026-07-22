@@ -251,6 +251,7 @@ struct TermKey {
 
 	char   is_closed;
 	char   is_started;
+	int    waittime;  /* msec, for termkey_waitkey() poll timeout */
 
 	// There are 32 C0 codes
 	TermKeyKeyInfo c0[32];
@@ -1583,6 +1584,7 @@ TERMKEY_EXPORT bool
 termkey_init_from_fd(TermKey *tk, int fd, TermKeyStartFlags start_flags, char *term)
 {
 	tk->fd = fd;
+	tk->waittime = 50;  /* 50ms default, matches libtermkey */
 
 	termkey_register_c0(tk, TERMKEY_SYM_TAB,    0x09);
 	termkey_register_c0(tk, TERMKEY_SYM_ENTER,  0x0d);
@@ -1643,6 +1645,18 @@ TERMKEY_EXPORT void
 termkey_set_canonflags(TermKey *tk, int flags)
 {
 	tk->canonflags = flags;
+}
+
+TERMKEY_EXPORT void
+termkey_set_waittime(TermKey *tk, int msec)
+{
+	tk->waittime = msec;
+}
+
+TERMKEY_EXPORT int
+termkey_get_waittime(TermKey *tk)
+{
+	return tk->waittime;
 }
 
 static void
@@ -1899,6 +1913,60 @@ retry:;
 
 	tk->buffcount += len;
 	return TERMKEY_RES_AGAIN;
+}
+
+TERMKEY_EXPORT TermKeyResult
+termkey_waitkey(TermKey *tk, TermKeyKey *key)
+{
+	if (tk->fd == -1) {
+		errno = EBADF;
+		return TERMKEY_RES_ERROR;
+	}
+
+	while (1) {
+		TermKeyResult ret = termkey_getkey(tk, key);
+
+		switch (ret) {
+		case TERMKEY_RES_KEY:
+		case TERMKEY_RES_EOF:
+		case TERMKEY_RES_ERROR:
+			return ret;
+
+		case TERMKEY_RES_NONE:
+			ret = termkey_advisereadable(tk);
+			if (ret == TERMKEY_RES_ERROR)
+				return ret;
+			break;
+
+		case TERMKEY_RES_AGAIN:
+			if (tk->is_closed)
+				return termkey_getkey_force(tk, key);
+
+			{
+				struct pollfd fd;
+				fd.fd = tk->fd;
+				fd.events = POLLIN;
+
+				int pollret = poll(&fd, 1, tk->waittime);
+				if (pollret == -1) {
+					if (errno == EINTR)
+						continue;
+					return TERMKEY_RES_ERROR;
+				}
+
+				if (fd.revents & (POLLIN | POLLHUP | POLLERR))
+					ret = termkey_advisereadable(tk);
+				else
+					ret = TERMKEY_RES_NONE;
+
+				if (ret == TERMKEY_RES_ERROR)
+					return ret;
+				if (ret == TERMKEY_RES_NONE)
+					return termkey_getkey_force(tk, key);
+			}
+			break;
+		}
+	}
 }
 
 TERMKEY_EXPORT const char *

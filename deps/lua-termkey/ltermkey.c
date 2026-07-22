@@ -281,15 +281,47 @@ static int Ltk_canonicalise(lua_State *L) {
     return lua_settop(L, 1), 1;
 }
 
+static int Ltk_waitkey(lua_State *L) {
+    ltk_State *S = (ltk_State *)luaL_checkudata(L, 1, LTK_NAME);
+    return ltk_pushresult(L, termkey_waitkey(&S->tk, &S->key));
+}
+
+static int Ltk_setwaittime(lua_State *L) {
+    ltk_State *S = (ltk_State *)luaL_checkudata(L, 1, LTK_NAME);
+    int msec = (int)luaL_checkinteger(L, 2);
+    termkey_set_waittime(&S->tk, msec);
+    return lua_settop(L, 1), 1;
+}
+
+static int Ltk_getwaittime(lua_State *L) {
+    ltk_State *S = (ltk_State *)luaL_checkudata(L, 1, LTK_NAME);
+    return lua_pushinteger(L, termkey_get_waittime(&S->tk)), 1;
+}
+
+#ifndef _WIN32
+#include <fcntl.h>
+#endif
+
+static int Ltk_blocking(lua_State *L) {
+    ltk_State *S = (ltk_State *)luaL_checkudata(L, 1, LTK_NAME);
+#ifndef _WIN32
+    int flags = fcntl(S->tk.fd, F_GETFL, 0);
+    fcntl(S->tk.fd, F_SETFL, flags & ~O_NONBLOCK);
+#endif
+    return lua_settop(L, 1), 1;
+}
+
 LUALIB_API int luaopen_termkey(lua_State *L) {
     luaL_Reg libs[] = {
             {"__gc", Ltk_delete},
 #define ENTRY(name) {#name, Ltk_##name}
             ENTRY(new),           ENTRY(delete),       ENTRY(start),
             ENTRY(stop),          ENTRY(release),      ENTRY(setcanonflags),
-            ENTRY(getkey),        ENTRY(canonicalise), ENTRY(advisereadable),
-            ENTRY(key),           ENTRY(data),         ENTRY(mod),
-            ENTRY(formatflags),   ENTRY(format),       ENTRY(parse),
+            ENTRY(getkey),        ENTRY(waitkey),      ENTRY(setwaittime),
+            ENTRY(getwaittime),   ENTRY(canonicalise), ENTRY(advisereadable),
+            ENTRY(blocking),      ENTRY(key),          ENTRY(data),
+            ENTRY(mod),           ENTRY(formatflags),  ENTRY(format),
+            ENTRY(parse),
 #undef ENTRY
             {NULL, NULL}};
     if (luaL_newmetatable(L, LTK_NAME)) {
