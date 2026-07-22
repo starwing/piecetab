@@ -237,8 +237,13 @@ function Doc:breaks() end
 function Doc:lines(fmt) end
 
 ---Commit fresh edits and create a new history version.
+---Returns current vid if there are no pending edits.
 ---@return integer  vid (version id, monotonically increasing)
 function Doc:commit() end
+
+---Get the current version id without side effects.
+---@return integer  vid
+function Doc:version() end
 
 ---Undo to a previous version. Discards any uncommitted edits.
 ---@param vid? integer  target version id (default: parent version)

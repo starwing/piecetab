@@ -70,14 +70,6 @@ function term.move(row, col)
   io.write(string.format("\27[%d;%dH", row, col))
 end
 
-function term.clear()
-  io.write("\27[2J")
-end
-
-function term.clearline()
-  io.write("\27[K")
-end
-
 -- style codes
 term.REVERSE     = "\27[7m"
 term.DIM         = "\27[2m"
@@ -95,339 +87,19 @@ end
 -- Section 2: Cell grid (frame buffer with scroll-aware diff)
 -- ================================================================
 
--- Cell char stored as Unicode codepoint (integer). 0 = continuation (skip).
--- Style IDs: 0=normal, 1=dim, 3=gray bg
+local cg = require("cellgrid")
 
-local function char_to_cp(ch)
-  if #ch == 0 then return 0x20 end
-  local b = ch:byte()
-  if b < 0x80 then return b end
-  if b < 0xe0 then return ((b & 0x1f) << 6) | (ch:byte(2) & 0x3f) end
-  if b < 0xf0 then return ((b & 0x0f) << 12) | ((ch:byte(2) & 0x3f) << 6) | (ch:byte(3) & 0x3f) end
-  return ((b & 0x07) << 18) | ((ch:byte(2) & 0x3f) << 12) | ((ch:byte(3) & 0x3f) << 6) | (ch:byte(4) & 0x3f)
-end
+-- style ID constants
+local STYLE_NORMAL = 0
+local STYLE_DIM    = 1
+local STYLE_GRAY   = 3
 
-local function cp_to_utf8(cp)
-  if cp <= 0 then return "" end
-  if cp <= 0x7f then return string.char(cp) end
-  if cp <= 0x7ff then
-    return string.char(0xc0 | (cp >> 6), 0x80 | (cp & 0x3f))
-  end
-  if cp <= 0xffff then
-    return string.char(0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f))
-  end
-  return string.char(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f))
-end
-
-local function cp_width(cp)
-  if cp <= 0 then return 0 end
-  if cp < 0x100 then return 1 end
-  local ch = cp_to_utf8(cp)
-  return utf8.width(ch) or 1
-end
-
-local Grid = {}
-Grid.__index = Grid
-
-local function row_fill(cols, cp, style)
-  local ct, st = {}, {}
-  for c = 1, cols do
-    ct[c] = cp; st[c] = style
-  end
-  return ct, st
-end
-
-function Grid:new()
-  return setmetatable({
-    C = {},
-    S = {},
-    Bc = {},
-    Bs = {},
-    dirty = {},
-    B2D = {},
-    T = {},
-    TSC = {},
-    rows = 0,
-    cols = 0,
-    topline = 0,
-    old_topline = 0,
-    all_dirty = true,
-  }, Grid)
-end
-
-function Grid:begin_frame(topline, visrows, cols)
-  local resized = (self.rows ~= visrows or self.cols ~= cols)
-  self.rows = visrows
-  self.cols = cols
-  self.old_topline = self.topline
-  self.topline = topline
-  local delta = topline - self.old_topline
-
-  if resized then
-    local ct, bs = row_fill(cols, 0x20, 0)
-    for r = 1, visrows do
-      self.C[r] = { table.unpack(ct) }
-      self.S[r] = { table.unpack(bs) }
-      self.Bc[r] = { table.unpack(ct) }
-      self.Bs[r] = { table.unpack(bs) }
-      self.B2D[r] = nil
-      self.T[r] = nil
-      self.TSC[r] = nil
-    end
-  end
-
-  if self.all_dirty then
-    for r = 1, visrows do
-      self.dirty[r] = {}
-      for c = 1, cols do self.dirty[r][c] = true end
-    end
-    return
-  end
-
-  if math.abs(delta) < 1 or math.abs(delta) >= visrows then
-    for r = 1, visrows do self.dirty[r] = {} end
-    return
-  end
-
-  -- scroll: shift current from back, then sync back = current
-  -- this ensures put() compares against correct post-scroll state
-  if delta > 0 then
-    for r = 1, visrows - delta do
-      local ct = self.Bc[r + delta]
-      self.C[r] = ct and { table.unpack(ct) } or (row_fill(cols, 0x20, 0))
-      self.S[r] = {}
-      for c = 1, cols do self.S[r][c] = (self.Bs[r + delta] or {})[c] or 0 end
-    end
-    for r = visrows - delta + 1, visrows do
-      self.C[r], self.S[r] = row_fill(cols, 0x20, 0)
-    end
-  else
-    local n = -delta
-    for r = 1, visrows - n do
-      local ct = self.Bc[r]
-      self.C[r + n] = ct and { table.unpack(ct) } or (row_fill(cols, 0x20, 0))
-      self.S[r + n] = {}
-      for c = 1, cols do self.S[r + n][c] = (self.Bs[r] or {})[c] or 0 end
-    end
-    for r = 1, n do
-      self.C[r], self.S[r] = row_fill(cols, 0x20, 0)
-    end
-  end
-
-  -- sync back = current (post-scroll baseline for put comparisons)
-  local n = delta > 0 and delta or -delta
-  for r = 1, visrows do
-    self.Bc[r] = { table.unpack(self.C[r]) }
-    self.Bs[r] = { table.unpack(self.S[r]) }
-  end
-
-  -- exposed rows dirty, shifted rows clean
-  for r = 1, visrows do self.dirty[r] = {} end
-  local first = delta > 0 and (visrows - n + 1) or 1
-  local last  = delta > 0 and visrows or n
-  for r = first, last do
-    for c = 1, cols do self.dirty[r][c] = true end
-  end
-end
-
-function Grid:clear()
-  self.all_dirty = true
-  for r = 1, self.rows do
-    for c = 1, self.cols do self.dirty[r][c] = true end
-    self.B2D[r] = nil
-    self.T[r] = nil
-    self.TSC[r] = nil
-  end
-end
-
-function Grid:clear_row(r)
-  local ct, bs = row_fill(self.cols, 0x20, 0)
-  self.C[r] = ct
-  self.S[r] = bs
-  for c = 1, self.cols do self.dirty[r][c] = true end
-  self.B2D[r] = nil
-  self.T[r] = nil
-  self.TSC[r] = nil
-end
-
-function Grid:put(r, c, ch, style)
-  if c < 1 or c > self.cols then return end
-  local cp = char_to_cp(ch)
-  local new_w = cp_width(cp)
-  local old_cp = self.Bc[r][c] or 0x20
-  local old_w = cp_width(old_cp)
-  self.C[r][c] = cp
-  self.S[r][c] = style
-  self.dirty[r][c] = (cp ~= old_cp) or (style ~= (self.Bs[r][c] or 0))
-  -- continuation columns
-  for j = 1, new_w - 1 do
-    local cc = c + j
-    if cc > self.cols then break end
-    self.C[r][cc] = 0
-    self.S[r][cc] = style
-    self.dirty[r][cc] = true
-  end
-  -- clear orphan columns (old wide char replaced by narrow)
-  if new_w < old_w then
-    for j = new_w, old_w - 1 do
-      local cc = c + j
-      if cc > self.cols then break end
-      self.C[r][cc] = 0x20
-      self.S[r][cc] = 0
-      self.dirty[r][cc] = true
-    end
-  end
-end
-
-function Grid:puts(r, c, text, style)
-  local col = c
-  local i = 1
-  while i <= #text do
-    local b = text:byte(i)
-    local ch, clen
-    if b >= 0xc0 then
-      clen = (b < 0xe0 and 2) or (b < 0xf0 and 3) or 4
-      ch = text:sub(i, i + clen - 1)
-    else
-      clen = 1
-      ch = text:sub(i, i)
-    end
-    local cp = char_to_cp(ch)
-    local w = cp_width(cp)
-    self:put(r, col, ch, style)
-    col = col + w
-    i = i + clen
-  end
-end
-
-function Grid:span(r, c, n, style)
-  for col = c, c + n - 1 do
-    if col > self.cols then break end
-    self.S[r][col] = style
-    self.dirty[r][col] = (style ~= (self.Bs[r][col] or 0))
-  end
-end
-
-function Grid:diff()
-  local d = { rows = {} }
-  if not self.all_dirty then
-    local delta = self.topline - self.old_topline
-    if math.abs(delta) > 0 and math.abs(delta) < self.rows then
-      d.scroll = { top = 1, bot = self.rows, n = delta }
-    end
-  end
-  for r = 1, self.rows do
-    for c = 1, self.cols do
-      if self.dirty[r][c] then
-        d.rows[r] = true; break
-      end
-    end
-  end
-  return d
-end
-
-function Grid:snap()
-  for r = 1, self.rows do
-    self.Bc[r] = { table.unpack(self.C[r]) }
-    self.Bs[r] = { table.unpack(self.S[r]) }
-    self.dirty[r] = {}
-  end
-  self.all_dirty = false
-end
-
--- High-level put: raw text with tabs, UTF-8/width handled internally.
--- Returns absolute column after text.
-function Grid:puts_raw(r, startcol, text, style, tabstop, pad_to)
-  self.B2D[r] = {}
-  self.T[r] = text
-  self.TSC[r] = startcol
-  local dc = 0
-  local i = 1
-  self.B2D[r][1] = 0
-  while i <= #text do
-    local b = text:byte(i)
-    if b == 9 then
-      local spaces = tabstop - (dc % tabstop)
-      for s = 1, spaces do
-        self:put(r, startcol + dc + s - 1, " ", style)
-      end
-      dc = dc + spaces
-      i = i + 1
-    elseif b >= 0xc0 then
-      local clen = (b < 0xe0 and 2) or (b < 0xf0 and 3) or 4
-      local ch = text:sub(i, i + clen - 1)
-      local w = cp_width(char_to_cp(ch))
-      self:put(r, startcol + dc, ch, style)
-      for j = 0, clen - 1 do self.B2D[r][i + j] = dc end
-      dc = dc + w
-      i = i + clen
-    else
-      self:put(r, startcol + dc, text:sub(i, i), style)
-      dc = dc + 1
-      i = i + 1
-    end
-    self.B2D[r][i] = dc
-  end
-  if pad_to then
-    while startcol + dc < pad_to do
-      self:put(r, startcol + dc, " ", 0)
-      dc = dc + 1
-    end
-  end
-  return startcol + dc
-end
-
--- Highlight byte range [bytestart, byteend) (1-based, exclusive) with style.
-function Grid:highlight(r, bytestart, byteend, style)
-  local map = self.B2D[r]
-  local startcol = self.TSC[r]
-  if not map or not startcol then return end
-  local ds = map[bytestart]
-  local de = map[byteend]
-  if not ds or not de then return end
-  for col = startcol + ds, startcol + de - 1 do
-    self.S[r][col] = style
-    self.dirty[r][col] = true
-  end
-end
-
--- 0-based byte offset -> 0-based display column within text (via B2D).
-function Grid:byte_to_dcol(r, byte)
-  local map = self.B2D[r]
-  return map and map[byte + 1]
-end
-
--- 0-based display column within text -> 0-based byte offset (via B2D).
-function Grid:dcol_to_byte(r, dcol)
-  local map = self.B2D[r]
-  local texts = self.T[r]
-  if not map or not texts then return nil end
-  local bc = #texts
-  for i = 1, #texts + 1 do
-    local dc = map[i]
-    if dc == nil then break end
-    if dc > dcol then
-      bc = i - 2; break
-    end
-    if dc == dcol then
-      bc = i - 1; break
-    end
-  end
-  while bc > 0 do
-    local b = texts:byte(bc)
-    if not b or b < 0x80 or b >= 0xc0 then break end
-    bc = bc - 1
-  end
-  return bc
-end
-
--- Pad row from col to targetcol with char and style.
-function Grid:pad_to(r, col, targetcol, ch, style)
-  while col < targetcol do
-    self:put(r, col, ch, style)
-    col = col + 1
-  end
-end
+-- diff style table
+local DIFF_STYLE = {
+    [0] = "\27[0m",          -- RESET
+    [1] = "\27[2m",          -- DIM
+    [3] = "\27[48;5;237m",   -- gray bg
+}
 
 -- ================================================================
 -- Section 3: Highlight module (piece-based span coloring)
@@ -481,6 +153,10 @@ end
 
 local ed = {}
 
+local function dirty(ed)
+    return ed.doc:version() ~= ed.saved_vid
+end
+
 function ed.init(filename)
   local content = ""
   if filename then
@@ -494,10 +170,10 @@ function ed.init(filename)
   ed.mode = "NORMAL"
   ed.cmdline = ""      -- command-line buffer for ":" mode
   ed.msg = ""          -- status message (transient)
-  ed.dirty = false     -- unsaved changes since last save
+  ed.saved_vid = ed.doc:version()
   ed.pending_key = nil -- for multi-key sequences (gg, dd)
   ed.scroll_line = 0   -- first visible line (0-based)
-  ed.grid = Grid:new() -- cell grid for diff-based rendering
+  ed.grid = cg.new() -- cell grid for diff-based rendering
   edlog("init: file=%s lines=%d bytes=%d",
     filename or "(new)", ed.doc:breaks(), #ed.doc)
 end
@@ -587,14 +263,6 @@ end
 
 -- Rendering helpers
 
-local BG_GRAY = "\27[48;5;237m"
-
-local function style_ansi(s)
-  if s == 1 then return term.DIM end
-  if s == 3 then return BG_GRAY end
-  return term.RESET -- style 0 = normal, must clear any stale style
-end
-
 -- 0-based display column within text (before byte offset 'byte').
 local function text_byte_to_dcol(text, byte, tabstop)
   if byte <= 0 then return 0 end
@@ -649,47 +317,56 @@ local function text_dcol_to_byte(text, dcol, tabstop)
   return #text
 end
 
-local function diff_flush(diff, g, cols)
-  if diff.scroll then
-    local s = diff.scroll
-    io.write(string.format("\27[%d;%dr", s.top, s.bot))
-    if s.n > 0 then
-      io.write(string.format("\27[%dS", s.n))
+-- Single-pass line render: walk text byte-by-byte, switch style at segment
+-- boundaries, batch same-style text into g:putline. Tabs expanded inline.
+-- Returns absolute column (0-based) after rendered text.
+local function render_line(g, row, col, text, segs, tabstop)
+  local byte = 1
+  local batch_start = 1
+  local cur_style = STYLE_NORMAL
+  local seg_idx = 1
+  local dc = 0
+
+  local function style_at(b)
+    while seg_idx <= #segs do
+      local s = segs[seg_idx]
+      if b >= s.start and b < s.start + s.len then
+        return s.kind == 1 and STYLE_GRAY or STYLE_NORMAL
+      end
+      if b < s.start then break end
+      seg_idx = seg_idx + 1
+    end
+    return STYLE_NORMAL
+  end
+
+  local function flush()
+    if batch_start < byte then
+      local s = text:sub(batch_start, byte - 1)
+      dc = g:putline(row, col + dc, s, cur_style) - col
+      batch_start = byte
+    end
+  end
+
+  while byte <= #text do
+    local b = text:byte(byte)
+    if b == 9 then
+      flush()
+      local n = tabstop - (dc % tabstop)
+      dc = g:putline(row, col + dc, string.rep(" ", n), cur_style) - col
+      byte = byte + 1
+      batch_start = byte
     else
-      io.write(string.format("\27[%dT", -s.n))
-    end
-    io.write("\27[r")
-  end
-  for r = 1, g.rows do
-    if diff.rows[r] then
-      term.move(r, 1)
-      local cps, styles = g.C[r], g.S[r]
-      local out_chars, out_st = {}, {}
-      for col = 1, cols do
-        local cp = cps[col] or 0x20
-        if cp ~= 0 then
-          out_chars[#out_chars + 1] = cp_to_utf8(cp)
-          out_st[#out_st + 1] = styles[col] or 0
-        end
+      local clen = 1
+      if b >= 0xc0 then
+        clen = (b < 0xe0 and 2) or (b < 0xf0 and 3) or 4
       end
-      local chars = table.concat(out_chars)
-      -- byte offset for each character index (1-based char → 1-based byte)
-      local boff = { 1 }
-      for ci = 1, #out_chars do
-        boff[ci + 1] = boff[ci] + #out_chars[ci]
-      end
-      local i = 1
-      while i <= #out_st do
-        local s = out_st[i]
-        io.write(style_ansi(s))
-        local j = i
-        while j <= #out_st and out_st[j] == s do j = j + 1 end
-        io.write(chars:sub(boff[i], boff[j] - 1))
-        i = j
-      end
-      io.write(term.RESET)
+      local st = style_at(byte)
+      if st ~= cur_style then flush(); cur_style = st end
+      byte = byte + clen
     end
   end
+  flush()
+  return col + dc
 end
 
 function ed.render()
@@ -715,20 +392,20 @@ function ed.render()
   local regions = hl.build_regions(ed.doc)
   local saved_off = ed.doc:offset()
   local g = ed.grid
-  g:begin_frame(ed.scroll_line, visrows, cols)
+  g:begin(ed.scroll_line, visrows, cols)
 
   -- Pass 1: line numbers from breaks()
   local lnum_fmt = "%" .. lnum_width .. "d "
   for row = 1, visrows do
+    local r0 = row - 1
     local line_idx = ed.scroll_line + row - 1
     if line_idx < total_lines then
       local s = string.format(lnum_fmt, line_idx + 1)
-      g:puts(row, 1, s, 1)
-      for c = #s + 1, cols do g:put(row, c, " ", 0) end
+      g:putline(r0, 0, s, STYLE_DIM)
+      g:clearrow(r0, #s, cols)
     else
-      for c = 1, lnum_width + 1 do g:put(row, c, " ", 0) end
-      g:put(row, lnum_width + 2, "~", 1)
-      for c = lnum_width + 3, cols do g:put(row, c, " ", 0) end
+      g:clearrow(r0, 0, cols)
+      g:put(r0, lnum_width + 1, 0x7e, STYLE_DIM)
     end
   end
 
@@ -752,48 +429,20 @@ function ed.render()
   local col_start = lnum_width + 2
   local col_pad = col_start + text_width
 
-  -- Pass 2a: text content
+  -- Pass 2: content + highlights (single pass, highlight-driven)
   for _, ld in ipairs(lines_data) do
-    g:puts_raw(ld.row, col_start, ld.text, 0, 4, col_pad)
-    if ld.row == cur_line - ed.scroll_line + 1 then
-      edlog("  pass2 row=%d text_len=%d", ld.row, #ld.text)
-    end
-  end
-
-  -- Pass 2b: highlights
-  for _, ld in ipairs(lines_data) do
+    local r0 = ld.row - 1
     local segs = hl.line_segments(regions, ld.start, ld.start + #ld.text)
-    for _, seg in ipairs(segs) do
-      if seg.kind == 1 then
-        g:highlight(ld.row, seg.start, seg.start + seg.len, 3)
-      end
+    local endcol = render_line(g, r0, col_start - 1, ld.text, segs, 4)
+    if endcol < col_pad - 1 then
+      g:clearrow(r0, endcol, col_pad - 1)
     end
   end
 
   -- flush grid diff
-  -- flush grid diff
-  local diff = g:diff()
-  local dirty_count, dirty_rows = 0, {}
-  for r = 1, visrows do
-    if diff.rows[r] then
-      dirty_count = dirty_count + 1; dirty_rows[#dirty_rows + 1] = r
-    end
-  end
-  edlog("  diff: scroll=%s dirty=%d rows=%s",
-    diff.scroll and string.format("%d,%d,%d", diff.scroll.top, diff.scroll.bot, diff.scroll.n) or "nil",
-    dirty_count, table.concat(dirty_rows, ","))
-  -- dump grid cells for cursor line
-  if diff.rows[cur_line - ed.scroll_line + 1] then
-    local gc = g.C[cur_line - ed.scroll_line + 1] or {}
-    local gs = g.S[cur_line - ed.scroll_line + 1] or {}
-    local cps, ss = {}, {}
-    for c = 1, math.min(cols, 40) do
-      cps[#cps + 1] = string.format("%04X", gc[c] or 0); ss[#ss + 1] = gs[c] or 0
-    end
-    edlog("  grid[%d]: cps=%s", cur_line - ed.scroll_line + 1, table.concat(cps, " "))
-    edlog("  grid[%d]: sts=%s", cur_line - ed.scroll_line + 1, table.concat(ss, " "))
-  end
-  diff_flush(diff, g, cols)
+  local csi = g:diff(DIFF_STYLE)
+  edlog("  diff: csi_len=%d", #csi)
+  io.write(csi)
 
   -- status bar
   term.move(rows, 1)
@@ -804,7 +453,7 @@ function ed.render()
     if pad > 0 then io.write(string.rep(" ", pad)) end
     io.write(term.RESET)
   else
-    local dirty_mark = ed.dirty and "[+] " or ""
+    local dirty_mark = dirty(ed) and "[+] " or ""
     local linestr = string.format("L%d,%d", cur_line + 1, ed.doc:column() + 1)
     local left = string.format(" %s%s %s  %s ", dirty_mark,
       ed.filename or "[No Name]", ed.mode, linestr)
@@ -840,7 +489,7 @@ function ed.render()
   io.write("\27[?25h")
   io.flush()
 
-  g:snap()
+  g:freeze()
 end
 
 -- Normal mode commands
@@ -996,7 +645,7 @@ local function cmd_save(ed)
   local data = ed.doc:dump()
   f:write(data)
   f:close()
-  ed.dirty = false
+  ed.saved_vid = ed.doc:version()
   ed.msg = '"' .. ed.filename .. '" written'
   edlog("save: %s %d bytes", ed.filename, #data)
 end
@@ -1024,7 +673,7 @@ local function cmd_edit(ed, arg)
   end
   ed.doc = content ~= "" and pt.doc(content) or pt.doc(nil)
   ed.filename = arg
-  ed.dirty = false
+  ed.saved_vid = ed.doc:version()
   ed.scroll_line = 0
   ed.msg = '"' .. arg .. '" loaded, ' .. ed.doc:breaks() .. " lines"
   edlog("edit: %s lines=%d bytes=%d", arg, ed.doc:breaks(), #ed.doc)
@@ -1061,7 +710,6 @@ local function insert_key(ed, key)
     if ed.doc:offset() > 0 then
       cursor_move_char(ed.doc, -1)
     end
-    ed.dirty = true
     edlog("insert: ESC -> NORMAL, commit off=%d", ed.doc:offset())
     ed.msg = ""
   elseif key == "<Backspace>" then

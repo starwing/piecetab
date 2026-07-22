@@ -797,6 +797,12 @@ static int lpt_switch(lua_State *L, lpt_Doc *d, ut_Vid src, ut_Vid dst) {
     return pt_seek(&d->C, b, pos), lpt_pushvid(L, dst);
 }
 
+static int Ldoc_version(lua_State *L) {
+    lpt_Doc  *d = lpt_checkdoc(L, 1);
+    pt_Buffer b = (pt_Buffer)ut_payload(ut_current(d->ut));
+    return lua_pushinteger(L, (lua_Integer)pt_version(b)), 1;
+}
+
 static int Ldoc_undo(lua_State *L) {
     lpt_Doc  *d = lpt_checkdoc(L, 1);
     ut_Vid    dst, src = ut_current(d->ut);
@@ -895,7 +901,7 @@ static void lpt_opendoc(lua_State *L) {
             ENTRY(undo),         ENTRY(redo),
             ENTRY(earlier),      ENTRY(later),
             ENTRY(buffer),       ENTRY(dump),
-            ENTRY(piece),
+            ENTRY(version),      ENTRY(piece),
 #undef ENTRY
             {NULL, NULL}};
     if (luaL_newmetatable(L, LPT_DOC_TYPE)) {
