@@ -633,7 +633,7 @@ UT_API size_t ut_mapoffset(ut_Tree *T, size_t offset) {
     const ut_Hunk *h = ut_hunks(T, &hn);
     ptrdiff_t      shift = 0;
     for (i = 0; i < hn && offset >= h[i].pa; ++i) {
-        if (offset < h[i].pa + h[i].pdel) return h[i].ca;
+        if (offset == h[i].pa || offset < h[i].pa + h[i].pdel) return h[i].ca;
         shift += (ptrdiff_t)h[i].cins - (ptrdiff_t)h[i].pdel;
     }
     return (size_t)((ptrdiff_t)offset + shift);

@@ -1382,7 +1382,7 @@ static void test_mapoffset_insert_at(void) {
     ut_Vid    root = ut_root(T);
     ut_record(T, 5, 0, 3), ut_commit(T, NULL);
     assert(ut_diff(T, root, ut_current(T)) == 1);
-    assert(ut_mapoffset(T, 5) == 8);
+    assert(ut_mapoffset(T, 5) == 5);
     ut_deltree(S, T), ut_close(S);
 }
 
@@ -1533,7 +1533,39 @@ static void test_mapoffset_fresh(void) {
     ut_record(T, 5, 0, 3);
     assert(ut_freshdiff(T, 0, 1) == 1);
     assert(ut_mapoffset(T, 2) == 2);
-    assert(ut_mapoffset(T, 5) == 8);
+    assert(ut_mapoffset(T, 5) == 5);
+    ut_deltree(S, T), ut_close(S);
+}
+
+/* mapoffset: freshdiff backward (inverted) for delete */
+static void test_mapoffset_fresh_backward_delete(void) {
+    ut_State *S = ut_open(NULL, NULL);
+    ut_Tree  *T = ut_newtree(S, NULL);
+    ut_record(T, 24, 6, 0);                      /* delete 6 at 24 */
+    assert(ut_freshdiff(T, 1, 0) == 1);           /* inverted */
+    assert(ut_mapoffset(T, 24) == 24);            /* cursor at delete point */
+    ut_deltree(S, T), ut_close(S);
+}
+
+/* mapoffset: freshdiff backward (inverted) for insert */
+static void test_mapoffset_fresh_backward_insert(void) {
+    ut_State *S = ut_open(NULL, NULL);
+    ut_Tree  *T = ut_newtree(S, NULL);
+    ut_record(T, 5, 0, 3);                       /* insert 3 at 5 */
+    assert(ut_freshdiff(T, 1, 0) == 1);           /* inverted */
+    assert(ut_mapoffset(T, 5) == 5);              /* cursor at insert point */
+    assert(ut_mapoffset(T, 8) == 5);              /* cursor after append */
+    ut_deltree(S, T), ut_close(S);
+}
+
+/* mapoffset: freshdiff backward (inverted) for splice */
+static void test_mapoffset_fresh_backward_splice(void) {
+    ut_State *S = ut_open(NULL, NULL);
+    ut_Tree  *T = ut_newtree(S, NULL);
+    ut_record(T, 10, 2, 4);                      /* del 2, ins 4 at 10 */
+    assert(ut_freshdiff(T, 1, 0) == 1);           /* inverted */
+    assert(ut_mapoffset(T, 10) == 10);            /* cursor at edit start */
+    assert(ut_mapoffset(T, 14) == 12);            /* cursor after splice → ca+cins */
     ut_deltree(S, T), ut_close(S);
 }
 
@@ -1547,7 +1579,7 @@ static void test_mapoffset_zero(void) {
     /* insert at 0 */
     ut_record(T, 0, 0, 3), ut_commit(T, NULL);
     assert(ut_diff(T, root, ut_current(T)) == 1);
-    assert(ut_mapoffset(T, 0) == 3);
+    assert(ut_mapoffset(T, 0) == 0);
     ut_deltree(S, T);
     /* delete at 0 */
     T = ut_newtree(S, NULL), root = ut_root(T);
@@ -1629,6 +1661,9 @@ static void test_mapoffset_zero(void) {
     X(mapoffset_delete_in)           \
     X(mapoffset_empty)               \
     X(mapoffset_fresh)               \
+    X(mapoffset_fresh_backward_delete) \
+    X(mapoffset_fresh_backward_insert) \
+    X(mapoffset_fresh_backward_splice) \
     X(mapoffset_insert_after)        \
     X(mapoffset_insert_at)           \
     X(mapoffset_insert_before)       \
