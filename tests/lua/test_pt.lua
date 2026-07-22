@@ -566,15 +566,15 @@ function TestDoc:testUndoTree()
     lu.assertEquals(d:offset(), 6)
     d:redo() -- B -> firstchild = C (oldest)
     lu.assertEquals(d:dump(), "abcXYZ!")
-    lu.assertEquals(d:offset(), 7)
+    lu.assertEquals(d:offset(), 6)
     -- undo(C) + redo → still C, cursor preserved
     d:undo(); d:redo()
     lu.assertEquals(d:dump(), "abcXYZ!")
-    lu.assertEquals(d:offset(), 7)
+    lu.assertEquals(d:offset(), 6)
     -- Jump back to D via vid
     d:undo(vD)
     lu.assertEquals(d:dump(), "abcXYZ123")
-    lu.assertEquals(d:offset(), 9)
+    lu.assertEquals(d:offset(), 6)
 end
 
 function TestDoc:testBufferExport()
@@ -685,31 +685,31 @@ end
 
 function TestDoc:testLineCountEmpty()
     local d = pt.doc("")
-    lu.assertEquals(d:breaks(), 1)
+    lu.assertEquals(d:breaks(), 0)
 end
 
 function TestDoc:testBreaksAfterAppend()
     -- append at pos 0 should not change break count
     local d = pt.doc("hello\nworld\n")
-    lu.assertEquals(d:breaks(), 3)
+    lu.assertEquals(d:breaks(), 2)
     d:seek(0); d:append("X")
-    lu.assertEquals(d:breaks(), 3)
+    lu.assertEquals(d:breaks(), 2)
 end
 
 function TestDoc:testBreaksAfterAppendMiddle()
     -- append in middle of first line
     local d = pt.doc("hello\nworld\n")
-    lu.assertEquals(d:breaks(), 3)
+    lu.assertEquals(d:breaks(), 2)
     d:seek(2); d:append("X")
-    lu.assertEquals(d:breaks(), 3)
+    lu.assertEquals(d:breaks(), 2)
 end
 
 function TestDoc:testBreaksAfterAppendPastNL()
     -- append after \n (shifts \n position, line count unchanged)
     local d = pt.doc("hello\nworld\n")
-    lu.assertEquals(d:breaks(), 3)
+    lu.assertEquals(d:breaks(), 2)
     d:seek(6); d:append("X")  -- at "world"
-    lu.assertEquals(d:breaks(), 3)
+    lu.assertEquals(d:breaks(), 2)
 end
 
 function TestDoc:testLinesCorruptsSeekLine()
@@ -755,6 +755,29 @@ function TestDoc:testLinesTrailingNL()
     end
     lu.assertEquals(#lines, 1)
     lu.assertEquals(lines[1], "x")
+end
+
+function TestDoc:testBreaksLinesMismatchTrailingNL()
+    -- File ending with \n: breaks() counts trailing empty line,
+    -- but lines() does not yield it. This mismatch causes
+    -- editor G command to leave a ghost row at screen bottom.
+    local d = pt.doc("a\nb\n")
+    lu.assertEquals(d:breaks(), 2)   -- should match lines() yield count
+
+    local yielded = {}
+    for text in d:lines() do
+        table.insert(yielded, text)
+    end
+    lu.assertEquals(#yielded, 2)
+    lu.assertEquals(yielded[1], "a")
+    lu.assertEquals(yielded[2], "b")
+
+    -- Without trailing \n: consistent (already passing)
+    local d2 = pt.doc("a\nb")
+    lu.assertEquals(d2:breaks(), 2)
+    local c = 0
+    for _ in d2:lines() do c = c + 1 end
+    lu.assertEquals(c, 2)
 end
 
 function TestDoc:testLinesFormatL()
@@ -880,7 +903,7 @@ function TestDoc:testPieceBoundaryNewline()
     d:edit(0, "def")
     d:append("zzz\n")
     lu.assertEquals(d:dump(), "abcdefzzz\n")
-    lu.assertEquals(d:breaks(), 2)
+    lu.assertEquals(d:breaks(), 1)
     lu.assertEquals(d:linelen(0), 10)
 end
 
@@ -947,7 +970,7 @@ function TestDoc:testRedoCursorPosition()
     d:undo()   -- back to "hello", cursor at 3
     d:redo()   -- forward to "helxxxlo"
     lu.assertEquals(d:dump(), "helxxxlo")
-    lu.assertEquals(d:offset(), 6)
+    lu.assertEquals(d:offset(), 3) -- insert point (geometric mapping)
 end
 
 function TestDoc:testFreshUndoCursorPosition()
@@ -958,6 +981,20 @@ function TestDoc:testFreshUndoCursorPosition()
     d:undo()       -- discard fresh edits
     lu.assertEquals(d:dump(), "hello")
     lu.assertEquals(d:offset(), 2)
+end
+
+function TestDoc:testUndoLinecacheConsistency()
+    local d = pt.doc("line0\nline1\nline2\nline3\nline4\n")
+    d:seek("line", 2); d:seek("cur", 1); d:edit(0, "X"); d:commit()
+    d:seek("line", 1); local ll = d:linelen(1); d:remove(ll)
+    d:undo()
+    lu.assertEquals(d:dump(), "line0\nline1\nline2\nline3\nline4\n")
+    lu.assertEquals(d:breaks(), 5)
+    d:seek("set", 0)
+    local yielded = {}
+    for text in d:lines() do table.insert(yielded, text) end
+    lu.assertEquals(#yielded, 5)
+    lu.assertEquals(yielded[5], "line4")
 end
 
 function TestDoc:testNewBadArg()
@@ -1141,11 +1178,11 @@ function TestDoc:testLater()
     local vid = d:later()    -- -> "AB"
     lu.assertEquals(vid, vB)
     lu.assertEquals(d:dump(), "AB")
-    lu.assertEquals(d:offset(), 2)
+    lu.assertEquals(d:offset(), 1)
     vid = d:later() -- -> "ABC"
     lu.assertEquals(vid, vC)
     lu.assertEquals(d:dump(), "ABC")
-    lu.assertEquals(d:offset(), 3)
+    lu.assertEquals(d:offset(), 1)
 end
 
 function TestDoc:testEarilerAtRoot()
@@ -1204,12 +1241,12 @@ function TestDoc:testTreeEarilerLater()
     vid = d:later()
     lu.assertEquals(vid, vC)
     lu.assertEquals(d:dump(), "ABC")
-    lu.assertEquals(d:offset(), 3)
+    lu.assertEquals(d:offset(), 2)
     -- later: vC → vD
     vid = d:later()
     lu.assertEquals(vid, vD)
     lu.assertEquals(d:dump(), "ABD")
-    lu.assertEquals(d:offset(), 3)
+    lu.assertEquals(d:offset(), 2)
     -- navigate to root: vD→vB(undo), vB→vA(earlier), vA→root(earlier)
     d:undo(); d:earlier(); d:earlier()
     lu.assertEquals(d:dump(), "")

@@ -735,8 +735,11 @@ static int Ldoc_linelen(lua_State *L) {
 
 static int Ldoc_breaks(lua_State *L) {
     lpt_Doc *d = lpt_checkdoc(L, 1);
+    size_t   total, trailing = 0;
     lpt_checkerror(L, lpt_docsync(d, LPT_UNL, LPT_UNL));
-    return lua_pushinteger(L, (lua_Integer)(lc_breaks(d->lc) + 1)), 1;
+    total = pt_bytes(pt_buffer(&d->C));
+    if (lc_bytes(d->lc) < total) trailing = 1;
+    return lua_pushinteger(L, (lua_Integer)(lc_breaks(d->lc) + trailing)), 1;
 }
 
 static int Ldoc_lineiter(lua_State *L) {
@@ -778,14 +781,12 @@ static int Ldoc_commit(lua_State *L) {
 }
 
 static int lpt_switch(lua_State *L, lpt_Doc *d, ut_Vid src, ut_Vid dst) {
-    pt_Buffer      b = (pt_Buffer)ut_payload(dst);
-    size_t         pos = pt_offset(&d->C), hn;
-    const ut_Hunk *hs;
-    int            r;
+    pt_Buffer b = (pt_Buffer)ut_payload(dst);
+    size_t    pos = pt_offset(&d->C);
+    int       r;
     if ((r = ut_diff(d->ut, src, dst)) < 0) lpt_checkerror(L, r);
     pos = ut_mapoffset(d->ut, pos);
-    hs = ut_hunks(d->ut, &hn);
-    r = lpt_hunkapply(d->lc, hs, (int)hn, b);
+    r = lpt_hunkapply(d->lc, ut_hunks(d->ut, NULL), r, b);
     if (r == LC_OK) d->lcvid = dst;
     d->lck = 0, ut_switch(d->ut, dst);
     return pt_seek(&d->C, b, pos), lpt_pushvid(L, dst);
