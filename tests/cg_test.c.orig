@@ -1,0 +1,870 @@
+#define CG_IMPLEMENTATION
+#include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "cellgrid.h"
+
+#define cg_log(...) fprintf(stderr, __VA_ARGS__)
+
+static void *cg_test_alloc(void *ud, void *p, size_t osize, size_t nsize) {
+    void *np;
+    (void)ud, (void)osize;
+    if (nsize == 0) return free(p), NULL;
+    np = realloc(p, nsize);
+    if (!np) abort();
+    return np;
+}
+static void *oom_alloc(void *ud, void *p, size_t osize, size_t nsize) {
+    int *cnt = (int *)ud;
+    (void)osize;
+    if (nsize == 0) return free(p), NULL;
+    if (!cnt || *cnt <= 0) return NULL;
+    return (*cnt)--, realloc(p, nsize);
+}
+
+static int cg_test_wcw(int cp) { return cp < 0x80 ? 1 : 2; }
+
+typedef struct {
+    const char *name;
+    void (*fn)(void);
+} cg_test_entry;
+
+static int cg_test_main(
+        const char *b, const cg_test_entry *e, int argc, char *argv[]) {
+    int i, j;
+    cg_log("=== %s ===\n", b);
+    if (argc == 1) {
+        while (e->name) e->fn(), cg_log("  %s OK\n", e->name), ++e;
+        return cg_log("\nAll tests passed!\n"), 0;
+    }
+    for (i = 1; i < argc; ++i) {
+        const char *n = argv[i];
+        size_t      len = strlen(n);
+        int         found = 0, only = *n == '@';
+        if (only) n++, len--;
+        for (j = 0; e[j].name; ++j)
+            if (strlen(e[j].name) >= len && strncmp(n, e[j].name, len) == 0)
+                e[j].fn(), cg_log("  %s OK\n", e[j].name), found = 1,
+                                                           j = only ? 9999 : j;
+        if (!found) return cg_log("Unknown test: %s\n", n), 1;
+    }
+    return 0;
+}
+
+#define CG_TEST_MAIN(banner)                                     \
+    int main(int argc, char *argv[]) {                           \
+        static const cg_test_entry e[] = {TESTS(X){NULL, NULL}}; \
+        return cg_test_main(banner, e, argc, argv);              \
+    }
+
+#define X(name)    static void test_##name(void)
+#define TEST(name) X(name)
+
+/* ================================================================== */
+
+TEST(open_params) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    assert(g);
+    assert(cg_rows(g) == 0);
+    assert(cg_cols(g) == 0);
+    assert(cg_top(g) == 0);
+    cg_close(g);
+}
+
+TEST(open_close) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    assert(g);
+    cg_close(g);
+    cg_close(NULL); /* must not crash */
+}
+
+/* ================================================================== */
+/*  cg_begin                                                          */
+/* ================================================================== */
+
+TEST(begin_first) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 5, 2, 3);
+    assert(cg_rows(g) == 2);
+    assert(cg_cols(g) == 3);
+    assert(cg_top(g) == 5);
+    cg_close(g);
+}
+
+TEST(begin_resize_grow) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_begin(g, 0, 2, 3);
+    cg_put(g, 0, 0, "A", 1);
+    cg_begin(g, 1, 4, 5);
+    assert(cg_rows(g) == 4);
+    assert(cg_cols(g) == 5);
+    assert(cg_top(g) == 1);
+    /* overlap region preserved */
+    assert(cg_cell(g, 0, 0, NULL) == 'A');
+    cg_close(g);
+}
+
+TEST(begin_resize_shrink) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_begin(g, 0, 4, 5);
+    cg_put(g, 0, 2, "B", 1);
+    cg_begin(g, 2, 2, 3);
+    assert(cg_rows(g) == 2);
+    assert(cg_cols(g) == 3);
+    assert(cg_top(g) == 2);
+    assert(cg_cell(g, 0, 2, NULL) == 'B');
+    cg_close(g);
+}
+
+TEST(begin_zero) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 0, 5);
+    assert(cg_rows(g) == 0);
+    assert(cg_cols(g) == 0);
+    cg_begin(g, 0, 5, 0);
+    assert(cg_rows(g) == 0);
+    assert(cg_cols(g) == 0);
+    cg_close(g);
+}
+
+TEST(begin_same) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_begin(g, 0, 2, 3);
+    cg_put(g, 0, 0, "X", 1);
+    cg_begin(g, 10, 2, 3);
+    assert(cg_rows(g) == 2);
+    assert(cg_top(g) == 10);
+    /* data preserved */
+    assert(cg_cell(g, 0, 0, NULL) == 'X');
+    cg_close(g);
+}
+
+/* ================================================================== */
+/*  cg_setwcwidth / cg_clear                                           */
+/* ================================================================== */
+
+TEST(wcwidth_set) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 4);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, "\xe4\xb8\xad", 1); /* U+4E2D w=2 */
+    assert(cg_cell(g, 0, 0, NULL) == 0x4e2d);
+    assert(cg_cell(g, 0, 1, NULL) == 0);
+    cg_close(g);
+}
+
+TEST(clear_set) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    cg_clear(g); /* sets all_dirty, no crash */
+    cg_close(g);
+}
+
+/* ================================================================== */
+/*  cg_put (cell write)                                                */
+/* ================================================================== */
+
+TEST(put_ascii) {
+    unsigned st;
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 1, "a", 7);
+    assert(cg_cell(g, 0, 1, &st) == 'a');
+    assert(st == 7);
+    cg_close(g);
+}
+
+TEST(put_widechar) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 4);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, "\xe4\xb8\xad", 2); /* U+4E2D */
+    assert(cg_cell(g, 0, 0, NULL) == 0x4e2d);
+    assert(cg_cell(g, 0, 1, NULL) == 0);
+    cg_close(g);
+}
+
+TEST(put_truncate) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 1, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 2, "\xe4\xb8\xad", 1); /* last col, truncate */
+    assert(cg_cell(g, 0, 2, NULL) == '>');
+    cg_close(g);
+}
+
+TEST(put_overwrite_left) {
+    /* wide then narrow on right half → left cleared */
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 1, 4);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, "\xe4\xb8\xad", 1); /* wide */
+    cg_put(g, 0, 1, "a", 1);            /* narrow on right half */
+    assert(cg_cell(g, 0, 0, NULL) == 0x20);
+    assert(cg_cell(g, 0, 1, NULL) == 'a');
+    cg_close(g);
+}
+
+TEST(put_overwrite_right) {
+    /* wide then narrow on left half → right cleared */
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 1, 4);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, "\xe4\xb8\xad", 1); /* wide */
+    cg_put(g, 0, 0, "a", 1);            /* narrow on left half */
+    assert(cg_cell(g, 0, 0, NULL) == 'a');
+    assert(cg_cell(g, 0, 1, NULL) == 0x20);
+    cg_close(g);
+}
+
+TEST(put_utf8_range) {
+    /* 2-byte (U+00C0) and 4-byte (U+10000) UTF-8 paths */
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 1, 4);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, "\xc3\x80", 1); /* U+00C0, 2-byte */
+    assert(cg_cell(g, 0, 0, NULL) == 0xc0);
+    assert(cg_cell(g, 0, 1, NULL) == 0);
+    cg_clearrow(g, 0);
+    cg_put(g, 0, 0, "\xf0\x90\x80\x80", 1); /* U+10000, 4-byte */
+    assert(cg_cell(g, 0, 0, NULL) == 0x10000);
+    assert(cg_cell(g, 0, 1, NULL) == 0);
+    cg_close(g);
+}
+
+TEST(put_params) {
+    /* null, empty, OOB all no-op no-crash */
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, NULL, 0);
+    cg_put(g, 0, 0, "", 0);
+    cg_put(g, -1, 0, "a", 0);
+    cg_put(g, 2, 0, "a", 0);
+    cg_put(g, 0, -1, "a", 0);
+    cg_put(g, 0, 3, "a", 0);
+    assert(cg_cell(g, 0, 0, NULL) == 0x20); /* unchanged */
+    cg_close(g);
+}
+
+/* ================================================================== */
+/*  cg_span                                                           */
+/* ================================================================== */
+
+TEST(span_set) {
+    unsigned st;
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 4);
+    cg_span(g, 0, 1, 2, 3);
+    assert(cg_cell(g, 0, 1, &st) == 0x20);
+    assert(st == 3);
+    assert(cg_cell(g, 0, 2, &st) == 0x20);
+    assert(st == 3);
+    /* cell outside span unaffected */
+    cg_cell(g, 0, 0, &st);
+    assert(st == 0);
+    cg_close(g);
+}
+
+TEST(span_params) {
+    /* OOB, n<=0: nop no-crash */
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 4);
+    cg_span(g, -1, 0, 2, 1);
+    cg_span(g, 2, 0, 2, 1);
+    cg_span(g, 0, -1, 2, 1);
+    cg_span(g, 0, 4, 2, 1);
+    cg_span(g, 0, 0, 0, 1);
+    cg_span(g, 0, 0, -1, 1);
+    /* span clip: n > remaining cols */
+    cg_span(g, 0, 3, 5, 7); /* n clipped to 1, should not crash */
+    cg_close(g);
+}
+
+/* ================================================================== */
+/*  cg_clearrow / cg_clearend / cg_pad                                  */
+/* ================================================================== */
+
+TEST(clearrow_set) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 1, 0, "a", 1);
+    cg_put(g, 1, 1, "b", 1);
+    cg_clearrow(g, 1);
+    assert(cg_cell(g, 1, 0, NULL) == 0x20);
+    assert(cg_cell(g, 1, 1, NULL) == 0x20);
+    cg_close(g);
+}
+
+TEST(clearrow_out_of_bounds) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    cg_clearrow(g, -1);
+    cg_clearrow(g, 2);
+    cg_close(g);
+}
+
+TEST(clearend_set) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 1, 4);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, "a", 1);
+    cg_put(g, 0, 1, "b", 1);
+    cg_put(g, 0, 2, "c", 1);
+    cg_clearend(g, 0, 1);
+    assert(cg_cell(g, 0, 0, NULL) == 'a');
+    assert(cg_cell(g, 0, 1, NULL) == 0x20);
+    assert(cg_cell(g, 0, 2, NULL) == 0x20);
+    cg_close(g);
+}
+
+TEST(clearend_oob) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    cg_clearend(g, -1, 0);
+    cg_clearend(g, 2, 0);
+    cg_clearend(g, 0, -1);
+    cg_clearend(g, 0, 3);
+    cg_close(g);
+}
+
+TEST(pad_set) {
+    unsigned st;
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 1, 5);
+    cg_pad(g, 0, 1, 4, 9);
+    assert(cg_cell(g, 0, 1, &st) == 0x20 && st == 9);
+    assert(cg_cell(g, 0, 2, &st) == 0x20 && st == 9);
+    assert(cg_cell(g, 0, 3, &st) == 0x20 && st == 9);
+    /* col 0, 4 unaffected */
+    cg_cell(g, 0, 0, &st);
+    assert(st == 0);
+    cg_close(g);
+}
+
+TEST(pad_params) {
+    /* OOB, c>=end: nop no-crash */
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 4);
+    cg_pad(g, -1, 0, 2, 1);
+    cg_pad(g, 2, 0, 2, 1);
+    cg_pad(g, 0, -1, 2, 1);
+    cg_pad(g, 0, 4, 5, 1);
+    cg_pad(g, 0, 2, 2, 1);  /* c == end nop */
+    cg_pad(g, 0, 0, 10, 1); /* end > cols, clamp */
+    cg_close(g);
+}
+
+/* ================================================================== */
+/*  cg_putline                                                        */
+/* ================================================================== */
+
+TEST(putline_ascii) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 1, 6);
+    cg_setwcwidth(g, cg_test_wcw);
+    assert(cg_putline(g, 0, 0, "ab", 1) == 2);
+    assert(cg_cell(g, 0, 0, NULL) == 'a');
+    assert(cg_cell(g, 0, 1, NULL) == 'b');
+    cg_close(g);
+}
+
+TEST(putline_widechar) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 1, 6);
+    cg_setwcwidth(g, cg_test_wcw);
+    assert(cg_putline(g, 0, 0, "\xe4\xb8\xad", 1) == 2);
+    assert(cg_cell(g, 0, 0, NULL) == 0x4e2d);
+    assert(cg_cell(g, 0, 1, NULL) == 0);
+    cg_close(g);
+}
+
+TEST(putline_params) {
+    /* null, OOB, skip invalid byte */
+    char     buf[4];
+    int      rc;
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 4);
+    cg_setwcwidth(g, cg_test_wcw);
+    /* null: returns c */
+    assert(cg_putline(g, 0, 0, NULL, 1) == 0);
+    /* OOB: returns c */
+    assert(cg_putline(g, -1, 0, "a", 1) == 0);
+    assert(cg_putline(g, 0, 4, "a", 1) == 4);
+    /* skip: lone continuation byte */
+    buf[0] = (char)0x80;
+    buf[1] = 'a';
+    buf[2] = 'b';
+    buf[3] = '\0';
+    rc = cg_putline(g, 0, 0, buf, 1);
+    assert(rc == 2); /* skip 0x80, then a & b */
+    assert(cg_cell(g, 0, 0, NULL) == 'a');
+    assert(cg_cell(g, 0, 1, NULL) == 'b');
+    cg_close(g);
+}
+
+TEST(putline_skip) {
+    char     buf[3];
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 1, 4);
+    cg_setwcwidth(g, cg_test_wcw);
+    buf[0] = (char)0x80; /* continuation byte: utflen=0 */
+    buf[1] = 'X';
+    buf[2] = '\0';
+    assert(cg_putline(g, 0, 0, buf, 1) == 1);
+    assert(cg_cell(g, 0, 0, NULL) == 'X');
+    assert(cg_cell(g, 0, 1, NULL) == 0x20);
+    cg_close(g);
+}
+
+/* ================================================================== */
+/*  cg_highlight                                                      */
+/* ================================================================== */
+
+TEST(highlight_set) {
+    unsigned st;
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 1, 5);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, "a", 0);
+    cg_put(g, 0, 1, "b", 0);
+    cg_highlight(g, 0, 1, 3, 5);
+    /* col 1,2 get st=5, col 0 unchanged */
+    cg_cell(g, 0, 0, &st);
+    assert(st == 0);
+    assert(cg_cell(g, 0, 1, &st) == 'b' && st == 5);
+    assert(cg_cell(g, 0, 2, &st) == 0x20 && st == 5);
+    cg_close(g);
+}
+
+TEST(highlight_clamp_nop) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 4);
+    /* clamp cs<0 */
+    cg_highlight(g, 0, -1, 2, 1);
+    /* clamp ce>cols */
+    cg_highlight(g, 0, 2, 10, 1);
+    /* cs >= ce nop */
+    cg_highlight(g, 0, 3, 1, 1);
+    /* r OOB nop */
+    cg_highlight(g, -1, 0, 2, 1);
+    cg_close(g);
+}
+
+/* ================================================================== */
+/*  getters                                                            */
+/* ================================================================== */
+
+TEST(getter_values) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 3, 2, 5);
+    assert(cg_rows(g) == 2);
+    assert(cg_cols(g) == 5);
+    assert(cg_top(g) == 3);
+    cg_close(g);
+}
+
+TEST(getter_cell) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 1, "Z", 4);
+    assert(cg_cell(g, 0, 1, NULL) == 'Z');
+    cg_close(g);
+}
+
+TEST(getter_back) {
+    unsigned st;
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    assert(cg_back(g, 0, 0, &st) == 0x20);
+    assert(st == 0);
+    cg_close(g);
+}
+
+TEST(getter_params) {
+    /* OOB returns 0, st=NULL safe */
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    assert(cg_cell(g, -1, 0, NULL) == 0);
+    assert(cg_cell(g, 2, 0, NULL) == 0);
+    assert(cg_cell(g, 0, -1, NULL) == 0);
+    assert(cg_cell(g, 0, 3, NULL) == 0);
+    assert(cg_back(g, -1, 0, NULL) == 0);
+    assert(cg_isdirty(g, -1, 0) == 0);
+    assert(cg_isdirty(g, 0, 3) == 0);
+    cg_close(g);
+}
+
+/* ================================================================== */
+/*  edge cases                                                         */
+/* ================================================================== */
+
+TEST(empty_grid) {
+    /* ops on grid with rows=0 are nop no-crash */
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_put(g, 0, 0, "a", 0);
+    cg_span(g, 0, 0, 2, 1);
+    cg_clearrow(g, 0);
+    cg_clearend(g, 0, 0);
+    cg_pad(g, 0, 0, 2, 1);
+    assert(cg_putline(g, 0, 0, "a", 0) == 0);
+    cg_highlight(g, 0, 0, 2, 1);
+    assert(cg_cell(g, 0, 0, NULL) == 0);
+    assert(cg_back(g, 0, 0, NULL) == 0);
+    assert(cg_isdirty(g, 0, 0) == 0);
+    cg_close(g);
+}
+
+TEST(dirty_track) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 1, "a", 0);
+    assert(cg_isdirty(g, 0, 1) == 1);
+    cg_close(g);
+}
+
+TEST(diff_empty) {
+    cg_Grid       *g = cg_open(cg_test_alloc, NULL);
+    const cg_Diff *d;
+    cg_begin(g, 0, 2, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_freeze(g);
+    d = cg_diff(g);
+    assert(d != NULL);
+    assert(d->n == 0);
+    assert(d->has_scroll == 0);
+    cg_close(g);
+}
+
+TEST(diff_dirty) {
+    cg_Grid       *g = cg_open(cg_test_alloc, NULL);
+    const cg_Diff *d;
+    cg_begin(g, 0, 2, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, "a", 0);
+    cg_put(g, 1, 1, "b", 1);
+    d = cg_diff(g);
+    assert(d != NULL);
+    assert(d->n == 2);
+    cg_close(g);
+}
+
+TEST(diff_scroll) {
+    cg_Grid       *g = cg_open(cg_test_alloc, NULL);
+    const cg_Diff *d;
+    cg_begin(g, 0, 3, 4);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_freeze(g);
+    cg_begin(g, 1, 3, 4);
+    d = cg_diff(g);
+    assert(d != NULL);
+    assert(d->has_scroll == 1);
+    assert(d->scroll_n == 1);
+    cg_close(g);
+}
+
+TEST(freeze_copies) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, "X", 5);
+    assert(cg_isdirty(g, 0, 0) == 1);
+    assert(cg_back(g, 0, 0, NULL) == 0x20);
+    cg_freeze(g);
+    assert(cg_isdirty(g, 0, 0) == 0);
+    assert(cg_back(g, 0, 0, NULL) == 'X');
+    cg_close(g);
+}
+
+TEST(freeze_clears_dirty) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, "a", 0);
+    cg_put(g, 0, 1, "b", 0);
+    assert(cg_isdirty(g, 0, 0) == 1);
+    assert(cg_isdirty(g, 0, 1) == 1);
+    cg_freeze(g);
+    assert(cg_isdirty(g, 0, 0) == 0);
+    assert(cg_isdirty(g, 0, 1) == 0);
+    cg_close(g);
+}
+
+TEST(begin_scroll_down) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 3, 4);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, "A", 0);
+    cg_put(g, 1, 0, "B", 0);
+    cg_put(g, 2, 0, "C", 0);
+    cg_freeze(g);
+    cg_begin(g, 1, 3, 4);
+    assert(cg_cell(g, 0, 0, NULL) == 'B');
+    assert(cg_cell(g, 1, 0, NULL) == 'C');
+    cg_close(g);
+}
+
+TEST(begin_scroll_up) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 1, 3, 4);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, "A", 0);
+    cg_put(g, 1, 0, "B", 0);
+    cg_put(g, 2, 0, "C", 0);
+    cg_freeze(g);
+    cg_begin(g, 0, 3, 4);
+    assert(cg_cell(g, 1, 0, NULL) == 'A');
+    assert(cg_cell(g, 2, 0, NULL) == 'B');
+    cg_close(g);
+}
+
+TEST(begin_bigjump) {
+    cg_Grid       *g = cg_open(cg_test_alloc, NULL);
+    const cg_Diff *d;
+    cg_begin(g, 0, 3, 4);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, "A", 0);
+    cg_freeze(g);
+    cg_begin(g, 10, 3, 4);
+    d = cg_diff(g);
+    assert(d != NULL);
+    assert(d->n == 3);
+    assert(d->has_scroll == 0);
+    cg_close(g);
+}
+
+TEST(clear_all_dirty) {
+    cg_Grid       *g = cg_open(cg_test_alloc, NULL);
+    const cg_Diff *d;
+    cg_begin(g, 0, 2, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, "a", 0);
+    cg_freeze(g);
+    cg_clear(g);
+    cg_begin(g, 0, 2, 3);
+    d = cg_diff(g);
+    assert(d != NULL);
+    assert(d->n == 2);
+    cg_close(g);
+}
+
+/* ================================================================== */
+/*  internal: cgK_toutf8 (dead code, for coverage)                    */
+/* ================================================================== */
+
+TEST(toutf8) {
+    /* can call static helpers from same TU */
+    char buf[4];
+    assert(cgK_toutf8(0x41, buf) == 1 && buf[0] == 'A');
+    assert(cgK_toutf8(0xc0, buf) == 2);
+    assert((unsigned char)buf[0] == 0xc3 && (unsigned char)buf[1] == 0x80);
+    assert(cgK_toutf8(0x800, buf) == 3);
+    assert((unsigned char)buf[0] == 0xe0 && (unsigned char)buf[1] == 0xa0
+           && (unsigned char)buf[2] == 0x80);
+    assert(cgK_toutf8(0x10000, buf) == 4);
+    assert((unsigned char)buf[0] == 0xf0 && (unsigned char)buf[1] == 0x90
+           && (unsigned char)buf[2] == 0x80 && (unsigned char)buf[3] == 0x80);
+    assert(cgK_tocp("\xe0\xa0\x80", 3) == 0x800);
+    assert(cgK_tocp("\xef\xbf\xbf", 3) == 0xFFFF);
+}
+
+TEST(diff_emptygrid) {
+    cg_Grid       *g = cg_open(cg_test_alloc, NULL);
+    const cg_Diff *d = cg_diff(g);
+    assert(d && d->n == 0);
+    cg_close(g);
+}
+
+TEST(diff_twice) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_freeze(g), cg_diff(g);
+    cg_put(g, 0, 0, "a", 0);
+    assert(cg_diff(g)->n == 1);
+    cg_close(g);
+}
+
+TEST(diff_oom) {
+    int            cnt = 0;
+    cg_Grid       *g = cg_open(cg_test_alloc, NULL);
+    const cg_Diff *d;
+    cg_begin(g, 0, 2, 3);
+    g->allocf = oom_alloc, g->ud = &cnt;
+    d = cg_diff(g);
+    assert(d && d->n == 0 && d->has_scroll == 0);
+    cg_close(g);
+}
+
+TEST(begin_sametop) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_freeze(g);
+    cg_begin(g, 0, 2, 3);
+    assert(cg_isdirty(g, 0, 0) == 0);
+    cg_close(g);
+}
+
+TEST(put_same) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, "X", 0);
+    cg_freeze(g);
+    cg_put(g, 0, 0, "X", 0);
+    assert(cg_isdirty(g, 0, 0) == 0);
+    cg_close(g);
+}
+
+TEST(span_backmatch) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_span(g, 0, 0, 2, 5);
+    cg_freeze(g);
+    cg_span(g, 0, 0, 2, 5);
+    assert(cg_isdirty(g, 0, 0) == 0);
+    cg_close(g);
+}
+
+TEST(pad_stchange) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, "a", 0);
+    cg_freeze(g);
+    cg_pad(g, 0, 0, 1, 3);
+    assert(cg_cell(g, 0, 0, NULL) == 0x20);
+    cg_close(g);
+}
+
+TEST(highlight_backmatch) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_highlight(g, 0, 0, 2, 5);
+    cg_freeze(g);
+    cg_highlight(g, 0, 0, 2, 5);
+    assert(cg_isdirty(g, 0, 0) == 0);
+    cg_close(g);
+}
+
+TEST(scroll_up_expose) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 1, 3, 4);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, "A", 0);
+    cg_put(g, 1, 0, "B", 0);
+    cg_put(g, 2, 0, "C", 0);
+    cg_freeze(g);
+    cg_begin(g, 0, 3, 4);
+    assert(cg_cell(g, 0, 0, NULL) == 0x20);
+    assert(cg_cell(g, 1, 0, NULL) == 'A');
+    cg_close(g);
+}
+
+TEST(resize_cols) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, "A", 0);
+    cg_freeze(g);
+    cg_begin(g, 0, 2, 5);
+    assert(cg_cols(g) == 5);
+    assert(cg_cell(g, 0, 0, NULL) == 'A');
+    cg_close(g);
+}
+
+TEST(resize_rows) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    cg_put(g, 0, 0, "A", 0);
+    cg_freeze(g);
+    cg_begin(g, 0, 4, 3);
+    assert(cg_rows(g) == 4);
+    assert(cg_cell(g, 0, 0, NULL) == 'A');
+    cg_close(g);
+}
+
+TEST(putline_atend) {
+    cg_Grid *g = cg_open(cg_test_alloc, NULL);
+    cg_begin(g, 0, 2, 3);
+    cg_setwcwidth(g, cg_test_wcw);
+    assert(cg_putline(g, 0, 3, "abc", 0) == 3);
+    cg_close(g);
+}
+
+#define TESTS(X)              \
+    X(open_params)            \
+    X(open_close)             \
+    X(begin_first)            \
+    X(begin_resize_grow)      \
+    X(begin_resize_shrink)    \
+    X(begin_zero)             \
+    X(begin_same)             \
+    X(wcwidth_set)            \
+    X(clear_set)              \
+    X(put_ascii)              \
+    X(put_widechar)           \
+    X(put_utf8_range)         \
+    X(put_truncate)           \
+    X(put_overwrite_left)     \
+    X(put_overwrite_right)    \
+    X(put_params)             \
+    X(span_set)               \
+    X(span_params)            \
+    X(clearrow_set)           \
+    X(clearrow_out_of_bounds) \
+    X(clearend_set)           \
+    X(clearend_oob)           \
+    X(pad_set)                \
+    X(pad_params)             \
+    X(putline_ascii)          \
+    X(putline_widechar)       \
+    X(putline_params)         \
+    X(putline_skip)           \
+    X(highlight_set)          \
+    X(highlight_clamp_nop)    \
+    X(getter_values)          \
+    X(getter_cell)            \
+    X(getter_back)            \
+    X(getter_params)          \
+    X(empty_grid)             \
+    X(dirty_track)            \
+    X(diff_empty)             \
+    X(diff_dirty)             \
+    X(diff_scroll)            \
+    X(freeze_copies)          \
+    X(freeze_clears_dirty)    \
+    X(begin_scroll_down)      \
+    X(begin_scroll_up)        \
+    X(begin_bigjump)          \
+    X(clear_all_dirty)        \
+    X(begin_sametop)          \
+    X(put_same)               \
+    X(span_backmatch)         \
+    X(pad_stchange)           \
+    X(highlight_backmatch)    \
+    X(scroll_up_expose)       \
+    X(resize_cols)            \
+    X(resize_rows)            \
+    X(putline_atend)          \
+    X(diff_emptygrid)         \
+    X(diff_twice)             \
+    X(diff_oom)               \
+    X(toutf8)
+
+#undef X
+#define X(name) {#name, test_##name},
+CG_TEST_MAIN("cellgrid tests")

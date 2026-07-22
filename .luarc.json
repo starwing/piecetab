@@ -9,6 +9,7 @@
         ".git",
         ".vscode",
         "luaunit.lua",
+        "misc",
         "serpent.lua"
     ]
 }

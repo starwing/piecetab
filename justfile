@@ -64,10 +64,22 @@ ut *tests='': (dbg-run "ut_test" tests)
 ut-cov: clean-gcda (cov-run "ut_test") (cov-show "undotree.h")
 ut-lines: (cov-lines "undotree.h")
 
+# cellgrid tests
+cg *tests='': (dbg-run "cg_test" tests)
+cg-cov: clean-gcda (cov-run "cg_test") (cov-show "cellgrid.h")
+cg-lines: (cov-lines "cellgrid.h")
+
 # termkey binding
 
 tk-build:
     just -f deps/lua-termkey/justfile
+
+# cellgrid binding
+
+cg-lua-build:
+    mkdir -p build/lua55 build/luajit
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o build/lua55/cellgrid.so cellgrid.c
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o build/luajit/cellgrid.so cellgrid.c
 
 # lua binding (endpoints: PUC 5.5 + LuaJIT 2.1/5.1 cover the compat range)
 
