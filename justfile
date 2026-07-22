@@ -69,34 +69,22 @@ cg *tests='': (dbg-run "cg_test" tests)
 cg-cov: clean-gcda (cov-run "cg_test") (cov-show "cellgrid.h")
 cg-lines: (cov-lines "cellgrid.h")
 
-# termkey binding
-
-tk-build:
-    just -f deps/lua-termkey/justfile
-
-# cellgrid binding
-
-cg-lua-build:
-    mkdir -p build/lua55 build/luajit
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o build/lua55/cellgrid.so cellgrid.c
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o build/luajit/cellgrid.so cellgrid.c
-
 # lua binding (endpoints: PUC 5.5 + LuaJIT 2.1/5.1 cover the compat range)
 
 LUAFLAGS := "-Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -std=c89 -Wno-variadic-macros"
 LUA55_INC := "-I/opt/homebrew/include/lua5.5"
 LUAJIT_INC := "-I/opt/homebrew/include/luajit-2.1"
 
-lua-build:
+lua-pt-build:
     mkdir -p build/lua55 build/luajit
     {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o build/lua55/piecetab.so piecetab.c
     {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o build/luajit/piecetab.so piecetab.c
 
-lua-test *t: lua-build
-    lua tests/lua/test_pt.lua {{ t }}
-    luajit tests/lua/test_pt.lua {{ t }}
+lua-pt *t: lua-pt-build
+    lua tests/lua/pt_test.lua {{ t }}
+    luajit tests/lua/pt_test.lua {{ t }}
 
-lua-cov: clean-gcda
+lua-pt-cov: clean-gcda
     mkdir -p build/lua55 build/luajit
     {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o build/lua55/piecetab.so piecetab.c
     {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o build/luajit/piecetab.so piecetab.c
@@ -107,6 +95,17 @@ lua-cov: clean-gcda
     @echo "=== piecetab.c coverage ==="
     lcov --list --rc branch_coverage=1 lcov.info
 
-lua-lines:
+lua-pt-lines:
     @awk '/^DA:/ && /,0$/ {gsub(/DA:|,0/,""); print $0}' lcov.info \
     | sort -n | while read ln; do echo "L$ln: $(sed -n ${ln}p piecetab.c)"; done
+# cellgrid binding
+
+lua-cg-build:
+    mkdir -p build/lua55 build/luajit
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o build/lua55/cellgrid.so cellgrid.c
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o build/luajit/cellgrid.so cellgrid.c
+
+# termkey binding
+
+lua-tk-build:
+    just -f deps/lua-termkey/justfile
