@@ -772,11 +772,16 @@ static int Ldoc_commit(lua_State *L) {
     off = pt_offset(&d->C);
     b = pt_commit(&d->C);
     if (!b) lpt_checkerror(L, PT_ERRMEM);
+    if (d->lck && d->lck < (int)ut_freshcount(d->ut)) {
+        int r = ut_freshdiff(d->ut, d->lck, (int)ut_freshcount(d->ut));
+        if (r < 0) lpt_checkerror(L, r);
+        lpt_checkerror(L, lpt_hunkapply(d->lc, ut_hunks(d->ut, NULL), r, b));
+        d->lck = (int)ut_freshcount(d->ut);
+    }
     n = ut_commit(d->ut, (ut_Payload *)b);
     if (!n) pt_release(b), lpt_checkerror(L, PT_ERRMEM);
     lpt_setvid(L, 1, (lua_Integer)pt_version(b), n);
-    pt_seek(&d->C, b, off);
-    d->lcvid = n, d->lck = 0;
+    pt_seek(&d->C, b, off), d->lck = 0;
     return lua_pushinteger(L, (lua_Integer)pt_version(b)), 1;
 }
 
@@ -797,12 +802,17 @@ static int Ldoc_undo(lua_State *L) {
     ut_Vid    dst, src = ut_current(d->ut);
     pt_Buffer b;
     size_t    pos = pt_offset(&d->C);
-    int       r;
-    if (ut_freshcount(d->ut)) {
-        if ((r = ut_freshdiff(d->ut, ut_freshcount(d->ut), 0)) < 0)
-            lpt_checkerror(L, r);
+    int       r, fc = ut_freshcount(d->ut);
+    if (fc) {
+        if ((r = ut_freshdiff(d->ut, fc, 0)) < 0) lpt_checkerror(L, r);
         pos = ut_mapoffset(d->ut, pos);
         b = (pt_Buffer)ut_payload(src);
+        if (d->lck) {
+            if (d->lck != fc && (r = ut_freshdiff(d->ut, d->lck, 0)) < 0)
+                lpt_checkerror(L, r);
+            r = lpt_hunkapply(d->lc, ut_hunks(d->ut, NULL), r, b);
+            lpt_checkerror(L, r), d->lck = 0;
+        }
         pt_release(pt_rollback(&d->C)), ut_discard(d->ut);
         pt_seek(&d->C, b, pos);
     }

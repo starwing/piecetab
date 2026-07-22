@@ -669,6 +669,25 @@ function TestDoc:testFreshUndoCannotRedo()
     lu.assertEquals(d:dump(), "hello")
 end
 
+function TestDoc:testFreshUndoNoSyncLineCache()
+    -- lck=1 at undo: assert(d->lck == 0) fires before ut_discard
+    local d = pt.doc("L0\nL1\nL2\nL3\n")
+    d:seek("line", 0); d:edit(0, "X")       -- freshcount=1, lck=0
+    d:breaks()                                 -- sync lc → lck=1
+    d:undo()                                   -- assert: lck must be 0
+    d:seek("line", 1)
+    lu.assertEquals(d:read("l"), "L1")
+end
+
+function TestDoc:testCommitLckInvariant()
+    -- lck not 0 and not freshcount at commit: assert fires
+    local d = pt.doc("L0\nL1\nL2\n")
+    d:seek("line", 0); d:edit(0, "A")        -- edit #1: fc=1, lck=0
+    d:line()                                   -- sync → lck=1
+    d:seek("line", 1); d:edit(0, "B")        -- edit #2: fc=2, lck=1
+    d:commit()                                 -- assert: lck not 0, not fc
+end
+
 function TestDoc:testRedoFreshError()
     local d = pt.doc("hello")
     d:write(" world") -- uncommitted

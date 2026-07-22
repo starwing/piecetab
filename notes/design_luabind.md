@@ -192,9 +192,14 @@ d:dump() → string
   数据可从 payload 重 scan 覆盖；COW 化已否决）。lc 只跟随活动
   查询需求，靠 undotree diff + journal 追赶增量更新。
 - **编辑零负担**：编辑路径只 journal（24B/条 O(1) append），
-  不碰 lc、不触发追赶。lc 允许任意落后，追赶时逐条 apply 的坐标
-  基准逐条自然成立（无需 lc 与 pt 同步的前置条件——此为位点模型
-  相对旧设计"编辑必先修复行表"的关键差异）。
+   不碰 lc、不触发追赶。lc 允许在**行查询路径内**落后，
+   追赶时逐条 apply 的坐标基准逐条自然成立。
+
+  **铁律**：lc 落后仅在 lck 语义之下有效。切换 `ut_current`（经由
+  `ut_commit`/`ut_switch`）或丢弃 fresh 草稿（`ut_discard`）之
+  前，**必须确保 lck == 0**（commit 例外：lck == freshcount 也合法，
+  此时 lc 已追平 fresh 可直接 set lcvid=n）。违反此不变式会导致
+  lc 数据与 current 节点状态不一致，且丢失还原所需 journal 信息。
 
 ### 6.2 数据结构（定案，2026-07 勘误）
 
@@ -208,7 +213,9 @@ lpt_Doc (userdata)
 ├── ut_Tree  *ut     (undotree 版本树)
 ├── lc_Cache *lc     (linecache，doc 持有；不可 delcache+newcache 重建)
 ├── ut_Vid    lcvid  (lc 对齐的 commit 版本节点，NULL=空)
-└── int       lck    (journal 条目已消费进 lc 的前缀条数)
+└── int       lck    (journal 条目已消费进 lc 的前缀条数；
+                      0 = lc 在 commit 状态，>0 = lc 含部分 fresh
+                      数据。铁律：换 current / discard 前必为 0)
 ```
 
 **doc = cursor 装文本 + undotree 管历史 + linecache 查行**。
@@ -231,7 +238,7 @@ Ldoc_edit/insert/append/splice/remove（write=append 别名）:
      （del=0且ins=0 时 ut_record 内部 no-op，绑定层不预先判断）
   2. pt_xxx(&d->C, ...)                   -- 直通
      失败 → ut_unrecord(d->ut, 1) 回退后抛
-  3. lcok = 0（编辑后 lc 过期）
+  3. lck 不变（编辑后 lc 自然落后，下次行查询自动追赶）
 ```
 
 编辑不触发 lc 追赶（§6.1）。off 取编辑前 `pt_offset(&d->C)`；
@@ -282,18 +289,34 @@ lpt_docsync(L, d, tbytes, tlines):
 
 ### 6.5 undo/redo 路径
 
-- **commit**（§5 Ldoc_commit）：
-  1. 如有 fresh journal：pt_commit(&d->C) → pt_Buffer b
-  2. ut_commit(d->ut, (ut_Payload*)b) → 新节点 n
-  3. lpt_setvid(d, pt_version(b), n)
-  4. pt_seek(&d->C, b, pt_offset 旧位置)
-  5. lcvid = n, lck = 0（版本变了，lc 数据需追赶至新节点）
-- **undo**（§5 Ldoc_undo）：
+> **lck 不变式（2026-07 勘误）**：切换 `ut_current` 或丢弃 fresh 草稿
+> 之前，lck 必须为 0。commit 是两个合法例外之一：lck == freshcount 也
+> 合法（此时 lc 已追平 fresh，可直接 set lcvid=n 跳过 version diff）。
+> lck 的其他值（0 < lck < freshcount）在 commit 前须先通过 barrier 追
+> 平到 freshcount。
+
+- **commit barrier**（lck → freshcount）：
+  1. 如有 fresh journal：
+     a. pt_commit(&d->C) → pt_Buffer b
+     b. 若 lck < ut_freshcount(ut)：
+        `ut_freshdiff(lck, ut_freshcount(ut))` → apply hunk 到 lc
+     c. ut_commit(d->ut, (ut_Payload*)b) → 新节点 n
+     d. lcvid = n, lck = 0
+     e. lpt_setvid(d, pt_version(b), n)
+     f. pt_seek(&d->C, b, pt_offset 旧位置)
+  2. 无 fresh → payload 同节点，返回当前 vid
+
+- **undo barrier**（lck → 0）：
   1. 保存 pos = pt_offset(&d->C)
-  2. 如有 fresh journal → ut_freshdiff + 光标坐标映射 → 丢弃
-  3. ut_diff(src, dst) → 光标坐标映射 + lc 数据同步
-  4. ut_switch(d->ut, dst); pt_seek(&d->C, payload(dst), pos)
-  5. lcvid = dst, lck = 0（lc 已同步至目标版本）
+  2. 如有 fresh journal → ut_freshdiff(freshcount, 0) → 光标坐标映射
+  3. 若 lck > 0：
+     `ut_freshdiff(lck, 0)` → apply 反向 hunk 到 lc
+     设 lck = 0
+  4. ut_discard(d->ut) → ptr_release(pt_rollback(&d->C))
+  5. pt_seek(&d->C, ut_payload(current), pos)
+  6. 若目标 vid ≠ current → ut_diff(src, dst) → hunkapply → ut_switch
+     → lcvid = dst, lck = 0
+
 - **redo**（§5 Ldoc_redo）：
   1. 如有 fresh journal → 无操作（§5 定案）
   2. ut_diff(cur, target) → 光标坐标映射 + lc 数据同步
