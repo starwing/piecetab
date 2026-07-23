@@ -44,12 +44,8 @@
 
 /* ---- grid userdata ---- */
 
-typedef struct {
-    cg_Grid g;
-} lcg_Grid;
-
-static lcg_Grid *lcg_check(lua_State *L, int idx) {
-    return (lcg_Grid *)luaL_checkudata(L, idx, LCG_GRID_TYPE);
+static cg_Grid *lcg_check(lua_State *L, int idx) {
+    return (cg_Grid *)luaL_checkudata(L, idx, LCG_GRID_TYPE);
 }
 
 static int lcg_cptoutf8(int cp, char *buf) {
@@ -79,13 +75,16 @@ static int lcg_cptoutf8(int cp, char *buf) {
 
 #define lcgW_tablesize(t) (sizeof(t) / sizeof((t)[0]))
 
-static int lcgW_find(const range_table *t, size_t size, utfint ch) {
+static int lcg_find(const range_table *t, size_t size, utfint ch) {
     size_t begin = 0, end = size;
     while (begin < end) {
         size_t mid = (begin + end) / 2;
-        if (t[mid].last < ch) begin = mid + 1;
-        else if (t[mid].first > ch) end = mid;
-        else return (int)((ch - t[mid].first) % (utfint)t[mid].step == 0);
+        if (t[mid].last < ch)
+            begin = mid + 1;
+        else if (t[mid].first > ch)
+            end = mid;
+        else
+            return (int)((ch - t[mid].first) % (utfint)t[mid].step == 0);
     }
     return 0;
 }
@@ -93,11 +92,11 @@ static int lcgW_find(const range_table *t, size_t size, utfint ch) {
 static int lcgW_width(void *ud, int cp) {
     utfint ch = (utfint)cp;
     (void)ud;
-    if (lcgW_find(zerowidth_table, lcgW_tablesize(zerowidth_table), ch))
+    if (lcg_find(zerowidth_table, lcgW_tablesize(zerowidth_table), ch))
         return 0;
-    if (lcgW_find(doublewidth_table, lcgW_tablesize(doublewidth_table), ch))
+    if (lcg_find(doublewidth_table, lcgW_tablesize(doublewidth_table), ch))
         return 2;
-    if (lcgW_find(ambiwidth_table, lcgW_tablesize(ambiwidth_table), ch))
+    if (lcg_find(ambiwidth_table, lcgW_tablesize(ambiwidth_table), ch))
         return 2;
     return 1;
 }
@@ -105,141 +104,134 @@ static int lcgW_width(void *ud, int cp) {
 /* ===== Grid lifecycle ===== */
 
 static int Lgrid_delete(lua_State *L) {
-    cg_free(&lcg_check(L, 1)->g);
+    cg_Grid *g = lcg_check(L, 1);
+    if (cg_valid(g)) cg_free(g);
     return 0;
 }
 
 static int Lgrid_new(lua_State *L) {
-    lcg_Grid *lg = (lcg_Grid *)lua_newuserdata(L, sizeof(lcg_Grid));
-    cg_init(&lg->g, NULL, NULL);
-    cg_setwcwidth(&lg->g, lcgW_width, NULL);
+    cg_Grid *g = (cg_Grid *)lua_newuserdata(L, sizeof(cg_Grid));
+    cg_init(g, NULL, NULL);
+    cg_setwcwidth(g, lcgW_width, NULL);
     luaL_setmetatable(L, LCG_GRID_TYPE);
     return 1;
 }
 
 /* ===== Frame methods ===== */
 
+static int lcg_checkerror(lua_State *L, int r) {
+    switch (r) {
+    case CG_OK: return r;
+    case CG_ERRMEM: return luaL_error(L, "cellgrid: out of memory");
+    case CG_ERRPARAM: return luaL_error(L, "cellgrid: invalid parameter");
+    default: return luaL_error(L, "cellgrid: unknown error(%d)", r);
+    }
+}
+
 static int Lgrid_begin(lua_State *L) {
-    lcg_Grid *lg = lcg_check(L, 1);
-    int       top = (int)luaL_checkinteger(L, 2);
-    int       rows = (int)luaL_checkinteger(L, 3);
-    int       cols = (int)luaL_checkinteger(L, 4);
-    int       r = cg_begin(&lg->g, top, rows, cols);
-    if (r != CG_OK)
-        luaL_error(
-                L, r == CG_ERRMEM ? "cellgrid: out of memory"
-                                  : "cellgrid: invalid parameter");
-    return 0;
+    cg_Grid *g = lcg_check(L, 1);
+    int      top = (int)luaL_checkinteger(L, 2);
+    int      rows = (int)luaL_checkinteger(L, 3);
+    int      cols = (int)luaL_checkinteger(L, 4);
+    return lcg_checkerror(L, cg_begin(g, top, rows, cols)), lua_settop(L, 1), 1;
 }
 
-static int Lgrid_clear(lua_State *L) {
-    cg_clear(&lcg_check(L, 1)->g);
-    return 0;
-}
+/* clang-format off */
+static int Lgrid_clear(lua_State *L)
+{ return cg_clear(lcg_check(L, 1)), lua_settop(L, 1), 1; }
 
-static int Lgrid_freeze(lua_State *L) {
-    cg_freeze(&lcg_check(L, 1)->g);
-    return 0;
-}
+static int Lgrid_freeze(lua_State *L)
+{ return cg_freeze(lcg_check(L, 1)), lua_settop(L, 1), 1; }
+/* clang-format on */
 
 /* ===== Cell writing methods ===== */
 
 static int Lgrid_put(lua_State *L) {
-    lcg_Grid *lg = lcg_check(L, 1);
-    int       r = (int)luaL_checkinteger(L, 2);
-    int       c = (int)luaL_checkinteger(L, 3);
-    int       cp = (int)luaL_checkinteger(L, 4);
-    unsigned  st = (unsigned)luaL_optinteger(L, 5, 0);
-    cg_put(&lg->g, r, c, cp, st);
-    return 0;
+    cg_Grid *g = lcg_check(L, 1);
+    int      r = (int)luaL_checkinteger(L, 2);
+    int      c = (int)luaL_checkinteger(L, 3);
+    int      cp = (int)luaL_checkinteger(L, 4);
+    unsigned st = (unsigned)luaL_optinteger(L, 5, 0);
+    return cg_put(g, r, c, cp, st), lua_settop(L, 1), 1;
 }
 
 static int Lgrid_clearrow(lua_State *L) {
-    lcg_Grid *lg = lcg_check(L, 1);
-    int       r = (int)luaL_checkinteger(L, 2);
-    int       cs = (int)luaL_checkinteger(L, 3);
-    int       ce = (int)luaL_checkinteger(L, 4);
-    cg_clearrow(&lg->g, r, cs, ce);
-    return 0;
+    cg_Grid *g = lcg_check(L, 1);
+    int      r = (int)luaL_checkinteger(L, 2);
+    int      cs = (int)luaL_checkinteger(L, 3);
+    int      ce = (int)luaL_checkinteger(L, 4);
+    return cg_clearrow(g, r, cs, ce), lua_settop(L, 1), 1;
 }
 
 static int Lgrid_fill(lua_State *L) {
-    lcg_Grid *lg = lcg_check(L, 1);
-    int       r = (int)luaL_checkinteger(L, 2);
-    int       cs = (int)luaL_checkinteger(L, 3);
-    int       ce = (int)luaL_checkinteger(L, 4);
-    int       cp = (int)luaL_checkinteger(L, 5);
-    cg_fill(&lg->g, r, cs, ce, cp);
-    return 0;
+    cg_Grid *g = lcg_check(L, 1);
+    int      r = (int)luaL_checkinteger(L, 2);
+    int      cs = (int)luaL_checkinteger(L, 3);
+    int      ce = (int)luaL_checkinteger(L, 4);
+    int      cp = (int)luaL_checkinteger(L, 5);
+    return cg_fill(g, r, cs, ce, cp), lua_settop(L, 1), 1;
 }
 
 static int Lgrid_span(lua_State *L) {
-    lcg_Grid *lg = lcg_check(L, 1);
-    int       r = (int)luaL_checkinteger(L, 2);
-    int       cs = (int)luaL_checkinteger(L, 3);
-    int       ce = (int)luaL_checkinteger(L, 4);
-    unsigned  st = (unsigned)luaL_checkinteger(L, 5);
-    cg_span(&lg->g, r, cs, ce, st);
-    return 0;
+    cg_Grid *g = lcg_check(L, 1);
+    int      r = (int)luaL_checkinteger(L, 2);
+    int      cs = (int)luaL_checkinteger(L, 3);
+    int      ce = (int)luaL_checkinteger(L, 4);
+    unsigned st = (unsigned)luaL_checkinteger(L, 5);
+    return cg_span(g, r, cs, ce, st), lua_settop(L, 1), 1;
 }
 
 static int Lgrid_putline(lua_State *L) {
-    lcg_Grid   *lg = lcg_check(L, 1);
+    cg_Grid    *g = lcg_check(L, 1);
     int         r = (int)luaL_checkinteger(L, 2);
     int         c = (int)luaL_checkinteger(L, 3);
     size_t      len;
     const char *s = luaL_checklstring(L, 4, &len);
     unsigned    st = (unsigned)luaL_optinteger(L, 5, 0);
-    lua_pushinteger(L, cg_putline(&lg->g, r, c, s, st));
-    return 1;
+    return lua_pushinteger(L, cg_putline(g, r, c, s, st)), 1;
 }
 
 /* ===== Getter methods ===== */
 
 static int Lgrid_cell(lua_State *L) {
-    lcg_Grid *lg = lcg_check(L, 1);
-    int       r = (int)luaL_checkinteger(L, 2);
-    int       c = (int)luaL_checkinteger(L, 3);
-    unsigned  st;
-    int       cp = cg_cell(&lg->g, r, c, &st);
+    cg_Grid *g = lcg_check(L, 1);
+    int      r = (int)luaL_checkinteger(L, 2);
+    int      c = (int)luaL_checkinteger(L, 3);
+    unsigned st;
+    int      cp = cg_cell(g, r, c, &st);
     lua_pushinteger(L, cp);
     lua_pushinteger(L, (int)st);
     return 2;
 }
 
 static int Lgrid_back(lua_State *L) {
-    lcg_Grid *lg = lcg_check(L, 1);
-    int       r = (int)luaL_checkinteger(L, 2);
-    int       c = (int)luaL_checkinteger(L, 3);
-    unsigned  st;
-    int       cp = cg_back(&lg->g, r, c, &st);
+    cg_Grid *g = lcg_check(L, 1);
+    int      r = (int)luaL_checkinteger(L, 2);
+    int      c = (int)luaL_checkinteger(L, 3);
+    unsigned st;
+    int      cp = cg_back(g, r, c, &st);
     lua_pushinteger(L, cp);
     lua_pushinteger(L, (int)st);
     return 2;
 }
 
 static int Lgrid_isdirty(lua_State *L) {
-    lcg_Grid *lg = lcg_check(L, 1);
-    int       r = (int)luaL_checkinteger(L, 2);
-    int       c = (int)luaL_checkinteger(L, 3);
-    lua_pushboolean(L, cg_isdirty(&lg->g, r, c));
-    return 1;
+    cg_Grid *g = lcg_check(L, 1);
+    int      r = (int)luaL_checkinteger(L, 2);
+    int      c = (int)luaL_checkinteger(L, 3);
+    return lua_pushboolean(L, cg_isdirty(g, r, c)), 1;
 }
 
-static int Lgrid_rows(lua_State *L) {
-    lua_pushinteger(L, lcg_check(L, 1)->g.rows);
-    return 1;
-}
+/* clang-format off */
+static int Lgrid_rows(lua_State *L)
+{ return lua_pushinteger(L, cg_rows(lcg_check(L, 1))), 1; }
 
-static int Lgrid_cols(lua_State *L) {
-    lua_pushinteger(L, lcg_check(L, 1)->g.cols);
-    return 1;
-}
+static int Lgrid_cols(lua_State *L)
+{ return lua_pushinteger(L, cg_cols(lcg_check(L, 1))), 1; }
 
-static int Lgrid_top(lua_State *L) {
-    lua_pushinteger(L, lcg_check(L, 1)->g.top);
-    return 1;
-}
+static int Lgrid_top(lua_State *L)
+{ return lua_pushinteger(L, cg_top(lcg_check(L, 1))), 1; }
+/* clang-format on */
 
 /* ===== Diff rendering (shared: fd>=0→write, fd=-1→luaL_Buffer) ===== */
 
@@ -256,12 +248,12 @@ static int Lgrid_top(lua_State *L) {
 #define LCG_DEF_REP "\x1b[%db"
 #define LCG_BUF     128
 
-typedef struct {
+typedef struct lcg_Diff {
     cg_Diff     base;
     lua_State  *L;
-    int         tblref;
+    int         optidx;
     int         fd;
-    luaL_Buffer lbuf;
+    luaL_Buffer b;
     int         rows;
     const char *cup_fmt;
     const char *csr_fmt;
@@ -270,36 +262,27 @@ typedef struct {
     const char *rep_fmt;
 } lcg_Diff;
 
-static const char *lcg_optstr(
-        lua_State *L, int tblidx, const char *key, const char *def) {
+static const char *lcg_opt(lua_State *L, int i, const char *k, const char *d) {
     const char *s;
-    lua_getfield(L, tblidx, key);
-    if (!lua_isstring(L, -1)) {
-        lua_pop(L, 1);
-        return def;
-    }
+    lua_getfield(L, i, k);
+    if (!lua_isstring(L, -1)) return lua_pop(L, 1), d;
     s = lua_tostring(L, -1);
     return lua_pop(L, 1), s;
 }
 
-static const char *lcg_styleof(lua_State *L, int tblref, unsigned st) {
-    lua_rawgeti(L, LUA_REGISTRYINDEX, tblref);
-    lua_rawgeti(L, -1, (int)st);
-    if (lua_isstring(L, -1)) {
-        const char *s = lua_tostring(L, -1);
-        lua_pop(L, 2);
-        return s;
-    }
-    lua_pop(L, 2);
-    return NULL;
+static const char *lcg_styleof(lua_State *L, int idx, unsigned st) {
+    const char *s;
+    lua_rawgeti(L, idx, (int)st);
+    s = lua_tostring(L, -1);
+    lua_pop(L, 1);
+    return s;
 }
 
 static int lcg_output(lcg_Diff *d, const char *buf, int len) {
     if (len <= 0) return 0;
     if (d->fd >= 0)
         return write(d->fd, buf, (size_t)len) == (ssize_t)len ? 0 : -1;
-    luaL_addlstring(&d->lbuf, buf, (size_t)len);
-    return 0;
+    return luaL_addlstring(&d->b, buf, (size_t)len), 0;
 }
 
 #define lcg_writef(D, fmt, ...)                               \
@@ -309,7 +292,7 @@ static int lcg_output(lcg_Diff *d, const char *buf, int len) {
         if (lcg_output((D), _b, _w)) return CG_ERRPARAM;      \
     } while (0)
 
-static int Ldiff_scroll(cg_Diff *D, int top, int bot, int n) {
+static int lcg_scroll(cg_Diff *D, int top, int bot, int n) {
     lcg_Diff *d = (lcg_Diff *)D;
     lcg_writef(d, d->csr_fmt, top, bot);
     if (n > 0)
@@ -320,97 +303,85 @@ static int Ldiff_scroll(cg_Diff *D, int top, int bot, int n) {
     return 0;
 }
 
-static int Ldiff_move(cg_Diff *D, int r, int c) {
+static int lcg_move(cg_Diff *D, int r, int c) {
     lcg_Diff *d = (lcg_Diff *)D;
     lcg_writef(d, d->cup_fmt, r + 1, c + 1);
     return 0;
 }
 
-static int Ldiff_style(cg_Diff *D, unsigned st) {
-    lcg_Diff *d = (lcg_Diff *)D;
-    const char *s = lcg_styleof(d->L, d->tblref, st);
+static int lcg_style(cg_Diff *D, unsigned st) {
+    lcg_Diff   *d = (lcg_Diff *)D;
+    const char *s = lcg_styleof(d->L, d->optidx, st);
     if (s) return lcg_output(d, s, (int)strlen(s));
     return 0;
 }
 
-static int Ldiff_fill(cg_Diff *D, int n, int cp) {
+static int lcg_fill(cg_Diff *D, int n, int cp) {
     lcg_Diff *d = (lcg_Diff *)D;
-    char        buf[8];
-    int         len = lcg_cptoutf8(cp, buf);
+    char      buf[8];
+    int       len = lcg_cptoutf8(cp, buf);
     if (lcg_output(d, buf, len)) return CG_ERRPARAM;
     if (n > 1) lcg_writef(d, d->rep_fmt, n - 1);
     return 0;
 }
 
-static int Ldiff_put(cg_Diff *D, int cp) {
+static int lcg_put(cg_Diff *D, int cp) {
     lcg_Diff *d = (lcg_Diff *)D;
-    char        buf[8];
-    int         len = lcg_cptoutf8(cp, buf);
+    char      buf[8];
+    int       len = lcg_cptoutf8(cp, buf);
     return lcg_output(d, buf, len);
 }
 
-static int Ldiff_finish(cg_Diff *D) {
-    lcg_Diff *d = (lcg_Diff *)D;
-    const char *s = lcg_styleof(d->L, d->tblref, 0U);
+static int lcg_finish(cg_Diff *D) {
+    lcg_Diff   *d = (lcg_Diff *)D;
+    const char *s = lcg_styleof(d->L, d->optidx, 0U);
     if (s) return lcg_output(d, s, (int)strlen(s));
     return 0;
 }
 
-static void lcg_initdiff(
-        lcg_Diff *d, lua_State *L, int tblidx, int fd, int rows) {
+static void lcg_initdiff(lcg_Diff *d, lua_State *L, int idx, int fd, int rows) {
     memset(d, 0, sizeof(*d));
     d->L = L, d->fd = fd, d->rows = rows;
-    lua_pushvalue(L, tblidx);
-    d->tblref = luaL_ref(L, LUA_REGISTRYINDEX);
-    d->cup_fmt = lcg_optstr(L, tblidx, LCG_KEY_CUP, LCG_DEF_CUP);
-    d->csr_fmt = lcg_optstr(L, tblidx, LCG_KEY_CSR, LCG_DEF_CSR);
-    d->indn_fmt = lcg_optstr(L, tblidx, LCG_KEY_IND, LCG_DEF_IND);
-    d->rin_fmt = lcg_optstr(L, tblidx, LCG_KEY_RIN, LCG_DEF_RIN);
-    d->rep_fmt = lcg_optstr(L, tblidx, LCG_KEY_REP, LCG_DEF_REP);
-    lua_getfield(L, tblidx, "fill_min");
+    d->optidx = idx;
+    d->cup_fmt = lcg_opt(L, idx, LCG_KEY_CUP, LCG_DEF_CUP);
+    d->csr_fmt = lcg_opt(L, idx, LCG_KEY_CSR, LCG_DEF_CSR);
+    d->indn_fmt = lcg_opt(L, idx, LCG_KEY_IND, LCG_DEF_IND);
+    d->rin_fmt = lcg_opt(L, idx, LCG_KEY_RIN, LCG_DEF_RIN);
+    d->rep_fmt = lcg_opt(L, idx, LCG_KEY_REP, LCG_DEF_REP);
+    lua_getfield(L, idx, "fill_min");
     d->base.fill_min = lua_isinteger(L, -1) ? (int)lua_tointeger(L, -1) : 0;
     lua_pop(L, 1);
-    d->base.scroll = Ldiff_scroll;
-    d->base.move = Ldiff_move;
-    d->base.style = Ldiff_style;
-    d->base.fill = Ldiff_fill;
-    d->base.put = Ldiff_put;
-    d->base.finish = Ldiff_finish;
+    d->base.scroll = lcg_scroll;
+    d->base.move = lcg_move;
+    d->base.style = lcg_style;
+    d->base.fill = lcg_fill;
+    d->base.put = lcg_put;
+    d->base.finish = lcg_finish;
 }
 
 static int Lgrid_diff(lua_State *L) {
-    lcg_Grid  *lg = lcg_check(L, 1);
+    cg_Grid *g = lcg_check(L, 1);
     lcg_Diff d;
-    if (lua_gettop(L) < 2 || lua_isnoneornil(L, 2))
-        lua_newtable(L);
+    if (lua_isnoneornil(L, 2))
+        lua_settop(L, 1), lua_newtable(L);
     else
         luaL_checktype(L, 2, LUA_TTABLE);
-    lcg_initdiff(&d, L, 2, -1, lg->g.rows);
-    luaL_buffinit(L, &d.lbuf);
-    if (cg_diff(&lg->g, &d.base) != CG_OK) {
-        luaL_unref(L, LUA_REGISTRYINDEX, d.tblref);
-        luaL_error(L, "cellgrid: diff failed");
-    }
-    luaL_unref(L, LUA_REGISTRYINDEX, d.tblref);
-    luaL_pushresult(&d.lbuf);
-    return 1;
+    lcg_initdiff(&d, L, 2, -1, cg_rows(g));
+    luaL_buffinit(L, &d.b);
+    lcg_checkerror(L, cg_diff(g, &d.base));
+    return luaL_pushresult(&d.b), 1;
 }
 
 static int Lgrid_render(lua_State *L) {
-    lcg_Grid  *lg = lcg_check(L, 1);
+    cg_Grid *g = lcg_check(L, 1);
     lcg_Diff d;
-    int        fd = (int)luaL_checkinteger(L, 2);
-    if (lua_gettop(L) < 3 || lua_isnoneornil(L, 3))
-        lua_newtable(L);
+    int      fd = (int)luaL_checkinteger(L, 2);
+    if (lua_isnoneornil(L, 3))
+        lua_settop(L, 2), lua_newtable(L);
     else
         luaL_checktype(L, 3, LUA_TTABLE);
-    lcg_initdiff(&d, L, 3, fd, lg->g.rows);
-    if (cg_diff(&lg->g, &d.base) != CG_OK) {
-        luaL_unref(L, LUA_REGISTRYINDEX, d.tblref);
-        luaL_error(L, "cellgrid: render failed");
-    }
-    luaL_unref(L, LUA_REGISTRYINDEX, d.tblref);
-    return 0;
+    lcg_initdiff(&d, L, 3, fd, cg_rows(g));
+    return lcg_checkerror(L, cg_diff(g, &d.base)), lua_settop(L, 1), 1;
 }
 
 /* ===== winsize ===== */

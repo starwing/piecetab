@@ -5,6 +5,8 @@
 package.cpath = package.cpath ..
     ";./build/lua55/?.so;./build/luajit/?.so;/opt/homebrew/lib/lua/5.5/?.so;/opt/homebrew/lib/lua/5.4/?.so"
 local pt = require("piecetab")
+local cg = require("cellgrid")
+
 local utf8 = require("lua-utf8")
 local termkey = require("termkey")
 
@@ -56,13 +58,8 @@ end
 
 --- @return integer row, integer cols
 function term.size()
-  local f = io.popen("stty size 2>/dev/null")
-  if f then
-    local s = f:read("*a")
-    f:close()
-    local r, c = s:match("^(%d+) (%d+)")
-    if r then return tonumber(r)|0, tonumber(c)|0 end
-  end
+  local r, c = cg.winsize(1) -- stdout fd
+  if r and c then return r, c end
   return 24, 80
 end
 
@@ -71,9 +68,9 @@ function term.move(row, col)
 end
 
 -- style codes
-term.REVERSE     = "\27[7m"
-term.DIM         = "\27[2m"
-term.RESET       = "\27[0m"
+term.REVERSE = "\27[7m"
+term.DIM     = "\27[2m"
+term.RESET   = "\27[0m"
 
 --- Read one key (blocking). Returns termkey-formatted key string for dispatch.
 function term.getkey()
@@ -87,25 +84,23 @@ end
 -- Section 2: Cell grid (frame buffer with scroll-aware diff)
 -- ================================================================
 
-local cg = require("cellgrid")
-
 -- style ID constants
 local STYLE_NORMAL = 0
 local STYLE_DIM    = 1
 local STYLE_GRAY   = 3
 
 -- diff style table
-local DIFF_STYLE = {
-    [0] = "\27[0m",          -- RESET
-    [1] = "\27[2m",          -- DIM
-    [3] = "\27[48;5;237m",   -- gray bg
+local DIFF_STYLE   = {
+  [0] = "\27[0m",        -- RESET
+  [1] = "\27[2m",        -- DIM
+  [3] = "\27[48;5;237m", -- gray bg
 }
 
 -- ================================================================
 -- Section 3: Highlight module (piece-based span coloring)
 -- ================================================================
 
-local hl = {}
+local hl           = {}
 
 --- Build array of {offset, length, kind} from piece boundaries.
 --- Uses doc cursor (includes uncommitted edits), restores position.
@@ -151,10 +146,12 @@ end
 -- Section 4: Editor engine
 -- ================================================================
 
+--- @class editor
+--- @field doc piecetab.Doc
 local ed = {}
 
 local function dirty(ed)
-    return ed.doc:version() ~= ed.saved_vid
+  return ed.doc:version() ~= ed.saved_vid
 end
 
 function ed.init(filename)
@@ -173,7 +170,7 @@ function ed.init(filename)
   ed.saved_vid = ed.doc:version()
   ed.pending_key = nil -- for multi-key sequences (gg, dd)
   ed.scroll_line = 0   -- first visible line (0-based)
-  ed.grid = cg.new() -- cell grid for diff-based rendering
+  ed.grid = cg.new()   -- cell grid for diff-based rendering
   edlog("init: file=%s lines=%d bytes=%d",
     filename or "(new)", ed.doc:breaks(), #ed.doc)
 end
@@ -361,7 +358,9 @@ local function render_line(g, row, col, text, segs, tabstop)
         clen = (b < 0xe0 and 2) or (b < 0xf0 and 3) or 4
       end
       local st = style_at(byte)
-      if st ~= cur_style then flush(); cur_style = st end
+      if st ~= cur_style then
+        flush(); cur_style = st
+      end
       byte = byte + clen
     end
   end

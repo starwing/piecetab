@@ -105,6 +105,25 @@ lua-cg-build:
     {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o build/lua55/cellgrid.so cellgrid.c
     {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o build/luajit/cellgrid.so cellgrid.c
 
+lua-cg *t: lua-cg-build
+    lua tests/lua/cg_test.lua {{ t }}
+    luajit tests/lua/cg_test.lua {{ t }}
+
+lua-cg-cov: clean-gcda
+    mkdir -p build/lua55 build/luajit
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o build/lua55/cellgrid.so cellgrid.c
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o build/luajit/cellgrid.so cellgrid.c
+    lua tests/lua/cg_test.lua && luajit tests/lua/cg_test.lua
+    lcov --capture --directory build --rc branch_coverage=1 --output-file lua_coverage.info --ignore-errors mismatch
+    lcov --extract lua_coverage.info '*/cellgrid.c' --rc branch_coverage=1 --output-file lcov.info
+    @echo ""
+    @echo "=== cellgrid.c coverage ==="
+    lcov --list --rc branch_coverage=1 lcov.info
+
+lua-cg-lines:
+    @awk '/^DA:/ && /,0$/ {gsub(/DA:|,0/,""); print $0}' lcov.info \
+    | sort -n | while read ln; do echo "L$ln: $(sed -n ${ln}p cellgrid.c)"; done
+
 # termkey binding
 
 lua-tk-build:
