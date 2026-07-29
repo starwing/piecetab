@@ -4,7 +4,7 @@
 
 **English** | [中文](README.zh.md)
 
-Three lightweight, stb-style single-header C89 libraries for building
+lightweight, stb-style single-header C89 libraries for building
 high-performance text editor buffers:
 
 - **`piecetab.h`** — a byte-level piece table backed by a B+ tree, with
@@ -14,11 +14,16 @@ high-performance text editor buffers:
 - **`undotree.h`** — a version tree + edit journal + diff service based on
   interval algebra, riding on top of `pt_Buffer` COW snapshots.
 
-The three libraries are independent and composable: piecetab stores bytes
+These libraries are independent and composable: piecetab stores bytes
 ("clean octets" — no line or encoding awareness), linecache tracks line
 breaks, undotree manages the version graph and computes diffs between any
 two versions. Combine them to get a full editor buffer with O(log n)
 offset ↔ line navigation and undo/redo.
+
+## AI Usage
+- All implements (stb header) are written by hand, AI used to find solutions, help with design, and generate documentation.
+- All tests are written by AI, reviewed by human, used to verify the correctness of the implementation, and to ensure that the code meets the requirements and specifications.
+- `editor.lua` is written by AI, used to demonstrate the usage of the library, and to provide a reference for developers who want to use the library in their own projects.
 
 ## Motivation
 
@@ -78,7 +83,7 @@ complex content:
 
 ## Quick Start
 
-All three are stb-style: include the header anywhere, define the
+All headers are stb-style: include the header anywhere, define the
 `*_IMPLEMENTATION` macro in exactly one translation unit.
 
 ### piecetab.h
@@ -176,15 +181,15 @@ the caller must keep the memory alive while any buffer references it.
 
 ### undotree.h
 
-| Category  | Functions                                                                       |
-| --------- | ------------------------------------------------------------------------------- |
-| Lifecycle | `ut_open`, `ut_close`, `ut_setcleaner`                                          |
-| Tree      | `ut_newtree`, `ut_deltree`                                                      |
-| Journal   | `ut_record`, `ut_unrecord`, `ut_freshcount`, `ut_discard`                       |
-| Version   | `ut_commit`, `ut_switch`                                                        |
-| Navigate  | `ut_root`, `ut_current`, `ut_parent`, `ut_payload`, `ut_childcount`       |
-| Navigate  | `ut_firstchild`, `ut_lastchild`, `ut_nextsib`, `ut_younger`, `ut_older`   |
-| Navigate  | `ut_ancestor`                                                                   |
+| Category  | Functions                                                               |
+| --------- | ----------------------------------------------------------------------- |
+| Lifecycle | `ut_open`, `ut_close`, `ut_setcleaner`                                  |
+| Tree      | `ut_newtree`, `ut_deltree`                                              |
+| Journal   | `ut_record`, `ut_unrecord`, `ut_freshcount`, `ut_discard`               |
+| Version   | `ut_commit`, `ut_switch`                                                |
+| Navigate  | `ut_root`, `ut_current`, `ut_parent`, `ut_payload`, `ut_childcount`     |
+| Navigate  | `ut_firstchild`, `ut_lastchild`, `ut_nextsib`, `ut_younger`, `ut_older` |
+| Navigate  | `ut_ancestor`                                                           |
 | Diff      | `ut_freshvid`, `ut_diff`, `ut_freshdiff`, `ut_hunks`, `ut_mapoffset`    |
 
 See [`docs/piecetab.md`](docs/piecetab.md),
@@ -195,18 +200,17 @@ See [`docs/piecetab.md`](docs/piecetab.md),
 
 Override before including the implementation:
 
-| Macro                           | Default | Meaning                              |
-| ------------------------------- | ------- | ------------------------------------ |
-| `PT_FANOUT` / `LC_FANOUT`       | 62      | max children per node                |
-| `LC_LEAF_FANOUT`                | 62      | max lines per leaf                   |
-| `PT_MAX_HOLESIZE`               | 64      | hole piece capacity                  |
-| `PT_MAX_LEVEL` / `LC_MAX_LEVEL` | 16      | max tree depth                       |
-| `PT_PAGE_SIZE` / `LC_PAGE_SIZE` | 65536   | pool allocator page size             |
-| `PT_ARENA_SIZE`                 | 1024    | arena block minimum size             |
-| `PT_COMPACT_RANGES`             | 64      | compact range array initial capacity |
-| `UT_PAGE_SIZE`                  | 65536   | undotree: pool allocator page size    |
+| Macro                                            | Default | Meaning                              |
+| ------------------------------------------------ | ------- | ------------------------------------ |
+| `PT_FANOUT` / `LC_FANOUT`                        | 62      | max children per node                |
+| `LC_LEAF_FANOUT`                                 | 62      | max lines per leaf                   |
+| `PT_MAX_HOLESIZE`                                | 64      | hole piece capacity                  |
+| `PT_MAX_LEVEL` / `LC_MAX_LEVEL`                  | 16      | max tree depth                       |
+| `PT_PAGE_SIZE` / `LC_PAGE_SIZE` / `UT_PAGE_SIZE` | 65536   | pool allocator page size             |
+| `PT_ARENA_SIZE`                                  | 1024    | arena block minimum size             |
+| `PT_COMPACT_RANGES`                              | 64      | compact range array initial capacity |
 
-All three libraries accept a custom allocator (`lc_Alloc` / `pt_Alloc`
+All libraries accept a custom allocator (`lc_Alloc` / `pt_Alloc`
 / `ut_Alloc`, Lua-style realloc signature) at `*_open`.
 
 ## Documentation
@@ -224,7 +228,7 @@ All three libraries accept a custom allocator (`lc_Alloc` / `pt_Alloc`
 ## Testing
 
 Tests run with tiny fanout (4) under ASan/UBSan to force tree splits, plus
-coverage builds via lcov. All three headers maintain **100% line / function
+coverage builds via lcov. All libraries maintain **100% line / function
 coverage** and ~90% branch coverage.
 
 ```sh

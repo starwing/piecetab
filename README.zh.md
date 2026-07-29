@@ -4,7 +4,7 @@
 
 [English](README.md) | **中文**
 
-三个轻量级 stb 风格单头文件 C89 库，用于构建高性能文本编辑器 buffer：
+多个轻量级 stb 风格单头文件 C89 库，用于构建高性能文本编辑器 buffer：
 
 - **`piecetab.h`** — 基于 B+ 树的字节级 piece table，支持写时复制（COW）
   快照、事务化编辑、零拷贝读取。
@@ -13,9 +13,14 @@
 - **`undotree.h`** — 基于区间代数的版本图 + 编辑日志 + 差分服务，骑在
   `pt_Buffer` COW 快照之上。
 
-三库相互独立、可自由组合：piecetab 只存字节（"clean octet"——不管行、
+所有库相互独立、可自由组合：piecetab 只存字节（"clean octet"——不管行、
 不管编码），linecache 只管行断点，undotree 管理版本图并为任意两版本计算差分。
 三者组合即得支持 O(log n) 偏移 ↔ 行号双向导航和 undo/redo 的完整编辑器 buffer。
+
+## AI 使用
+- 所有实现（stb 头文件）均为手写，AI 用于寻找解决方案、辅助设计和生成文档。
+- 所有测试均由 AI 编写，人工review，用于验证实现的正确性，并确保代码满足需求和规范。
+- `editor.lua` 由 AI 编写，用于演示库的使用，并为希望在自己的项目中使用库的开发者提供参考。
 
 ## 动机
 
@@ -63,7 +68,7 @@
 
 ## 快速上手
 
-三库皆为 stb 风格：任意处包含头文件，在恰好一个编译单元中定义
+所有库皆为 stb 风格：任意处包含头文件，在恰好一个编译单元中定义
 `*_IMPLEMENTATION` 宏。
 
 ### piecetab.h
@@ -161,15 +166,15 @@ int main(void) {
 
 ### undotree.h
 
-| 类别     | 函数                                                                       |
-| -------- | -------------------------------------------------------------------------- |
-| 生命周期 | `ut_open`, `ut_close`, `ut_setcleaner`                                     |
-| 树       | `ut_newtree`, `ut_deltree`                                                 |
-| Journal  | `ut_record`, `ut_unrecord`, `ut_freshcount`, `ut_discard`                  |
-| 版本     | `ut_commit`, `ut_switch`                                                   |
-| 导航     | `ut_root`, `ut_current`, `ut_parent`, `ut_payload`, `ut_childcount`       |
-| 导航     | `ut_firstchild`, `ut_lastchild`, `ut_nextsib`, `ut_younger`, `ut_older`   |
-| 导航     | `ut_ancestor`                                                              |
+| 类别     | 函数                                                                    |
+| -------- | ----------------------------------------------------------------------- |
+| 生命周期 | `ut_open`, `ut_close`, `ut_setcleaner`                                  |
+| 树       | `ut_newtree`, `ut_deltree`                                              |
+| Journal  | `ut_record`, `ut_unrecord`, `ut_freshcount`, `ut_discard`               |
+| 版本     | `ut_commit`, `ut_switch`                                                |
+| 导航     | `ut_root`, `ut_current`, `ut_parent`, `ut_payload`, `ut_childcount`     |
+| 导航     | `ut_firstchild`, `ut_lastchild`, `ut_nextsib`, `ut_younger`, `ut_older` |
+| 导航     | `ut_ancestor`                                                           |
 | Diff     | `ut_freshvid`, `ut_diff`, `ut_freshdiff`, `ut_hunks`, `ut_mapoffset`    |
 
 完整 API 参考见 [`docs/piecetab.zh.md`](docs/piecetab.zh.md)、
@@ -180,18 +185,17 @@ int main(void) {
 
 在包含实现之前覆盖以下宏：
 
-| 宏                              | 默认  | 含义                     |
-| ------------------------------- | ----- | ------------------------ |
-| `PT_FANOUT` / `LC_FANOUT`       | 62    | 节点最大子数             |
-| `LC_LEAF_FANOUT`                | 62    | 叶最大行数               |
-| `PT_MAX_HOLESIZE`               | 64    | hole piece 容量          |
-| `PT_MAX_LEVEL` / `LC_MAX_LEVEL` | 16    | 最大树深                 |
-| `PT_PAGE_SIZE` / `LC_PAGE_SIZE` | 65536 | 池分配器页大小           |
-| `PT_ARENA_SIZE`                 | 1024  | arena 块最小容量         |
-| `PT_COMPACT_RANGES`             | 64    | compact 区间数组初始容量 |
-| `UT_PAGE_SIZE`                  | 65536 | undotree: 池分配器页大小     |
+| 宏                                               | 默认  | 含义                     |
+| ------------------------------------------------ | ----- | ------------------------ |
+| `PT_FANOUT` / `LC_FANOUT`                        | 62    | 节点最大子数             |
+| `LC_LEAF_FANOUT`                                 | 62    | 叶最大行数               |
+| `PT_MAX_HOLESIZE`                                | 64    | hole piece 容量          |
+| `PT_MAX_LEVEL` / `LC_MAX_LEVEL`                  | 16    | 最大树深                 |
+| `PT_PAGE_SIZE` / `LC_PAGE_SIZE` / `UT_PAGE_SIZE` | 65536 | 池分配器页大小           |
+| `PT_ARENA_SIZE`                                  | 1024  | arena 块最小容量         |
+| `PT_COMPACT_RANGES`                              | 64    | compact 区间数组初始容量 |
 
-三库均可在 `*_open` 时传入自定义分配器（`lc_Alloc` / `pt_Alloc`
+所有库均可在 `*_open` 时传入自定义分配器（`lc_Alloc` / `pt_Alloc`
 / `ut_Alloc`，Lua 风格 realloc 签名）。
 
 ## 文档
@@ -205,7 +209,7 @@ int main(void) {
 ## 测试
 
 测试以极小扇出（4）配合 ASan/UBSan 运行以逼树分裂，并有 lcov 覆盖率
-构建。三个头文件均保持 **100% 行/函数覆盖**与约 90% 分支覆盖。
+构建。所有库均保持 **100% 行/函数覆盖**与约 90% 分支覆盖。
 
 ```sh
 just lc     # linecache 测试
