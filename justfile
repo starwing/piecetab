@@ -20,11 +20,11 @@ clean: clean-gcda
     rm -fr tests/*.dSYM
 
 cov-show src:
-    lcov --capture --directory . --rc branch_coverage=1 --output-file coverage.info --no-external --ignore-errors unsupported
-    lcov --extract coverage.info {{ src }} --rc branch_coverage=1  --output-file lcov.info
+    lcov --capture --directory . --rc branch_coverage=1 --output-file coverage.info --no-external --ignore-errors unsupported,inconsistent
+    lcov --extract coverage.info {{ src }} --rc branch_coverage=1 --ignore-errors inconsistent --output-file lcov.info
     @echo ""
     @echo "=== {{ src }} coverage ==="
-    lcov --list --rc branch_coverage=1  lcov.info
+    lcov --list --rc branch_coverage=1 --ignore-errors inconsistent lcov.info
 
 cov-lines src:
     @awk '/^DA:/ && /,0$/ {gsub(/DA:|,0/,""); print $0}' lcov.info \
@@ -68,6 +68,11 @@ ut-lines: (cov-lines "undotree.h")
 cg *tests='': (dbg-run "cg_test" tests)
 cg-cov: clean-gcda (cov-run "cg_test") (cov-show "cellgrid.h")
 cg-lines: (cov-lines "cellgrid.h")
+
+# termfeed tests
+tf *tests='': (dbg-run "tf_test" tests)
+tf-cov: clean-gcda (cov-run "tf_test") (cov-show "termfeed.h")
+tf-lines: (cov-lines "termfeed.h")
 
 # lua binding (endpoints: PUC 5.5 + LuaJIT 2.1/5.1 cover the compat range)
 
