@@ -152,7 +152,7 @@ PT_NS_END
 
 #ifndef PT_FANOUT
 # define PT_FANOUT 62
-#endif
+#endif /* PT_FANOUT */
 
 /* makeroom needs at most 2 free slots; a split of a full node leaves
  * FANOUT/2 free in the cursor's half, so require FANOUT >= 4. */
