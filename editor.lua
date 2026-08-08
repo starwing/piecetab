@@ -8,7 +8,7 @@ local pt = require("piecetab")
 local cg = require("cellgrid")
 
 local utf8 = require("lua-utf8")
-local termkey = require("termkey")
+local tf = require("termfeed")
 
 -- ================================================================
 -- Logging (writes to editor.log for debugging)
@@ -29,25 +29,25 @@ local function edlog(fmt, ...)
 end
 
 -- ================================================================
--- Section 1: Terminal control (powered by termkey)
+-- Section 1: Terminal control (powered by termfeed)
 -- ================================================================
 
 local term = {}
---- @type termkey.Termkey
+--- @type termfeed.State
 local tk_instance = nil
 
 function term.init()
   io.write("\27[?1049h") -- alt screen
   io.write("\27[?25l")   -- hide cursor
   io.flush()
-  tk_instance = assert(termkey.new(0))
-  tk_instance:setcanonflags("delbs")
-  tk_instance:start()
+  tk_instance = assert(tf.new())
+  tk_instance:setflag(tf.FLAG_DELBS)
+  tk_instance:raw(0)
 end
 
 function term.shutdown()
   if tk_instance then
-    tk_instance:stop()
+    tk_instance:cooked()
     tk_instance:delete()
   end
   io.write("\27[?25h")   -- show cursor
@@ -72,12 +72,12 @@ term.REVERSE = "\27[7m"
 term.DIM     = "\27[2m"
 term.RESET   = "\27[0m"
 
---- Read one key (blocking). Returns termkey-formatted key string for dispatch.
+--- Read one key (blocking). Returns termfeed-formatted key string for dispatch.
 function term.getkey()
   local tk = tk_instance
-  local r = tk:waitkey()
+  local r = tk:waitkey(0, -1)
   if r ~= "KEY" then return nil end
-  return tk:format(termkey.FORMAT_VIM)
+  return tk:format()
 end
 
 -- ================================================================

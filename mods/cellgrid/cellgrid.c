@@ -293,12 +293,14 @@ static int lcg_output(lcg_Diff *d, const char *buf, int len) {
     } while (0)
 
 static int lcg_scroll(cg_Diff *D, int top, int bot, int n) {
+    /* n = viewport delta (cg_begin): n>0 = viewport up → content down (rin),
+     * n<0 = viewport down → content up (indn) */
     lcg_Diff *d = (lcg_Diff *)D;
     lcg_writef(d, d->csr_fmt, top, bot);
     if (n > 0)
-        lcg_writef(d, d->indn_fmt, n);
+        lcg_writef(d, d->rin_fmt, n);
     else if (n < 0)
-        lcg_writef(d, d->rin_fmt, -n);
+        lcg_writef(d, d->indn_fmt, -n);
     lcg_writef(d, d->csr_fmt, 1, d->rows);
     return 0;
 }

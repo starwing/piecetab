@@ -3,9 +3,10 @@
 -- Uncovered: L423-425 (winsize ioctl success) -- requires TTY fd,
 --   not guaranteed in CI/non-interactive environments.
 local dir = arg[0]:match("^(.*)[/\\]") or "."
+local root = dir .. "/../.."
 package.path = dir .. "/?.lua;" .. package.path
-package.cpath = (_G["jit"] and "build/luajit/?.so;" or "build/lua55/?.so;")
-    .. package.cpath
+package.cpath = (_G["jit"] and root .. "/build/luajit/?.so;"
+    or root .. "/build/lua55/?.so;") .. package.cpath
 
 local lu = require "luaunit"
 local cg = require "cellgrid"
@@ -577,7 +578,8 @@ function TestSystem:testWinsizeFd()
 end
 
 function TestSystem:testWinsizeTty()
-    local f = assert(io.open("/dev/tty", "r"))
+    -- /dev/tty may not exist in non-interactive contexts: fall back
+    local f = io.open("/dev/tty", "r")
     if f then
         local ok, fd = pcall(function() return f["fd"](f) end)
         f:close()
@@ -605,7 +607,7 @@ function TestSystem:testWinsizeTty()
         local ttypath = p:read("*l")
         p:close()
         if ttypath then
-            local f2 = assert(io.open(ttypath, "r"))
+            local f2 = io.open(ttypath, "r")
             if f2 then
                 local ok, fd = pcall(function() return f2["fd"](f2) end)
                 f2:close()
@@ -673,6 +675,44 @@ function TestScroll:testDeltaPositive()
     g:put(1, 0, 68)
     local s = g:diff({})
     lu.assertStrContains(s, "C")
+end
+
+function TestScroll:testScrollDownDirection()
+    -- viewport moves down (top increases, delta<0): content must scroll UP
+    -- (SU = parm_index), exposing new lines at the bottom
+    local g = cg.new()
+    g:begin(0, 3, 4)
+    g:putline(0, 0, "L1")
+    g:putline(1, 0, "L2")
+    g:putline(2, 0, "L3")
+    g:freeze()
+    g:begin(1, 3, 4)
+    g:putline(0, 0, "L2")
+    g:putline(1, 0, "L3")
+    g:putline(2, 0, "L4")
+    local s = g:diff({ parm_index = "SU%d", parm_rindex = "SD%d" })
+    lu.assertStrContains(s, "SU1")
+    lu.assertNotStrContains(s, "SD1")
+    lu.assertStrContains(s, "4") -- new bottom line L4
+end
+
+function TestScroll:testScrollUpDirection()
+    -- viewport moves up (top decreases, delta>0): content must scroll DOWN
+    -- (SD = parm_rindex), exposing new lines at the top
+    local g = cg.new()
+    g:begin(1, 3, 4)
+    g:putline(0, 0, "L2")
+    g:putline(1, 0, "L3")
+    g:putline(2, 0, "L4")
+    g:freeze()
+    g:begin(0, 3, 4)
+    g:putline(0, 0, "L1")
+    g:putline(1, 0, "L2")
+    g:putline(2, 0, "L3")
+    local s = g:diff({ parm_index = "SU%d", parm_rindex = "SD%d" })
+    lu.assertStrContains(s, "SD1")
+    lu.assertNotStrContains(s, "SU1")
+    lu.assertStrContains(s, "1") -- new top line L1
 end
 
 -- ======== cgK_tocp branches (via putline) ========

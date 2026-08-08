@@ -22,6 +22,12 @@ jobs:
         run: just lc8
       - name: piecetab tests
         run: just pt
+      - name: undotree tests
+        run: just ut
+      - name: cellgrid tests
+        run: just cg
+      - name: termfeed tests
+        run: just tf
 
   coverage:
     if: "! contains(toJSON(github.event.commits.*.message), '[skip ci]')"

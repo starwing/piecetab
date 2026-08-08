@@ -1,84 +1,67 @@
-# linecache test runner
+import 'build.just'
 
-CC := "gcc"
-CFLAGS := "-Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic -std=c89 -Wno-variadic-macros"
+# piecetab core tests (cellgrid & termfeed live in mods/, delegated below)
+
 INCS := "-I. -Itests"
 
-cov: clean-gcda (cov-run "lc_test4") (cov-run "lc_test8") (cov-run "pt_test4") (cov-run "ut_test") (cov-show "piecetab.h linecache.h undotree.h")
+lc *tests='': (dbg-run "tests/lc_test4" "-I. -Itests" tests)
+# large fanout tests (LC_LEAF_FANOUT=8, LC_FANOUT=8)
+lc8 *tests='': (dbg-run "tests/lc_test8" "-I. -Itests" tests)
+pt *tests='': (dbg-run "tests/pt_test4" "-I. -Itests" tests)
+ut *tests='': (dbg-run "tests/ut_test" "-I. -Itests" tests)
 
-dbg-run t *tests='':
-    {{ CC }} {{ CFLAGS }} {{ INCS }} -g -O0 -fsanitize=address,undefined -o tests/{{ t }} tests/{{ t }}.c && ./tests/{{ t }} {{ tests }}
+# mods: delegate to per-module justfiles
 
-cov-run t *tests='':
-    {{ CC }} {{ CFLAGS }} {{ INCS }} --coverage -Wno-unused-function -O0 -o tests/{{ t }} tests/{{ t }}.c && ./tests/{{ t }} {{ tests }}
+cg *tests='': (mod-test "cellgrid" tests)
+tf *tests='': (mod-test "termfeed" tests)
 
-clean-gcda:
-    rm -f tests/*.gcda tests/*.gcno ./*.gcda ./*.gcno *.info build/*/*.gcda build/*/*.gcno
+mod-test mod *tests='':
+    @just -f mods/{{ mod }}/justfile test {{ tests }}
+
+lua-cg: (mod-lua "cellgrid")
+lua-tf: (mod-lua "termfeed")
+lua-cg-cov: (mod-lua-cov "cellgrid")
+lua-tf-cov: (mod-lua-cov "termfeed")
+lua-cg-lines: (mod-lua-lines "cellgrid")
+lua-tf-lines: (mod-lua-lines "termfeed")
+
+mod-lua mod:
+    @just -f mods/{{ mod }}/justfile lua
+
+mod-lua-cov mod:
+    @just -f mods/{{ mod }}/justfile lua-cov
+
+mod-lua-lines mod:
+    @just -f mods/{{ mod }}/justfile lua-lines
+
+# coverage
+
+cov: clean-gcda (cov-run "tests/lc_test4" "-I. -Itests") (cov-run "tests/lc_test8" "-I. -Itests") (cov-run "tests/pt_test4" "-I. -Itests") (cov-run "tests/ut_test" "-I. -Itests") (cov-run "mods/cellgrid/cellgrid_test" "-Imods/cellgrid -I.") (cov-run "mods/termfeed/termfeed_test" "-Imods/termfeed -I.") (cov-show "piecetab.h linecache.h undotree.h mods/cellgrid/cellgrid.h mods/termfeed/termfeed.h")
+
+lc-cov: clean-gcda (cov-run "tests/lc_test4" "-I. -Itests") (cov-run "tests/lc_test8" "-I. -Itests") (cov-show "linecache.h")
+pt-cov: clean-gcda (cov-run "tests/pt_test4" "-I. -Itests") (cov-show "piecetab.h")
+ut-cov: clean-gcda (cov-run "tests/ut_test" "-I. -Itests") (cov-show "undotree.h")
+cg-cov: clean-gcda (cov-run "mods/cellgrid/cellgrid_test" "-Imods/cellgrid -I.") (cov-show "mods/cellgrid/cellgrid.h")
+tf-cov: clean-gcda (cov-run "mods/termfeed/termfeed_test" "-Imods/termfeed -I.") (cov-show "mods/termfeed/termfeed.h")
+
+lc-lines: (cov-lines "linecache.h")
+pt-lines: (cov-lines "piecetab.h")
+ut-lines: (cov-lines "undotree.h")
+cg-lines: (cov-lines "mods/cellgrid/cellgrid.h")
+tf-lines: (cov-lines "mods/termfeed/termfeed.h")
+
+lc-unbranched: (cov-unbranched "linecache.h")
+pt-unbranched: (cov-unbranched "piecetab.h")
+ut-unbranched: (cov-unbranched "undotree.h")
+cg-unbranched: (cov-unbranched "mods/cellgrid/cellgrid.h")
+tf-unbranched: (cov-unbranched "mods/termfeed/termfeed.h")
 
 clean: clean-gcda
-    rm -f tests/lc_test4 tests/lc_test8 tests/pt_test4 tests/ut_test tests/ut_test
+    rm -f tests/lc_test4 tests/lc_test8 tests/pt_test4 tests/ut_test
+    rm -f mods/cellgrid/cellgrid_test mods/termfeed/termfeed_test
     rm -fr tests/*.dSYM
 
-cov-show src:
-    lcov --capture --directory . --rc branch_coverage=1 --output-file coverage.info --no-external --ignore-errors unsupported,inconsistent
-    lcov --extract coverage.info {{ src }} --rc branch_coverage=1 --ignore-errors inconsistent --output-file lcov.info
-    @echo ""
-    @echo "=== {{ src }} coverage ==="
-    lcov --list --rc branch_coverage=1 --ignore-errors inconsistent lcov.info
-
-cov-lines src:
-    @awk '/^DA:/ && /,0$/ {gsub(/DA:|,0/,""); print $0}' lcov.info \
-    | sort -n | while read ln; do echo "L$ln: $(sed -n ${ln}p {{ src }})"; done
-
-cov-unbranched src:
-    @awk -F'[:,]' '/^BRDA:/ && $5==0 {print $2}' lcov.info \
-    | sort -n -u \
-    | while read ln; do \
-        src=$(sed -n "${ln}p" {{ src }} 2>/dev/null); \
-        case "$src" in *assert*) ;; *) printf "L%-5d %s\n" "$ln" "$src";; esac; \
-    done
-
-cov-uncovered:
-    @awk '/^DA:/ && /,0$/ {gsub(/DA:|,0/,""); print $0}' lcov.info \
-    | sort -n | awk \
-    'NR==1{s=p=$1;c=1} $1==p+1{p=$1;c++} \
-    $1>p+1{printf "%4d-%-4d (%d lines)\n",s,p,c;s=$1;p=$1;c=1} \
-    END{printf "%4d-%-4d (%d lines)\n",s,p,c}'
-
-# linecache tests
-lc *tests='': (dbg-run "lc_test4" tests)
-# large fanout tests (LC_LEAF_FANOUT=8, LC_FANOUT=8)
-lc8 *tests='': (dbg-run "lc_test8" tests)
-lc-cov: clean-gcda (cov-run "lc_test4") (cov-run "lc_test8") (cov-show "linecache.h")
-lc-lines: (cov-lines "linecache.h")
-lc-unbranched: (cov-unbranched "linecache.h")
-
-# piecetab tests
-pt *tests='': (dbg-run "pt_test4" tests)
-pt-cov: clean-gcda (cov-run "pt_test4") (cov-show "piecetab.h")
-pt-lines: (cov-lines "piecetab.h")
-pt-unbranched: (cov-unbranched "piecetab.h")
-
-# undotree tests
-ut *tests='': (dbg-run "ut_test" tests)
-ut-cov: clean-gcda (cov-run "ut_test") (cov-show "undotree.h")
-ut-lines: (cov-lines "undotree.h")
-
-# cellgrid tests
-cg *tests='': (dbg-run "cg_test" tests)
-cg-cov: clean-gcda (cov-run "cg_test") (cov-show "cellgrid.h")
-cg-lines: (cov-lines "cellgrid.h")
-
-# termfeed tests
-tf *tests='': (dbg-run "tf_test" tests)
-tf-cov: clean-gcda (cov-run "tf_test") (cov-show "termfeed.h")
-tf-lines: (cov-lines "termfeed.h")
-
-# lua binding (endpoints: PUC 5.5 + LuaJIT 2.1/5.1 cover the compat range)
-
-LUAFLAGS := "-Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -std=c89 -Wno-variadic-macros"
-LUA55_INC := "-I/opt/homebrew/include/lua5.5"
-LUAJIT_INC := "-I/opt/homebrew/include/luajit-2.1"
+# piecetab lua binding (endpoints: PUC 5.5 + LuaJIT 2.1/5.1 cover the compat range)
 
 lua-pt-build:
     mkdir -p build/lua55 build/luajit
@@ -93,7 +76,7 @@ lua-pt-cov: clean-gcda
     mkdir -p build/lua55 build/luajit
     {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o build/lua55/piecetab.so piecetab.c
     {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o build/luajit/piecetab.so piecetab.c
-    lua tests/lua/test_pt.lua && luajit tests/lua/test_pt.lua
+    lua tests/lua/pt_test.lua && luajit tests/lua/pt_test.lua
     lcov --capture --directory build --rc branch_coverage=1 --output-file lua_coverage.info --ignore-errors mismatch
     lcov --extract lua_coverage.info '*/piecetab.c' --rc branch_coverage=1 --output-file lcov.info
     @echo ""
@@ -103,33 +86,3 @@ lua-pt-cov: clean-gcda
 lua-pt-lines:
     @awk '/^DA:/ && /,0$/ {gsub(/DA:|,0/,""); print $0}' lcov.info \
     | sort -n | while read ln; do echo "L$ln: $(sed -n ${ln}p piecetab.c)"; done
-# cellgrid binding
-
-lua-cg-build:
-    mkdir -p build/lua55 build/luajit
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o build/lua55/cellgrid.so cellgrid.c
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o build/luajit/cellgrid.so cellgrid.c
-
-lua-cg *t: lua-cg-build
-    lua tests/lua/cg_test.lua {{ t }}
-    luajit tests/lua/cg_test.lua {{ t }}
-
-lua-cg-cov: clean-gcda
-    mkdir -p build/lua55 build/luajit
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o build/lua55/cellgrid.so cellgrid.c
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o build/luajit/cellgrid.so cellgrid.c
-    lua tests/lua/cg_test.lua && luajit tests/lua/cg_test.lua
-    lcov --capture --directory build --rc branch_coverage=1 --output-file lua_coverage.info --ignore-errors mismatch
-    lcov --extract lua_coverage.info '*/cellgrid.c' --rc branch_coverage=1 --output-file lcov.info
-    @echo ""
-    @echo "=== cellgrid.c coverage ==="
-    lcov --list --rc branch_coverage=1 lcov.info
-
-lua-cg-lines:
-    @awk '/^DA:/ && /,0$/ {gsub(/DA:|,0/,""); print $0}' lcov.info \
-    | sort -n | while read ln; do echo "L$ln: $(sed -n ${ln}p cellgrid.c)"; done
-
-# termkey binding
-
-lua-tk-build:
-    just -f deps/lua-termkey/justfile
