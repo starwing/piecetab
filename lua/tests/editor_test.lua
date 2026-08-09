@@ -84,4 +84,72 @@ function TestSkeleton:testQuitSetsDone()
   lu.assertTrue(e.done)
 end
 
+TestNormal = {}
+
+function TestNormal:setUp()
+  self.e = make_ed("line one\nline two\nline three\n")
+end
+
+function TestNormal:testHAndL()
+  self.e:dispatch("l")
+  lu.assertEquals(self.e.doc:column(), 1)
+  self.e:dispatch("h")
+  lu.assertEquals(self.e.doc:column(), 0)
+end
+
+function TestNormal:testJAndK()
+  self.e:dispatch("j")
+  lu.assertEquals(self.e.doc:line(), 1)
+  self.e:dispatch("k")
+  lu.assertEquals(self.e.doc:line(), 0)
+end
+
+function TestNormal:testWordMotions()
+  self.e:dispatch("w")
+  lu.assertEquals(self.e.doc:column(), 5) -- 跳过 "line"+空格，停在 'o' 前
+  self.e:dispatch("b")
+  lu.assertEquals(self.e.doc:column(), 0)
+end
+
+function TestNormal:testZeroAndDollar()
+  self.e:dispatch("$")
+  lu.assertEquals(self.e.doc:column(), 8) -- "line one" 尾（列 8，brief 原 7 错）
+  self.e:dispatch("0")
+  lu.assertEquals(self.e.doc:column(), 0)
+end
+
+function TestNormal:testGgG()
+  self.e:dispatch("G")
+  lu.assertEquals(self.e.doc:line(), 2)
+  self.e:dispatch("gg")
+  lu.assertEquals(self.e.doc:line(), 0)
+end
+
+function TestNormal:testXDeletesChar()
+  self.e:dispatch("x")
+  lu.assertEquals(self.e.doc:read("l"):sub(1, 1), "i")
+end
+
+function TestNormal:testDdDeletesLine()
+  self.e:dispatch("dd")
+  lu.assertEquals(self.e.doc:breaks(), 2)
+end
+
+function TestNormal:testPendingGeneric()
+  -- 自定义组合键 "zz" 验证泛化 pending（不依赖内置）
+  local e2 = make_ed("")
+  local hit = 0
+  e2:keymap("normal", "zz", function() hit = hit + 1 end)
+  e2:dispatch("z")
+  lu.assertEquals(hit, 0) -- 等第二键
+  e2:dispatch("z")
+  lu.assertEquals(hit, 1)
+end
+
+function TestNormal:testPendingMissFallsThrough()
+  self.e:dispatch("g")
+  self.e:dispatch("x") -- gx 未绑定 → x 生效
+  lu.assertEquals(self.e.doc:read("l"):sub(1, 1), "i")
+end
+
 os.exit(lu.LuaUnit.run(), true)

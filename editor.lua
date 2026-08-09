@@ -275,6 +275,27 @@ local function dcol_to_byte(doc, lnum, dcol)
   return text_dcol_to_byte(text, dcol, 4)
 end
 
+-- Move cursor vertically by dl lines, preserving display column
+local function move_vert(doc, dl)
+  local lnum = doc:line()
+  local nlnum = lnum + dl
+  if nlnum < 0 or nlnum >= doc:breaks() then return end
+  local dcol = byte_to_dcol(doc)
+  doc:seek("line", nlnum)
+  doc:seek("cur", dcol_to_byte(doc, nlnum, dcol))
+end
+
+-- Open a new line: dir > 0 below (o), dir < 0 above (O); enter INSERT
+local function open_line(self, dir)
+  self.doc:seek("line", self.doc:line())
+  if dir > 0 then
+    self.doc:seek("cur", line_endcol(self, self.doc:line()))
+  end
+  self.doc:edit(0, "\n")
+  if dir < 0 then self.doc:seek("cur", -1) end
+  self.mode = "INSERT"
+end
+
 -- ================================================================
 -- Section 3: Highlight module (piece-based span coloring)
 -- ================================================================
@@ -331,6 +352,45 @@ local Ed = {}
 -- forward declaration: filled in Section 5 (dispatch reads it via upvalue)
 local mode_dispatch = {}
 
+-- built-in normal keymaps (per-instance, called from Ed.new)
+local function install_normal_keys(self)
+  local n = self.keymaps.normal
+  n.h = function(self) cursor_move_char(self.doc, -1) end
+  n.l = function(self) cursor_move_char(self.doc, 1) end
+  n.j = function(self) move_vert(self.doc, 1) end
+  n.k = function(self) move_vert(self.doc, -1) end
+  n.w = function(self) move_word_forward(self.doc) end
+  n.b = function(self) move_word_backward(self.doc) end
+  n["0"] = function(self) self.doc:seek("line", self.doc:line()) end
+  n["$"] = function(self)
+    local lnum = self.doc:line()
+    self.doc:seek("line", lnum)
+    self.doc:seek("cur", line_endcol(self, lnum))
+  end
+  n.gg = function(self) self.doc:seek("line", 0) end
+  n.G = function(self) self.doc:seek("line", self.doc:breaks() - 1) end
+  n.x = function(self) self.doc:edit(1, ""); self.doc:commit() end
+  n.dd = function(self)
+    local lnum = self.doc:line()
+    local llen = self.doc:linelen(lnum)
+    self.doc:seek("line", lnum)
+    self.doc:remove(llen)
+    self.doc:commit()
+  end
+  n.i = function(self) self.mode = "INSERT" end
+  n.a = function(self) cursor_move_char(self.doc, 1); self.mode = "INSERT" end
+  n.o = function(self) open_line(self, 1) end
+  n.O = function(self) open_line(self, -1) end
+  n.u = function(self) self.doc:undo(); self.msg = "" end
+  n["<C-r>"] = function(self) self.doc:redo(); self.msg = "" end
+  n["<C-l>"] = function(self) self.grid:clear(); self.msg = "" end
+  n[":"] = function(self) self.mode = "COMMAND"; self.cmdline = "" end
+  n["<Up>"] = n.k
+  n["<Down>"] = n.j
+  n["<Left>"] = n.h
+  n["<Right>"] = n.l
+end
+
 do
   Ed.__index = Ed
 
@@ -360,7 +420,7 @@ do
     self.grid = grid or cg.new()
     self.keymaps = { normal = {}, insert = {}, command = {} }
     self.commands = {}
-    -- built-in registration filled by Tasks 2/3/4; empty in Task 1
+    install_normal_keys(self)
     return self
   end
 
@@ -416,8 +476,20 @@ end
 -- ================================================================
 
 mode_dispatch.normal = function(self, key)
+  if self.pending_key then
+    local combo = self.pending_key .. key
+    local fn = self.keymaps.normal[combo]
+    self.pending_key = nil
+    if fn then fn(self, combo); return end
+  end
   local fn = self.keymaps.normal[key]
-  if fn then fn(self, key) end
+  if fn then fn(self, key); return end
+  for combo in pairs(self.keymaps.normal) do
+    if #combo > 1 and combo:sub(1, 1) == key then
+      self.pending_key = key
+      return
+    end
+  end
 end
 mode_dispatch.insert = function() end
 mode_dispatch.command = function() end
