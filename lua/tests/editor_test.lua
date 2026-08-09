@@ -279,6 +279,18 @@ function TestInsert:testTypeText()
   lu.assertEquals(self.e.mode, "NORMAL")
 end
 
+function TestInsert:testOThenTextEscCursorOnLastChar()
+  -- regression: o + "abcdef" + ESC must land on 'f' (L2,6 display).
+  -- Root cause is in pt (commit after partial linecache sync corrupts
+  -- the line view); see pt_test testCommitAfterPartialSync.
+  local e = make_ed("#!/usr/bin/env lua\nx\n")
+  e:dispatch("o")
+  for c in ("abcdef"):gmatch(".") do e:dispatch(c) end
+  e:dispatch("<Escape>")
+  lu.assertEquals(e.doc:line(), 1)
+  lu.assertEquals(e.doc:column(), 5)
+end
+
 function TestInsert:testBackspace()
   self.e:dispatch("i")
   self.e:dispatch("X")

@@ -486,6 +486,21 @@ function TestDoc:testCommitNoop()
     lu.assertEquals(v2, v1)
 end
 
+function TestDoc:testCommitAfterPartialSync()
+    -- editor regression: partial linecache sync (line() query to cursor)
+    -- before commit corrupts the line view after commit
+    local d = pt.doc("abcdefghijklmnopqrs\nx\n")
+    d:seek("set", 19)
+    d:edit(0, "\n")
+    d:edit(0, "abcdef")
+    d:seek("set", 24)
+    d:line() -- partial sync to cursor, as editor render does
+    d:commit()
+    d:seek("set", 24)
+    lu.assertEquals(d:line(), 1)
+    lu.assertEquals(d:column(), 4)
+end
+
 function TestDoc:testUndoRedo()
     local d = pt.doc("")
     local v0 = d:commit()
