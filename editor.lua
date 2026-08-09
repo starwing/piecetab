@@ -108,6 +108,18 @@ Term.REVERSE = "\27[7m"
 Term.DIM     = "\27[2m"
 Term.RESET   = "\27[0m"
 
+-- grid cell style IDs (see DIFF_STYLE for CSI mapping)
+local STYLE_NORMAL = 0
+local STYLE_DIM    = 1
+local STYLE_GRAY   = 3
+
+-- diff style table: cell style ID -> CSI
+local DIFF_STYLE = {
+  [0] = "\27[0m",        -- RESET
+  [1] = "\27[2m",        -- DIM
+  [3] = "\27[48;5;237m", -- gray bg
+}
+
 -- ================================================================
 -- Section 2: Text/cursor pure functions
 -- Char motion and column math here are C-module incubation
@@ -328,6 +340,59 @@ function hl.line_segments(regions, line_start, line_end)
     end
   end
   return segs
+end
+
+-- Single-pass line render: walk text byte-by-byte, switch style at segment
+-- boundaries, batch same-style text into g:putline. Tabs expanded inline.
+-- Returns absolute column (0-based) after rendered text.
+-- TODO(C): tab expand + display-col math to C (cellgrid family);
+-- see notes/design_editor.md 六b
+local function render_line(g, row, col, text, segs, tabstop)
+  local byte = 1
+  local batch_start = 1
+  local cur_style = STYLE_NORMAL
+  local seg_idx = 1
+  local dc = 0
+
+  local function style_at(b)
+    while seg_idx <= #segs do
+      local s = segs[seg_idx]
+      if b >= s.start and b < s.start + s.len then
+        return s.kind == 1 and STYLE_GRAY or STYLE_NORMAL
+      end
+      if b < s.start then break end
+      seg_idx = seg_idx + 1
+    end
+    return STYLE_NORMAL
+  end
+
+  local function flush()
+    if batch_start < byte then
+      local s = text:sub(batch_start, byte - 1)
+      dc = g:putline(row, col + dc, s, cur_style) - col
+      batch_start = byte
+    end
+  end
+
+  while byte <= #text do
+    local b = text:byte(byte)
+    if b == 9 then
+      flush()
+      local n = tabstop - (dc % tabstop)
+      dc = g:putline(row, col + dc, string.rep(" ", n), cur_style) - col
+      byte = byte + 1
+      batch_start = byte
+    else
+      local nxt = utf8.next(text, byte) or #text + 1
+      local st = style_at(byte)
+      if st ~= cur_style then
+        flush(); cur_style = st
+      end
+      byte = nxt
+    end
+  end
+  flush()
+  return col + dc
 end
 
 -- ================================================================
@@ -570,9 +635,132 @@ do
     fn(self, key)
   end
 
-  function Ed:render() -- Task 5: full implementation
+  function Ed:render()
     self.term:write("\27[?25l")
-    self.grid:freeze()
+    local rows, cols = self.term:size()
+    local visrows = rows - 1
+    local total_lines = self.doc:breaks()
+    local cur_line = self.doc:line()
+    local cur_col = self.doc:column()
+    local lnum_width = math.max(3, tostring(total_lines):len())
+    local text_width = cols - lnum_width - 2
+
+    -- clamp scroll
+    if cur_line < self.scroll_line then
+      self.scroll_line = cur_line
+    elseif cur_line >= self.scroll_line + visrows then
+      self.scroll_line = cur_line - visrows + 1
+    end
+    if self.scroll_line < 0 then self.scroll_line = 0 end
+
+    self.log("render: size=%dx%d scroll=%d cur=%d,%d total=%d",
+      rows, cols, self.scroll_line, cur_line, cur_col, total_lines)
+
+    local regions = hl.build_regions(self.doc)
+    local saved_off = self.doc:offset()
+    local g = self.grid
+    g:begin(self.scroll_line, visrows, cols)
+
+    -- Pass 1: line numbers from breaks()
+    local lnum_fmt = "%" .. lnum_width .. "d "
+    for row = 1, visrows do
+      local r0 = row - 1
+      local line_idx = self.scroll_line + row - 1
+      if line_idx < total_lines then
+        local s = string.format(lnum_fmt, line_idx + 1)
+        g:putline(r0, 0, s, STYLE_DIM)
+        g:clearrow(r0, #s, cols)
+      else
+        g:clearrow(r0, 0, cols)
+        g:put(r0, lnum_width + 1, 0x7e, STYLE_DIM)
+      end
+    end
+
+    -- Pass 2: content and highlights
+    self.doc:seek("line", self.scroll_line)
+    local lines_data = {}
+    local cur_off = self.doc:offset()
+    local line_idx = self.scroll_line - 1
+
+    for line_text in self.doc:lines() do
+      line_idx = line_idx + 1
+      if line_idx >= self.scroll_line + visrows then break end
+      local line_start = cur_off
+      cur_off = cur_off + #line_text + 1
+      local row = line_idx - self.scroll_line + 1
+      lines_data[#lines_data + 1] = {
+        row = row, text = line_text, start = line_start
+      }
+    end
+
+    local col_start = lnum_width + 2
+    local col_pad = col_start + text_width
+
+    -- content + highlights (single pass, highlight-driven)
+    for _, ld in ipairs(lines_data) do
+      local r0 = ld.row - 1
+      local segs = hl.line_segments(regions, ld.start, ld.start + #ld.text)
+      local endcol = render_line(g, r0, col_start - 1, ld.text, segs, self.tabstop)
+      if endcol < col_pad - 1 then
+        g:clearrow(r0, endcol, col_pad - 1)
+      end
+    end
+
+    -- flush grid diff
+    local csi = g:diff(DIFF_STYLE)
+    self.log("  diff: csi_len=%d", #csi)
+    self.term:write(csi)
+
+    self:render_status(rows, cols, cur_line, cur_col)
+    self:render_cursor(saved_off, lnum_width, rows, cols)
+    self.term:flush()
+    g:freeze()
+  end
+
+  function Ed:render_status(rows, cols, cur_line, cur_col)
+    self.term:move(rows, 1)
+    if self.mode == "COMMAND" then
+      self.term:write(Term.REVERSE)
+      self.term:write(":" .. self.cmdline)
+      local pad = cols - utf8.width(":" .. self.cmdline) - 1
+      if pad > 0 then self.term:write(string.rep(" ", pad)) end
+      self.term:write(Term.RESET)
+    else
+      local dirty_mark = (self.doc:version() ~= self.saved_vid) and "[+] " or ""
+      local linestr = string.format("L%d,%d", cur_line + 1, cur_col + 1)
+      local left = string.format(" %s%s %s  %s ", dirty_mark,
+        self.filename or "[No Name]", self.mode, linestr)
+      local msg_part = ""
+      if #self.msg > 0 then msg_part = " " .. self.msg end
+      local pad = cols - utf8.width(left) - utf8.width(msg_part) - 1
+      if pad < 0 then pad = 0 end
+      self.term:write(Term.REVERSE)
+      self.term:write(left .. string.rep(" ", pad) .. msg_part .. " ")
+      self.term:write(Term.RESET)
+    end
+  end
+
+  function Ed:render_cursor(saved_off, lnum_width, rows, cols)
+    self.doc:seek("set", saved_off)
+    local cur_line = self.doc:line()
+    local cur_screen_row = cur_line - self.scroll_line + 1
+    if cur_screen_row < 1 then cur_screen_row = 1 end
+    if cur_screen_row > rows - 1 then cur_screen_row = rows - 1 end
+
+    local saved = self.doc:offset()
+    self.doc:seek("line", cur_line)
+    local cur_line_text = self.doc:read("l") or ""
+    self.doc:seek("set", saved)
+    local byte_col = self.doc:column()
+    self.log("cursor: saved_off=%d cur_line=%d line_text=[%s](%d) byte_col=%d",
+      saved_off, cur_line, cur_line_text:gsub("\n", "\\n"), #cur_line_text, byte_col)
+    local display_col = text_byte_to_dcol(cur_line_text, byte_col, self.tabstop)
+
+    local cur_screen_col = display_col + lnum_width + 2
+    if cur_screen_col > cols then cur_screen_col = cols end
+
+    self.term:move(cur_screen_row, cur_screen_col)
+    self.term:write("\27[?25h")
   end
 end
 

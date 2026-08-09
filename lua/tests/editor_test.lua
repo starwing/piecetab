@@ -17,10 +17,33 @@ local ROWS, COLS = 6, 40
 local function make_ed(content)
   local term = { s = "", write = function(t, x) t.s = t.s .. x end,
                  flush = function() end,
+                 move = function(t, row, col)
+                   t.s = t.s .. string.format("\27[%d;%dH", row, col)
+                 end,
                  size = function() return ROWS, COLS end }
   local e = Ed.new(content, term)
   e.log = function() end
   return e
+end
+
+local LINES = 20 -- document lines for scroll tests
+
+local function make_doc()
+  local t = {}
+  for i = 1, LINES do t[i] = "line " .. i end
+  return table.concat(t, "\n") .. "\n"
+end
+
+-- Render one frame, return captured byte stream (accumulates in e.term.s).
+local function frame(e)
+  e:render()
+  return e.term.s
+end
+
+-- Drive one key: dispatch, then render frame, return frame bytes.
+local function keystroke(e, k)
+  e:dispatch(k)
+  return frame(e)
 end
 
 TestSkeleton = {}
@@ -411,6 +434,100 @@ function TestUtf8:testHLongLineWindow()
   lu.assertEquals(e.doc:column(), #line - 7) -- start of "你"
   e:dispatch("h")
   lu.assertEquals(e.doc:column(), #line - 8) -- last 'a'
+end
+
+-- ======== Scroll regression: viewport down must emit SU, not SD ========
+-- (grid diff emits region + SU/SD; captured via accumulating e.term.s)
+
+TestScroll = {}
+
+function TestScroll:setUp()
+  self.e = make_ed(make_doc())
+end
+
+function TestScroll:testDownScrollEmitsSu()
+  -- j to the last visible row (row 4 of 5), then one more j scrolls
+  for _ = 1, 4 do
+    keystroke(self.e, "j")
+  end
+  local s = keystroke(self.e, "j") -- 5th j: scroll_line 0 -> 1
+  lu.assertStrContains(s, "\27[1;5r") -- scroll region rows 1..5
+  lu.assertStrContains(s, "\27[1S")   -- SU 1: content scrolls UP
+  lu.assertNotStrContains(s, "\27%[1T") -- no SD
+  lu.assertEquals(self.e.scroll_line, 1)
+end
+
+function TestScroll:testDownScrollMany()
+  for _ = 1, 4 do
+    keystroke(self.e, "j")
+  end
+  for i = 1, 10 do
+    local s = keystroke(self.e, "j")
+    lu.assertNotStrContains(s, "\27%[1T", "frame " .. i)
+    lu.assertEquals(self.e.scroll_line, i)
+  end
+  lu.assertEquals(self.e.scroll_line, 10)
+end
+
+function TestScroll:testUpScrollEmitsSd()
+  for _ = 1, 14 do -- deep scroll down (viewport 10..14)
+    keystroke(self.e, "j")
+  end
+  self.e.term.s = "" -- observe k-phase only (earlier frames hold SU)
+  local s
+  for _ = 1, 20 do
+    s = keystroke(self.e, "k")
+    if self.e.scroll_line < 10 then break end
+  end
+  lu.assertStrContains(s, "\27[1;5r")
+  lu.assertStrContains(s, "\27[1T")    -- SD 1: content scrolls DOWN
+  lu.assertNotStrContains(s, "\27%[1S") -- no SU
+  lu.assertEquals(self.e.scroll_line, 9)
+end
+
+function TestScroll:testUpScrollRedrawsLineNumbers()
+  -- exposed top row after SD is physically blank: the full line number
+  -- must be redrawn (regression: only differing digits were emitted,
+  -- leaving "54" instead of "854")
+  for _ = 1, 14 do -- viewport 10..14, cursor at 14
+    keystroke(self.e, "j")
+  end
+  local s
+  for _ = 1, 20 do
+    s = keystroke(self.e, "k")
+    if self.e.scroll_line < 10 then break end
+  end
+  -- row 0 line number "10" (1-based) fully redrawn: digits 1 and 0
+  lu.assertStrContains(s, "\27[1;2H1") -- col 1: digit '1'
+  lu.assertStrContains(s, "\27[1;3H0") -- col 2: digit '0'
+end
+
+-- ======== Status bar ========
+
+TestOps = {}
+
+function TestOps:testStatusBarShowsMode()
+  local e = make_ed("")
+  local s = frame(e)
+  lu.assertStrContains(s, "NORMAL")
+  e:dispatch("i")
+  s = frame(e)
+  lu.assertStrContains(s, "INSERT")
+end
+
+function TestOps:testStatusBarShowsCommandLine()
+  local e = make_ed("")
+  e:dispatch(":")
+  local s = frame(e)
+  lu.assertStrContains(s, "\27[7m:") -- REVERSE + ":" + cmdline
+end
+
+function TestOps:testCursorClampedToScreen()
+  -- long line: display col 100 -> screen col clamped to cols (40)
+  local e = make_ed(string.rep("x", 100) .. "\n")
+  e.doc:seek("set", 100)
+  local s = frame(e)
+  lu.assertStrContains(s, "\27[1;40H")
 end
 
 os.exit(lu.LuaUnit.run(), true)
