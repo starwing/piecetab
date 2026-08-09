@@ -70,7 +70,7 @@ TF_API int  tf_waitkey(tf_State *S, int fd, int timeout_ms, tf_Key *key);
 /* attributes */
 
 TF_API int tf_setflag(tf_State *S, int flag);
-TF_API int tf_setlookup(tf_State *S, tf_Lookup *lookup, void *lookup_ud);
+TF_API int tf_load(tf_State *S, tf_Lookup *lookup, void *lookup_ud);
 
 /* names & format */
 
@@ -275,8 +275,6 @@ struct tf_State {
     tf_Node    *node;   /* current trie node, NULL = dead */
     tf_Reader  *reader; /* current reader (tf_feed) */
     void       *reader_ud;
-    tf_Lookup  *lookup; /* terminfo lookup callback */
-    void       *lookup_ud;
 
     /* tf_waitkey: read target, injected via tf_feed — standard chunk
      * path, not a separate input source */
@@ -516,7 +514,7 @@ static void tfT_freeall(tf_State *S, tf_Node *n) {
     S->allocf(S->alloc_ud, n, sizeof(*n) + sz, 0);
 }
 
-/* tf_setlookup */
+/* tf_load */
 
 static int tfT_loadseq(tf_State *S, const char *seq, const tf_KeyEntry *ke) {
     tf_Node **cur;
@@ -1171,11 +1169,9 @@ TF_API void tf_free(tf_State *S) {
     memset(S, 0, sizeof(*S));
 }
 
-TF_API int tf_setlookup(tf_State *S, tf_Lookup *lu, void *ud) {
+TF_API int tf_load(tf_State *S, tf_Lookup *lu, void *ud) {
     int r;
-    if (!S) return TF_ERRPARAM;
-    S->lookup = lu, S->lookup_ud = ud;
-    if (!lu) return TF_OK;
+    if (!S || !lu) return TF_ERRPARAM;
     tfT_freeall(S, S->root); /* re-entrant: drop the previous trie */
     S->root = NULL, S->node = NULL;
     if ((r = tfT_loadtable(S, lu, ud)) != TF_OK) return r;
@@ -1657,11 +1653,11 @@ static ssize_t tfZ_readfd(tf_WaitCtx *x, int fd) {
 
 TF_API int tf_waitkey(tf_State *S, int fd, int timeout_ms, tf_Key *key) {
     struct pollfd pfd;
-    tf_WaitCtx   *x = &S->wait;
+    tf_WaitCtx   *x;
     ssize_t       nread;
     int           r;
     if (!S || !key || fd < 0) return TF_ERRPARAM;
-    pfd.fd = fd, pfd.events = POLLIN;
+    x = &S->wait, pfd.fd = fd, pfd.events = POLLIN;
     for (;;) {
         int pr;
         if ((r = tf_readkey(S, key)) != TF_NONE && r != TF_AGAIN) return r;

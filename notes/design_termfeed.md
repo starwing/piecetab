@@ -250,11 +250,9 @@ typedef struct tf_State {
     int   cs_len;
     int   cs_cap;
 
-    /* terminfo: trie + lookup */
+    /* terminfo: trie (lookup 回调不保留——tf_load 一次性构建) */
     struct tf_Node *root;   /* trie 根节点 */
     struct tf_Node *node;   /* 当前匹配节点, NULL=死路 */
-    tf_Lookup      *lookup;
-    void           *lookup_ud;
 
     /* reader 引用 (由 tf_feed 设置) */
     tf_Reader *reader;
@@ -654,8 +652,9 @@ typedef const char *tf_Lookup(void *ud, const char *name);
 无此条目。调用方可用 unibilium、curses 或自定义查表实现。
 trie 支持任意首字节（§3.6）。
 
-**加载时机**: `tf_setlookup` 调用时遍历所有支持的 terminfo 键名，
-将序列插入 trie。`tf_init` 时不加载。
+**加载时机**: `tf_load` 调用时遍历所有支持的 terminfo 键名，
+将序列插入 trie。`tf_init` 时不加载。回调仅在加载期间被调用，
+**不保留**——`tf_State` 不持有 lookup 引用，加载完成后回调即可释放。
 
 **支持的 terminfo 条目**（基于 Neovim 保留集 + F 键）:
 
@@ -742,8 +741,9 @@ tf_State 字段:
 - 后加载键的中间字节撞上已有 KEY 节点（先加载键是它的真前缀）→ 后加载
   键**跳过**（长键不可达，trie 匹配到最短完整前缀即止）
 - 后加载短键的 KEY 位置已有内容（slot 被占）→ **跳过**
-- `tf_setlookup` **可重入**：重复调用先 free 旧 trie 再重建（无泄漏），
-  之后加载顺序重新决定胜者
+- `tf_load` **可重入**：重复调用先 free 旧 trie 再重建（无泄漏），
+  之后加载顺序重新决定胜者；`lookup == NULL` → TF_ERRPARAM（无
+  "清除"概念——回调从不被持有，trie 可随时重载）
 - 标准 terminfo 键序列互不为前缀，冲突仅出现在自定义 lookup
 
 **匹配时机**: IDLE 态每个字节都从 `root` 匹配（单字节键直接命中；
@@ -1109,7 +1109,7 @@ void tf_init(tf_State *S, tf_Alloc *allocf, void *alloc_ud);  /* allocf NULL →
 void tf_free(tf_State *S);
 
 /* terminfo 回调 */
-int tf_setlookup(tf_State *S, tf_Lookup *lookup, void *lookup_ud);  /* 加载 trie, TF_OK/TF_ERRMEM */
+int tf_load(tf_State *S, tf_Lookup *lookup, void *lookup_ud);  /* 一次性加载 trie, TF_OK/TF_ERRMEM; 回调不保留 */
 
 /* 解析 */
 void tf_feed(tf_State *S, tf_Reader *r, void *ud);  /* 设置 reader */
@@ -1271,7 +1271,7 @@ tf_init(&input->tfst, &nvim_alloc, NULL);
 tf_setflag(&input->tfst, TF_FLAG_KEEPC0);  /* 同 Nvim KEEPC0:
                                                    C0 原样输出, forward 层转 */
 tf_setflag(&input->tfst, TF_FLAG_DELBS);        /* DEL(0x7f) → Backspace */
-tf_setlookup(&input->tfst, &nvim_ti_lookup, &ti_data);
+tf_load(&input->tfst, &nvim_ti_lookup, &ti_data);
 tf_feed(&input->tfst, nvim_reader, &input->rd);
 ```
 
@@ -1324,7 +1324,7 @@ static const char *vis_reader(void *ud, size_t *plen) {
 }
 ```
 
-**初始化**: 同 Neovim，`tf_feed` 设 reader，`tf_setlookup` 设 terminfo。
+**初始化**: 同 Neovim，`tf_feed` 设 reader，`tf_load` 加载 terminfo。
 `tf_parse` 替代 `termkey_strpkey` 做键绑定解析。
 
 **主循环** (替换 `termkey_advisereadable` + getkey 循环):

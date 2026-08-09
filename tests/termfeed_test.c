@@ -2137,7 +2137,7 @@ TEST(trie_match) {
     int      r;
     TILookup tbl[] = {{"key_backspace", "\x1b\x7f"}, {NULL, NULL}};
     tf_init(&S, NULL, NULL);
-    tf_setlookup(&S, ti_lookup, tbl);
+    tf_load(&S, ti_lookup, tbl);
 
     /* \x1b\x7f → BACKSPACE via trie (DSA would give DEL+ALT) */
     r = feed_seq(&S, &key, "\x1b\x7f", 2);
@@ -2156,7 +2156,7 @@ TEST(trie_singlebyte) {
     int      r;
     TILookup tbl[] = {{"key_backspace", "\x7f"}, {NULL, NULL}};
     tf_init(&S, NULL, NULL);
-    tf_setlookup(&S, ti_lookup, tbl);
+    tf_load(&S, ti_lookup, tbl);
 
     /* lone 0x7f → BACKSPACE via trie (DSA would give DEL) */
     r = feed_seq(&S, &key, "\x7f", 1);
@@ -2169,7 +2169,7 @@ TEST(trie_singlebyte) {
     tf_free(&S);
     tf_init(&S, NULL, NULL);
     tbl[0].seq = "\x08";
-    tf_setlookup(&S, ti_lookup, tbl);
+    tf_load(&S, ti_lookup, tbl);
     r = feed_seq(&S, &key, "\x08", 1);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
@@ -2185,7 +2185,7 @@ TEST(trie_singlebyte) {
     tf_free(&S);
     tf_init(&S, NULL, NULL);
     tbl[0].seq = "\x7f";
-    tf_setlookup(&S, ti_lookup, tbl);
+    tf_load(&S, ti_lookup, tbl);
     r = feed_seq(&S, &key, "a\x7f", 2);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -2204,7 +2204,7 @@ TEST(trie_fallback) {
     int      r;
     TILookup tbl[] = {{"key_backspace", "\x1b\x7f"}, {NULL, NULL}};
     tf_init(&S, NULL, NULL);
-    tf_setlookup(&S, ti_lookup, tbl);
+    tf_load(&S, ti_lookup, tbl);
 
     /* \x1b[A → DSA: UP (trie has no match for \x1bA) */
     r = feed_seq(&S, &key, "\x1b[A", 3);
@@ -2223,7 +2223,7 @@ TEST(trie_aftermatch) {
     char       data[] = "\x1b\x7fx";
     TILookup   tbl[] = {{"key_backspace", "\x1b\x7f"}, {NULL, NULL}};
     tf_init(&S, NULL, NULL);
-    tf_setlookup(&S, ti_lookup, tbl);
+    tf_load(&S, ti_lookup, tbl);
 
     /* \x1b\x7fx → BACKSPACE, then 'x' (no misalignment) */
     mr.data = data, mr.len = 3, mr.called = 0;
@@ -2263,7 +2263,7 @@ TEST(trie_idle_inactive) {
     char       data[] = "[1~";
     TILookup   tbl[] = {{"key_find", "\x1b[1~"}, {NULL, NULL}};
     tf_init(&S, NULL, NULL);
-    tf_setlookup(&S, ti_lookup, tbl);
+    tf_load(&S, ti_lookup, tbl);
 
     /* "[1~" without ESC must NOT match trie: three plain chars */
     mr.data = data, mr.len = 3, mr.called = 0;
@@ -2290,7 +2290,7 @@ TEST(trie_shifted) {
     int      r;
     TILookup tbl[] = {{"key_btab", "\x1b[Z"}, {NULL, NULL}};
     tf_init(&S, NULL, NULL);
-    tf_setlookup(&S, ti_lookup, tbl);
+    tf_load(&S, ti_lookup, tbl);
 
     /* \x1b[Z → Shift+TAB via trie */
     r = feed_seq(&S, &key, "\x1b[Z", 3);
@@ -2308,7 +2308,7 @@ TEST(trie_fkeybreak) {
     int      r;
     TILookup tbl[] = {{"key_f1", "\x1b[OP"}, {NULL, NULL}};
     tf_init(&S, NULL, NULL);
-    tf_setlookup(&S, ti_lookup, tbl);
+    tf_load(&S, ti_lookup, tbl);
 
     /* key_f1 loaded, f2 missing → only f1 matches */
     r = feed_seq(&S, &key, "\x1bOP", 3);
@@ -2337,7 +2337,7 @@ TEST(trie_oom) {
     for (ec = 0; ec <= 8; ec++) {
         int n = ec;
         tf_init(&S, oom_alloc, &n);
-        tf_setlookup(&S, ti_lookup, tbl);
+        tf_load(&S, ti_lookup, tbl);
         r = feed_seq(&S, &key, "\x1b[A", 3);
         asserteq(r, TF_OK);
         asserteq((long)key.d.sym, (long)TF_SYM_UP);
@@ -2348,7 +2348,7 @@ TEST(trie_oom) {
     {
         int n = 100;
         tf_init(&S, oom_alloc, &n);
-        tf_setlookup(&S, ti_lookup, tbl);
+        tf_load(&S, ti_lookup, tbl);
         r = feed_seq(&S, &key, "\x1b\x7f", 2);
         asserteq(r, TF_OK);
         asserteq((long)key.d.sym, (long)TF_SYM_BACKSPACE);
@@ -2741,8 +2741,8 @@ TEST(replay_seq) {
     tf_free(&S);
 }
 
-/* setlookup reports trie-build OOM instead of swallowing it */
-TEST(setlookup_oom) {
+/* tf_load reports trie-build OOM instead of swallowing it */
+TEST(trie_load_oom) {
     tf_State S;
     int      n;
     TILookup tbl[] = {{"key_backspace", "\x1b\x7f"}, {NULL, NULL}};
@@ -2750,33 +2750,33 @@ TEST(setlookup_oom) {
     /* loadtable path: first trie allocation fails */
     n = 0;
     tf_init(&S, oom_alloc, &n);
-    asserteq(tf_setlookup(&S, ti_lookup, tbl), TF_ERRMEM);
+    asserteq(tf_load(&S, ti_lookup, tbl), TF_ERRMEM);
     tf_free(&S);
     /* loadfkeys path (no keytable entries present) */
     n = 0;
     tf_init(&S, oom_alloc, &n);
-    asserteq(tf_setlookup(&S, ti_lookup, f1only), TF_ERRMEM);
+    asserteq(tf_load(&S, ti_lookup, f1only), TF_ERRMEM);
     tf_free(&S);
     /* success path */
     n = 100;
     tf_init(&S, oom_alloc, &n);
-    asserteq(tf_setlookup(&S, ti_lookup, tbl), TF_OK);
+    asserteq(tf_load(&S, ti_lookup, tbl), TF_OK);
     tf_free(&S);
 }
 
-TEST(trie_setlookup_params) {
+TEST(trie_load_params) {
     tf_State S;
     tf_init(&S, NULL, NULL);
 
-    /* tf_setlookup with NULL → no-op, no crash */
-    tf_setlookup(NULL, ti_lookup, NULL);
-    tf_setlookup(&S, NULL, NULL);
+    /* tf_load with NULL → TF_ERRPARAM, no crash, trie untouched */
+    asserteq(tf_load(NULL, ti_lookup, NULL), TF_ERRPARAM);
+    asserteq(tf_load(&S, NULL, NULL), TF_ERRPARAM);
     asserteq(S.root, (struct tf_Node *)NULL);
 
     /* lookup that stops after the first F-key */
     {
         TILookup f1only[] = {{"key_f1", "\x1bOP"}, {NULL, NULL}};
-        tf_setlookup(&S, ti_lookup, f1only);
+        tf_load(&S, ti_lookup, f1only);
         asserteq(S.root != NULL, 1);
     }
 
@@ -2794,7 +2794,7 @@ TEST(trie_setlookup_params) {
         }
         fk[63].name = NULL;
         fk[63].seq = NULL;
-        tf_setlookup(&S, ti_lookup, fk);
+        tf_load(&S, ti_lookup, fk);
         asserteq(S.root != NULL, 1);
     }
 
@@ -2809,7 +2809,7 @@ TEST(trie_withalt) {
     int      r;
     TILookup tbl[] = {{"key_backspace", "\x1b\x7f"}, {NULL, NULL}};
     tf_init(&S, NULL, NULL);
-    tf_setlookup(&S, ti_lookup, tbl);
+    tf_load(&S, ti_lookup, tbl);
 
     /* \x1b\x1b\x7f → BACKSPACE + ALT (alt_pending merged) */
     r = feed_byte(&S, &key, 0x1b);
@@ -2836,7 +2836,7 @@ TEST(trie_multikey) {
             {"key_end", "\x1bOF"},
             {NULL, NULL}};
     tf_init(&S, NULL, NULL);
-    tf_setlookup(&S, ti_lookup, tbl);
+    tf_load(&S, ti_lookup, tbl);
 
     r = feed_seq(&S, &key, "\x1bOP", 3);
     asserteq(r, TF_OK);
@@ -2862,7 +2862,7 @@ TEST(trie_expand) {
     int      r;
     TILookup tbl[] = {{"key_f1", "\x1bOP"}, {"key_up", "\x1b[A"}, {NULL, NULL}};
     tf_init(&S, NULL, NULL);
-    tf_setlookup(&S, ti_lookup, tbl);
+    tf_load(&S, ti_lookup, tbl);
 
     /* \x1bOP → F1 (first byte after \x1b = 'O') */
     r = feed_seq(&S, &key, "\x1bOP", 3);
@@ -2886,7 +2886,7 @@ TEST(trie_alloc) {
     int      r;
     TILookup tbl[] = {{"key_home", "\x1bOH"}, {NULL, NULL}};
     tf_init(&S, test_alloc, NULL);
-    tf_setlookup(&S, ti_lookup, tbl);
+    tf_load(&S, ti_lookup, tbl);
 
     r = feed_seq(&S, &key, "\x1bOH", 3);
     asserteq(r, TF_OK);
@@ -2900,12 +2900,12 @@ TEST(trie_allocfree) {
     tf_State S;
     TILookup tbl[] = {{"key_home", "\x1bOH"}, {NULL, NULL}};
     tf_init(&S, test_alloc, NULL);
-    tf_setlookup(&S, ti_lookup, tbl);
+    tf_load(&S, ti_lookup, tbl);
     assert(S.root != NULL);
     tf_free(&S); /* frees trie via test_alloc */
 }
 
-/* repeated tf_setlookup must not leak the previous trie */
+/* repeated tf_load must not leak the previous trie */
 TEST(trie_reload) {
     tf_State S;
     tf_Key   key;
@@ -2914,14 +2914,14 @@ TEST(trie_reload) {
     TILookup tbl[] = {
             {"key_home", "\x1b[1~"}, {"key_left", "\x1b[D"}, {NULL, NULL}};
     tf_init(&S, count_alloc, &live);
-    tf_setlookup(&S, ti_lookup, tbl);
-    tf_setlookup(&S, ti_lookup, tbl);
+    tf_load(&S, ti_lookup, tbl);
+    tf_load(&S, ti_lookup, tbl);
     assert(live > 0);
     tf_free(&S);
     asserteq((long)live, 0); /* leaked trie nodes keep live > 0 */
     /* reloaded trie still matches */
     tf_init(&S, NULL, NULL);
-    tf_setlookup(&S, ti_lookup, tbl);
+    tf_load(&S, ti_lookup, tbl);
     r = feed_seq(&S, &key, "\x1b[1~", 4);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
@@ -2938,7 +2938,7 @@ TEST(trie_prefix) {
     TILookup tbl[] = {
             {"key_home", "\x1b[2"}, {"key_left", "\x1b[2x"}, {NULL, NULL}};
     tf_init(&S, NULL, NULL);
-    tf_setlookup(&S, ti_lookup, tbl); /* pre-fix: assert abort */
+    tf_load(&S, ti_lookup, tbl); /* pre-fix: assert abort */
     r = feed_seq(&S, &key, "\x1b[2", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
@@ -5005,7 +5005,7 @@ TEST(trie_leftexpand) {
              "A"}, /* later → left expand */
             {NULL, NULL}};
     tf_init(&S, NULL, NULL);
-    tf_setlookup(&S, ti_lookup, tbl);
+    tf_load(&S, ti_lookup, tbl);
 
     /* Verify both can be matched */
     r = feed_seq(
@@ -5481,7 +5481,7 @@ TEST(ss3_edge) {
     tf_init(&S, NULL, NULL);
     {
         TILookup tbl[] = {{"key_f3", "\x1bOR"}, {NULL, NULL}};
-        tf_setlookup(&S, ti_lookup, tbl);
+        tf_load(&S, ti_lookup, tbl);
     }
     r = feed_seq(&S, &key, "\x1bOR", 3);
     asserteq(r, TF_OK);
@@ -5535,7 +5535,7 @@ TEST(trie_rightexpand) {
              "Z"}, /* later → right expand */
             {NULL, NULL}};
     tf_init(&S, NULL, NULL);
-    tf_setlookup(&S, ti_lookup, tbl);
+    tf_load(&S, ti_lookup, tbl);
 
     /* Verify both can be matched */
     r = feed_seq(

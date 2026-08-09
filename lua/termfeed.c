@@ -191,18 +191,15 @@ static const char *ltf_lookup(void *ud, const char *name) {
     return st->lookup;
 }
 
-static int Ltf_setlookup(lua_State *L) {
+static int Ltf_load(lua_State *L) {
     ltf_State *st = ltf_check(L, 1);
     int        r;
     ltf_freelookup(L, st);
-    if (lua_isnoneornil(L, 2)) {
-        tf_setlookup(&st->S, NULL, NULL);
-        return lua_settop(L, 1), 1;
-    }
+    if (lua_isnoneornil(L, 2)) return lua_settop(L, 1), 1;
     luaL_checktype(L, 2, LUA_TFUNCTION);
     lua_pushvalue(L, 2);
     st->lookup_ref = luaL_ref(L, LUA_REGISTRYINDEX);
-    r = tf_setlookup(&st->S, ltf_lookup, st);
+    r = tf_load(&st->S, ltf_lookup, st);
     if (r == TF_ERRMEM) return luaL_error(L, "termfeed: out of memory");
     return lua_settop(L, 1), 1;
 }
@@ -431,16 +428,15 @@ static int Ltf_sym(lua_State *L) {
 /* ---- module registration ---- */
 
 LUALIB_API int luaopen_termfeed(lua_State *L) {
-    luaL_Reg libs[] = {{"__gc", Ltf_delete},
+    luaL_Reg libs[] = {
+            {"__gc", Ltf_delete},
 #define ENTRY(name) {#name, Ltf_##name}
-                       ENTRY(new),           ENTRY(delete),  ENTRY(raw),
-                       ENTRY(cooked),        ENTRY(setflag), ENTRY(setlookup),
-                       ENTRY(feed),          ENTRY(readkey), ENTRY(waitkey),
-                       ENTRY(flush),         ENTRY(key),     ENTRY(data),
-                       ENTRY(mod),           ENTRY(format),  ENTRY(parse),
-                       ENTRY(string),
+            ENTRY(new),           ENTRY(delete), ENTRY(raw),   ENTRY(cooked),
+            ENTRY(setflag),       ENTRY(load),   ENTRY(feed),  ENTRY(readkey),
+            ENTRY(waitkey),       ENTRY(flush),  ENTRY(key),   ENTRY(data),
+            ENTRY(mod),           ENTRY(format), ENTRY(parse), ENTRY(string),
 #undef ENTRY
-                       {NULL, NULL}};
+            {NULL, NULL}};
     if (luaL_newmetatable(L, LTF_STATE_TYPE)) {
         luaL_setfuncs(L, libs, 0);
         lua_pushvalue(L, -1), lua_setfield(L, -2, "__index");

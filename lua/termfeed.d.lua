@@ -29,11 +29,12 @@ function State:cooked() end
 ---@return integer old flags
 function State:setflag(flag) end
 
----Set terminfo lookup callback (name -> sequence string), or nil to clear.
----The callback is invoked during trie build for each supported terminfo name.
+---Build the terminfo trie via callback (name -> sequence string).
+---The callback is invoked once per supported terminfo name during the
+---build; it is not retained. nil clears the callback without rebuilding.
 ---@param fn? function(name: string) -> string?
 ---@return termfeed.State self
-function State:setlookup(fn) end
+function State:load(fn) end
 
 ---Feed bytes into the parser, replacing any pending chunk.
 ---@param s string

@@ -484,7 +484,7 @@ function TestFlush:testEscape()
     lu.assertEquals(t:format(), "<Escape>")
 end
 
--- ======== Setlookup (terminfo) ========
+-- ======== Load (terminfo trie build) ========
 TestLookup = {}
 
 function TestLookup:testNone()
@@ -495,7 +495,7 @@ end
 
 function TestLookup:testCallback()
     local t = tf.new()
-    t:setlookup(function(name)
+    t:load(function(name)
         if name == "key_home" then return "\x1b[7~" end
     end)
     t:feed("\x1b[7~")
@@ -507,15 +507,15 @@ end
 function TestLookup:testLookupError()
     local t = tf.new()
     lu.assertErrorMsgContains("boom",
-        function() t:setlookup(function() error("boom") end) end)
+        function() t:load(function() error("boom") end) end)
 end
 
 function TestLookup:testClear()
     local t = tf.new()
-    t:setlookup(function(name)
+    t:load(function(name)
         if name == "key_home" then return "\x1b[7~" end
     end)
-    t:setlookup(nil)
+    t:load(nil)
     t:feed("\x1b[27;99~")
     lu.assertEquals(t:readkey(), "KEY")
     lu.assertEquals(t:key(), "UNKNOWN_CSI")
