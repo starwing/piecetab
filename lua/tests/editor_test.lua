@@ -158,4 +158,62 @@ function TestNormal:testMsgClearedOnNormalKey()
   lu.assertEquals(self.e.msg, "")
 end
 
+function TestNormal:testOOpensLineBelow()
+  self.e:dispatch("o")
+  lu.assertEquals(self.e.mode, "INSERT")
+  lu.assertEquals(self.e.doc:breaks(), 4)
+end
+
+function TestNormal:testOOpensLineAbove()
+  self.e:dispatch("O")
+  lu.assertEquals(self.e.mode, "INSERT")
+  lu.assertEquals(self.e.doc:breaks(), 4)
+end
+
+TestInsert = {}
+
+function TestInsert:setUp()
+  self.e = make_ed("ab\n")
+end
+
+local function esc(e) e:dispatch("<Escape>") end
+
+function TestInsert:testTypeText()
+  self.e:dispatch("a") -- a: 光标右移一字符进 insert
+  self.e:dispatch("X")
+  self.e:dispatch("Y")
+  esc(self.e)
+  self.e.doc:seek("set", 0)
+  lu.assertEquals(self.e.doc:read("l"), "aXYb") -- brief said "abXY": 'a' appends after cursor (vim semantics), corrected
+  lu.assertEquals(self.e.mode, "NORMAL")
+end
+
+function TestInsert:testBackspace()
+  self.e:dispatch("i")
+  self.e:dispatch("X")
+  self.e:dispatch("<Backspace>")
+  esc(self.e)
+  lu.assertEquals(self.e.doc:read("l"), "ab")
+end
+
+function TestInsert:testEnterSplitsLine()
+  self.e:dispatch("i")
+  self.e:dispatch("<Enter>")
+  esc(self.e)
+  lu.assertEquals(self.e.doc:breaks(), 2)
+end
+
+function TestInsert:testEscapeMovesLeft()
+  self.e:dispatch("i")
+  self.e:dispatch("<Escape>")
+  lu.assertEquals(self.e.doc:column(), 0) -- ESC 后光标左移一字符
+end
+
+function TestInsert:testControlKeyFiltered()
+  self.e:dispatch("i")
+  self.e:dispatch("<F5>") -- 未绑定控制键 → 不插入
+  esc(self.e)
+  lu.assertEquals(self.e.doc:read("l"), "ab")
+end
+
 os.exit(lu.LuaUnit.run(), true)

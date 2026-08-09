@@ -391,6 +391,70 @@ local function install_normal_keys(self)
   n["<Right>"] = n.l
 end
 
+-- built-in insert handlers (registered via install_insert_keys)
+local function ins_escape(self)
+  self.mode = "NORMAL"
+  self.doc:commit()
+  if self.doc:offset() > 0 then cursor_move_char(self.doc, -1) end
+  self.msg = ""
+end
+
+local function ins_backspace(self)
+  local off = self.doc:offset()
+  if off > 0 then
+    local buf = self.doc:buffer()
+    local p = off - 1
+    while p > 0 do
+      local b = buf:read(p, 1):byte()
+      if b >= 0xc0 or b < 0x80 then break end
+      p = p - 1
+    end
+    local char_len = off - p
+    self.doc:seek("set", p)
+    self.doc:edit(char_len, "")
+  end
+end
+
+local function ins_delete(self)
+  local off = self.doc:offset()
+  local buf = self.doc:buffer()
+  if off < #buf then
+    self.doc:edit(utf8_char_len(buf:read(off, 1):byte()), "")
+  end
+end
+
+-- built-in insert keymaps (per-instance, called from Ed.new)
+local function install_insert_keys(self)
+  local i = self.keymaps.insert
+  i["<Escape>"] = ins_escape
+  i["<Backspace>"] = ins_backspace
+  i["<Delete>"] = ins_delete
+  i["<Enter>"] = function(self) self.doc:edit(0, "\n") end
+  i["<Tab>"] = function(self) self.doc:edit(0, "\t") end
+  i["<C-c>"] = function(self)
+    self.mode = "NORMAL"
+    self.msg = ""
+  end
+  i["<Up>"] = function(self) move_vert(self.doc, -1) end
+  i["<Down>"] = function(self) move_vert(self.doc, 1) end
+  i["<Left>"] = function(self) cursor_move_char(self.doc, -1) end
+  i["<Right>"] = function(self) cursor_move_char(self.doc, 1) end
+  i["<Home>"] = function(self) self.doc:seek("line", self.doc:line()) end
+  i["<End>"] = function(self)
+    local lnum = self.doc:line()
+    self.doc:seek("line", lnum)
+    self.doc:seek("cur", line_endcol(self, lnum))
+  end
+  i["<PageUp>"] = function(self)
+    local rows = self.term:size()
+    for _ = 1, rows - 2 do move_vert(self.doc, -1) end
+  end
+  i["<PageDown>"] = function(self)
+    local rows = self.term:size()
+    for _ = 1, rows - 2 do move_vert(self.doc, 1) end
+  end
+end
+
 do
   Ed.__index = Ed
 
@@ -421,6 +485,7 @@ do
     self.keymaps = { normal = {}, insert = {}, command = {} }
     self.commands = {}
     install_normal_keys(self)
+    install_insert_keys(self)
     return self
   end
 
@@ -495,7 +560,19 @@ mode_dispatch.normal = function(self, key)
     end
   end
 end
-mode_dispatch.insert = function() end
+-- insert dispatch: keymap hit -> fn, else printable char fallback
+local function insert_key(self, key)
+  local fn = self.keymaps.insert[key]
+  if fn then fn(self, key); return end
+  if type(key) == "string" and #key > 0 then
+    if key:sub(1, 1) == "<" and key:sub(-1) == ">" then return end
+    local b = key:byte(1)
+    if b >= 32 and b < 127 or b >= 0xc0 then
+      self.doc:edit(0, key)
+    end
+  end
+end
+mode_dispatch.insert = insert_key
 mode_dispatch.command = function() end
 
 -- ================================================================
