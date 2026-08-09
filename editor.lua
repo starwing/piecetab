@@ -468,7 +468,10 @@ end
 local function ins_escape(self)
   self.mode = "NORMAL"
   self.doc:commit()
-  if self.doc:column() > 0 then cursor_move_char(self.doc, -1) end
+  local off = self.doc:offset()
+  if off > 0 and self.doc:buffer():read(off - 1, 1) ~= "\n" then
+    cursor_move_char(self.doc, -1)
+  end
   self.msg = ""
 end
 

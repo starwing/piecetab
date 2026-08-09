@@ -309,6 +309,15 @@ function TestInsert:testEscapeAtLineStartStays()
   lu.assertEquals(e.doc:column(), 0)
 end
 
+function TestInsert:testEscapeAtEofMovesLeft()
+  local e = make_ed("ab") -- no trailing newline
+  e.doc:seek("set", 2) -- EOF
+  e:dispatch("i")
+  e:dispatch("X")
+  e:dispatch("<Escape>")
+  lu.assertEquals(e.doc:offset(), 2) -- back before the X
+end
+
 function TestInsert:testControlKeyFiltered()
   self.e:dispatch("i")
   self.e:dispatch("<F5>") -- unbound control key -> not inserted
