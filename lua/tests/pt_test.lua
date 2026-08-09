@@ -60,6 +60,31 @@ function TestBuffer:testPieces()
     lu.assertEquals(result, "hello\nworld")
 end
 
+function TestBuffer:testPiecesAfterDelete()
+    -- iterator holds its own retained tree ref: delete() must not
+    -- crash a live iteration
+    local b = pt.from("ab\ncd")
+    local it = b:pieces()
+    b:delete()
+    local parts = {}
+    for off, len, s in it do
+        table.insert(parts, s)
+    end
+    lu.assertEquals(table.concat(parts), "ab\ncd")
+end
+
+function TestBuffer:testPiecesAfterDeleteGenericFor()
+    -- generic-for 4-value protocol: closing value releases the tree
+    -- on 5.4+; iterator must stay safe on 5.1-5.3 (gc path)
+    local b = pt.from("xy")
+    local n = 0
+    for off, len, s in b:pieces() do
+        n = n + 1
+    end
+    b:delete()
+    lu.assertEquals(n, 1)
+end
+
 function TestBuffer:testCompact()
     local b = pt.from("hello\nworld")
     local c = b:compact()
@@ -1422,6 +1447,36 @@ function TestDoc:testPieceSingleLoop()
     -- reseek: prev from start = 0
     d:seek("set", 0)
     lu.assertEquals(d:piece("prev"), 0)
+end
+
+function TestDoc:testReadLongLine()
+    -- line longer than LUAL_BUFFERSIZE must not overflow the luaL_Buffer
+    local long = string.rep("a", 20000)
+    local d = pt.doc(long .. "\n")
+    d:seek("set", 0)
+    lu.assertEquals(d:read("l"), long)
+    d:seek("set", 0)
+    lu.assertEquals(d:read("L"), long .. "\n")
+    d:seek("set", 0)
+    lu.assertEquals(d:read("l"), long)
+end
+
+function TestDoc:testSeekEndNegativeClamp()
+    local d = pt.doc("hello world")
+    d:seek("end", -3)
+    lu.assertEquals(d:offset(), 8)
+    d:seek("end", -999)
+    lu.assertEquals(d:offset(), 0)
+    d:seek("end", 3)
+    lu.assertEquals(d:offset(), 3)
+end
+
+function TestDoc:testEditNegativeAmount()
+    local d = pt.doc("abc")
+    d:seek("set", 1)
+    lu.assertError(function() d:edit(-1, "x") end)
+    lu.assertError(function() d:remove(-1) end)
+    lu.assertError(function() d:splice(-1, "x") end)
 end
 
 os.exit(lu.LuaUnit.run(), true)

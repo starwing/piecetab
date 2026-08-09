@@ -147,7 +147,8 @@ d:line() → lnum                       -- 当前位置行号
 d:column() → col                      -- 当前位置列（行内字节偏移）
 d:linelen([lnum]) → n                 -- 行长含 \n；残段/虚拟尾行 =
                                        --   pt_bytes - lc_bytes
-d:breaks() → n                        -- 断数直通 lc_breaks；行数恒 = breaks+1
+d:breaks() → n                        -- 行数（= lc_breaks + 尾残段修正）；
+                                       --   尾 \n 的虚拟空行不计（editor 行号语义）
 d:lines([fmt, ...])                   -- 迭代器，反复调 read(fmt, ...) 直到 nil；
                                        --   无参 = lines() 逐行不含 \n（io.lines 语义）
 d:piece("len"|"next"|"prev") → n       -- 当前/下一/前一 piece 长度（调试用）；
@@ -356,6 +357,8 @@ lpt_docsync(L, d, tbytes, tlines):
 树外（lc_bytes ≤ pt_bytes），由 trailing 虚拟行机制寻址。
 **行数恒 = breaks + 1**（无脑 +1：尾要么有残段行，要么 \n 后有
 虚拟空行，要么空文档一个空行）。
+**breaks() 返回行数**（§五）：= lc_breaks + 尾残段修正；尾 \n 后的
+虚拟空行**不计**（编辑器行号语义，vim 对 "a\n" 显示 1 行）。
 
 | 文档     | breaks | 行数 | read("l") 连续     | lines() 迭代 |
 | -------- | ------ | ---- | ------------------- | ------------ |

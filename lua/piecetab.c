@@ -109,6 +109,13 @@ static lpt_State *lpt_state(lua_State *L) {
 #define LPT_BUFFER_TYPE "piecetab.Buffer"
 #define LPT_CURSOR_TYPE "piecetab.Cursor"
 #define LPT_DOC_TYPE    "piecetab.Doc"
+#define LPT_ITER_TYPE   "piecetab.PieceIter"
+
+/* piece iterator userdata: owns a retained tree ref, cursor built from it */
+typedef struct lpt_PieceIter {
+    pt_Cursor C;   /* iteration cursor */
+    pt_Buffer b;   /* retained tree ref; released by __gc/__close */
+} lpt_PieceIter;
 
 /* doc userdata */
 typedef struct lpt_Doc {
@@ -193,33 +200,48 @@ static int Lbuf_delete(lua_State *L) {
 static int Lbuf_read(lua_State *L) {
     pt_Buffer   b = lpt_checkbuffer(L, 1);
     lua_Integer cnt, off = luaL_checkinteger(L, 2);
-    size_t      o, n, total = pt_bytes(b);
+    size_t      o, total = pt_bytes(b);
     pt_Cursor   C;
     luaL_argcheck(L, off >= 0, 2, "offset must be non-negative");
     if ((o = (size_t)off) >= total) return lua_pushliteral(L, ""), 1;
     cnt = luaL_optinteger(L, 3, (lua_Integer)(total - o));
     luaL_argcheck(L, cnt >= 0, 3, "length must be non-negative");
-    return n = (size_t)cnt, pt_seek(&C, b, off), lpt_readstring(L, &C, n);
+    return pt_seek(&C, b, off), lpt_readstring(L, &C, (size_t)cnt);
+}
+
+static int Lpieceiter_gc(lua_State *L) {
+    lpt_PieceIter *it = (lpt_PieceIter *)lua_touserdata(L, 1);
+    if (it->b) pt_release(it->b), it->b = NULL;
+    return 0;
 }
 
 static int Lbuf_pieceiter(lua_State *L) {
-    pt_Cursor  *C = (pt_Cursor *)lua_touserdata(L, lua_upvalueindex(1));
-    size_t      len;
-    const char *s;
-    if ((s = pt_piece(C, &len)) == NULL) return 0;
-    lua_pushinteger(L, (lua_Integer)pt_offset(C));
+    lpt_PieceIter *it = (lpt_PieceIter *)lua_touserdata(L, lua_upvalueindex(1));
+    size_t         len;
+    const char    *s;
+    if (it->b == NULL) return 0; /* closed by 5.4+ __close: iteration over */
+    if ((s = pt_piece(&it->C, &len)) == NULL) return 0;
+    lua_pushinteger(L, (lua_Integer)pt_offset(&it->C));
     lua_pushinteger(L, (lua_Integer)len);
     lua_pushlstring(L, s, len);
-    pt_next(C, &len);
+    pt_next(&it->C, &len);
     return 3;
 }
 
 static int Lbuf_pieces(lua_State *L) {
-    pt_Buffer  b = lpt_checkbuffer(L, 1);
-    pt_Cursor *C = (pt_Cursor *)lua_newuserdata(L, sizeof(pt_Cursor));
-    pt_seek(C, b, 0);
-    lua_pushvalue(L, 1);
-    return lua_pushcclosure(L, Lbuf_pieceiter, 2), 1;
+    pt_Buffer      b = lpt_checkbuffer(L, 1);
+    lpt_PieceIter *it =
+            (lpt_PieceIter *)lua_newuserdata(L, sizeof(lpt_PieceIter));
+    if (luaL_newmetatable(L, LPT_ITER_TYPE)) {
+        lua_pushcfunction(L, Lpieceiter_gc), lua_setfield(L, -2, "__gc");
+        lua_pushcfunction(L, Lpieceiter_gc), lua_setfield(L, -2, "__close");
+    }
+    lua_setmetatable(L, -2);
+    it->b = b, pt_retain(b);
+    pt_seek(&it->C, b, 0);
+    lua_pushvalue(L, -1), lua_pushcclosure(L, Lbuf_pieceiter, 1);
+    lua_pushnil(L), lua_pushnil(L), lua_pushvalue(L, -4);
+    return 4;
 }
 
 static int Lbuf_compact(lua_State *L) {
@@ -320,27 +342,30 @@ static int Lcur_insert(lua_State *L) {
 
 static int Lcur_edit(lua_State *L) {
     pt_Cursor  *C = lpt_checkcursor(L, 1);
-    size_t      del = (size_t)luaL_checkinteger(L, 2);
+    lua_Integer d = luaL_checkinteger(L, 2);
     size_t      len;
     const char *s = luaL_checklstring(L, 3, &len);
-    luaL_argcheck(L, len <= PT_MAX_HOLESIZE, 3, "edit too long (use splice)");
-    lpt_checkerror(L, pt_edit(C, del, s, len));
+    luaL_argcheck(L, d >= 0, 2, "amount must be non-negative");
+    if (len > PT_MAX_HOLESIZE) luaL_argerror(L, 3, "string too long for hole");
+    lpt_checkerror(L, pt_edit(C, (size_t)d, s, len));
     return lua_settop(L, 1), 1;
 }
 
 static int Lcur_remove(lua_State *L) {
-    pt_Cursor *C = lpt_checkcursor(L, 1);
-    size_t     len = (size_t)luaL_checkinteger(L, 2);
-    lpt_checkerror(L, pt_remove(C, len));
+    pt_Cursor  *C = lpt_checkcursor(L, 1);
+    lua_Integer n = luaL_checkinteger(L, 2);
+    luaL_argcheck(L, n >= 0, 2, "amount must be non-negative");
+    lpt_checkerror(L, pt_remove(C, (size_t)n));
     return lua_settop(L, 1), 1;
 }
 
 static int Lcur_splice(lua_State *L) {
     pt_Cursor  *C = lpt_checkcursor(L, 1);
-    size_t      del = (size_t)luaL_checkinteger(L, 2);
+    lua_Integer d = luaL_checkinteger(L, 2);
     size_t      len;
     const char *s = lpt_toliteral(L, 3, &len, C);
-    lpt_checkerror(L, pt_splice(C, del, s, len));
+    luaL_argcheck(L, d >= 0, 2, "amount must be non-negative");
+    lpt_checkerror(L, pt_splice(C, (size_t)d, s, len));
     return lua_settop(L, 1), 1;
 }
 
@@ -505,7 +530,7 @@ static lpt_Doc *lpt_newdoc(lua_State *L, pt_Buffer b) {
     memset(d, 0, sizeof(lpt_Doc));
     luaL_setmetatable(L, LPT_DOC_TYPE);
     d->ut = ut_newtree(S->US, (ut_Payload *)b);
-    if (!d->ut) luaL_error(L, "piecetab: out of memory");
+    if (!d->ut) pt_release(b), luaL_error(L, "piecetab: out of memory");
     d->lc = lc_newcache(S->LS);
     if (!d->lc) luaL_error(L, "piecetab: out of memory");
     pt_seek(&d->C, b, 0), d->lck = 0, d->lcvid = ut_root(d->ut);
@@ -539,7 +564,7 @@ static int lpt_seekpos(lua_State *L, lpt_Doc *d, const char *whence) {
         pt_advance(&d->C, (pt_Delta)off);
     else if (whence[0] == 'e') {
         size_t n = pt_bytes(pt_buffer(&d->C));
-        if (off < 0) n -= (size_t)(-off);
+        if (off < 0) n = (size_t)(-off) >= n ? 0 : n - (size_t)(-off);
         if (off > 0) n = (size_t)off;
         pt_locate(&d->C, n);
     } else if (whence[0] == 'l') {
@@ -578,19 +603,23 @@ static int lpt_readbytes(lua_State *L, lpt_Doc *d, size_t len) {
 static int lpt_readline(lua_State *L, lpt_Doc *d, int wantnl) {
     pt_Cursor  *C = &d->C;
     luaL_Buffer B;
-    size_t      i, len, n = 0;
+    size_t      i, len;
     const char *src = pt_piece(C, &len);
     if (src == NULL) return lua_pushliteral(L, ""), 0;
     luaL_buffinit(L, &B);
     for (; src; src = pt_next(C, &len)) {
-        char *buf = luaL_prepbuffer(&B);
-        for (i = 0; i < len && src[i] != '\n'; i++) buf[n++] = src[i];
-        if (i < len) {
-            if (wantnl) buf[n++] = '\n';
-            pt_advance(C, (pt_Delta)(i + 1));
-            return luaL_addsize(&B, n), luaL_pushresult(&B), 1;
+        for (i = 0; i < len && src[i] != '\n';) {
+            char  *buf = luaL_prepbuffer(&B);
+            size_t k;
+            for (k = 0; k < LUAL_BUFFERSIZE && i < len && src[i] != '\n'; k++)
+                buf[k] = src[i++];
+            luaL_addsize(&B, k);
         }
-        luaL_addsize(&B, n), n = 0;
+        if (i < len) {
+            if (wantnl) luaL_prepbuffer(&B)[0] = '\n';
+            pt_advance(C, (pt_Delta)(i + 1));
+            return luaL_addsize(&B, (size_t)wantnl), luaL_pushresult(&B), 1;
+        }
     }
     return luaL_pushresult(&B), 1;
 }
@@ -647,13 +676,14 @@ static int Ldoc_insert(lua_State *L) {
 
 static int Ldoc_edit(lua_State *L) {
     lpt_Doc    *d = lpt_checkdoc(L, 1);
-    size_t      del = (size_t)luaL_checkinteger(L, 2);
+    lua_Integer del = luaL_checkinteger(L, 2);
     size_t      len, off = pt_offset(&d->C);
     const char *s = luaL_checklstring(L, 3, &len);
     int         r;
+    luaL_argcheck(L, del >= 0, 2, "amount must be non-negative");
     if (len > PT_MAX_HOLESIZE) luaL_argerror(L, 3, "string too long for hole");
-    if ((r = ut_record(d->ut, off, del, len)) < 0) lpt_checkerror(L, r);
-    if ((r = pt_edit(&d->C, del, s, len)) < 0) ut_unrecord(d->ut, 1);
+    if ((r = ut_record(d->ut, off, (size_t)del, len)) < 0) lpt_checkerror(L, r);
+    if ((r = pt_edit(&d->C, (size_t)del, s, len)) < 0) ut_unrecord(d->ut, 1);
     return lpt_checkerror(L, r), lua_settop(L, 1), 1;
 }
 
@@ -676,17 +706,19 @@ static int Ldoc_write(lua_State *L) {
 
 static int Ldoc_splice(lua_State *L) {
     lpt_Doc    *d = lpt_checkdoc(L, 1);
-    size_t      del = (size_t)luaL_checkinteger(L, 2);
+    lua_Integer del = luaL_checkinteger(L, 2);
     size_t      len;
     const char *s = lpt_toliteral(L, 3, &len, &d->C);
-    lpt_checkerror(L, lpt_docedit(d, del, s, len));
+    luaL_argcheck(L, del >= 0, 2, "amount must be non-negative");
+    lpt_checkerror(L, lpt_docedit(d, (size_t)del, s, len));
     return lua_settop(L, 1), 1;
 }
 
 static int Ldoc_remove(lua_State *L) {
-    lpt_Doc *d = lpt_checkdoc(L, 1);
-    size_t   n = (size_t)luaL_checkinteger(L, 2);
-    lpt_checkerror(L, lpt_docedit(d, n, NULL, 0));
+    lpt_Doc    *d = lpt_checkdoc(L, 1);
+    lua_Integer n = luaL_checkinteger(L, 2);
+    luaL_argcheck(L, n >= 0, 2, "amount must be non-negative");
+    lpt_checkerror(L, lpt_docedit(d, (size_t)n, NULL, 0));
     return lua_settop(L, 1), 1;
 }
 
@@ -774,7 +806,8 @@ static int Ldoc_commit(lua_State *L) {
     if (d->lck && d->lck < (int)ut_freshcount(d->ut)) {
         int r = ut_freshdiff(d->ut, d->lck, (int)ut_freshcount(d->ut));
         if (r < 0) lpt_checkerror(L, r);
-        lpt_checkerror(L, lpt_hunkapply(d->lc, ut_hunks(d->ut, NULL), r, b));
+        r = lpt_hunkapply(d->lc, ut_hunks(d->ut, NULL), r, b);
+        if (r != LC_OK) pt_seek(&d->C, b, off), lpt_checkerror(L, r);
         d->lck = (int)ut_freshcount(d->ut);
     }
     n = ut_commit(d->ut, (ut_Payload *)b);
@@ -793,8 +826,8 @@ static int lpt_switch(lua_State *L, lpt_Doc *d, ut_Vid src, ut_Vid dst) {
     if ((r = ut_diff(d->ut, src, dst)) < 0) lpt_checkerror(L, r);
     pos = ut_mapoffset(d->ut, pos);
     r = lpt_hunkapply(d->lc, ut_hunks(d->ut, NULL), r, b);
-    if (r == LC_OK) d->lcvid = dst;
-    d->lck = 0, ut_switch(d->ut, dst);
+    if (r != LC_OK) lpt_checkerror(L, r);
+    d->lcvid = dst, d->lck = 0, ut_switch(d->ut, dst);
     return pt_seek(&d->C, b, pos), lpt_pushvid(L, dst);
 }
 
@@ -915,17 +948,8 @@ static void lpt_opendoc(lua_State *L) {
 /* library functions */
 
 static int Lpt_from(lua_State *L) {
-    lpt_State  *S = lpt_state(L);
-    size_t      len;
-    const char *s;
-    pt_Cursor   C;
-    int         r = PT_OK;
-    r = pt_seek(&C, pt_empty(S->PS), 0), assert(r == PT_OK), (void)r;
-    lpt_checkmem(L, s = lpt_toliteral(L, 1, &len, &C));
-    if (len == 0) return *lpt_newbuffer(L) = pt_empty(S->PS), 1;
-    if ((r = pt_insert(&C, s, len)) < 0 || !(*lpt_newbuffer(L) = pt_commit(&C)))
-        pt_release(pt_rollback(&C)), lpt_checkerror(L, r ? r : PT_ERRMEM);
-    return 1;
+    pt_Buffer b = lpt_tobuffer(L, 1);
+    return *lpt_newbuffer(L) = b, 1;
 }
 
 /* metatable registration */
