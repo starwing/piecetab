@@ -119,10 +119,13 @@ function TestSkeleton:testKeymapReturnsSelf()
 end
 
 function TestSkeleton:testDispatchAfterQuit()
-  -- main loop exits on done: dispatch must not crash, no render side effects
-  local e = make_ed("")
+  -- dispatch is a single-key processor; done is consulted by the main loop
+  -- only, so a stray dispatch after quit must not crash and must leave
+  -- done set. Documented: the key handler still runs (x below deletes 'a').
+  local e = make_ed("ab\n")
   e:quit()
-  e:dispatch("j")
+  e:dispatch("x")
+  lu.assertTrue(e.done)
 end
 
 TestNormal = {}
@@ -554,14 +557,14 @@ function TestOps:testLineNumbersTrackScroll()
     keystroke(e, "j")
   end
   local s = frame(e)
-  lu.assertStrContains(s, "20") -- last line visible, numbered 20
+  lu.assertStrContains(s, "\27[5;2H2\27[5;3H0") -- lnum "20": tens at col 2, units at col 3
   lu.assertEquals(e.doc:line(), 19)
 end
 
 function TestOps:testInsertAndRender()
   self.e:dispatch("i")
   local s = keystroke(self.e, "x")
-  lu.assertStrContains(s, "x") -- inserted char rendered in frame
+  lu.assertStrContains(s, "\27[1;5H\27[0mx") -- 'x' rendered at col 5 (content start)
   self.e:dispatch("<Escape>")
 end
 
