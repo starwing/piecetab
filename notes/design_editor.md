@@ -5,6 +5,10 @@
 > `normal_cmds` 表 + if/elseif 链。目标：正规化 class 写法、LuaLS 标注
 > 完全、方便接入 spantree/highlighter 等外围库、任何显示/行为 bug 可在
 > editor_test.lua 重现。
+>
+> **行为标准（用户裁定，Task 5 后生效）：与 Vim/Neovim 对应行为等价，
+> 非旧 editor.lua 等价。旧实现只是迁移起点，其 bug（如 status L 列恒 0）
+> 不保留。**
 
 ## 一、决策（与用户讨论确认）
 
