@@ -439,8 +439,7 @@ static int lpt_hunkapply(lc_Cache *lc, const ut_Hunk *hs, int n, pt_Buffer b) {
         ctx.end = hs[i].ca + hs[i].cins, ctx.max_line = LPT_UNL,
         ctx.cur_line = 0;
         if ((r = lc_append(&C, 0, lpt_scanline, &ctx)) != LC_OK) break;
-        ins = (unsigned)(ctx.cur_line ? (ctx.end - pt_offset(&ctx.C))
-                                      : (pt_offset(&ctx.C) - hs[i].ca));
+        ins = (unsigned)(hs[i].cins - (lc_offset(&C) - hs[i].pa));
         if ((r = lc_splice(&C, 0, ins)) != LC_OK) break;
     }
     if (r < 0 && n > 0 && hs[0].pa < lc_bytes(lc)) {
@@ -781,6 +780,8 @@ static int Ldoc_commit(lua_State *L) {
     n = ut_commit(d->ut, (ut_Payload *)b);
     if (!n) pt_release(b), lpt_checkerror(L, PT_ERRMEM);
     lpt_setvid(L, 1, (lua_Integer)pt_version(b), n);
+    /* lck != 0: lc caught up to full fresh == b, re-anchor to n */
+    if (d->lck) d->lcvid = n;
     pt_seek(&d->C, b, off), d->lck = 0;
     return lua_pushinteger(L, (lua_Integer)pt_version(b)), 1;
 }
