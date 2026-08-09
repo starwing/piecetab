@@ -52,6 +52,9 @@ do
     self.tf = assert(tf.new())
     self.tf:setflag(tf.FLAG_DELBS)
     self.out = opts.out or IO
+    -- bare ESC: waitkey polls esc_timeout ms for a sequence prefix before
+    -- flushing it as a standalone ESC key (vim timeoutlen; -1 blocks forever)
+    self.esc_timeout = opts.esc_timeout or 50
     self.size_fn = opts.size or function()
       local r, c = cg.winsize(1)
       if r and c then return r, c end
@@ -83,7 +86,7 @@ do
   --- Read one key (blocking). Returns termfeed-formatted key string.
   --- @return string?
   function Term:getkey()
-    if self.tf:waitkey(0, -1) ~= "KEY" then return nil end
+    if self.tf:waitkey(0, self.esc_timeout) ~= "KEY" then return nil end
     return self.tf:format()
   end
 
@@ -570,8 +573,8 @@ do
   Ed.__index = Ed
 
   --- @return editor.Term
-  function Ed.newterm()
-    return Term.new()
+  function Ed.newterm(opts)
+    return Term.new(opts)
   end
 
   --- @param content? string

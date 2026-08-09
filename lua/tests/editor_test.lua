@@ -48,6 +48,16 @@ end
 
 TestSkeleton = {}
 
+function TestSkeleton:testEscTimeoutFinite()
+  -- bare ESC must return after esc_timeout (regression: waitkey(-1)
+  -- blocks forever after ESC in real tty, breaking :mode exit).
+  -- Real-tty behavior verified manually; here we lock the config.
+  local t = Ed.newterm()
+  lu.assertTrue(t.esc_timeout > 0 and t.esc_timeout <= 1000)
+  local t2 = Ed.newterm({ esc_timeout = 7 })
+  lu.assertEquals(t2.esc_timeout, 7)
+end
+
 function TestSkeleton:testConstruct()
   local e = make_ed("a\nb")
   lu.assertEquals(e.mode, "NORMAL")
