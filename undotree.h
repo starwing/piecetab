@@ -190,10 +190,10 @@ struct ut_State {
 
 /*  memory helpers */
 
-#define utOK(call, cleanup)                                   \
-    do {                                                      \
-        int r;                                                \
-        if ((r = (call)) != UT_OK) return (void)(cleanup), r; \
+#define utOK(call, cleanup)                                     \
+    do {                                                        \
+        int r_;                                                 \
+        if ((r_ = (call)) != UT_OK) return (void)(cleanup), r_; \
     } while (0)
 
 #define utV_sz(cap, sz) (sizeof(utV_Header) + cap * sz)

@@ -3945,12 +3945,12 @@ static void maketree(pt_State *S, pt_Cursor *C, size_t off) {
         lf->bytes[0] = 2;
         lf->children[1] = (pt_Node *)h0;
         lf->bytes[1] = 2;
-        lf->mask |= (1u << 1);
+        lf->mask |= (pt_Mask)1 << 1;
         lf->children[2] = (pt_Node *)(pt_srcbuf + idx + 2);
         lf->bytes[2] = 2;
         lf->children[3] = (pt_Node *)h1;
         lf->bytes[3] = 2;
-        lf->mask |= (1u << 3);
+        lf->mask |= (pt_Mask)1 << 3;
         idx += 4;
         leaves[i] = lf;
     }
@@ -3962,7 +3962,7 @@ static void maketree(pt_State *S, pt_Cursor *C, size_t off) {
         for (j = 0; j < 4; j++) {
             n->children[j] = leaves[i * 4 + j];
             n->bytes[j] = ptN_sumbytes(leaves[i * 4 + j], 0, 4);
-            if (leaves[i * 4 + j]->mask) n->mask |= (1u << j);
+            if (leaves[i * 4 + j]->mask) n->mask |= (pt_Mask)1 << j;
         }
         inners[i] = n;
     }
@@ -3977,12 +3977,12 @@ static void maketree(pt_State *S, pt_Cursor *C, size_t off) {
         for (j = 0; j < rshape[i]; j++) {
             n->children[j] = inners[ii + j];
             n->bytes[j] = ptN_sumbytes(inners[ii + j], 0, 4);
-            if (inners[ii + j]->mask) n->mask |= (1u << j);
+            if (inners[ii + j]->mask) n->mask |= (pt_Mask)1 << j;
         }
         ii += rshape[i];
         root->children[i] = n;
         root->bytes[i] = ptN_sumbytes(n, 0, rshape[i]);
-        if (n->mask) root->mask |= (1u << i);
+        if (n->mask) root->mask |= (pt_Mask)1 << i;
     }
 
     pt_seek(C, treeV(3, root), off);

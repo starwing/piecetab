@@ -310,7 +310,7 @@ CG_API void cg_span(cg_Grid *G, int r, int cs, int ce, unsigned st) {
 CG_API int cg_putline(cg_Grid *G, int r, int c, const char *s, unsigned st) {
     if (!cgP_checkrc(G, r, c) || !s) return c;
     while (*s && c < G->cols) {
-        int len, cp, w;
+        int cp, w, len = 0;
         while (*s && (len = cgK_utflen(s)) == 0) s++;
         if (!*s) break;
         cp = cgK_tocp(s, len);

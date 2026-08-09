@@ -2706,7 +2706,7 @@ TEST(replay_seq) {
     /* set up replay source with 3 bytes: 'a', 0x80, 'b' */
     S.replay = 3;
     S.buf[TF_MAX_BUFLEN - 3] = 'a';
-    S.buf[TF_MAX_BUFLEN - 2] = (char)0x80;
+    S.buf[TF_MAX_BUFLEN - 2] = test_byte(0x80);
     S.buf[TF_MAX_BUFLEN - 1] = 'b';
     S.buf_len = 0;
 
@@ -2764,7 +2764,7 @@ TEST(trie_load_params) {
     /* tf_load with NULL → TF_ERRPARAM, no crash, trie untouched */
     asserteq(tf_load(NULL, ti_lookup, NULL), TF_ERRPARAM);
     asserteq(tf_load(&S, NULL, NULL), TF_ERRPARAM);
-    asserteq(S.root, (struct tf_Node *)NULL);
+    asserteq(S.root == NULL, 1);
 
     /* lookup that stops after the first F-key */
     {

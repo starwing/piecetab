@@ -19,6 +19,11 @@ notes/plans/
 *.o
 *.so
 *.log
+*.exe
+*.obj
+*.pdb
+*.exp
+*.lib
 lc_insert_demo
 tests/pt_bench.c
 tests/linecache_test_fanout4

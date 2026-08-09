@@ -19,6 +19,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* MSVC: nested blocks re-declare loop vars (legal C89 scoping), C4456. */
+#ifdef _MSC_VER
+# pragma warning(disable : 4456)
+#endif
+
 #define test_log(...) fprintf(stderr, __VA_ARGS__)
 #define test_lu(x)    ((unsigned long)(x))
 
@@ -69,6 +74,10 @@ TEST_STATIC void *test_alloc(void *ud, void *p, size_t osize, size_t nsize) {
     if (!np) abort();
     return np;
 }
+
+/* test_byte — build a UTF-8 byte from a constant; the variable parameter
+ * keeps MSVC's C4310 (constant truncation cast) from firing. */
+TEST_STATIC char test_byte(int v) { return (char)v; }
 
 TEST_STATIC void *oom_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
     int *cnt = (int *)ud;

@@ -113,8 +113,8 @@ static lpt_State *lpt_state(lua_State *L) {
 
 /* piece iterator userdata: owns a retained tree ref, cursor built from it */
 typedef struct lpt_PieceIter {
-    pt_Cursor C;   /* iteration cursor */
-    pt_Buffer b;   /* retained tree ref; released by __gc/__close */
+    pt_Cursor C; /* iteration cursor */
+    pt_Buffer b; /* retained tree ref; released by __gc/__close */
 } lpt_PieceIter;
 
 /* doc userdata */
@@ -230,8 +230,8 @@ static int Lbuf_pieceiter(lua_State *L) {
 
 static int Lbuf_pieces(lua_State *L) {
     pt_Buffer      b = lpt_checkbuffer(L, 1);
-    lpt_PieceIter *it =
-            (lpt_PieceIter *)lua_newuserdata(L, sizeof(lpt_PieceIter));
+    lpt_PieceIter *it = (lpt_PieceIter *)lua_newuserdata(
+            L, sizeof(lpt_PieceIter));
     if (luaL_newmetatable(L, LPT_ITER_TYPE)) {
         lua_pushcfunction(L, Lpieceiter_gc), lua_setfield(L, -2, "__gc");
         lua_pushcfunction(L, Lpieceiter_gc), lua_setfield(L, -2, "__close");
@@ -517,7 +517,7 @@ static pt_Buffer lpt_tobuffer(lua_State *L, int idx) {
     int         r;
     luaL_checklstring(L, idx, &len);
     if (len == 0) return pt_empty(S->PS);
-    pt_seek(&C, pt_empty(S->PS), 0);
+    pt_seek(&C, (assert(S), pt_empty(S->PS)), 0);
     lpt_checkmem(L, lit = lpt_toliteral(L, idx, &len, &C));
     if ((r = pt_insert(&C, lit, len)) < 0 || !(b = pt_commit(&C)))
         pt_release(pt_rollback(&C)), lpt_checkerror(L, r ? r : PT_ERRMEM);

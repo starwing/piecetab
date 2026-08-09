@@ -513,7 +513,7 @@ static void ptK_findleaf(pt_Cursor *C, int l, size_t *poff) {
         int      i;
         for (i = 0; i < ptN_cc(p) && *poff >= p->bytes[i]; ++i)
             *poff -= p->bytes[i], C->off += p->bytes[i];
-        C->paths[l] = &p->children[assert(i < ptN_cc(p)), i];
+        assert(i < ptN_cc(p)), C->paths[l] = &p->children[i];
     }
 }
 
@@ -524,7 +524,7 @@ static int ptK_locend(pt_Cursor *C) {
         return C->paths[0] = n->children, C->off = 0, C->poff = 0, 0;
     for (l = 0; l < ptK_levels(C); ++l)
         n = *(C->paths[l] = &n->children[ptN_cc(n) - 1]);
-    C->paths[l] = &n->children[assert(ptN_cc(n)), ptN_cc(n) - 1];
+    assert(ptN_cc(n)), C->paths[l] = &n->children[ptN_cc(n) - 1];
     C->poff = n->bytes[ptN_cc(n) - 1], C->off = ptK_bytes(C) - C->poff;
     return 1;
 }
@@ -560,8 +560,8 @@ static int ptK_forwardoff(pt_Cursor *C, size_t d) {
 }
 
 static int ptK_backwardoff(pt_Cursor *C, size_t d) {
-    pt_Node *p;
-    int      l, i;
+    pt_Node *p = NULL;
+    int      l, i = 0;
     if (d <= C->poff) return C->poff -= d, 0;
     d -= C->poff, C->poff = 0;
     for (l = ptK_levels(C); l >= 0; --l) {
@@ -942,7 +942,7 @@ static void ptD_cutrange(pt_Cursor *L, pt_Cursor *R, pt_Node *rt, int fl) {
 }
 
 static int ptD_makechain(pt_Cursor *C, int from, int to, int nofail) {
-    pt_Node *p, *nn, ***cp = C->paths + to;
+    pt_Node *p, *nn = NULL, ***cp = C->paths + to;
     int      l, r = 0;
     if (!nofail && ptP_reserve(C->tree->S, &C->tree->S->nodes, to - from + 1))
         return PT_ERRMEM;
@@ -968,8 +968,8 @@ static int ptD_makechain(pt_Cursor *C, int from, int to, int nofail) {
 }
 
 static void ptD_findroom(pt_Cursor *C, int l) {
-    int      i, fl;
-    pt_Node *p;
+    int      fl, i = 0;
+    pt_Node *p = NULL;
     for (fl = l - 1; fl >= 0; --fl) {
         p = ptK_parent(C, fl), i = ptK_idx(C, p, fl);
         if (i < PT_FANOUT - 1) break;
@@ -984,7 +984,7 @@ static void ptD_backwardnode(pt_Cursor *C, int d, int l) {
     if (d > i) {
         d -= i + 1, dl = l;
         while (--dl >= 0 && ptK_idx(C, ptK_parent(C, dl), dl) == 0) continue;
-        C->paths[assert(dl >= 0), dl] -= 1;
+        assert(dl >= 0), C->paths[dl] -= 1;
         while (++dl <= l)
             p = ptK_parent(C, dl), C->paths[dl] = &p->children[ptN_cc(p) - 1];
     }
@@ -1080,7 +1080,7 @@ static void ptD_stitchnode(pt_Cursor *L, pt_Node *rt) {
 static int ptD_mergeleaf(pt_Cursor *C, pt_Node *rt) {
     int      cc, hL, hR, merged = 0, l = ptK_levels(C);
     pt_Node *p = ptK_parent(C, l);
-    size_t   d = 0, bc = p->bytes[assert(ptN_cc(p)), (cc = ptN_cc(p)) - 1];
+    size_t   d = 0, bc = p->bytes[(cc = (assert(ptN_cc(p)), ptN_cc(p))) - 1];
     hL = ptM_ishole(p, cc - 1), hR = ptM_ishole(rt, 0);
     if (!hL && !hR && ptN_lit(p, cc - 1) + bc == ptN_lit(rt, 0))
         merged = 1;
@@ -1373,7 +1373,7 @@ static int ptZ_append(pt_Cursor *C, pt_Compact *B) {
             p->children[i] = (pt_Node *)s, p->bytes[i] = n, i += 1;
         db += (pt_Delta)n;
     }
-    ptN_setcc(p, i), C->paths[l] = &p->children[assert(i > 0), i - 1];
+    assert(i > 0), ptN_setcc(p, i), C->paths[l] = &p->children[i - 1];
     return ptM_up(C, l - 1, db), i == PT_FANOUT && s != NULL;
 }
 

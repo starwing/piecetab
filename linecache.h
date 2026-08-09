@@ -369,7 +369,7 @@ static void lcK_findleaf(lc_Cursor *C, int l, size_t *poff) {
         int      i;
         for (i = 0; i < lcN_cc(p) && *poff >= p->bytes[i]; ++i)
             *poff -= p->bytes[i], C->nu += p->breaks[i], C->off += p->bytes[i];
-        C->paths[l] = &p->children[assert(i < lcN_cc(p)), i];
+        assert(i < lcN_cc(p)), C->paths[l] = &p->children[i];
     }
 }
 
@@ -380,7 +380,7 @@ static void lcK_findline(lc_Cursor *C, int l, size_t *pl) {
         int      i, cc = lcN_cc(p);
         for (i = 0; i < cc && *pl >= p->breaks[i] + (i == cc - 1); ++i)
             *pl -= p->breaks[i], C->nu += p->breaks[i], C->off += p->bytes[i];
-        C->paths[l] = &p->children[assert(i < lcN_cc(p)), i];
+        assert(i < lcN_cc(p)), C->paths[l] = &p->children[i];
     }
 }
 
@@ -707,7 +707,7 @@ static int lcD_rmleaf(lc_Cursor *C, size_t del) {
 }
 
 static int lcD_makechain(lc_Cursor *C, int from, int to, int nofail) {
-    lc_Node *p, *nn, ***cp = C->paths + to;
+    lc_Node *p, *nn = NULL, ***cp = C->paths + to;
     int      l, r = 0;
     if (!nofail && lcP_reserve(C->tree->S, &C->tree->S->nodes, to - from + 1))
         return LC_ERRMEM;
@@ -730,8 +730,8 @@ static int lcD_makechain(lc_Cursor *C, int from, int to, int nofail) {
 }
 
 static int lcD_findroom(lc_Cursor *C, lc_Node *rt, int nofail, int l) {
-    int      i, fl, c;
-    lc_Node *p;
+    int      fl, c, i = 0;
+    lc_Node *p = NULL;
     for (fl = l - 1; fl >= 0; --fl)
         if ((i = lcK_idx(C, p = lcK_parent(C, fl), fl)) < LC_FANOUT - 1) break;
     if (fl >= 0 && (c = lcN_cc(p) - i - 1) > 0) {
@@ -750,7 +750,7 @@ static int lcD_mergeleaf(lc_Cursor *C, lc_Node *rt) {
     lc_Node *p = lcK_parent(C, l);
     int      cc = lcN_cc(p), rtlc = (int)rt[0].breaks[0];
     lc_Leaf *lf = (assert(rtlc), lcN_leaf(&rt[0], 0));
-    size_t  *bs = &p->bytes[cc - 1], *ls = &p->breaks[assert(cc), cc - 1];
+    size_t  *bs = &p->bytes[cc - 1], *ls = (assert(cc), &p->breaks[cc - 1]);
     lc_Delta db = 0, dl = lc_min(rtlc, LC_LEAF_FANOUT - (int)*ls);
     if (*ls == LC_LEAF_FANOUT) return 0;
     memcpy(lcN_leaf(p, cc - 1)->bytes + *ls, lf->bytes, dl * sizeof(unsigned));
@@ -779,7 +779,7 @@ static void lcD_backwardnode(lc_Cursor *C, int d, int l) {
     if (d > i) {
         d -= i + 1, dl = l;
         while (--dl >= 0 && lcK_idx(C, lcK_parent(C, dl), dl) == 0) continue;
-        C->paths[assert(dl >= 0), dl] -= 1;
+        assert(dl >= 0), C->paths[dl] -= 1;
         while (++dl <= l)
             p = lcK_parent(C, dl), C->paths[dl] = &p->children[lcN_cc(p) - 1];
     }

@@ -481,7 +481,7 @@ TEST(putline_params) {
     asserteq(cg_putline(&g, -1, 0, "a", 1), 0);
     asserteq(cg_putline(&g, 0, 4, "a", 1), 4);
     asserteq(cg_putline(gp, 0, 0, "a", 1), 0);
-    buf[0] = (char)0x80;
+    buf[0] = test_byte(0x80);
     buf[1] = 'a';
     buf[2] = 'b';
     buf[3] = '\0';
@@ -497,7 +497,7 @@ TEST(putline_skip) {
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 1, 4);
     cg_setwcwidth(&g, cw_double, NULL);
-    buf[0] = (char)0x80;
+    buf[0] = test_byte(0x80);
     buf[1] = 'X';
     buf[2] = '\0';
     asserteq(cg_putline(&g, 0, 0, buf, 1), 1);
@@ -1006,11 +1006,11 @@ TEST(diff_fill_min_pass) {
 TEST(tocp_trunc) {
     char buf[8];
     memset(buf, 0, sizeof(buf));
-    buf[0] = (char)0xc3;
+    buf[0] = test_byte(0xc3);
     cgK_tocp(buf, 1);
-    buf[0] = (char)0xe4;
+    buf[0] = test_byte(0xe4);
     cgK_tocp(buf, 2);
-    buf[0] = (char)0xe4;
+    buf[0] = test_byte(0xe4);
     cgK_tocp(buf, 1);
 }
 
