@@ -129,20 +129,25 @@ local function utf8_char_len(byte)
   return 4
 end
 
+-- byte offset of the start of the UTF-8 character ending at off (off-1..)
+local function utf8_prev_start(buf, off)
+  local p = off - 1
+  while p > 0 do
+    local b = buf:read(p, 1):byte()
+    if b >= 0xc0 or b < 0x80 then break end
+    p = p - 1
+  end
+  return p
+end
+
 -- Move cursor by n characters (-1 = left, +1 = right)
 local function cursor_move_char(doc, n)
   local off = doc:offset()
   if n < 0 and off <= 0 then return end
-  local buf, lnum = doc:buffer(), doc:line()
+  local buf = doc:buffer()
   local saved = off
   if n < 0 then
-    local p = off - 1
-    while p > 0 do
-      local b = buf:read(p, 1):byte()
-      if b >= 0xc0 or b < 0x80 then break end
-      p = p - 1
-    end
-    doc:seek("set", p)
+    doc:seek("set", utf8_prev_start(buf, off))
   elseif n > 0 then
     if off >= #buf then return end
     local clen = utf8_char_len(buf:read(off, 1):byte())
@@ -402,16 +407,9 @@ end
 local function ins_backspace(self)
   local off = self.doc:offset()
   if off > 0 then
-    local buf = self.doc:buffer()
-    local p = off - 1
-    while p > 0 do
-      local b = buf:read(p, 1):byte()
-      if b >= 0xc0 or b < 0x80 then break end
-      p = p - 1
-    end
-    local char_len = off - p
+    local p = utf8_prev_start(self.doc:buffer(), off)
     self.doc:seek("set", p)
-    self.doc:edit(char_len, "")
+    self.doc:edit(off - p, "")
   end
 end
 

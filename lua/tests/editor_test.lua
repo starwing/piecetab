@@ -162,12 +162,16 @@ function TestNormal:testOOpensLineBelow()
   self.e:dispatch("o")
   lu.assertEquals(self.e.mode, "INSERT")
   lu.assertEquals(self.e.doc:breaks(), 4)
+  lu.assertEquals(self.e.doc:line(), 1) -- new empty line below, cursor at its start
+  lu.assertEquals(self.e.doc:column(), 0)
 end
 
 function TestNormal:testOOpensLineAbove()
   self.e:dispatch("O")
   lu.assertEquals(self.e.mode, "INSERT")
   lu.assertEquals(self.e.doc:breaks(), 4)
+  lu.assertEquals(self.e.doc:line(), 0) -- new empty line above, cursor at its start
+  lu.assertEquals(self.e.doc:column(), 0)
 end
 
 TestInsert = {}
@@ -179,7 +183,7 @@ end
 local function esc(e) e:dispatch("<Escape>") end
 
 function TestInsert:testTypeText()
-  self.e:dispatch("a") -- a: 光标右移一字符进 insert
+  self.e:dispatch("a") -- a: cursor right one char, enter insert
   self.e:dispatch("X")
   self.e:dispatch("Y")
   esc(self.e)
@@ -196,6 +200,16 @@ function TestInsert:testBackspace()
   lu.assertEquals(self.e.doc:read("l"), "ab")
 end
 
+function TestInsert:testBackspaceUtf8()
+  local e = make_ed("你好\n")
+  e.doc:seek("set", 6) -- end of line, after the 3-byte "好"
+  e:dispatch("i")
+  e:dispatch("<Backspace>") -- deletes whole "好" (3 bytes), cursor trails to its start
+  e:dispatch("<Escape>")
+  e.doc:seek("set", 0)
+  lu.assertEquals(e.doc:read("*a"), "你\n")
+end
+
 function TestInsert:testEnterSplitsLine()
   self.e:dispatch("i")
   self.e:dispatch("<Enter>")
@@ -206,12 +220,12 @@ end
 function TestInsert:testEscapeMovesLeft()
   self.e:dispatch("i")
   self.e:dispatch("<Escape>")
-  lu.assertEquals(self.e.doc:column(), 0) -- ESC 后光标左移一字符
+  lu.assertEquals(self.e.doc:column(), 0) -- ESC moves cursor one char left
 end
 
 function TestInsert:testControlKeyFiltered()
   self.e:dispatch("i")
-  self.e:dispatch("<F5>") -- 未绑定控制键 → 不插入
+  self.e:dispatch("<F5>") -- unbound control key -> not inserted
   esc(self.e)
   lu.assertEquals(self.e.doc:read("l"), "ab")
 end
