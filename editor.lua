@@ -34,6 +34,12 @@ end
 
 --- @class editor.Term
 local Term = {}
+
+-- method-style wrapper so Term:write/self.out.write(self.out, s) works
+-- for both this and duck-typed outs (fake term in tests)
+local IO = { write = function(_, s) io.write(s) end,
+             flush = function() io.flush() end }
+
 do
   Term.__index = Term
 
@@ -45,8 +51,12 @@ do
     --- @type termfeed.State
     self.tf = assert(tf.new())
     self.tf:setflag(tf.FLAG_DELBS)
-    self.out = opts.out or io
-    self.size_fn = opts.size or function() return cg.winsize(1) end
+    self.out = opts.out or IO
+    self.size_fn = opts.size or function()
+      local r, c = cg.winsize(1)
+      if r and c then return r, c end
+      return 24, 80
+    end
     return self
   end
 
@@ -390,7 +400,9 @@ do
 
   function Ed:dispatch(key)
     if not key then return end
-    mode_dispatch[self.mode:lower()](self, key)
+    local fn = mode_dispatch[self.mode:lower()]
+    assert(fn, "unknown mode")
+    fn(self, key)
   end
 
   function Ed:render() -- Task 5: full implementation

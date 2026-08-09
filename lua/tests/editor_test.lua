@@ -44,8 +44,17 @@ function TestSkeleton:testOpenReadsFile()
   f:write("x\ny\n")
   f:close()
   local e = Ed.open(path)
+  e.log = function() end
   lu.assertEquals(e.doc:breaks(), 2)
   os.remove(path)
+end
+
+function TestSkeleton:testTermWriteNoCrash()
+  -- default Term.new() must not crash: out defaults to io wrapped
+  -- method-style (io.write(io, s) would error before the fix)
+  local e = Ed.new() -- real Term.new() path
+  e.log = function() end
+  e.term:write("")
 end
 
 function TestSkeleton:testKeymapRegisterAndDispatch()
