@@ -346,4 +346,55 @@ function TestCommand:testEreloadsFile()
   os.remove(path)
 end
 
+TestUtf8 = {}
+
+function TestUtf8:setUp()
+  self.e = make_ed("你好\nworld\n")
+end
+
+function TestUtf8:testHLeftAcrossUtf8()
+  self.e.doc:seek("set", 6) -- end of "你好" line (byte 6)
+  self.e:dispatch("h")
+  lu.assertEquals(self.e.doc:column(), 3) -- start of "好"
+  self.e:dispatch("h")
+  lu.assertEquals(self.e.doc:column(), 0)
+end
+
+function TestUtf8:testLRightAcrossUtf8()
+  self.e.doc:seek("set", 0)
+  self.e:dispatch("l")
+  lu.assertEquals(self.e.doc:column(), 3) -- start of "好"
+  self.e:dispatch("l")
+  lu.assertEquals(self.e.doc:column(), 6) -- end of line
+end
+
+function TestUtf8:testDeleteUtf8()
+  self.e.doc:seek("set", 3) -- at "好"
+  self.e:dispatch("i")
+  self.e:dispatch("<Delete>")
+  self.e:dispatch("<Escape>")
+  self.e.doc:seek("set", 0)
+  lu.assertEquals(self.e.doc:read("*a"), "你\nworld\n")
+end
+
+function TestUtf8:testDeleteLastChar()
+  -- cursor at "好" (last char of buffer): utf8.next returns nil past it
+  local e = make_ed("你好")
+  e.doc:seek("set", 3)
+  e:dispatch("i")
+  e:dispatch("<Delete>")
+  e:dispatch("<Escape>")
+  e.doc:seek("set", 0)
+  lu.assertEquals(e.doc:read("*a"), "你")
+end
+
+function TestUtf8:testJKeepsDisplayCol()
+  -- "你好" 显示宽 4 列; 行尾 col6; j 到 "world" 应保持显示列 4 -> byte col 4
+  self.e.doc:seek("set", 6)
+  self.e:dispatch("j")
+  lu.assertEquals(self.e.doc:column(), 4)
+  self.e:dispatch("k")
+  lu.assertEquals(self.e.doc:column(), 6)
+end
+
 os.exit(lu.LuaUnit.run(), true)

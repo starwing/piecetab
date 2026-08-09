@@ -122,26 +122,6 @@ local function word_class(byte)
   return 0
 end
 
--- UTF-8 helpers
-local function utf8_char_len(byte)
-  if byte < 0x80 then return 1 end
-  if byte < 0xc0 then return 0 end
-  if byte < 0xe0 then return 2 end
-  if byte < 0xf0 then return 3 end
-  return 4
-end
-
--- byte offset of the start of the UTF-8 character ending at off (off-1..)
-local function utf8_prev_start(buf, off)
-  local p = off - 1
-  while p > 0 do
-    local b = buf:read(p, 1):byte()
-    if b >= 0xc0 or b < 0x80 then break end
-    p = p - 1
-  end
-  return p
-end
-
 -- Move cursor by n characters (-1 = left, +1 = right)
 local function cursor_move_char(doc, n)
   -- TODO(C): promote char motion to C (pt or new module)
@@ -150,11 +130,13 @@ local function cursor_move_char(doc, n)
   local buf = doc:buffer()
   local saved = off
   if n < 0 then
-    doc:seek("set", utf8_prev_start(buf, off))
+    -- prefix aligns with 0-based off: prev char start is p - 1
+    doc:seek("set", utf8.offset(buf:read(0, off), -1) - 1)
   elseif n > 0 then
     if off >= #buf then return end
-    local clen = utf8_char_len(buf:read(off, 1):byte())
-    doc:seek("set", off + clen)
+    -- 5 bytes cover a 4-byte char plus its successor's lead byte
+    local nxt = utf8.next(buf:read(off, 5), 1)
+    doc:seek("set", nxt and off + nxt - 1 or #buf)
   end
   -- restore if seek didn't move (boundary clamp)
   if doc:offset() == saved and n > 0 and off < #buf then
@@ -216,12 +198,11 @@ local function text_byte_to_dcol(text, byte, tabstop)
       col = col + tabstop - (col % tabstop)
       i = i + 1
     elseif b >= 0xc0 then
-      local clen = (b < 0xe0 and 2) or (b < 0xf0 and 3) or 4
-      if i + clen - 1 <= blen then
-        local ch = text:sub(i, i + clen - 1)
-        col = col + (utf8.width(ch) or 1)
+      local nxt = utf8.next(text, i) or #text + 1
+      if nxt - 1 <= blen then
+        col = col + (utf8.width(text, i, nxt - 1) or 1)
       end
-      i = i + clen
+      i = nxt
     else
       col = col + 1
       i = i + 1
@@ -237,23 +218,19 @@ local function text_dcol_to_byte(text, dcol, tabstop)
   local i = 1
   while i <= #text do
     local b = text:byte(i)
+    local nxt = i + 1
     local nextcol
     if b == 9 then
       nextcol = col + tabstop - (col % tabstop)
     elseif b >= 0xc0 then
-      local clen = (b < 0xe0 and 2) or (b < 0xf0 and 3) or 4
-      local ch = text:sub(i, i + clen - 1)
-      nextcol = col + (utf8.width(ch) or 1)
+      nxt = utf8.next(text, i) or #text + 1
+      nextcol = col + (utf8.width(text, i, nxt - 1) or 1)
     else
       nextcol = col + 1
     end
     if nextcol > dcol then return i - 1 end
     col = nextcol
-    if b >= 0xc0 then
-      i = i + ((b < 0xe0 and 2) or (b < 0xf0 and 3) or 4)
-    else
-      i = i + 1
-    end
+    i = nxt
   end
   return #text
 end
@@ -426,9 +403,10 @@ end
 local function ins_backspace(self)
   local off = self.doc:offset()
   if off > 0 then
-    local p = utf8_prev_start(self.doc:buffer(), off)
-    self.doc:seek("set", p)
-    self.doc:edit(off - p, "")
+    -- prefix [0, off) holds the char before the cursor; p is 1-based
+    local p = utf8.offset(self.doc:buffer():read(0, off), -1)
+    self.doc:seek("set", p - 1)
+    self.doc:edit(off - p + 1, "")
   end
 end
 
@@ -436,7 +414,9 @@ local function ins_delete(self)
   local off = self.doc:offset()
   local buf = self.doc:buffer()
   if off < #buf then
-    self.doc:edit(utf8_char_len(buf:read(off, 1):byte()), "")
+    -- 5 bytes cover a 4-byte char plus its successor's lead byte
+    local nxt = utf8.next(buf:read(off, 5), 1)
+    self.doc:edit(nxt and nxt - 1 or #buf - off, "")
   end
 end
 
