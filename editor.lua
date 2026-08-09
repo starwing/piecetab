@@ -130,8 +130,10 @@ local function cursor_move_char(doc, n)
   local buf = doc:buffer()
   local saved = off
   if n < 0 then
-    -- prefix aligns with 0-based off: prev char start is p - 1
-    doc:seek("set", utf8.offset(buf:read(0, off), -1) - 1)
+    -- tail window [off-4, off+1): prev char lead + current lead
+    local s0 = math.max(off - 4, 0)
+    local p = utf8.offset(buf:read(s0, off - s0 + 1), -1, off - s0 + 1)
+    doc:seek("set", p - 1 + s0)
   elseif n > 0 then
     if off >= #buf then return end
     -- 5 bytes cover a 4-byte char plus its successor's lead byte
@@ -403,10 +405,13 @@ end
 local function ins_backspace(self)
   local off = self.doc:offset()
   if off > 0 then
-    -- prefix [0, off) holds the char before the cursor; p is 1-based
-    local p = utf8.offset(self.doc:buffer():read(0, off), -1)
-    self.doc:seek("set", p - 1)
-    self.doc:edit(off - p + 1, "")
+    -- tail window [off-4, off+1): prev char lead + current lead
+    local buf = self.doc:buffer()
+    local s0 = math.max(off - 4, 0)
+    local p = utf8.offset(buf:read(s0, off - s0 + 1), -1, off - s0 + 1)
+    local prev = p - 1 + s0
+    self.doc:seek("set", prev)
+    self.doc:edit(off - prev, "")
   end
 end
 

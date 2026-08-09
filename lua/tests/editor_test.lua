@@ -389,12 +389,28 @@ function TestUtf8:testDeleteLastChar()
 end
 
 function TestUtf8:testJKeepsDisplayCol()
-  -- "你好" 显示宽 4 列; 行尾 col6; j 到 "world" 应保持显示列 4 -> byte col 4
+  -- "你好" is 4 display columns wide; line end at byte col 6; j to "world"
+  -- keeps display col 4 -> byte col 4
   self.e.doc:seek("set", 6)
   self.e:dispatch("j")
   lu.assertEquals(self.e.doc:column(), 4)
   self.e:dispatch("k")
   lu.assertEquals(self.e.doc:column(), 6)
+end
+
+function TestUtf8:testHLongLineWindow()
+  -- 100 ASCII + CJK: left-move window [off-4, off+1) must land exactly
+  local line = string.rep("a", 100) .. "你好b"
+  local e = make_ed(line .. "\n")
+  e.doc:seek("set", #line)
+  e:dispatch("h")
+  lu.assertEquals(e.doc:column(), #line - 1) -- at 'b'
+  e:dispatch("h")
+  lu.assertEquals(e.doc:column(), #line - 4) -- start of "好"
+  e:dispatch("h")
+  lu.assertEquals(e.doc:column(), #line - 7) -- start of "你"
+  e:dispatch("h")
+  lu.assertEquals(e.doc:column(), #line - 8) -- last 'a'
 end
 
 os.exit(lu.LuaUnit.run(), true)

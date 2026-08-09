@@ -160,7 +160,7 @@ editor.lua 是 C 模块库的 demo——cellgrid/termfeed 均由 editor demo 需
 
 | 候选 | 位置 | 说明 |
 |---|---|---|
-| 字符移动原语 | `cursor_move_char` + `utf8_char_len`/`utf8_prev_start` | UTF-8 字符边界 walk；可入 pt 或独立 C 模块（配合 undo 对齐） |
+| 字符移动原语 | `cursor_move_char`（utf8.next/offset + pt seek） | UTF-8 委托 lua-utf8 已完成（Task 4b）；余下 pt 侧逻辑（seek/边界 clamp）可入 pt 或独立 C 模块（配合 undo 对齐） |
 | 显示列换算 | `text_byte_to_dcol`/`text_dcol_to_byte`（tab 展开 + 宽字符） | cellgrid 家族候选；render_line 的 tab 逻辑（Task 5 迁移）同属此候选 |
 | 单词移动 | `move_word_forward/backward` + `word_class` | 暂留 Lua（vim 语义属编辑器逻辑）；若入 kana/多语言分词再 C 化 |
 | 渲染管线 | render_line 的 style 批量 putline | spantree 落地后与 highlighter 合并进 C 渲染路径 |
