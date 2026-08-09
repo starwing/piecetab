@@ -67,16 +67,14 @@ function TestSkeleton:testKeymapRegisterAndDispatch()
   lu.assertEquals(called, 1)
 end
 
---[[
 function TestSkeleton:testCommandRegister()
   local e = make_ed("")
   local got
   e:command("w", function(self, arg, bang) got = { arg, bang } end)
   e.cmdline = "w file"
-  e:dispatch("<Enter>") -- exec stub placeholder until Task 4
+  e:dispatch("<Enter>") -- Enter executes the pending :command
   lu.assertNotNil(got)
 end
---]]
 
 function TestSkeleton:testQuitSetsDone()
   local e = make_ed("")
@@ -228,6 +226,77 @@ function TestInsert:testControlKeyFiltered()
   self.e:dispatch("<F5>") -- unbound control key -> not inserted
   esc(self.e)
   lu.assertEquals(self.e.doc:read("l"), "ab")
+end
+
+TestCommand = {}
+
+function TestCommand:setUp()
+  self.e = make_ed("ab\n")
+end
+
+function TestCommand:testColonEntersCommandMode()
+  self.e:dispatch(":")
+  lu.assertEquals(self.e.mode, "COMMAND")
+end
+
+function TestCommand:testTypingAppendsCmdline()
+  self.e:dispatch(":")
+  self.e:dispatch("w")
+  self.e:dispatch("q")
+  lu.assertEquals(self.e.cmdline, "wq")
+end
+
+function TestCommand:testEscapeAborts()
+  self.e:dispatch(":")
+  self.e:dispatch("abc")
+  self.e:dispatch("<Escape>")
+  lu.assertEquals(self.e.mode, "NORMAL")
+  lu.assertEquals(self.e.cmdline, "")
+end
+
+function TestCommand:testBackspace()
+  self.e:dispatch(":")
+  self.e:dispatch("wq")
+  self.e:dispatch("<Backspace>")
+  lu.assertEquals(self.e.cmdline, "w")
+end
+
+function TestCommand:testUnknownCommand()
+  self.e:dispatch(":")
+  self.e:dispatch("zz")
+  self.e:dispatch("<Enter>")
+  lu.assertEquals(self.e.mode, "NORMAL")
+  lu.assertStrContains(self.e.msg, "Unknown")
+end
+
+function TestCommand:testBangParsed() -- regression: q! dead-code branch
+  local e2 = make_ed("")
+  local got
+  e2:command("q", function(self, arg, bang) got = bang end)
+  e2.cmdline = "q!"
+  e2:dispatch("<Enter>")
+  lu.assertTrue(got)
+end
+
+function TestCommand:testSaveWithFilename()
+  local path = os.tmpname()
+  local e = Ed.open(path)
+  e.log = function() end
+  e:dispatch(":")
+  e:dispatch("w")
+  e:dispatch("<Enter>")
+  local f = assert(io.open(path, "r"))
+  local content = f:read("*a"); f:close()
+  lu.assertEquals(content, "")
+  os.remove(path)
+end
+
+function TestCommand:testQuitSetsDone()
+  local e = make_ed("")
+  e:dispatch(":")
+  e:dispatch("q")
+  e:dispatch("<Enter>")
+  lu.assertTrue(e.done)
 end
 
 os.exit(lu.LuaUnit.run(), true)

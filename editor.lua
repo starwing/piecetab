@@ -361,6 +361,21 @@ local Ed = {}
 -- forward declaration: filled in Section 5 (dispatch reads it via upvalue)
 local mode_dispatch = {}
 
+-- Execute pending ":" cmdline: parse name/bang/arg, dispatch registered
+-- :command; unregistered name sets msg "Unknown: :" .. line
+local function exec_command(self)
+  self.mode = "NORMAL"
+  local line = self.cmdline
+  self.cmdline = ""
+  local name, bang, arg = line:match("^(%a+)(!?)(.*)")
+  local fn = name and self.commands[name]
+  if fn then
+    fn(self, arg:match("^%s*(.*)"), bang == "!")
+  else
+    self.msg = "Unknown: :" .. line
+  end
+end
+
 -- built-in normal keymaps (per-instance, called from Ed.new)
 local function install_normal_keys(self)
   local n = self.keymaps.normal
@@ -394,6 +409,7 @@ local function install_normal_keys(self)
   n["<C-r>"] = function(self) self.doc:redo() end
   n["<C-l>"] = function(self) self.grid:clear() end
   n[":"] = function(self) self.mode = "COMMAND"; self.cmdline = "" end
+  n["<Enter>"] = function(self) if #self.cmdline > 0 then exec_command(self) end end
   n["<Up>"] = n.k
   n["<Down>"] = n.j
   n["<Left>"] = n.h
@@ -457,6 +473,42 @@ local function install_insert_keys(self)
   end
 end
 
+-- built-in command keymaps (per-instance, called from Ed.new)
+local function install_command_keys(self)
+  local c = self.keymaps.command
+  c["<Escape>"] = function(self) self.mode = "NORMAL"; self.cmdline = "" end
+  c["<C-c>"] = function(self) self.mode = "NORMAL"; self.cmdline = "" end
+  c["<Enter>"] = exec_command
+  c["<Backspace>"] = function(self) self.cmdline = self.cmdline:sub(1, -2) end
+end
+
+-- built-in :commands (per-instance, called from Ed.new)
+local function install_builtin_commands(self)
+  local c = self.commands
+  c.w = function(self, arg, bang)
+    if not self.filename then self.msg = "No filename"; return end
+    local f = io.open(self.filename, "w")
+    if not f then self.msg = "Cannot write: " .. self.filename; return end
+    local data = self.doc:dump()
+    f:write(data); f:close()
+    self.saved_vid = self.doc:version()
+    self.msg = '"' .. self.filename .. '" written'
+  end
+  c.q = function(self, arg, bang) self:quit() end
+  c.wq = function(self, arg, bang) c.w(self); c.q(self) end
+  c.e = function(self, arg, bang)
+    if not arg or arg == "" then self.msg = "No filename"; return end
+    local f = io.open(arg, "r")
+    local content = ""
+    if f then content = f:read("*a"); f:close() end
+    self.doc = content ~= "" and pt.doc(content) or pt.doc(nil)
+    self.filename = arg
+    self.saved_vid = self.doc:version()
+    self.scroll_line = 0
+    self.msg = '"' .. arg .. '" loaded, ' .. self.doc:breaks() .. " lines"
+  end
+end
+
 do
   Ed.__index = Ed
 
@@ -488,6 +540,8 @@ do
     self.commands = {}
     install_normal_keys(self)
     install_insert_keys(self)
+    install_command_keys(self)
+    install_builtin_commands(self)
     return self
   end
 
@@ -575,7 +629,21 @@ local function insert_key(self, key)
   end
 end
 mode_dispatch.insert = insert_key
-mode_dispatch.command = function() end
+-- command dispatch: keymap hit -> fn, else printable chars append cmdline
+local function command_key(self, key)
+  local fn = self.keymaps.command[key]
+  if fn then fn(self, key); return end
+  if type(key) == "string" and #key > 0 then
+    if key:sub(1, 1) == "<" and key:sub(-1) == ">" then return end
+    local i = 1
+    while i <= #key do
+      local b = key:byte(i)
+      if b >= 32 and b <= 126 then self.cmdline = self.cmdline .. key:sub(i, i) end
+      i = i + 1
+    end
+  end
+end
+mode_dispatch.command = command_key
 
 -- ================================================================
 -- Section 6: Main
