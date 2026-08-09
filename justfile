@@ -86,3 +86,7 @@ lua-pt-cov: clean-gcda
 lua-pt-lines:
     @awk '/^DA:/ && /,0$/ {gsub(/DA:|,0/,""); print $0}' lcov.info \
     | sort -n | while read ln; do echo "L$ln: $(sed -n ${ln}p piecetab.c)"; done
+
+# editor.lua headless tests (needs lua-utf8 rock: PUC Lua only)
+lua-ed:
+    lua tests/lua/editor_test.lua

@@ -10,6 +10,34 @@
 
 #define cg_log(...) fprintf(stderr, __VA_ARGS__)
 
+#define cg_assert(e)                                            \
+    do {                                                        \
+        if (!(e)) {                                             \
+            cg_log("FAIL %s:%d: %s\n", __FILE__, __LINE__, #e); \
+            abort();                                            \
+        }                                                       \
+    } while (0)
+
+#define cg_asserteq(a, b)                                             \
+    do {                                                              \
+        long _a = (long)(a), _b = (long)(b);                          \
+        if (_a != _b) {                                               \
+            cg_log("FAIL %s:%d: %s == %ld, expected %ld\n", __FILE__, \
+                   __LINE__, #a, _a, _b);                             \
+            abort();                                                  \
+        }                                                             \
+    } while (0)
+
+#define cg_assertstreq(a, b)                                              \
+    do {                                                                  \
+        const char *_sa = (a), *_sb = (b);                                \
+        if (strcmp(_sa, _sb) != 0) {                                      \
+            cg_log("FAIL %s:%d: '%s' != '%s'\n", __FILE__, __LINE__, _sa, \
+                   _sb);                                                  \
+            abort();                                                      \
+        }                                                                 \
+    } while (0)
+
 static void *cg_test_alloc(void *ud, void *p, size_t osize, size_t nsize) {
     void *np;
     (void)ud, (void)osize;
@@ -128,7 +156,7 @@ static void assert_diff(cg_Grid *G, const char *expected) {
     char         buf[4096];
     size_t       len = sizeof(buf);
     cg_initdebug(&d, buf, &len);
-    assert(cg_diff(G, &d.base) == CG_OK);
+    cg_asserteq(cg_diff(G, &d.base), CG_OK);
     if (strcmp(buf, expected) != 0)
         cg_log("diff mismatch:\n  got:      %s\n  expected: %s\n", buf,
                expected);
@@ -141,11 +169,11 @@ static void assert_diff(cg_Grid *G, const char *expected) {
 
 TEST(init_params) {
     cg_Grid g;
-    assert(cg_init(NULL, cg_test_alloc, NULL) == CG_ERRPARAM);
-    assert(cg_init(&g, cg_test_alloc, NULL) == CG_OK);
-    assert(cg_rows(&g) == 0);
-    assert(cg_cols(&g) == 0);
-    assert(cg_top(&g) == 0);
+    cg_asserteq(cg_init(NULL, cg_test_alloc, NULL), CG_ERRPARAM);
+    cg_asserteq(cg_init(&g, cg_test_alloc, NULL), CG_OK);
+    cg_asserteq(cg_rows(&g), 0);
+    cg_asserteq(cg_cols(&g), 0);
+    cg_asserteq(cg_top(&g), 0);
     cg_free(&g);
 }
 
@@ -159,10 +187,10 @@ TEST(free_empty) {
 
 TEST(init_default_alloc) {
     cg_Grid g;
-    assert(cg_init(&g, NULL, NULL) == CG_OK);
-    assert(cg_begin(&g, 0, 2, 3) == CG_OK);
+    cg_asserteq(cg_init(&g, NULL, NULL), CG_OK);
+    cg_asserteq(cg_begin(&g, 0, 2, 3), CG_OK);
     cg_put(&g, 0, 0, 'X', 0);
-    assert(cg_cell(&g, 0, 0, NULL) == 'X');
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), 'X');
     cg_free(&g);
 }
 
@@ -173,32 +201,32 @@ TEST(init_default_alloc) {
 TEST(begin_first) {
     cg_Grid g;
     cg_init(&g, cg_test_alloc, NULL);
-    assert(cg_begin(&g, 5, 2, 3) == CG_OK);
-    assert(cg_rows(&g) == 2);
-    assert(cg_cols(&g) == 3);
-    assert(cg_top(&g) == 5);
+    cg_asserteq(cg_begin(&g, 5, 2, 3), CG_OK);
+    cg_asserteq(cg_rows(&g), 2);
+    cg_asserteq(cg_cols(&g), 3);
+    cg_asserteq(cg_top(&g), 5);
     cg_free(&g);
 }
 
 TEST(begin_zero) {
     cg_Grid g;
     cg_init(&g, cg_test_alloc, NULL);
-    assert(cg_begin(&g, 0, 0, 5) == CG_ERRPARAM);
-    assert(cg_begin(&g, 0, 5, 0) == CG_ERRPARAM);
-    assert(cg_rows(&g) == 0);
+    cg_asserteq(cg_begin(&g, 0, 0, 5), CG_ERRPARAM);
+    cg_asserteq(cg_begin(&g, 0, 5, 0), CG_ERRPARAM);
+    cg_asserteq(cg_rows(&g), 0);
     cg_free(&g);
 }
 
 TEST(begin_null) {
-    assert(cg_begin(NULL, 0, 2, 3) == CG_ERRPARAM);
+    cg_asserteq(cg_begin(NULL, 0, 2, 3), CG_ERRPARAM);
 }
 
 TEST(begin_oom_init) {
     int      cnt = 0;
     cg_Grid g;
     cg_init(&g, oom_alloc, &cnt);
-    assert(cg_begin(&g, 0, 2, 3) == CG_ERRMEM);
-    assert(cg_rows(&g) == 0);
+    cg_asserteq(cg_begin(&g, 0, 2, 3), CG_ERRMEM);
+    cg_asserteq(cg_rows(&g), 0);
     cg_free(&g);
 }
 
@@ -209,10 +237,10 @@ TEST(begin_oom_resize) {
     cg_begin(&g, 0, 2, 3);
     cg_put(&g, 0, 0, 'A', 0);
     g.allocf = oom_alloc, g.ud = &cnt;
-    assert(cg_begin(&g, 0, 4, 5) == CG_ERRMEM);
-    assert(cg_rows(&g) == 2);
-    assert(cg_cols(&g) == 3);
-    assert(cg_cell(&g, 0, 0, NULL) == 'A');
+    cg_asserteq(cg_begin(&g, 0, 4, 5), CG_ERRMEM);
+    cg_asserteq(cg_rows(&g), 2);
+    cg_asserteq(cg_cols(&g), 3);
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), 'A');
     cg_free(&g);
 }
 
@@ -228,10 +256,10 @@ TEST(begin_resize_grow) {
     cg_begin(&g, 0, 2, 3);
     cg_put(&g, 0, 0, 'A', 1);
     cg_begin(&g, 1, 4, 5);
-    assert(cg_rows(&g) == 4);
-    assert(cg_cols(&g) == 5);
-    assert(cg_top(&g) == 1);
-    assert(cg_cell(&g, 0, 0, NULL) == 'A');
+    cg_asserteq(cg_rows(&g), 4);
+    cg_asserteq(cg_cols(&g), 5);
+    cg_asserteq(cg_top(&g), 1);
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), 'A');
     cg_free(&g);
 }
 
@@ -242,10 +270,10 @@ TEST(begin_resize_shrink) {
     cg_begin(&g, 0, 4, 5);
     cg_put(&g, 0, 2, 'B', 1);
     cg_begin(&g, 2, 2, 3);
-    assert(cg_rows(&g) == 2);
-    assert(cg_cols(&g) == 3);
-    assert(cg_top(&g) == 2);
-    assert(cg_cell(&g, 0, 2, NULL) == 'B');
+    cg_asserteq(cg_rows(&g), 2);
+    cg_asserteq(cg_cols(&g), 3);
+    cg_asserteq(cg_top(&g), 2);
+    cg_asserteq(cg_cell(&g, 0, 2, NULL), 'B');
     cg_free(&g);
 }
 
@@ -256,9 +284,9 @@ TEST(begin_same) {
     cg_begin(&g, 0, 2, 3);
     cg_put(&g, 0, 0, 'X', 1);
     cg_begin(&g, 10, 2, 3);
-    assert(cg_rows(&g) == 2);
-    assert(cg_top(&g) == 10);
-    assert(cg_cell(&g, 0, 0, NULL) == 'X');
+    cg_asserteq(cg_rows(&g), 2);
+    cg_asserteq(cg_top(&g), 10);
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), 'X');
     cg_free(&g);
 }
 
@@ -270,7 +298,7 @@ TEST(begin_sametop) {
     cg_put(&g, 0, 0, 'a', 0);
     cg_freeze(&g);
     cg_begin(&g, 0, 2, 3);
-    assert(cg_isdirty(&g, 0, 0) == 0);
+    cg_asserteq(cg_isdirty(&g, 0, 0), 0);
     cg_free(&g);
 }
 
@@ -284,8 +312,8 @@ TEST(wcwidth_set) {
     cg_begin(&g, 0, 2, 4);
     cg_setwcwidth(&g, cw_double, NULL);
     cg_put(&g, 0, 0, 0x4e2d, 1);
-    assert(cg_cell(&g, 0, 0, NULL) == 0x4e2d);
-    assert(cg_cell(&g, 0, 1, NULL) == -1);
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), 0x4e2d);
+    cg_asserteq(cg_cell(&g, 0, 1, NULL), -1);
     cg_free(&g);
 }
 
@@ -295,7 +323,7 @@ TEST(clear_set) {
     cg_begin(&g, 0, 2, 3);
     cg_put(&g, 0, 0, 'X', 0);
     cg_clear(&g);
-    assert(cg_cell(&g, 0, 0, NULL) == ' ');
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), ' ');
     cg_free(&g);
 }
 
@@ -321,8 +349,8 @@ TEST(put_ascii) {
     cg_begin(&g, 0, 2, 3);
     cg_setwcwidth(&g, cw_double, NULL);
     cg_put(&g, 0, 1, 'a', 7);
-    assert(cg_cell(&g, 0, 1, &st) == 'a');
-    assert(st == 7);
+    cg_asserteq(cg_cell(&g, 0, 1, &st), 'a');
+    cg_asserteq(st, 7);
     cg_free(&g);
 }
 
@@ -332,8 +360,8 @@ TEST(put_widechar) {
     cg_begin(&g, 0, 2, 4);
     cg_setwcwidth(&g, cw_double, NULL);
     cg_put(&g, 0, 0, 0x4e2d, 2);
-    assert(cg_cell(&g, 0, 0, NULL) == 0x4e2d);
-    assert(cg_cell(&g, 0, 1, NULL) == -1);
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), 0x4e2d);
+    cg_asserteq(cg_cell(&g, 0, 1, NULL), -1);
     cg_free(&g);
 }
 
@@ -343,7 +371,7 @@ TEST(put_truncate) {
     cg_begin(&g, 0, 1, 3);
     cg_setwcwidth(&g, cw_double, NULL);
     cg_put(&g, 0, 2, 0x4e2d, 1);
-    assert(cg_cell(&g, 0, 2, NULL) == '>');
+    cg_asserteq(cg_cell(&g, 0, 2, NULL), '>');
     cg_free(&g);
 }
 
@@ -354,8 +382,8 @@ TEST(put_overwrite_left) {
     cg_setwcwidth(&g, cw_double, NULL);
     cg_put(&g, 0, 0, 0x4e2d, 1);
     cg_put(&g, 0, 1, 'a', 1);
-    assert(cg_cell(&g, 0, 0, NULL) == 0x20);
-    assert(cg_cell(&g, 0, 1, NULL) == 'a');
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), 0x20);
+    cg_asserteq(cg_cell(&g, 0, 1, NULL), 'a');
     cg_free(&g);
 }
 
@@ -366,8 +394,8 @@ TEST(put_overwrite_right) {
     cg_setwcwidth(&g, cw_double, NULL);
     cg_put(&g, 0, 0, 0x4e2d, 1);
     cg_put(&g, 0, 0, 'a', 1);
-    assert(cg_cell(&g, 0, 0, NULL) == 'a');
-    assert(cg_cell(&g, 0, 1, NULL) == 0x20);
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), 'a');
+    cg_asserteq(cg_cell(&g, 0, 1, NULL), 0x20);
     cg_free(&g);
 }
 
@@ -381,7 +409,7 @@ TEST(put_params) {
     cg_put(&g, 0, -1, 'a', 0);
     cg_put(&g, 0, 3, 'a', 0);
     cg_put(gp, 0, 0, 'a', 0);
-    assert(cg_cell(&g, 0, 0, NULL) == ' ');
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), ' ');
     cg_free(&g);
 }
 
@@ -393,7 +421,7 @@ TEST(put_same) {
     cg_put(&g, 0, 0, 'X', 0);
     cg_freeze(&g);
     cg_put(&g, 0, 0, 'X', 0);
-    assert(cg_isdirty(&g, 0, 0) == 0);
+    cg_asserteq(cg_isdirty(&g, 0, 0), 0);
     cg_free(&g);
 }
 
@@ -410,10 +438,10 @@ TEST(clearrow_range) {
     cg_put(&g, 1, 1, 'b', 1);
     cg_put(&g, 1, 2, 'c', 1);
     cg_clearrow(&g, 1, 1, 3);
-    assert(cg_cell(&g, 1, 0, NULL) == 'a');
-    assert(cg_cell(&g, 1, 1, NULL) == ' ');
-    assert(cg_cell(&g, 1, 2, NULL) == ' ');
-    assert(cg_cell(&g, 1, 3, NULL) == ' ');
+    cg_asserteq(cg_cell(&g, 1, 0, NULL), 'a');
+    cg_asserteq(cg_cell(&g, 1, 1, NULL), ' ');
+    cg_asserteq(cg_cell(&g, 1, 2, NULL), ' ');
+    cg_asserteq(cg_cell(&g, 1, 3, NULL), ' ');
     cg_free(&g);
 }
 
@@ -437,10 +465,10 @@ TEST(fill_set) {
     cg_init(&g, cg_test_alloc, NULL);
     cg_begin(&g, 0, 1, 5);
     cg_fill(&g, 0, 1, 4, '.');
-    assert(cg_cell(&g, 0, 1, NULL) == '.');
-    assert(cg_cell(&g, 0, 2, NULL) == '.');
-    assert(cg_cell(&g, 0, 3, NULL) == '.');
-    assert(cg_cell(&g, 0, 0, NULL) == 0x20);
+    cg_asserteq(cg_cell(&g, 0, 1, NULL), '.');
+    cg_asserteq(cg_cell(&g, 0, 2, NULL), '.');
+    cg_asserteq(cg_cell(&g, 0, 3, NULL), '.');
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), 0x20);
     cg_free(&g);
 }
 
@@ -466,12 +494,12 @@ TEST(span_set) {
     cg_init(&g, cg_test_alloc, NULL);
     cg_begin(&g, 0, 2, 4);
     cg_span(&g, 0, 1, 3, 3);
-    assert(cg_cell(&g, 0, 1, &st) == 0x20);
-    assert(st == 3);
-    assert(cg_cell(&g, 0, 2, &st) == 0x20);
-    assert(st == 3);
+    cg_asserteq(cg_cell(&g, 0, 1, &st), 0x20);
+    cg_asserteq(st, 3);
+    cg_asserteq(cg_cell(&g, 0, 2, &st), 0x20);
+    cg_asserteq(st, 3);
     cg_cell(&g, 0, 0, &st);
-    assert(st == 0);
+    cg_asserteq(st, 0);
     cg_free(&g);
 }
 
@@ -495,7 +523,7 @@ TEST(span_backmatch) {
     cg_span(&g, 0, 0, 2, 5);
     cg_freeze(&g);
     cg_span(&g, 0, 0, 2, 5);
-    assert(cg_isdirty(&g, 0, 0) == 0);
+    cg_asserteq(cg_isdirty(&g, 0, 0), 0);
     cg_free(&g);
 }
 
@@ -508,9 +536,9 @@ TEST(putline_ascii) {
     cg_init(&g, cg_test_alloc, NULL);
     cg_begin(&g, 0, 1, 6);
     cg_setwcwidth(&g, cw_double, NULL);
-    assert(cg_putline(&g, 0, 0, "ab", 1) == 2);
-    assert(cg_cell(&g, 0, 0, NULL) == 'a');
-    assert(cg_cell(&g, 0, 1, NULL) == 'b');
+    cg_asserteq(cg_putline(&g, 0, 0, "ab", 1), 2);
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), 'a');
+    cg_asserteq(cg_cell(&g, 0, 1, NULL), 'b');
     assert_diff(&g,
         "[M 0 0][T 1][P 'a'][M 0 1][P 'b'][M 0 2][T 0][F 4 0x20][F]");
     cg_free(&g);
@@ -521,9 +549,9 @@ TEST(putline_wide) {
     cg_init(&g, cg_test_alloc, NULL);
     cg_begin(&g, 0, 1, 6);
     cg_setwcwidth(&g, cw_double, NULL);
-    assert(cg_putline(&g, 0, 0, "\xe4\xb8\xad", 1) == 2);
-    assert(cg_cell(&g, 0, 0, NULL) == 0x4e2d);
-    assert(cg_cell(&g, 0, 1, NULL) == -1);
+    cg_asserteq(cg_putline(&g, 0, 0, "\xe4\xb8\xad", 1), 2);
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), 0x4e2d);
+    cg_asserteq(cg_cell(&g, 0, 1, NULL), -1);
     assert_diff(&g,
         "[M 0 0][T 1][P 0x4e2d][M 0 2][T 0][F 4 0x20][F]");
     cg_free(&g);
@@ -535,17 +563,17 @@ TEST(putline_params) {
     cg_init(&g, cg_test_alloc, NULL);
     cg_begin(&g, 0, 2, 4);
     cg_setwcwidth(&g, cw_double, NULL);
-    assert(cg_putline(&g, 0, 0, NULL, 1) == 0);
-    assert(cg_putline(&g, -1, 0, "a", 1) == 0);
-    assert(cg_putline(&g, 0, 4, "a", 1) == 4);
-    assert(cg_putline(gp, 0, 0, "a", 1) == 0);
+    cg_asserteq(cg_putline(&g, 0, 0, NULL, 1), 0);
+    cg_asserteq(cg_putline(&g, -1, 0, "a", 1), 0);
+    cg_asserteq(cg_putline(&g, 0, 4, "a", 1), 4);
+    cg_asserteq(cg_putline(gp, 0, 0, "a", 1), 0);
     buf[0] = (char)0x80;
     buf[1] = 'a';
     buf[2] = 'b';
     buf[3] = '\0';
-    assert(cg_putline(&g, 0, 0, buf, 1) == 2);
-    assert(cg_cell(&g, 0, 0, NULL) == 'a');
-    assert(cg_cell(&g, 0, 1, NULL) == 'b');
+    cg_asserteq(cg_putline(&g, 0, 0, buf, 1), 2);
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), 'a');
+    cg_asserteq(cg_cell(&g, 0, 1, NULL), 'b');
     cg_free(&g);
 }
 
@@ -558,9 +586,9 @@ TEST(putline_skip) {
     buf[0] = (char)0x80;
     buf[1] = 'X';
     buf[2] = '\0';
-    assert(cg_putline(&g, 0, 0, buf, 1) == 1);
-    assert(cg_cell(&g, 0, 0, NULL) == 'X');
-    assert(cg_cell(&g, 0, 1, NULL) == 0x20);
+    cg_asserteq(cg_putline(&g, 0, 0, buf, 1), 1);
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), 'X');
+    cg_asserteq(cg_cell(&g, 0, 1, NULL), 0x20);
     assert_diff(&g,
         "[M 0 0][T 1][P 'X'][M 0 1][T 0][P 0x20][P 0x20][P 0x20][F]");
     cg_free(&g);
@@ -571,9 +599,9 @@ TEST(putline_2byte) {
     cg_init(&g, cg_test_alloc, NULL);
     cg_begin(&g, 0, 1, 4);
     cg_setwcwidth(&g, cw_double, NULL);
-    assert(cg_putline(&g, 0, 0, "\xc3\x80", 1) == 2);
-    assert(cg_cell(&g, 0, 0, NULL) == 0xc0);
-    assert(cg_cell(&g, 0, 1, NULL) == -1);
+    cg_asserteq(cg_putline(&g, 0, 0, "\xc3\x80", 1), 2);
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), 0xc0);
+    cg_asserteq(cg_cell(&g, 0, 1, NULL), -1);
     assert_diff(&g,
         "[M 0 0][T 1][P 0xc0][M 0 2][T 0][P 0x20][P 0x20][F]");
     cg_free(&g);
@@ -584,9 +612,9 @@ TEST(putline_4byte) {
     cg_init(&g, cg_test_alloc, NULL);
     cg_begin(&g, 0, 1, 4);
     cg_setwcwidth(&g, cw_double, NULL);
-    assert(cg_putline(&g, 0, 0, "\xf0\x90\x80\x80", 1) == 2);
-    assert(cg_cell(&g, 0, 0, NULL) == 0x10000);
-    assert(cg_cell(&g, 0, 1, NULL) == -1);
+    cg_asserteq(cg_putline(&g, 0, 0, "\xf0\x90\x80\x80", 1), 2);
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), 0x10000);
+    cg_asserteq(cg_cell(&g, 0, 1, NULL), -1);
     assert_diff(&g,
         "[M 0 0][T 1][P 0x10000][M 0 2][T 0][P 0x20][P 0x20][F]");
     cg_free(&g);
@@ -609,7 +637,7 @@ TEST(putline_atend) {
     cg_init(&g, cg_test_alloc, NULL);
     cg_begin(&g, 0, 2, 3);
     cg_setwcwidth(&g, cw_double, NULL);
-    assert(cg_putline(&g, 0, 3, "abc", 0) == 3);
+    cg_asserteq(cg_putline(&g, 0, 3, "abc", 0), 3);
     cg_free(&g);
 }
 
@@ -621,9 +649,9 @@ TEST(getter_values) {
     cg_Grid g;
     cg_init(&g, cg_test_alloc, NULL);
     cg_begin(&g, 3, 2, 5);
-    assert(cg_rows(&g) == 2);
-    assert(cg_cols(&g) == 5);
-    assert(cg_top(&g) == 3);
+    cg_asserteq(cg_rows(&g), 2);
+    cg_asserteq(cg_cols(&g), 5);
+    cg_asserteq(cg_top(&g), 3);
     cg_free(&g);
 }
 
@@ -634,8 +662,8 @@ TEST(getter_cell) {
     cg_begin(&g, 0, 2, 3);
     cg_setwcwidth(&g, cw_double, NULL);
     cg_put(&g, 0, 1, 'Z', 4);
-    assert(cg_cell(&g, 0, 1, &st) == 'Z');
-    assert(st == 4);
+    cg_asserteq(cg_cell(&g, 0, 1, &st), 'Z');
+    cg_asserteq(st, 4);
     cg_free(&g);
 }
 
@@ -644,8 +672,8 @@ TEST(getter_back) {
     cg_Grid g;
     cg_init(&g, cg_test_alloc, NULL);
     cg_begin(&g, 0, 2, 3);
-    assert(cg_back(&g, 0, 0, &st) == ' ');
-    assert(st == 0);
+    cg_asserteq(cg_back(&g, 0, 0, &st), ' ');
+    cg_asserteq(st, 0);
     cg_free(&g);
 }
 
@@ -653,16 +681,16 @@ TEST(getter_params) {
     cg_Grid g, *gp = NULL;
     cg_init(&g, cg_test_alloc, NULL);
     cg_begin(&g, 0, 2, 3);
-    assert(cg_cell(&g, -1, 0, NULL) == 0);
-    assert(cg_cell(&g, 2, 0, NULL) == 0);
-    assert(cg_cell(&g, 0, -1, NULL) == 0);
-    assert(cg_cell(&g, 0, 3, NULL) == 0);
-    assert(cg_cell(gp, 0, 0, NULL) == 0);
-    assert(cg_back(&g, -1, 0, NULL) == 0);
-    assert(cg_back(gp, 0, 0, NULL) == 0);
-    assert(cg_isdirty(&g, -1, 0) == 0);
-    assert(cg_isdirty(&g, 0, 3) == 0);
-    assert(cg_isdirty(gp, 0, 0) == 0);
+    cg_asserteq(cg_cell(&g, -1, 0, NULL), 0);
+    cg_asserteq(cg_cell(&g, 2, 0, NULL), 0);
+    cg_asserteq(cg_cell(&g, 0, -1, NULL), 0);
+    cg_asserteq(cg_cell(&g, 0, 3, NULL), 0);
+    cg_asserteq(cg_cell(gp, 0, 0, NULL), 0);
+    cg_asserteq(cg_back(&g, -1, 0, NULL), 0);
+    cg_asserteq(cg_back(gp, 0, 0, NULL), 0);
+    cg_asserteq(cg_isdirty(&g, -1, 0), 0);
+    cg_asserteq(cg_isdirty(&g, 0, 3), 0);
+    cg_asserteq(cg_isdirty(gp, 0, 0), 0);
     cg_free(&g);
 }
 
@@ -676,7 +704,7 @@ TEST(dirty_track) {
     cg_begin(&g, 0, 2, 3);
     cg_setwcwidth(&g, cw_double, NULL);
     cg_put(&g, 0, 1, 'a', 0);
-    assert(cg_isdirty(&g, 0, 1) == 1);
+    cg_asserteq(cg_isdirty(&g, 0, 1), 1);
     cg_free(&g);
 }
 
@@ -697,11 +725,11 @@ TEST(freeze_copies) {
     cg_begin(&g, 0, 2, 3);
     cg_setwcwidth(&g, cw_double, NULL);
     cg_put(&g, 0, 0, 'X', 5);
-    assert(cg_isdirty(&g, 0, 0) == 1);
-    assert(cg_back(&g, 0, 0, NULL) == ' ');
+    cg_asserteq(cg_isdirty(&g, 0, 0), 1);
+    cg_asserteq(cg_back(&g, 0, 0, NULL), ' ');
     cg_freeze(&g);
-    assert(cg_isdirty(&g, 0, 0) == 0);
-    assert(cg_back(&g, 0, 0, NULL) == 'X');
+    cg_asserteq(cg_isdirty(&g, 0, 0), 0);
+    cg_asserteq(cg_back(&g, 0, 0, NULL), 'X');
     cg_free(&g);
 }
 
@@ -712,11 +740,11 @@ TEST(freeze_clears_dirty) {
     cg_setwcwidth(&g, cw_double, NULL);
     cg_put(&g, 0, 0, 'a', 0);
     cg_put(&g, 0, 1, 'b', 0);
-    assert(cg_isdirty(&g, 0, 0) == 1);
-    assert(cg_isdirty(&g, 0, 1) == 1);
+    cg_asserteq(cg_isdirty(&g, 0, 0), 1);
+    cg_asserteq(cg_isdirty(&g, 0, 1), 1);
     cg_freeze(&g);
-    assert(cg_isdirty(&g, 0, 0) == 0);
-    assert(cg_isdirty(&g, 0, 1) == 0);
+    cg_asserteq(cg_isdirty(&g, 0, 0), 0);
+    cg_asserteq(cg_isdirty(&g, 0, 1), 0);
     cg_free(&g);
 }
 
@@ -734,8 +762,8 @@ TEST(begin_scroll_down) {
     cg_put(&g, 2, 0, 'C', 0);
     cg_freeze(&g);
     cg_begin(&g, 1, 3, 4);
-    assert(cg_cell(&g, 0, 0, NULL) == 'B');
-    assert(cg_cell(&g, 1, 0, NULL) == 'C');
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), 'B');
+    cg_asserteq(cg_cell(&g, 1, 0, NULL), 'C');
     cg_free(&g);
 }
 
@@ -749,8 +777,8 @@ TEST(begin_scroll_up) {
     cg_put(&g, 2, 0, 'C', 0);
     cg_freeze(&g);
     cg_begin(&g, 0, 3, 4);
-    assert(cg_cell(&g, 1, 0, NULL) == 'A');
-    assert(cg_cell(&g, 2, 0, NULL) == 'B');
+    cg_asserteq(cg_cell(&g, 1, 0, NULL), 'A');
+    cg_asserteq(cg_cell(&g, 2, 0, NULL), 'B');
     cg_free(&g);
 }
 
@@ -764,8 +792,8 @@ TEST(scroll_up_expose) {
     cg_put(&g, 2, 0, 'C', 0);
     cg_freeze(&g);
     cg_begin(&g, 0, 3, 4);
-    assert(cg_cell(&g, 0, 0, NULL) == ' ');
-    assert(cg_cell(&g, 1, 0, NULL) == 'A');
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), ' ');
+    cg_asserteq(cg_cell(&g, 1, 0, NULL), 'A');
     cg_free(&g);
 }
 
@@ -786,7 +814,7 @@ TEST(diff_empty) {
 TEST(diff_emptygrid) {
     cg_Grid g;
     cg_init(&g, cg_test_alloc, NULL);
-    assert(cg_diff(&g, NULL) == CG_ERRPARAM);
+    cg_asserteq(cg_diff(&g, NULL), CG_ERRPARAM);
     cg_free(&g);
 }
 
@@ -811,7 +839,52 @@ TEST(diff_scroll) {
     cg_setwcwidth(&g, cw_double, NULL);
     cg_freeze(&g);
     cg_begin(&g, 1, 3, 4);
+    /* exposed rows are cleared with back: blank grid stays blank */
     assert_diff(&g, "[S 1 3 -1][F]");
+    cg_free(&g);
+}
+
+TEST(diff_scroll_expose_sd) {
+    /* viewport up (delta>0, SD): top row is physically blank after the
+     * scroll — every cell must be redrawn, even those matching back */
+    cg_Grid g;
+    cg_init(&g, cg_test_alloc, NULL);
+    cg_begin(&g, 1, 3, 6);
+    cg_setwcwidth(&g, cw_double, NULL);
+    cg_putline(&g, 0, 0, " 866", 0);
+    cg_putline(&g, 1, 0, " 867", 0);
+    cg_putline(&g, 2, 0, " 868", 0);
+    cg_freeze(&g);
+    cg_begin(&g, 0, 3, 6); /* delta = +1 */
+    cg_putline(&g, 0, 0, " 865", 0);
+    cg_putline(&g, 1, 0, " 866", 0);
+    cg_putline(&g, 2, 0, " 867", 0);
+    assert_diff(&g,
+            "[S 1 3 1]"
+            "[M 0 0][P 0x20][M 0 1][P '8'][M 0 2][P '6'][M 0 3][P '5']"
+            "[F]");
+    cg_free(&g);
+}
+
+TEST(diff_scroll_expose_su) {
+    /* viewport down (delta<0, SU): bottom row is physically blank after
+     * the scroll — every cell must be redrawn */
+    cg_Grid g;
+    cg_init(&g, cg_test_alloc, NULL);
+    cg_begin(&g, 0, 3, 6);
+    cg_setwcwidth(&g, cw_double, NULL);
+    cg_putline(&g, 0, 0, " 865", 0);
+    cg_putline(&g, 1, 0, " 866", 0);
+    cg_putline(&g, 2, 0, " 867", 0);
+    cg_freeze(&g);
+    cg_begin(&g, 1, 3, 6); /* delta = -1 */
+    cg_putline(&g, 0, 0, " 866", 0);
+    cg_putline(&g, 1, 0, " 867", 0);
+    cg_putline(&g, 2, 0, " 868", 0);
+    assert_diff(&g,
+            "[S 1 3 -1]"
+            "[M 2 0][P 0x20][M 2 1][P '8'][M 2 2][P '6'][M 2 3][P '8']"
+            "[F]");
     cg_free(&g);
 }
 
@@ -912,7 +985,7 @@ TEST(diff_fill_error) {
     cg_begin(&g, 0, 1, 6);
     memset(&d, 0, sizeof(d));
     d.fill = err_cb_fill;
-    assert(cg_diff(&g, &d) == CG_ERRPARAM);
+    cg_asserteq(cg_diff(&g, &d), CG_ERRPARAM);
     cg_free(&g);
 }
 
@@ -922,7 +995,7 @@ TEST(diff_cb_null) {
     cg_init(&g, cg_test_alloc, NULL);
     cg_begin(&g, 0, 1, 6);
     memset(&d, 0, sizeof(d));
-    assert(cg_diff(&g, &d) == CG_OK);
+    cg_asserteq(cg_diff(&g, &d), CG_OK);
     cg_free(&g);
 }
 
@@ -936,7 +1009,7 @@ TEST(diff_cb_scroll_err) {
     cg_begin(&g, 1, 2, 3);
     memset(&d, 0, sizeof(d));
     d.scroll = err_cb_sn;
-    assert(cg_diff(&g, &d) == CG_ERRPARAM);
+    cg_asserteq(cg_diff(&g, &d), CG_ERRPARAM);
     cg_free(&g);
 }
 
@@ -947,7 +1020,7 @@ TEST(diff_cb_move_err) {
     cg_begin(&g, 0, 1, 2);
     memset(&d, 0, sizeof(d));
     d.move = err_cb_mv;
-    assert(cg_diff(&g, &d) == CG_ERRPARAM);
+    cg_asserteq(cg_diff(&g, &d), CG_ERRPARAM);
     cg_free(&g);
 }
 
@@ -964,7 +1037,7 @@ TEST(diff_cb_style_err) {
     cg_put(&g, 0, 0, 'x', 7);
     memset(&d, 0, sizeof(d));
     d.style = err_cb_st;
-    assert(cg_diff(&g, &d) == CG_ERRPARAM);
+    cg_asserteq(cg_diff(&g, &d), CG_ERRPARAM);
     cg_free(&g);
 }
 
@@ -976,7 +1049,7 @@ TEST(diff_cb_put_err) {
     cg_put(&g, 0, 0, 'x', 0);
     memset(&d, 0, sizeof(d));
     d.put = err_cb_put;
-    assert(cg_diff(&g, &d) == CG_ERRPARAM);
+    cg_asserteq(cg_diff(&g, &d), CG_ERRPARAM);
     cg_free(&g);
 }
 
@@ -989,7 +1062,7 @@ TEST(diff_cb_finish_err) {
     cg_freeze(&g);
     memset(&d, 0, sizeof(d));
     d.finish = err_cb;
-    assert(cg_diff(&g, &d) == CG_ERRPARAM);
+    cg_asserteq(cg_diff(&g, &d), CG_ERRPARAM);
     cg_free(&g);
 }
 
@@ -1001,7 +1074,7 @@ TEST(diff_cb_style0_err) {
     cg_put(&g, 0, 0, 'x', 7);
     memset(&d, 0, sizeof(d));
     d.style = err_cb_st0;
-    assert(cg_diff(&g, &d) == CG_ERRPARAM);
+    cg_asserteq(cg_diff(&g, &d), CG_ERRPARAM);
     cg_free(&g);
 }
 
@@ -1012,7 +1085,7 @@ TEST(diff_fill_min_pass) {
     cg_begin(&g, 0, 1, 6);
     memset(&d, 0, sizeof(d));
     d.fill_min = 2;
-    assert(cg_diff(&g, &d) == CG_OK);
+    cg_asserteq(cg_diff(&g, &d), CG_OK);
     cg_free(&g);
 }
 
@@ -1038,10 +1111,10 @@ TEST(empty_grid) {
     cg_span(&g, 0, 0, 2, 1);
     cg_clearrow(&g, 0, 0, 2);
     cg_fill(&g, 0, 0, 2, '.');
-    assert(cg_putline(&g, 0, 0, "a", 0) == 0);
-    assert(cg_cell(&g, 0, 0, NULL) == 0);
-    assert(cg_back(&g, 0, 0, NULL) == 0);
-    assert(cg_isdirty(&g, 0, 0) == 0);
+    cg_asserteq(cg_putline(&g, 0, 0, "a", 0), 0);
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), 0);
+    cg_asserteq(cg_back(&g, 0, 0, NULL), 0);
+    cg_asserteq(cg_isdirty(&g, 0, 0), 0);
     cg_free(&g);
 }
 
@@ -1053,8 +1126,8 @@ TEST(resize_cols) {
     cg_put(&g, 0, 0, 'A', 0);
     cg_freeze(&g);
     cg_begin(&g, 0, 2, 5);
-    assert(cg_cols(&g) == 5);
-    assert(cg_cell(&g, 0, 0, NULL) == 'A');
+    cg_asserteq(cg_cols(&g), 5);
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), 'A');
     cg_free(&g);
 }
 
@@ -1066,8 +1139,8 @@ TEST(resize_rows) {
     cg_put(&g, 0, 0, 'A', 0);
     cg_freeze(&g);
     cg_begin(&g, 0, 4, 3);
-    assert(cg_rows(&g) == 4);
-    assert(cg_cell(&g, 0, 0, NULL) == 'A');
+    cg_asserteq(cg_rows(&g), 4);
+    cg_asserteq(cg_cell(&g, 0, 0, NULL), 'A');
     cg_free(&g);
 }
 
@@ -1127,6 +1200,8 @@ TEST(resize_rows) {
     X(diff_emptygrid)      \
     X(diff_all_dirty)      \
     X(diff_scroll)         \
+    X(diff_scroll_expose_sd) \
+    X(diff_scroll_expose_su) \
     X(diff_bigjump)        \
     X(diff_twice)          \
     X(diff_clear_dirty)    \

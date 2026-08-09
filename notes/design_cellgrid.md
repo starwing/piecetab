@@ -56,7 +56,9 @@ back_cp = (int *)(cur_st + rows*cols);
 back_st = (unsigned *)(back_cp + rows*cols);
 ```
 
-cur 和 back 在同一 alloc 中，`memset` 打底。
+cur 和 back 在同一 alloc 中，`memset` 打底。缓冲区大小由宏统一计算：
+`cgF_cursz(G)` = cur 双缓冲（cp+st）字节数，`cgF_gridsz(G)` = 四缓冲
+（×2）——`cg_clear`/`cg_freeze`/`cg_free` 共用。
 
 ### 2.2 line_offset 旋转
 
@@ -83,9 +85,12 @@ off=0: 逻辑行 0→物理 0, 1→1, 2→2, 3→3, 4→4
 off=2: 逻辑行 0→物理 2, 1→3, 2→4, 3→0(裸露), 4→1(裸露)
 ```
 
-重叠区零拷贝——仅改 `off`。裸露行 cur 重置为默认 cell（cp=0, st=0）。
-`cg_freeze` 时 cur→back 全量同步，下一帧 back 自然一致。
-cur 和 back 同一 `off`，diff 时同逻辑行对应相同物理偏移。
+重叠区零拷贝——仅改 `off`。**裸露行 `cgF_blankrow` 重置为默认 cell
+（cp=0, st=0）——cur 和 back 一起清**：终端滚动命令执行后这些行
+物理上是空白的，cur 清空表示"该行无内容"，back 清空使 `cg_diff`
+的 skip 比较永不匹配（空 back 行 vs 新内容）→ 整行强制重画。
+若只清 cur，back 旧内容中与新版相同的字符会被 skip 漏画，露出
+残缺行（如行号"854"变"54"）。
 
 ### 2.3 脏检测
 
@@ -128,19 +133,24 @@ CG_API void cg_clear(cg_Grid *G);
 
 **尺寸变化（首帧或 resize）：**
 - `G->rows==0`（首帧）→ 分配 cur/back 全量数组，`all_dirty=1`
-- `rows != G->rows || cols != G->cols` → `cgF_resize` 保留重叠区重建，`off=0`
+- `rows != G->rows || cols != G->cols` → `cgF_resize`：新块整块清零
+  后拷贝重叠区（未拷贝的行尾自动保持空白），`off=0`
 - 尺寸不变 → scroll 逻辑
 
 **scroll 逻辑（尺寸不变时）：**
 - `delta = G->top - top`
 - `all_dirty` 或 `delta == 0`（同 top）→ 只更新 `G->top=top`, `scroll=off=0`
 - `|delta| >= G->rows` → 等效全屏 redraw：`off=0`, `all_dirty=1`
-- `delta > 0`（内容下滚，视口上移）→ `off = (off+delta) % rows`，裸露行重置 cur
-- `delta < 0`（内容上滚，视口下移）→ `off = (off+delta+rows) % rows`，裸露行重置 cur
+- `delta > 0`（内容下滚，视口上移）→ `off = (off+delta) % rows`，
+  顶部 `delta` 行 `cgF_blankrow`（cur+back 置空）
+- `delta < 0`（内容上滚，视口下移）→ `off = (off+delta+rows) % rows`，
+  底部 `-delta` 行 `cgF_blankrow`（cur+back 置空）
 
 `G->scroll` 记录 delta 供 `cg_diff` 输出 scroll 回调。
 
-`cg_clear(G)` 清空当前帧 cur 数据，设 `all_dirty=1`。
+`cg_clear(G)` 清空当前帧 cur 数据（back 保留），设 `all_dirty=1`——
+与 `cgF_blankrow`（双缓冲置空）语义区分：`cg_clear` 是编辑操作
+（diff 输出清屏），`blankrow` 是滚动后物理空行（diff 无需输出）。
 
 ### 3.3 Cell 写入
 
@@ -196,7 +206,9 @@ struct cg_Diff {
 ```
 
 回调语义：
-- `scroll(D, top, bot, n)` — 滚动区 [top, bot]（1-based），n>0 内容上滚、n<0 下滚
+- `scroll(D, top, bot, n)` — 滚动区 [top, bot]（1-based）；n 为视口移动量
+  （= `cg_begin` 的 delta）：n>0 视口上移→内容下滚（SD），n<0 视口下移→
+  内容上滚（SU）。渲染端按 n 符号选择滚动方向命令
 - `move(D, r, c)` — 定位到逻辑行 r 列 c
 - `style(D, st)` — 切换 style，st=0 表示行末重置或默认 style
 - `fill(D, n, cp)` — 输出 n 个 cp（连续相同 cell ≥ fill_min 时批量输出）
@@ -211,6 +223,10 @@ struct cg_Diff {
 2. 每行：skip 匹配区 → `move(r, c)` → `style(st)`（style 变时）→ `put`/`fill` 交替
 3. 每行末 → `style(0)`
 4. 最后 → `finish()`
+
+**scroll 暴露行**：滚动命令执行后物理空白的行（`cg_begin` 已 blankrow）
+在 skip 时永不匹配（back 为空）→ 整行重画。行尾未写 cell（cp=0）与
+空 back 相同，自动跳过——只输出实际内容，不输出行尾空白。
 
 回调模式允许调用方直接消费 diff 流（生成 ANSI 控制码、构建脏区表等），
 避免中间数据 struct 的信息损失。
@@ -279,11 +295,21 @@ cell 同值——diff 时不会误标脏。
 | 前缀 | 职责 |
 |------|------|
 | `cgK_` | UTF-8 编码工具（tocp/utflen） |
-| `cgF_` | 帧管理：initgrid/resize/putcp |
-| `cgD_` | diff 工具（skip/rep/call） |
+| `cgF_` | 帧管理：initgrid/resize/blankrow/putcp |
+| `cgD_` | diff 工具（skip/rep/row/call） |
 | `cgP_` | 前置条件检查（checkrc） |
 | `cgR_` | ring buffer 索引（cgR_idx 宏） |
 | `cgS_` | 静态/系统工具（defallocf） |
+
+**清空操作的三级语义**（概念统一）：
+
+| 操作 | 范围 | 缓冲 | 用途 |
+|------|------|------|------|
+| `cgF_blankrow` | 整行 | cur+back | 滚动暴露行（物理空白，diff 整行重画） |
+| `cg_clearrow` | 行内区间 | cur only | 编辑操作（diff 输出清行） |
+| `cg_clear` | 整块 | cur only | 清屏（all_dirty，diff 全画） |
+
+`cgF_cursz`/`cgF_gridsz` 宏统一所有缓冲大小计算（clear/freeze/free）。
 
 ## 七、编码工具函数（`cgK_`，内部）
 

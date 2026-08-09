@@ -134,6 +134,8 @@ CG_NS_BEGIN
 #define cg_min(a, b)  ((a) < (b) ? (a) : (b))
 #define cg_max(a, b)  ((a) > (b) ? (a) : (b))
 #define cgR_idx(G, r) (((G)->off + (unsigned)(r)) % (unsigned)(G)->rows)
+#define cgF_cursz(G)  ((G)->rows * (G)->cols * (sizeof(int) + sizeof(unsigned)))
+#define cgF_gridsz(G) (cgF_cursz(G) * 2)
 
 #define cgP_checkrc(G, r, c)                                     \
     ((G) && (G)->rows && (r) >= 0 && (r) < (G)->rows && (c) >= 0 \
@@ -176,29 +178,32 @@ static int cgF_initgrid(cg_Grid *G, int rows, int cols) {
 
 static int cgF_resize(cg_Grid *G, int rows, int cols) {
     int       mr = cg_min(G->rows, rows), mc = cg_min(G->cols, cols);
-    size_t    otsz = G->rows * G->cols * (sizeof(int) + sizeof(unsigned)) * 2;
+    size_t    otsz = cgF_gridsz(G);
     size_t    t = rows * cols, csz = t * (sizeof(int) + sizeof(unsigned)) * 2;
     int      *nc, *nb, r;
     unsigned *ncs, *nbs;
     if (!(nc = (int *)G->allocf(G->ud, NULL, 0, csz))) return CG_ERRMEM;
+    /* zeroed block: untouched tail cells of copied rows stay blank */
     memset(nc, 0, csz), ncs = (unsigned *)(nc + t);
     nb = (int *)(ncs + t), nbs = (unsigned *)(nb + t);
-    for (r = 0; r < rows; r++) {
-        int oro = cgR_idx(G, r) * G->cols, nro = r * cols, e = 0;
-        if (r < mr) {
-            e = mc, memcpy(nc + nro, G->cur_cp + oro, mc * sizeof(int));
-            memcpy(ncs + nro, G->cur_st + oro, mc * sizeof(unsigned));
-            memcpy(nb + nro, G->back_cp + oro, mc * sizeof(int));
-            memcpy(nbs + nro, G->back_st + oro, mc * sizeof(unsigned));
-        }
-        memset(nc + nro + e, 0, (cols - e) * sizeof(int));
-        memset(ncs + nro + e, 0, (cols - e) * sizeof(unsigned));
-        memset(nb + nro + e, 0, (cols - e) * sizeof(int));
-        memset(nbs + nro + e, 0, (cols - e) * sizeof(unsigned));
+    for (r = 0; r < mr; ++r) {
+        int oro = cgR_idx(G, r) * G->cols, nro = r * cols;
+        memcpy(nc + nro, G->cur_cp + oro, mc * sizeof(int));
+        memcpy(ncs + nro, G->cur_st + oro, mc * sizeof(unsigned));
+        memcpy(nb + nro, G->back_cp + oro, mc * sizeof(int));
+        memcpy(nbs + nro, G->back_st + oro, mc * sizeof(unsigned));
     }
     G->allocf(G->ud, G->cur_cp, otsz, 0);
     G->cur_cp = nc, G->cur_st = ncs, G->back_cp = nb, G->back_st = nbs;
     return G->off = 0, G->rows = rows, G->cols = cols, CG_OK;
+}
+
+static void cgF_blankrow(cg_Grid *G, int row) {
+    int ro = cgR_idx(G, row) * G->cols;
+    memset(G->cur_cp + ro, 0, G->cols * sizeof(int));
+    memset(G->cur_st + ro, 0, G->cols * sizeof(unsigned));
+    memset(G->back_cp + ro, 0, G->cols * sizeof(int));
+    memset(G->back_st + ro, 0, G->cols * sizeof(unsigned));
 }
 
 /* public API */
@@ -222,15 +227,13 @@ CG_API int cg_init(cg_Grid *G, cg_Allocf *f, void *ud) {
 }
 
 CG_API void cg_free(cg_Grid *G) {
-    size_t tsz;
     if (G == NULL) return;
-    tsz = G->rows * G->cols * (sizeof(int) + sizeof(unsigned)) * 2;
-    if (G->cur_cp) G->allocf(G->ud, G->cur_cp, tsz, 0);
+    if (G->cur_cp) G->allocf(G->ud, G->cur_cp, cgF_gridsz(G), 0);
     cg_init(G, G->allocf, G->ud);
 }
 
 CG_API int cg_begin(cg_Grid *G, int top, int rows, int cols) {
-    int delta, row, ro, r = CG_OK;
+    int delta, row, r = CG_OK;
     if (G == NULL || rows == 0 || cols == 0) return CG_ERRPARAM;
     if (!G->rows)
         r = cgF_initgrid(G, rows, cols);
@@ -243,28 +246,18 @@ CG_API int cg_begin(cg_Grid *G, int top, int rows, int cols) {
     if (delta < 0 ? -delta >= G->rows : delta >= G->rows)
         return G->off = 0, G->all_dirty = 1, G->scroll = 0, CG_OK;
     G->off = (G->off - delta + G->rows) % G->rows;
+    /* rows the scroll leaves physically blank: blank cur+back so diff
+     * redraws them fully — skip never matches an empty back row */
     if (delta > 0)
-        for (row = 0; row < delta; ++row) {
-            ro = cgR_idx(G, row) * G->cols;
-            memset(G->cur_cp + ro, 0, G->cols * sizeof(int));
-            memset(G->cur_st + ro, 0, G->cols * sizeof(unsigned));
-        }
-    else {
-        int nd = -delta;
-        for (row = G->rows - nd; row < G->rows; ++row) {
-            ro = cgR_idx(G, row) * G->cols;
-            memset(G->cur_cp + ro, 0, G->cols * sizeof(int));
-            memset(G->cur_st + ro, 0, G->cols * sizeof(unsigned));
-        }
-    }
+        for (row = 0; row < delta; ++row) cgF_blankrow(G, row);
+    else
+        for (row = G->rows + delta; row < G->rows; ++row) cgF_blankrow(G, row);
     return CG_OK;
 }
 
 CG_API void cg_clear(cg_Grid *G) {
-    size_t csz;
     if (!cg_valid(G)) return;
-    csz = G->rows * G->cols * (sizeof(int) + sizeof(unsigned));
-    memset(G->cur_cp, 0, csz), G->off = 0, G->all_dirty = 1;
+    memset(G->cur_cp, 0, cgF_cursz(G)), G->off = 0, G->all_dirty = 1;
 }
 
 static void cgF_putcp(cg_Grid *G, int r, int c, int cp, int w, unsigned st) {
@@ -329,10 +322,8 @@ CG_API int cg_putline(cg_Grid *G, int r, int c, const char *s, unsigned st) {
 }
 
 CG_API void cg_freeze(cg_Grid *G) {
-    size_t t;
     if (!cg_valid(G)) return;
-    t = G->rows * G->cols * (sizeof(int) + sizeof(unsigned));
-    memcpy(G->back_cp, G->cur_cp, t), G->all_dirty = 0;
+    memcpy(G->back_cp, G->cur_cp, cgF_cursz(G)), G->all_dirty = 0;
 }
 
 static int cgD_skip(const cg_Grid *G, int ro, int c) {
@@ -352,31 +343,33 @@ static int cgD_rep(const cg_Grid *G, int ro, int c) {
 
 #define cgD_call(f, args) ((f) && (r = f args) ? r : CG_OK)
 
+static int cgD_row(const cg_Grid *G, cg_Diff *D, int row) {
+    int      i, r = CG_OK, cp, f, col = 0, ro = cgR_idx(G, row) * G->cols;
+    unsigned st = 0;
+    for (; col < G->cols && (col = cgD_skip(G, ro, col)) < G->cols; col += f) {
+        f = cgD_rep(G, ro, col), cp = G->cur_cp[ro + col];
+        if ((cp = cp ? cp : ' ') <= 0) continue;
+        if (cgD_call(D->move, (D, row, col))) return r;
+        if (G->cur_st[ro + col] != st) {
+            if (cgD_call(D->style, (D, G->cur_st[ro + col]))) return r;
+            st = G->cur_st[ro + col];
+        }
+        if (f < D->fill_min) {
+            for (i = 0; i < f; ++i)
+                if (cgD_call(D->put, (D, cp))) return r;
+        } else if (cgD_call(D->fill, (D, f, cp)))
+            return r;
+    }
+    return st ? cgD_call(D->style, (D, 0)) : CG_OK;
+}
+
 CG_API int cg_diff(const cg_Grid *G, cg_Diff *D) {
     int row, r = CG_OK;
     if (!cg_valid(G) || !D) return CG_ERRPARAM;
     if (D->fill_min <= 1) D->fill_min = CG_DEFAULT_MINFILL;
     if (G->scroll && cgD_call(D->scroll, (D, 1, G->rows, G->scroll))) return r;
-    for (row = 0; row < G->rows; ++row) {
-        int      i, cp, f, col = 0, ro = cgR_idx(G, row) * G->cols;
-        unsigned st = 0;
-        for (; col < G->cols; col += f) {
-            if ((col = cgD_skip(G, ro, col)) >= G->cols) break;
-            f = cgD_rep(G, ro, col), cp = G->cur_cp[ro + col];
-            if ((cp = cp ? cp : ' ') <= 0) continue;
-            if (cgD_call(D->move, (D, row, col))) return r;
-            if (G->cur_st[ro + col] != st) {
-                if (cgD_call(D->style, (D, G->cur_st[ro + col]))) return r;
-                st = G->cur_st[ro + col];
-            }
-            if (f < D->fill_min) {
-                for (i = 0; i < f; ++i)
-                    if (cgD_call(D->put, (D, cp))) return r;
-            } else if (cgD_call(D->fill, (D, f, cp)))
-                return r;
-        }
-        if (st && cgD_call(D->style, (D, 0))) return r;
-    }
+    for (row = 0; row < G->rows; ++row)
+        if ((r = cgD_row(G, D, row))) return r;
     return cgD_call(D->finish, (D));
 }
 

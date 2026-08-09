@@ -857,4 +857,10 @@ local function main(argv)
   end
 end
 
-main(arg)
+-- run as a script only; tests require this file and drive ed directly
+if arg and arg[0] and arg[0]:match("editor%.lua$") then
+  main(arg)
+end
+
+ed.term = term -- test hook: term table for size/getkey injection
+return ed
