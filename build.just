@@ -9,9 +9,11 @@ LUAJIT_INC := "-I/opt/homebrew/include/luajit-2.1"
 
 # t = test source without .c suffix (may include dir), inc = include flags
 dbg-run t inc *tests='':
+    lua tests/gen_entries.lua {{ t }}.c {{ t }}.gen.inc
     {{ CC }} {{ CFLAGS }} {{ inc }} -g -O0 -fsanitize=address,undefined -o {{ t }} {{ t }}.c && ./{{ t }} {{ tests }}
 
 cov-run t inc *tests='':
+    lua tests/gen_entries.lua {{ t }}.c {{ t }}.gen.inc
     {{ CC }} {{ CFLAGS }} {{ inc }} --coverage -Wno-unused-function -O0 -o {{ t }} {{ t }}.c && ./{{ t }} {{ tests }}
 
 clean-gcda:

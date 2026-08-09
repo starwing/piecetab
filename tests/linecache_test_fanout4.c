@@ -11,7 +11,7 @@
 
 /* T1: lifecycle */
 
-static void test_lifecycle(void) {
+TEST(lifecycle) {
     lc_State *s = lc_open(&test_alloc, NULL);
     lc_Cache *t1, *t2;
     assert(s);
@@ -55,7 +55,7 @@ static void test_lifecycle(void) {
     }
 }
 
-static void test_scan_params(void) {
+TEST(scan_params) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     unsigned  brs[] = {0}, *pbrs = brs;
@@ -67,7 +67,7 @@ static void test_scan_params(void) {
     lc_close(S);
 }
 
-static void test_scan_basic(void) {
+TEST(scan_basic) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     unsigned  empty[] = {0}, full[] = {5, 10, 15, 20, 0}, *pbrs;
@@ -92,7 +92,7 @@ static void test_scan_basic(void) {
     lc_close(S);
 }
 
-static void test_scan_seek(void) {
+TEST(scan_seek) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -132,7 +132,7 @@ static void test_scan_seek(void) {
     lc_close(S);
 }
 
-static void test_scan_bulk(void) {
+TEST(scan_bulk) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -154,7 +154,7 @@ static void test_scan_bulk(void) {
     lc_close(S);
 }
 
-static void test_scan_append(void) {
+TEST(scan_append) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     unsigned  brs_a[] = {4, 10, 0}, *pa = brs_a;
@@ -170,7 +170,7 @@ static void test_scan_append(void) {
     lc_close(S);
 }
 
-static void test_scan_oom_items(void) {
+TEST(scan_oom_items) {
     lc_State *S;
     lc_Cache *c;
     unsigned  brs[] = {10, 0}, *pbrs = brs;
@@ -186,7 +186,7 @@ static void test_scan_oom_items(void) {
     lc_close(S);
 }
 
-static void test_scan_oom_flush(void) {
+TEST(scan_oom_flush) {
     lc_State *S;
     lc_Cache *c;
     unsigned  brs[] = {170, 10, 0}, *pbrs = brs;
@@ -201,7 +201,7 @@ static void test_scan_oom_flush(void) {
     lc_close(S);
 }
 
-static void test_scan_oom_build(void) {
+TEST(scan_oom_build) {
     lc_State *S;
     lc_Cache *c;
     unsigned  brs[] = {170, 1, 0}, *pbrs = brs;
@@ -218,7 +218,7 @@ static void test_scan_oom_build(void) {
 
 /* scan OOM after makechain: makechain deepens root, then lcL_new fails
  * → lc_scan returns ERRMEM without fold/rebalance → underfilled node */
-static void test_scan_oom_unfolded(void) {
+TEST(scan_oom_unfolded) {
     int       oom = 100, r;
     lc_State *S = lc_open(&oom_alloc, &oom);
     lc_Cache *c;
@@ -241,7 +241,7 @@ static void test_scan_oom_unfolded(void) {
 }
 
 /* scan beyond full tree: trigger makechain from<0 (root deepen) */
-static void test_scan_deepen_root(void) {
+TEST(scan_deepen_root) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
 
@@ -253,7 +253,7 @@ static void test_scan_deepen_root(void) {
     lc_close(S);
 }
 
-static void test_scan_edge_makechain_empty(void) {
+TEST(scan_edge_makechain_empty) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     unsigned  lines[] = {16, 10, 0}, *p = lines;
@@ -267,7 +267,7 @@ static void test_scan_edge_makechain_empty(void) {
     lc_close(S);
 }
 
-static void test_seek_params(void) {
+TEST(seek_params) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C, C2;
@@ -285,7 +285,7 @@ static void test_seek_params(void) {
     lc_close(S);
 }
 
-static void test_seek_pastleaf(void) {
+TEST(seek_pastleaf) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -305,7 +305,7 @@ static void test_seek_pastleaf(void) {
     lc_close(S);
 }
 
-static void test_seek_line_leaf(void) {
+TEST(seek_line_leaf) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -333,7 +333,7 @@ static void test_seek_line_leaf(void) {
     lc_close(S);
 }
 
-static void test_seek_line_pastleaf(void) {
+TEST(seek_line_pastleaf) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -352,7 +352,7 @@ static void test_seek_line_pastleaf(void) {
     lc_close(S);
 }
 
-static void test_seek_edge(void) {
+TEST(seek_edge) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -379,7 +379,7 @@ static void test_seek_edge(void) {
     lc_close(S);
 }
 
-static void test_advance_params(void) {
+TEST(advance_params) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
 
@@ -396,7 +396,7 @@ static void test_advance_params(void) {
     lc_close(S);
 }
 
-static void test_advance_single(void) {
+TEST(advance_single) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -436,7 +436,7 @@ static void test_advance_single(void) {
     lc_close(S);
 }
 
-static void test_advance_cross(void) {
+TEST(advance_cross) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
@@ -484,7 +484,7 @@ static void test_advance_cross(void) {
     lc_close(S);
 }
 
-static void test_advance_brute(void) {
+TEST(advance_brute) {
     lc_State *S;
     lc_Cache *c;
     lc_Cursor C;
@@ -508,8 +508,8 @@ static void test_advance_brute(void) {
             lc_advance(&C, delta);
             dst = pos + delta < 0 ? 0 : pos + delta;
             if (!lc_checkcursor(&C, dst)) {
-                lc_log("advance pos=%d delta=%d off=%lu exp=%d\n", pos, delta,
-                       lc_lu(lc_offset(&C)), dst);
+                test_log("advance pos=%d delta=%d off=%lu exp=%d\n", pos, delta,
+                       test_lu(lc_offset(&C)), dst);
                 lc_dumpcursor(&C, "after advance");
                 abort();
             }
@@ -518,7 +518,7 @@ static void test_advance_brute(void) {
     lc_close(S);
 }
 
-static void test_advance_cov_skip_siblings(void) {
+TEST(advance_cov_skip_siblings) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
@@ -555,7 +555,7 @@ static void test_advance_cov_skip_siblings(void) {
     lc_close(S);
 }
 
-static void test_advline_params(void) {
+TEST(advline_params) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
 
@@ -575,7 +575,7 @@ static void test_advline_params(void) {
     lc_close(S);
 }
 
-static void test_advline_cross(void) {
+TEST(advline_cross) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
@@ -607,7 +607,7 @@ static void test_advline_cross(void) {
     lc_close(S);
 }
 
-static void test_advline_zero(void) {
+TEST(advline_zero) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
@@ -626,7 +626,7 @@ static void test_advline_zero(void) {
     lc_close(S);
 }
 
-static void test_advline_brute(void) {
+TEST(advline_brute) {
     lc_State *S;
     lc_Cache *c;
     lc_Cursor C;
@@ -651,8 +651,8 @@ static void test_advline_brute(void) {
             dst = (pos + delta * 2) & ~1;
             dst = dst < 0 ? 0 : dst > n * 2 ? n * 2 : dst;
             if (!lc_checkcursor(&C, dst)) {
-                lc_log("advance pos=%d delta=%d off=%lu failed exp=%d\n", pos,
-                       delta, lc_lu(lc_offset(&C)), dst);
+                test_log("advance pos=%d delta=%d off=%lu failed exp=%d\n", pos,
+                       delta, test_lu(lc_offset(&C)), dst);
                 lc_dumpcursor(&C, "after advance");
                 abort();
             }
@@ -661,7 +661,7 @@ static void test_advline_brute(void) {
     lc_close(S);
 }
 
-static void test_markbreak_params(void) {
+TEST(markbreak_params) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -676,7 +676,7 @@ static void test_markbreak_params(void) {
     lc_close(S);
 }
 
-static void test_markbreak_basic(void) {
+TEST(markbreak_basic) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
@@ -711,7 +711,7 @@ static void test_markbreak_basic(void) {
     lc_close(S);
 }
 
-static void test_markbreak_brute(void) {
+TEST(markbreak_brute) {
     lc_State *S;
     lc_Cache *c;
     lc_Cursor C;
@@ -729,13 +729,13 @@ static void test_markbreak_brute(void) {
             r = lc_markbreak(&C, ins);
             assert(r == LC_OK);
             if (!lc_checktree(c) || !lc_checkcursor(&C, pos + ins)) {
-                lc_log("insert pos=%d ins=%d failed\n", pos, ins);
+                test_log("insert pos=%d ins=%d failed\n", pos, ins);
                 lc_dumptree(c, "insert brute fail");
                 lc_dumpcursor(&C, "insert brute fail");
                 abort();
             }
             if (lc_col(&C) != 0) {
-                lc_log("insert pos=%d ins=%d col=%u\n", pos, ins, lc_col(&C));
+                test_log("insert pos=%d ins=%d col=%u\n", pos, ins, lc_col(&C));
                 lc_dumptree(c, "insert brute fail");
                 lc_dumpcursor(&C, "insert brute fail");
                 abort();
@@ -746,7 +746,7 @@ static void test_markbreak_brute(void) {
     lc_close(S);
 }
 
-static void test_markbreak_empty(void) {
+TEST(markbreak_empty) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
@@ -765,7 +765,7 @@ static void test_markbreak_empty(void) {
     lc_close(S);
 }
 
-static void test_markbreak_crossline(void) {
+TEST(markbreak_crossline) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     lc_Cursor C;
@@ -804,7 +804,7 @@ static void test_markbreak_crossline(void) {
     lc_close(S);
 }
 
-static void test_markbreak_trailing(void) {
+TEST(markbreak_trailing) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
@@ -831,7 +831,7 @@ static void test_markbreak_trailing(void) {
     lc_close(S);
 }
 
-static void test_markbreak_noop(void) {
+TEST(markbreak_noop) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
@@ -848,7 +848,7 @@ static void test_markbreak_noop(void) {
     lc_close(S);
 }
 
-static void test_markbreak_brzero(void) {
+TEST(markbreak_brzero) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
@@ -864,7 +864,7 @@ static void test_markbreak_brzero(void) {
     lc_close(S);
 }
 
-static void test_markbreak_crossleaf(void) {
+TEST(markbreak_crossleaf) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
@@ -886,7 +886,7 @@ static void test_markbreak_crossleaf(void) {
     lc_close(S);
 }
 
-static void test_markbreak_split(void) {
+TEST(markbreak_split) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
@@ -908,7 +908,7 @@ static void test_markbreak_split(void) {
     lc_close(S);
 }
 
-static void test_markbreak_node_split(void) {
+TEST(markbreak_node_split) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
@@ -929,7 +929,7 @@ static void test_markbreak_node_split(void) {
     lc_close(S);
 }
 
-static void test_markbreak_root_split(void) {
+TEST(markbreak_root_split) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
@@ -949,7 +949,7 @@ static void test_markbreak_root_split(void) {
     lc_close(S);
 }
 
-static void test_markbreak_root_add(void) {
+TEST(markbreak_root_add) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
@@ -965,7 +965,7 @@ static void test_markbreak_root_add(void) {
     lc_close(S);
 }
 
-static void test_markbreak_cascade(void) {
+TEST(markbreak_cascade) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
@@ -986,7 +986,7 @@ static void test_markbreak_cascade(void) {
     lc_close(S);
 }
 
-static void test_markbreak_cov_split_right(void) {
+TEST(markbreak_cov_split_right) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
@@ -1006,7 +1006,7 @@ static void test_markbreak_cov_split_right(void) {
     lc_close(S);
 }
 
-static void test_markbreak_cov_child_right(void) {
+TEST(markbreak_cov_child_right) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(
             S, 2,
@@ -1032,7 +1032,7 @@ static void test_markbreak_cov_child_right(void) {
     lc_close(S);
 }
 
-static void test_markbreak_fullleaf_pastend(void) {
+TEST(markbreak_fullleaf_pastend) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -1052,7 +1052,7 @@ static void test_markbreak_fullleaf_pastend(void) {
     lc_close(S);
 }
 
-static void test_markbreak_fullleaf_brgt(void) {
+TEST(markbreak_fullleaf_brgt) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -1070,7 +1070,7 @@ static void test_markbreak_fullleaf_brgt(void) {
     lc_close(S);
 }
 
-static void test_clearbreaks_basic(void) {
+TEST(clearbreaks_basic) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -1114,7 +1114,7 @@ static void test_clearbreaks_basic(void) {
     lc_close(S);
 }
 
-static void test_clearbreaks_cov_slot(void) {
+TEST(clearbreaks_cov_slot) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor cur;
@@ -1131,7 +1131,7 @@ static void test_clearbreaks_cov_slot(void) {
     lc_close(S);
 }
 
-static void test_remove_params(void) {
+TEST(remove_params) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C, R, X;
@@ -1162,7 +1162,7 @@ static void test_remove_params(void) {
     lc_close(S);
 }
 
-static void test_remove_basic(void) {
+TEST(remove_basic) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     lc_Cursor C, R;
@@ -1212,7 +1212,7 @@ static void test_remove_basic(void) {
     lc_close(S);
 }
 
-static void test_splice_params(void) {
+TEST(splice_params) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -1227,7 +1227,7 @@ static void test_splice_params(void) {
     lc_close(S);
 }
 
-static void test_splice_basic(void) {
+TEST(splice_basic) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -1277,7 +1277,7 @@ static void test_splice_basic(void) {
     lc_close(S);
 }
 
-static void test_splice_trailing(void) {
+TEST(splice_trailing) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -1325,7 +1325,7 @@ static void test_splice_trailing(void) {
  * 128 lines of 2 bytes each = 256 total bytes, levels >= 2.
  * pos=0..257 (1 past end → trailing), del=0..257 (past end → clamp),
  * ins=0..1 (byte insert). */
-static void test_splice_brute(void) {
+TEST(splice_brute) {
     lc_State *S;
     lc_Cache *c;
     lc_Cursor C;
@@ -1350,13 +1350,13 @@ static void test_splice_brute(void) {
                 lc_seek(&C, c, pos);
                 lc_splice(&C, del, ins);
                 if (!lc_checktree(c)) {
-                    lc_log("splice pos=%d del=%d ins=%d tree\n", pos, del, ins);
+                    test_log("splice pos=%d del=%d ins=%d tree\n", pos, del, ins);
                     lc_dumptree(c, "after splice");
                     abort();
                 }
                 if (!lc_checkcursor(&C, pos + ins)) {
-                    lc_log("splice pos=%d del=%d ins=%d off=%lu exp=%d\n", pos,
-                           del, ins, lc_lu(lc_offset(&C)), pos + ins);
+                    test_log("splice pos=%d del=%d ins=%d off=%lu exp=%d\n", pos,
+                           del, ins, test_lu(lc_offset(&C)), pos + ins);
                     lc_dumpcursor(&C, "after splice");
                     abort();
                 }
@@ -1402,7 +1402,7 @@ static lc_Cache *brute3_cache(lc_State *S, const int *shape) {
     return lcN_setcc(root, 4), cacheV(S, 2, root);
 }
 
-static void test_splice_brute3(void) {
+TEST(splice_brute3) {
     static const int shapes[3][7] = {
             {4, 3, 2, 4, 2, 3, 4},
             {2, 2, 3, 2, 4, 2, 2},
@@ -1425,10 +1425,10 @@ static void test_splice_brute3(void) {
                 if (!lc_checktree_allow_empty(c, 1)
                     || lc_bytes(c) != total - len - hang
                     || !lc_checkcursor(&C, pos)) {
-                    lc_log("FAIL brute3 s=%d pos=%lu len=%lu bytes=%lu "
+                    test_log("FAIL brute3 s=%d pos=%lu len=%lu bytes=%lu "
                            "exp=%lu\n",
-                           si, lc_lu(pos), lc_lu(len), lc_lu(lc_bytes(c)),
-                           lc_lu(total - len - hang));
+                           si, test_lu(pos), test_lu(len), test_lu(lc_bytes(c)),
+                           test_lu(total - len - hang));
                     lc_dumptree(c, "after splice");
                     lc_dumpcursor(&C, "after splice");
                     abort();
@@ -1442,7 +1442,7 @@ static void test_splice_brute3(void) {
 /* cross-leaf splice with L->col (1) != R->col (0): del [1,4) of
  * lines {3,1 | 2,2} kills line A's break and line B; A's leading
  * byte must merge into line C → {1+2, 2} */
-static void test_splice_cross_col(void) {
+TEST(splice_cross_col) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(S, 0, botV(leafV(3, 1), leafV(2, 2)));
     lc_Cursor C;
@@ -1456,7 +1456,7 @@ static void test_splice_cross_col(void) {
     lc_close(S);
 }
 
-static void test_splice_cov_rebalance(void) {
+TEST(splice_cov_rebalance) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(
             S, 2,
@@ -1481,7 +1481,7 @@ static void test_splice_cov_rebalance(void) {
 }
 
 /* foldleaf balance cl+cg>4: via cross-leaf splice triggering stitch+foldleaf */
-static void test_splice_cov_foldleaf_lr(void) {
+TEST(splice_cov_foldleaf_lr) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cursor C;
     lc_Cache *c = cacheV(S, 0, botV(leafV(10, 10), leafV(10, 10, 10, 10)));
@@ -1493,7 +1493,7 @@ static void test_splice_cov_foldleaf_lr(void) {
     lc_close(S);
 }
 
-static void test_splice_cov_shiftnode_bal0(void) {
+TEST(splice_cov_shiftnode_bal0) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(
             S, 1,
@@ -1509,7 +1509,7 @@ static void test_splice_cov_shiftnode_bal0(void) {
     lc_close(S);
 }
 
-static void test_splice_cov_trimleaf(void) {
+TEST(splice_cov_trimleaf) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cursor cur;
     lc_Cache *c = cacheV(S, 0, botV(leafV(10, 0), leafV(10, 0), leafV(10, 0)));
@@ -1522,7 +1522,7 @@ static void test_splice_cov_trimleaf(void) {
     lc_close(S);
 }
 
-static void test_append_params(void) {
+TEST(append_params) {
     lc_State *S;
     lc_Cache *c;
     lc_Cursor C;
@@ -1547,7 +1547,7 @@ static void test_append_params(void) {
     lc_close(S);
 }
 
-static void test_append_leaf(void) {
+TEST(append_leaf) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -1567,7 +1567,7 @@ static void test_append_leaf(void) {
     lc_close(S);
 }
 
-static void test_append_col(void) {
+TEST(append_col) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -1590,7 +1590,7 @@ static void test_append_col(void) {
     lc_close(S);
 }
 
-static void test_append_basic(void) {
+TEST(append_basic) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -1611,7 +1611,7 @@ static void test_append_basic(void) {
     lc_close(S);
 }
 
-static void test_append_many(void) {
+TEST(append_many) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -1631,7 +1631,7 @@ static void test_append_many(void) {
     lc_close(S);
 }
 
-static void test_append_empty(void) {
+TEST(append_empty) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     lc_Cursor C;
@@ -1662,7 +1662,7 @@ static void test_append_empty(void) {
     lc_close(S);
 }
 
-static void test_append_sib(void) {
+TEST(append_sib) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(
             S, 0, botV(leafV(1, 0), leafV(2, 0), leafV(3, 0), NULL));
@@ -1676,7 +1676,7 @@ static void test_append_sib(void) {
     lc_close(S);
 }
 
-static void test_append_deep(void) {
+TEST(append_deep) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     lc_Cursor C;
@@ -1700,7 +1700,7 @@ static void test_append_deep(void) {
     lc_close(S);
 }
 
-static void test_append_leaf_split(void) {
+TEST(append_leaf_split) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -1720,7 +1720,7 @@ static void test_append_leaf_split(void) {
     lc_close(S);
 }
 
-static void test_append_stitch_shiftup(void) {
+TEST(append_stitch_shiftup) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(S, 0, botV(leafV(1), leafV(1), leafV(1), leafV(1)));
     lc_Cursor C;
@@ -1735,7 +1735,7 @@ static void test_append_stitch_shiftup(void) {
     lc_close(S);
 }
 
-static void test_append_rootpush(void) {
+TEST(append_rootpush) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(S, 0, botV(leafV(1), leafV(1), leafV(1), leafV(1)));
     lc_Cursor C;
@@ -1749,7 +1749,7 @@ static void test_append_rootpush(void) {
     lc_close(S);
 }
 
-static void test_append_findroom_findlevel(void) {
+TEST(append_findroom_findlevel) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     lc_Cursor cur;
@@ -1771,7 +1771,7 @@ static void test_append_findroom_findlevel(void) {
     lc_close(S);
 }
 
-static void test_append_noop(void) {
+TEST(append_noop) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -1791,7 +1791,7 @@ static void test_append_noop(void) {
     lc_close(S);
 }
 
-static void test_append_trailing(void) {
+TEST(append_trailing) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -1822,7 +1822,7 @@ static unsigned brute_scanner(void *ud, size_t pos) {
     return (*n)--, 3;
 }
 
-static void test_append_brute(void) {
+TEST(append_brute) {
     lc_State *S;
     lc_Cache *c;
     lc_Cursor C;
@@ -1843,7 +1843,7 @@ static void test_append_brute(void) {
                 assert(r == LC_OK);
                 if (!lc_checktree(c)
                     || !lc_checkcursor(&C, pos + ins * 3 + e)) {
-                    lc_log("insert pos=%d ins=%d e=%d failed\n", pos, ins, e);
+                    test_log("insert pos=%d ins=%d e=%d failed\n", pos, ins, e);
                     lc_dumptree(c, "insert brute fail");
                     lc_dumpcursor(&C, "insert brute fail");
                     abort();
@@ -1854,7 +1854,7 @@ static void test_append_brute(void) {
     lc_close(S);
 }
 
-static void test_append_noscanner(void) {
+TEST(append_noscanner) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -1890,7 +1890,7 @@ static void test_append_noscanner(void) {
     lc_close(S);
 }
 
-static void test_append_oom_brute(void) {
+TEST(append_oom_brute) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     lc_Cursor C;
@@ -1919,7 +1919,7 @@ static void test_append_oom_brute(void) {
                     if (r == LC_ERRMEM) {
                         if (!lc_checktree(c)
                             || !lc_checkcursor(&C, (size_t)pos)) {
-                            lc_log("OOM brute fail pos=%d ins=%d e=%d"
+                            test_log("OOM brute fail pos=%d ins=%d e=%d"
                                    " oom=%d\n",
                                    pos, ins, e, oom);
                             lc_dumptree(c, "oom brute fail");
@@ -1933,11 +1933,11 @@ static void test_append_oom_brute(void) {
                     assert(r == LC_OK);
                     lc_delcache(S, c);
                 }
-    lc_log("  test_append_oom_brute: %d OOM cases\n", cnt);
+    test_log("  test_append_oom_brute: %d OOM cases\n", cnt);
     lc_close(S);
 }
 
-static void test_append_oom_trailing(void) {
+TEST(append_oom_trailing) {
     lc_State *S;
     lc_Cache *c;
     lc_Cursor C;
@@ -1971,7 +1971,7 @@ static void test_append_oom_trailing(void) {
     assert(found);
 }
 
-static void test_append_oom_normal(void) {
+TEST(append_oom_normal) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     lc_Cursor C;
@@ -2012,7 +2012,7 @@ static void test_append_oom_normal(void) {
     lc_close(S);
 }
 
-static void test_append_oom_col0(void) {
+TEST(append_oom_col0) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     lc_Cursor C;
@@ -2056,7 +2056,7 @@ static void test_append_oom_col0(void) {
     lc_close(S);
 }
 
-static void test_append_oom_shiftup(void) {
+TEST(append_oom_shiftup) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     lc_Cursor C;
@@ -2100,7 +2100,7 @@ static void test_append_oom_shiftup(void) {
     lc_close(S);
 }
 
-static void test_append_oom_rootpush(void) {
+TEST(append_oom_rootpush) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     lc_Cursor C;
@@ -2138,7 +2138,7 @@ static void test_append_oom_rootpush(void) {
     lc_close(S);
 }
 
-static void test_append_oom_deroot(void) {
+TEST(append_oom_deroot) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     lc_Cursor C;
@@ -2183,7 +2183,7 @@ static void test_append_oom_deroot(void) {
     lc_close(S);
 }
 
-static void test_append_oom_rollback(void) {
+TEST(append_oom_rollback) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     lc_Cursor C;
@@ -2222,7 +2222,7 @@ static void test_append_oom_rollback(void) {
  * freelists cleared → every page alloc goes through oom_alloc.
  * O(1) reserve: oom=3 fails (findroom+stitch need 4 allocfs);
  * oom=4 succeeds. */
-static void test_append_oom_full(void) {
+TEST(append_oom_full) {
     unsigned  ins[] = {45, 1, 0};
     unsigned *p;
     lc_State *S;
@@ -2274,7 +2274,7 @@ static void test_append_oom_full(void) {
 }
 
 /* splice delete all with insertion triggers lcD_reset */
-static void test_splice_reset(void) {
+TEST(splice_reset) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -2292,7 +2292,7 @@ static void test_splice_reset(void) {
     lc_close(S);
 }
 
-static void test_splice_cov_foldleaf_rl(void) {
+TEST(splice_cov_foldleaf_rl) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(S, 0, botV(leafV(10, 10), leafV(10, 10, 10, 10)));
     lc_Cursor C;
@@ -2308,7 +2308,7 @@ static void test_splice_cov_foldleaf_rl(void) {
 /* rebalance early exit: foldnode returns 0 (balance, not merge).
  * botV[0] underfull after foldleaf (1 leaf), botV[1] has 4 leaves,
  * 1+4=5 > 4 → balance → foldnode returns 0 → rebalance returns. */
-static void test_splice_rebalance_earlyexit(void) {
+TEST(splice_rebalance_earlyexit) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(
             S, 2,
@@ -2331,7 +2331,7 @@ static void test_splice_rebalance_earlyexit(void) {
 }
 
 /* markbreak at right-half of fully packed tree → root split with i>=mid */
-static void test_markbreak_cov_rootright(void) {
+TEST(markbreak_cov_rootright) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -2354,7 +2354,7 @@ static void test_markbreak_cov_rootright(void) {
 /* insert with root-deepening to exercise fixsource dl>0 */
 /* OOM in lcB_oneline: leaf allocation fails (line 898).
  * Use oom_alloc with counter=2: lc_open+l_newtree succeed, lcL_new fails. */
-static void test_markbreak_oom_oneline(void) {
+TEST(markbreak_oom_oneline) {
     int       oom = 2;
     lc_State *S = lc_open(&oom_alloc, &oom);
     lc_Cache *c;
@@ -2376,7 +2376,7 @@ static void test_markbreak_oom_oneline(void) {
 
 /* OOM in lcB_makeroom: leaf allocation fails (line 970).
  * Tree with one full leaf, leaves pool drained, markbreak triggers makeroom. */
-static void test_markbreak_oom_makeroom(void) {
+TEST(markbreak_oom_makeroom) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(S, 0, botV(leafV(3, 3, 3, 3)));
     lc_Cursor C;
@@ -2400,7 +2400,7 @@ static void test_markbreak_oom_makeroom(void) {
 
 /* OOM in lcB_cutleaf: leaf allocation fails (line 1067).
  * Tree with data, leaves pool drained, insert triggers cutleaf. */
-static void test_append_oom_cutleaf(void) {
+TEST(append_oom_cutleaf) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(S, 0, botV(leafV(10, 10)));
     lc_Cursor C;
@@ -2424,7 +2424,7 @@ static void test_append_oom_cutleaf(void) {
     lc_close(S);
 }
 
-static void test_append_cov_rootdeep(void) {
+TEST(append_cov_rootdeep) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -2446,7 +2446,7 @@ static void test_append_cov_rootdeep(void) {
 
 /* lc_insert — wrapper around lc_append that restores cursor */
 
-static void test_insert_params(void) {
+TEST(insert_params) {
     lc_State *S;
     lc_Cache *c;
     lc_Cursor C;
@@ -2466,7 +2466,7 @@ static void test_insert_params(void) {
     lc_close(S);
 }
 
-static void test_insert_basic(void) {
+TEST(insert_basic) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -2487,7 +2487,7 @@ static void test_insert_basic(void) {
     lc_close(S);
 }
 
-static void test_insert_leaf(void) {
+TEST(insert_leaf) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -2508,7 +2508,7 @@ static void test_insert_leaf(void) {
     lc_close(S);
 }
 
-static void test_insert_col(void) {
+TEST(insert_col) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -2530,7 +2530,7 @@ static void test_insert_col(void) {
     lc_close(S);
 }
 
-static void test_insert_empty(void) {
+TEST(insert_empty) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
     lc_Cursor C;
@@ -2560,7 +2560,7 @@ static void test_insert_empty(void) {
     lc_close(S);
 }
 
-static void test_insert_trailing(void) {
+TEST(insert_trailing) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -2582,7 +2582,7 @@ static void test_insert_trailing(void) {
     lc_close(S);
 }
 
-static void test_insert_noop(void) {
+TEST(insert_noop) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -2603,7 +2603,7 @@ static void test_insert_noop(void) {
     lc_close(S);
 }
 
-static void test_insert_many(void) {
+TEST(insert_many) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -2623,7 +2623,7 @@ static void test_insert_many(void) {
     lc_close(S);
 }
 
-static void test_insert_noscanner(void) {
+TEST(insert_noscanner) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -2655,11 +2655,11 @@ static void test_insert_noscanner(void) {
     lc_close(S);
 }
 
-static void test_locate_params(void) {
+TEST(locate_params) {
     assert(lc_locate(NULL, 0) == LC_ERRPARAM);
 }
 
-static void test_locate_basic(void) {
+TEST(locate_basic) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -2694,7 +2694,7 @@ static void test_locate_basic(void) {
     lc_close(S);
 }
 
-static void test_locate_empty(void) {
+TEST(locate_empty) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -2713,7 +2713,7 @@ static void test_locate_empty(void) {
     lc_close(S);
 }
 
-static void test_locline_params(void) {
+TEST(locline_params) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -2726,7 +2726,7 @@ static void test_locline_params(void) {
     lc_close(S);
 }
 
-static void test_locline_basic(void) {
+TEST(locline_basic) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -2753,7 +2753,7 @@ static void test_locline_basic(void) {
     lc_close(S);
 }
 
-static void test_locline_empty(void) {
+TEST(locline_empty) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -2768,7 +2768,7 @@ static void test_locline_empty(void) {
     lc_close(S);
 }
 
-static void test_locline_crossleaf(void) {
+TEST(locline_crossleaf) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -2786,115 +2786,5 @@ static void test_locline_crossleaf(void) {
     lc_close(S);
 }
 
-#define TESTS(X)                  \
-    X(lifecycle)                  \
-    X(scan_params)                \
-    X(scan_basic)                 \
-    X(scan_seek)                  \
-    X(scan_bulk)                  \
-    X(scan_append)                \
-    X(scan_oom_items)             \
-    X(scan_oom_flush)             \
-    X(scan_oom_build)             \
-    X(scan_oom_unfolded)          \
-    X(scan_deepen_root)           \
-    X(scan_edge_makechain_empty)  \
-    X(seek_params)                \
-    X(seek_pastleaf)              \
-    X(seek_line_leaf)             \
-    X(seek_line_pastleaf)         \
-    X(seek_edge)                  \
-    X(advance_params)             \
-    X(advance_single)             \
-    X(advance_cross)              \
-    X(advance_brute)              \
-    X(advance_cov_skip_siblings)  \
-    X(advline_params)             \
-    X(advline_cross)              \
-    X(advline_zero)               \
-    X(advline_brute)              \
-    X(markbreak_params)           \
-    X(markbreak_basic)            \
-    X(markbreak_empty)            \
-    X(markbreak_crossline)        \
-    X(markbreak_trailing)         \
-    X(markbreak_noop)             \
-    X(markbreak_brzero)           \
-    X(markbreak_crossleaf)        \
-    X(markbreak_split)            \
-    X(markbreak_node_split)       \
-    X(markbreak_root_split)       \
-    X(markbreak_root_add)         \
-    X(markbreak_cascade)          \
-    X(markbreak_fullleaf_pastend) \
-    X(markbreak_fullleaf_brgt)    \
-    X(markbreak_brute)            \
-    X(markbreak_cov_split_right)  \
-    X(markbreak_cov_child_right)  \
-    X(markbreak_cov_rootright)    \
-    X(markbreak_oom_oneline)      \
-    X(markbreak_oom_makeroom)     \
-    X(clearbreaks_basic)          \
-    X(clearbreaks_cov_slot)       \
-    X(remove_params)              \
-    X(remove_basic)               \
-    X(splice_params)              \
-    X(splice_basic)               \
-    X(splice_reset)               \
-    X(splice_trailing)            \
-    X(splice_brute)               \
-    X(splice_brute3)              \
-    X(splice_cross_col)           \
-    X(splice_cov_rebalance)       \
-    X(splice_cov_shiftnode_bal0)  \
-    X(splice_cov_trimleaf)        \
-    X(splice_cov_foldleaf_lr)     \
-    X(splice_cov_foldleaf_rl)     \
-    X(splice_rebalance_earlyexit) \
-    X(append_params)              \
-    X(append_basic)               \
-    X(append_leaf)                \
-    X(append_col)                 \
-    X(append_many)                \
-    X(append_empty)               \
-    X(append_sib)                 \
-    X(append_deep)                \
-    X(append_leaf_split)          \
-    X(append_stitch_shiftup)      \
-    X(append_rootpush)            \
-    X(append_findroom_findlevel)  \
-    X(append_noop)                \
-    X(append_trailing)            \
-    X(append_brute)               \
-    X(append_oom_brute)           \
-    X(append_noscanner)           \
-    X(append_oom_trailing)        \
-    X(append_oom_normal)          \
-    X(append_oom_col0)            \
-    X(append_oom_shiftup)         \
-    X(append_oom_rootpush)        \
-    X(append_oom_deroot)          \
-    X(append_oom_rollback)        \
-    X(append_oom_cutleaf)         \
-    X(append_oom_full)            \
-    X(append_cov_rootdeep)        \
-    X(insert_params)              \
-    X(insert_basic)               \
-    X(insert_leaf)                \
-    X(insert_col)                 \
-    X(insert_empty)               \
-    X(insert_trailing)            \
-    X(insert_noop)                \
-    X(insert_many)                \
-    X(insert_noscanner)           \
-    X(locate_params)              \
-    X(locate_basic)               \
-    X(locate_empty)               \
-    X(locline_params)             \
-    X(locline_basic)              \
-    X(locline_empty)              \
-    X(locline_crossleaf)
 
-#define X(name) {#name, test_##name},
-LC_TEST_MAIN("linecache tests")
-#undef X
+#include "linecache_test_fanout4.gen.inc"

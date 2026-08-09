@@ -1,57 +1,18 @@
-/*
- * lc_tests.h — shared test utilities for linecache tests
+/* lc_tests.h — linecache-specific test utilities.
  *
- * Usage: #include "lc_tests.h" after defining LC_FANOUT / LC_PAGE_SIZE
- *        and after #include "linecache.h".  Define TESTS(X) macro with
- *        all test entries, then call LC_TEST_MAIN().
+ * Shared by lc_test4.c / lc_test8.c (multi-FANOUT).  Public utilities
+ * (runner, asserts, allocators) live in tests.h; only linecache-specific
+ * helpers live here.  Test sources define LC_FANOUT etc. before include.
  */
 
 #ifndef LC_TESTS_H
 #define LC_TESTS_H
 
-#include <assert.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-#define lc_log(...) fprintf(stderr, __VA_ARGS__)
-#define lc_lu(x)    ((unsigned long)(x))
-
-#define lc_check(e, ...)                         \
-    do {                                         \
-        if (!(e)) return lc_log(__VA_ARGS__), 0; \
-    } while (0)
-
 #include "linecache.h"
+#include "tests.h"
 
 LC_STATIC void lc_dumptree(const lc_Cache *c, const char *tag);
 LC_STATIC void lc_dumpcursor(const lc_Cursor *C, const char *tag);
-
-/* ================================================================ */
-/*  allocators                                                       */
-/* ================================================================ */
-
-LC_STATIC void *test_alloc(void *ud, void *p, size_t osize, size_t nsize) {
-    void *np;
-    (void)ud, (void)osize;
-    if (nsize == 0) return free(p), NULL;
-    np = realloc(p, nsize);
-    if (!np) abort();
-    return np;
-}
-
-LC_STATIC void *oom_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
-    int *cnt = (int *)ud;
-    (void)osize;
-    if (nsize == 0) {
-        free(ptr);
-        return NULL;
-    }
-    if (!cnt || *cnt <= 0) return NULL;
-    (*cnt)--;
-    return realloc(ptr, nsize);
-}
 
 /* lc_localfill — fill pool freelist with count objects from a local buffer.
  *   pool->freed is set to point to the first object in buf.
@@ -116,38 +77,38 @@ LC_STATIC int lc_checknode(const lc_Node *n, int rl, int mc) {
     size_t bsum, lsum;
     int    i;
     (void)bsum, (void)lsum;
-    lc_check(
+    check(
             n->child_count >= mc, "[chk] N[%p] rl=%d cc=%d<%d\n", (void *)n, rl,
             n->child_count, mc);
-    lc_check(
+    check(
             n->child_count <= LC_FANOUT, "[chk] N[%p] rl=%d cc=%d>%d\n",
             (void *)n, rl, n->child_count, LC_FANOUT);
     for (i = 0; i < (int)n->child_count; ++i) {
         lc_Node *c = n->children[i];
         if (rl == 0) {
             bsum = lcL_sumbytes((lc_Leaf *)c, 0, (int)n->breaks[i]);
-            lc_check(
+            check(
                     n->breaks[i] >= (mc ? LC_LEAF_FANOUT / 2 : 0)
                             && n->breaks[i] <= LC_LEAF_FANOUT,
                     "[chk] LEAF rl=%d i=%d cc=%d brs=%lu bytes=%lu leaf=%p\n",
-                    rl, i, n->child_count, lc_lu(n->breaks[i]), lc_lu(n->bytes[i]),
+                    rl, i, n->child_count, test_lu(n->breaks[i]), test_lu(n->bytes[i]),
                     (void *)c);
-            lc_check(
+            check(
                     n->bytes[i] == bsum,
                     "[chk] BOTV rl=%d i=%d cc=%d brs=%lu bytes=%lu sum=%lu "
                     "leaf=%p\n",
-                    rl, i, n->child_count, lc_lu(n->breaks[i]), lc_lu(n->bytes[i]), lc_lu(bsum),
+                    rl, i, n->child_count, test_lu(n->breaks[i]), test_lu(n->bytes[i]), test_lu(bsum),
                     (void *)c);
         } else {
             if (!lc_checknode(c, rl - 1, mc ? LC_FANOUT / 2 : 0)) return 0;
             bsum = lcN_sumbytes(c, 0, c->child_count);
             lsum = lcN_sumbreaks(c, 0, c->child_count);
-            lc_check(
+            check(
                     n->bytes[i] == bsum && n->breaks[i] == lsum,
                     "[chk] INNER rl=%d i=%d cc=%d bytes=%lu sum=%lu "
                     "brs=%lu sum=%lu node=%p\n",
-                    rl, i, n->child_count, lc_lu(n->bytes[i]), lc_lu(bsum), lc_lu(n->breaks[i]),
-                    lc_lu(lsum), (void *)c);
+                    rl, i, n->child_count, test_lu(n->bytes[i]), test_lu(bsum), test_lu(n->breaks[i]),
+                    test_lu(lsum), (void *)c);
         }
     }
     return 1;
@@ -156,26 +117,26 @@ LC_STATIC int lc_checknode(const lc_Node *n, int rl, int mc) {
 LC_STATIC int lc_checktree_allow_empty(const lc_Cache *c, int allow_empty) {
     size_t bsum, lsum;
     if (c->root.child_count == 0) {
-        lc_check(
+        check(
                 c->bytes == 0 && c->breaks == 0,
-                "[chk] EMPTY tree has bytes=%lu brs=%lu\n", lc_lu(c->bytes),
-                lc_lu(c->breaks));
+                "[chk] EMPTY tree has bytes=%lu brs=%lu\n", test_lu(c->bytes),
+                test_lu(c->breaks));
     } else if (c->levels > 0 || c->root.child_count > 1)
         return lc_checknode(&c->root, c->levels, allow_empty ? 0 : 1);
     else {
         lc_Leaf *lf = (lc_Leaf *)c->root.children[0];
         bsum = lcL_sumbytes(lf, 0, (int)c->root.breaks[0]);
-        lc_check(
+        check(
                 c->root.bytes[0] == bsum,
                 "[chk] SINGLE LEAF tree has breaks=%lu bytes=%lu sum=%lu\n",
-                lc_lu(c->root.breaks[0]), lc_lu(c->root.bytes[0]), lc_lu(bsum));
+                test_lu(c->root.breaks[0]), test_lu(c->root.bytes[0]), test_lu(bsum));
     }
     bsum = lcN_sumbytes(&c->root, 0, c->root.child_count);
     lsum = lcN_sumbreaks(&c->root, 0, c->root.child_count);
-    lc_check(
+    check(
             c->bytes == bsum && c->breaks == lsum,
-            "[chk] ROOT bytes=%lu sum=%lu brs=%lu sum=%lu\n", lc_lu(c->bytes), lc_lu(bsum),
-            lc_lu(c->breaks), lc_lu(lsum));
+            "[chk] ROOT bytes=%lu sum=%lu brs=%lu sum=%lu\n", test_lu(c->bytes), test_lu(bsum),
+            test_lu(c->breaks), test_lu(lsum));
     return 1;
 }
 
@@ -191,16 +152,16 @@ LC_STATIC int lc_checkcursor(lc_Cursor *C, size_t expected_off) {
     size_t   bsum = 0, lsum = 0;
     int      i, l;
     lc_Node *p;
-    lc_check(
+    check(
             lc_offset(C) == expected_off,
-            "[chk] OFFSET mismatch off=%lu expected=%lu\n", lc_lu(lc_offset(C)),
-            lc_lu(expected_off));
+            "[chk] OFFSET mismatch off=%lu expected=%lu\n", test_lu(lc_offset(C)),
+            test_lu(expected_off));
     if (C->tree->root.child_count == 0) {
-        lc_check(
+        check(
                 C->lnu == 0 && C->loff == 0 && C->nu == 0 && C->off == 0,
-                "[chk] EMPTY lnu=%d loff=%lu nu=%lu off=%lu\n", C->lnu, lc_lu(C->loff),
-                lc_lu(C->nu), lc_lu(C->off));
-        lc_check(
+                "[chk] EMPTY lnu=%d loff=%lu nu=%lu off=%lu\n", C->lnu, test_lu(C->loff),
+                test_lu(C->nu), test_lu(C->off));
+        check(
                 C->paths[0] == &C->tree->root.children[0],
                 "[chk] EMPTY paths[0]=%p expected=%p\n", (void *)C->paths[0],
                 (void *)&C->tree->root.children[0]);
@@ -208,29 +169,29 @@ LC_STATIC int lc_checkcursor(lc_Cursor *C, size_t expected_off) {
     }
     for (l = 0; l <= lcK_levels(C); ++l) {
         p = lcK_parent(C, l), i = lcK_idx(C, p, l);
-        lc_check(
+        check(
                 i >= 0 && i < (int)p->child_count,
                 "[chk] PATHS[%d] invalid idx=%d cc=%u\n", l, i, p->child_count);
-        lc_check(
+        check(
                 C->paths[l] == &p->children[i],
                 "[chk] PATHS[%d] invalid ptr=%p expected=%p\n", l,
                 (void *)C->paths[l], (void *)&p->children[i]);
         bsum += lcN_sumbytes(p, 0, i);
         lsum += lcN_sumbreaks(p, 0, i);
     }
-    lc_check(
-            C->off == bsum, "[chk] OFF mismatch off=%lu sum=%lu\n", lc_lu(C->off),
-            lc_lu(bsum));
-    lc_check(C->nu == lsum, "[chk] NU mismatch nu=%lu sum=%lu\n", lc_lu(C->nu), lc_lu(lsum));
+    check(
+            C->off == bsum, "[chk] OFF mismatch off=%lu sum=%lu\n", test_lu(C->off),
+            test_lu(bsum));
+    check(C->nu == lsum, "[chk] NU mismatch nu=%lu sum=%lu\n", test_lu(C->nu), test_lu(lsum));
     p = lcK_parent(C, lcK_levels(C)), i = lcK_idx(C, p, lcK_levels(C));
     bsum = lcL_sumbytes(lcK_leaf(C), 0, C->lnu);
-    lc_check(
+    check(
             C->loff == bsum, "[chk] LOFF mismatch loff=%lu sum=%lu lnu=%d\n",
-            lc_lu(C->loff), lc_lu(bsum), C->lnu);
-    lc_check(
+            test_lu(C->loff), test_lu(bsum), C->lnu);
+    check(
             (size_t)C->lnu <= p->breaks[i],
-            "[chk] LNU out of bounds lnu=%d brs=%lu\n", C->lnu, lc_lu(p->breaks[i]));
-    lc_check(
+            "[chk] LNU out of bounds lnu=%d brs=%lu\n", C->lnu, test_lu(p->breaks[i]));
+    check(
             (size_t)C->lnu == p->breaks[i]
                     || C->col < lcK_leaf(C)->bytes[C->lnu],
             "[chk] COL out of bounds col=%u line_bytes=%u\n", C->col,
@@ -245,20 +206,20 @@ LC_STATIC int lc_checkcursor(lc_Cursor *C, size_t expected_off) {
 LC_STATIC void lc_dumpnode(const lc_Node *n, int idx, int l, int levels) {
     unsigned i, cc = n->child_count;
     if (l == 0)
-        lc_log("Root(%p) cc=%u", (void *)n, cc);
+        test_log("Root(%p) cc=%u", (void *)n, cc);
     else
-        lc_log("%*sN%u_%u(%p) cc=%u", l * 2, "", l - 1, idx, (void *)n, cc);
+        test_log("%*sN%u_%u(%p) cc=%u", l * 2, "", l - 1, idx, (void *)n, cc);
     for (i = 0; i < cc; ++i)
-        lc_log(" b[%u]=%lu l[%u]=%lu", i, lc_lu(n->bytes[i]), i, lc_lu(n->breaks[i]));
-    lc_log("\n");
+        test_log(" b[%u]=%lu l[%u]=%lu", i, test_lu(n->bytes[i]), i, test_lu(n->breaks[i]));
+    test_log("\n");
     if (l == levels || levels == 0) {
         for (i = 0; i < cc; ++i) {
             lc_Leaf *leaf = (lc_Leaf *)n->children[i];
             unsigned s, sc = (unsigned)n->breaks[i];
-            lc_log("%*sL%u leaf[%u]=%p segs=%u bytes:", (l + 1) * 2, "", l + 1,
+            test_log("%*sL%u leaf[%u]=%p segs=%u bytes:", (l + 1) * 2, "", l + 1,
                    i, (void *)leaf, sc);
-            for (s = 0; s < sc; ++s) lc_log(" %u", leaf->bytes[s]);
-            lc_log("\n");
+            for (s = 0; s < sc; ++s) test_log(" %u", leaf->bytes[s]);
+            test_log("\n");
         }
     } else {
         for (i = 0; i < cc; ++i) lc_dumpnode(n->children[i], i, l + 1, levels);
@@ -266,21 +227,21 @@ LC_STATIC void lc_dumpnode(const lc_Node *n, int idx, int l, int levels) {
 }
 
 LC_STATIC void lc_dumptree(const lc_Cache *c, const char *tag) {
-    lc_log("[TREE]\t %s: levels=%u root.cc=%u bytes=%lu breaks=%lu\n", tag,
-           c->levels, c->root.child_count, lc_lu(c->bytes), lc_lu(c->breaks));
+    test_log("[TREE]\t %s: levels=%u root.cc=%u bytes=%lu breaks=%lu\n", tag,
+           c->levels, c->root.child_count, test_lu(c->bytes), test_lu(c->breaks));
     lc_dumpnode(&c->root, -1, 0, c->levels);
 }
 
 LC_STATIC void lc_dumpcursor(const lc_Cursor *C, const char *tag) {
     int l;
-    lc_log("[CURSOR] %s: col=%u lnu=%d loff=%lu nu=%lu off=%lu\n", tag, C->col,
-           C->lnu, lc_lu(C->loff), lc_lu(C->nu), lc_lu(C->off));
+    test_log("[CURSOR] %s: col=%u lnu=%d loff=%lu nu=%lu off=%lu\n", tag, C->col,
+           C->lnu, test_lu(C->loff), test_lu(C->nu), test_lu(C->off));
     for (l = 0; l <= lcK_levels(C); ++l) {
         lc_Node *p = lcK_parent(C, l);
         int      i = lcK_idx(C, p, l);
-        lc_log("  paths[%d]=%p p(%p)[%d/%u]=%p b=%lu l=%lu\n", l,
+        test_log("  paths[%d]=%p p(%p)[%d/%u]=%p b=%lu l=%lu\n", l,
                (void *)C->paths[l], (void *)p, i, p->child_count,
-               (void *)*C->paths[l], lc_lu(p->bytes[i]), lc_lu(p->breaks[i]));
+               (void *)*C->paths[l], test_lu(p->bytes[i]), test_lu(p->breaks[i]));
     }
 }
 
@@ -517,67 +478,5 @@ LC_STATIC unsigned lc_rscanner(void *ud, size_t prev) {
     return cur[1];
 }
 
-/* ================================================================ */
-/*  test runner                                                      */
-/* ================================================================ */
-/* Usage: after #defining TESTS(X) with all test entries, write:
- *
- *   #define X(name) {#name, test_##name},
- *   LC_TEST_MAIN("my tests")
- *   #undef X
- *
- * LC_TEST_MAIN constructs the entries table and the main function.  */
-
-typedef struct {
-    const char *name;
-    void (*fn)(void);
-} lc_test_entry;
-
-LC_STATIC int lc_test_main(
-        const char *banner, const lc_test_entry *entries, int argc,
-        char *argv[]) {
-    int i, j;
-    lc_log("=== %s ===\n", banner);
-    if (argc == 1) {
-        const lc_test_entry *e = entries;
-        while (e->name) {
-            lc_log("- %s\n", e->name);
-            e->fn();
-            lc_log("  %s OK\n", e->name);
-            ++e;
-        }
-        lc_log("\nAll tests passed!\n");
-        return 0;
-    }
-    for (i = 1; i < argc; ++i) {
-        const char *name = argv[i];
-        size_t      len = strlen(name);
-        int         found = 0, only = *name == '@';
-        if (only) name++, len--;
-        for (j = 0; entries[j].name; ++j) {
-            if (strlen(entries[j].name) >= len
-                && strncmp(name, entries[j].name, len) == 0) {
-                lc_log("- %s\n", entries[j].name);
-                entries[j].fn();
-                lc_log("  %s OK\n", entries[j].name);
-                found = 1;
-                if (only) break;
-            }
-        }
-        if (!found) {
-            lc_log("Unknown test: %s\n", name);
-            return 1;
-        }
-    }
-    return 0;
-}
-
-#define LC_TEST_MAIN(banner)                                    \
-    int main(int argc, char *argv[]) {                          \
-        static const lc_test_entry _test_entries[] = {          \
-                TESTS(X){NULL, NULL},                           \
-        };                                                      \
-        return lc_test_main(banner, _test_entries, argc, argv); \
-    }
 
 #endif /* LC_TESTS_H */

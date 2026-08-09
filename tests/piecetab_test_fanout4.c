@@ -7,11 +7,417 @@
 # define PT_POOL_STATS
 #endif
 
-#include "pt_tests.h"
+#include "../piecetab.h"
+#include "tests.h"
+/* pt_localfill — fill pool freelist with count objects from a local buffer.
+ *   pool->freed is set to point to the first object in buf.
+ *   buf must hold count * pool->obj_size bytes.
+ *   Caller must ensure buf outlives the pool usage. */
+PT_STATIC void pt_localfill(pt_Pool *pool, void **op, void *buf, size_t count) {
+    size_t i;
+    size_t sz = pool->obj_size;
+    char  *base = (char *)buf;
+    assert(count > 0 && sz > sizeof(void *));
+    *op = pool->freed;
+    for (i = 1; i < count; ++i)
+        *(void **)(base + (i - 1) * sz) = (void *)(base + i * sz);
+    *(void **)(base + (count - 1) * sz) = NULL;
+    pool->freed = (void *)base;
+    pool->freed_obj = count; /* old chain parked in *op, not reachable */
+    ptP_stat(pool->live_obj += count);
+}
+
+/* pt_drainpool / pt_refillpool — detach the entire freelist (with its
+ * count) so the next ptP_alloc must take the page-alloc path (combine
+ * with oom_alloc cnt=0 to force failure).  Refill splices the detached
+ * chain back in front of anything freed meanwhile. */
+typedef struct {
+    void  *chain;
+    size_t count;
+} pt_Drain;
+
+PT_STATIC pt_Drain pt_drainpool(pt_Pool *p) {
+    pt_Drain d;
+    d.chain = p->freed, d.count = p->freed_obj;
+    p->freed = NULL, p->freed_obj = 0;
+    return d;
+}
+
+PT_STATIC void pt_refillpool(pt_Pool *p, pt_Drain d) {
+    void **pp = &d.chain;
+    while (*pp) pp = (void **)*pp;
+    *pp = p->freed;
+    p->freed = d.chain, p->freed_obj += d.count;
+}
+
+/* ================================================================ */
+/*  tree invariant checker                                           */
+/* ================================================================ */
+
+PT_STATIC int pt_checknode(const pt_Node *n, int rl, int mc, int *has_hole) {
+    int i, hh;
+    check(
+            n->child_count >= mc, "[chk] N[%p] rl=%d cc=%d<%d\n", (void *)n, rl,
+            n->child_count, mc);
+    check(
+            n->child_count <= PT_FANOUT, "[chk] N[%p] rl=%d cc=%d>%d\n",
+            (void *)n, rl, n->child_count, PT_FANOUT);
+    *has_hole = 0;
+    for (i = 0; i < n->child_count; ++i) {
+        if (rl == 0) {
+            if (ptM_ishole(n, i)) {
+                check(
+                        n->bytes[i] > 0 && n->bytes[i] <= PT_MAX_HOLESIZE,
+                        "[chk] HOLE rl=%d i=%d bytes=%lu > %d\n", rl, i,
+                        test_lu(n->bytes[i]), (int)PT_MAX_HOLESIZE);
+                *has_hole = 1;
+            } else {
+                check(
+                        n->bytes[i] > 0, "[chk] LITERAL rl=%d i=%d bytes=%lu\n",
+                        rl, i, test_lu(n->bytes[i]));
+                if (i > 0 && !ptM_ishole(n, i - 1)) {
+                    check(
+                            ptN_lit(n, i - 1) + n->bytes[i - 1]
+                                    != ptN_lit(n, i),
+                            "[chk] ADJACENT literals i=%d,%d node=%p\n", i - 1,
+                            i, (void *)n);
+                }
+            }
+        } else {
+            pt_Node *c = n->children[i];
+            if (!pt_checknode(c, rl - 1, mc ? PT_FANOUT / 2 : 0, &hh)) return 0;
+            check(
+                    n->bytes[i] == ptN_sumbytes(c, 0, c->child_count),
+                    "[chk] INNER rl=%d i=%d bytes=%lu sum=%lu node=%p\n", rl, i,
+                    test_lu(n->bytes[i]), test_lu(ptN_sumbytes(c, 0, c->child_count)), (void *)c);
+            check(
+                    (ptM_ishole(n, i) != 0) == (hh != 0),
+                    "[chk] MASK rl=%d i=%d mask=%d has_hole=%d\n", rl, i,
+                    ptM_ishole(n, i) != 0, hh);
+            if (hh) *has_hole = 1;
+        }
+    }
+    return 1;
+}
+
+PT_STATIC int pt_checktree_allow_empty(pt_Buffer snap, int allow_empty) {
+    int hh = 0;
+    check(
+            snap->root.child_count != 0 || snap->bytes == 0,
+            "[chk] EMPTY root but bytes=%lu\n", test_lu(snap->bytes));
+    if (snap->root.child_count == 0) {
+        check(
+                snap->bytes == 0, "[chk] EMPTY tree has bytes=%lu\n",
+                test_lu(snap->bytes));
+    } else if (snap->levels > 0 || snap->root.child_count > 1)
+        return pt_checknode(
+                &snap->root, snap->levels, allow_empty ? 0 : 1, &hh);
+    else {
+        if (ptM_ishole(&snap->root, 0)) {
+            check(
+                    snap->root.bytes[0] > 0
+                            && snap->root.bytes[0] <= PT_MAX_HOLESIZE,
+                    "[chk] SINGLE HOLE bytes=%lu > %d\n", test_lu(snap->root.bytes[0]),
+                    (int)PT_MAX_HOLESIZE);
+        } else {
+            check(
+                    snap->root.bytes[0] > 0, "[chk] SINGLE LITERAL bytes=%lu\n",
+                    test_lu(snap->root.bytes[0]));
+        }
+    }
+    check(
+            snap->bytes == ptN_sumbytes(&snap->root, 0, snap->root.child_count),
+            "[chk] ROOT bytes=%lu sum=%lu\n", test_lu(snap->bytes),
+            test_lu(ptN_sumbytes(&snap->root, 0, snap->root.child_count)));
+    return 1;
+}
+
+PT_STATIC int pt_checktree(pt_Buffer snap) {
+    return pt_checktree_allow_empty(snap, 0);
+}
+
+/* ================================================================ */
+/*  cursor invariant checker                                         */
+/* ================================================================ */
+
+PT_STATIC int pt_checkcursor(pt_Cursor *C, size_t expected_off) {
+    size_t   bsum = 0;
+    int      i, l;
+    pt_Node *p;
+    check(
+            pt_offset(C) == expected_off,
+            "[chk] OFFSET mismatch off=%lu expected=%lu\n", test_lu(pt_offset(C)),
+            test_lu(expected_off));
+    if (C->tree->root.child_count == 0) {
+        check(
+                C->poff == 0 && C->off == 0, "[chk] EMPTY poff=%lu off=%lu\n",
+                test_lu(C->poff), test_lu(C->off));
+        check(
+                C->paths[0] == &C->tree->root.children[0],
+                "[chk] EMPTY paths[0]=%p expected=%p\n", (void *)C->paths[0],
+                (void *)&C->tree->root.children[0]);
+        return 1;
+    }
+    for (l = 0; l <= ptK_levels(C); ++l) {
+        p = ptK_parent(C, l);
+        i = ptK_idx(C, p, l);
+        check(
+                i >= 0 && i < p->child_count,
+                "[chk] PATHS[%d] invalid idx=%d cc=%u\n", l, i, p->child_count);
+        check(
+                C->paths[l] == &p->children[i],
+                "[chk] PATHS[%d] invalid ptr=%p expected=%p\n", l,
+                (void *)C->paths[l], (void *)&p->children[i]);
+        bsum += ptN_sumbytes(p, 0, i);
+    }
+    check(
+            C->off == bsum, "[chk] OFF mismatch off=%lu sum=%lu\n", test_lu(C->off),
+            test_lu(bsum));
+    p = ptK_parent(C, ptK_levels(C));
+    i = ptK_idx(C, p, ptK_levels(C));
+    check(
+            C->poff <= p->bytes[i],
+            "[chk] POFF out of bounds poff=%lu bytes[%d]=%lu\n", test_lu(C->poff), i,
+            test_lu(p->bytes[i]));
+    return 1;
+}
+
+/* ================================================================ */
+/*  tree dump                                                        */
+/* ================================================================ */
+
+PT_STATIC void pt_dumpnode(const pt_Node *n, int idx, int l, int levels) {
+    unsigned i, cc = (unsigned)n->child_count;
+    if (l == 0)
+        test_log("Root(%p) cc=%u", (void *)n, cc);
+    else
+        test_log("%*sN%u_%u(%p) cc=%u", l * 2, "", (unsigned)(l - 1),
+               (unsigned)idx, (void *)n, cc);
+    for (i = 0; i < cc; ++i) test_log(" b[%u]=%lu", i, test_lu(n->bytes[i]));
+    test_log("\n");
+    if ((unsigned)l == (unsigned)levels || levels == 0) {
+        for (i = 0; i < cc; ++i) {
+            if (ptM_ishole(n, i)) {
+                const unsigned char *hd = (const unsigned char *)n->children[i];
+                unsigned             ki;
+                test_log("%*sL%u HOLE bytes=%lu data=", (l + 1) * 2, "", i,
+                       test_lu(n->bytes[i]));
+                for (ki = 0; ki < (unsigned)pt_min(n->bytes[i], 16); ++ki)
+                    test_log("%02x", hd[ki]);
+                test_log(" '");
+                for (ki = 0; ki < (unsigned)pt_min(n->bytes[i], 16); ++ki)
+                    test_log("%c",
+                           hd[ki] >= 32 && hd[ki] < 127 ? (char)hd[ki] : '.');
+                test_log("'\n");
+            } else {
+                test_log("%*sL%u LIT bytes=%lu %.*s\n", (l + 1) * 2, "", i,
+                       test_lu(n->bytes[i]), (int)n->bytes[i],
+                       (const char *)n->children[i]);
+            }
+        }
+    } else {
+        for (i = 0; i < cc; ++i) pt_dumpnode(n->children[i], i, l + 1, levels);
+    }
+}
+
+PT_STATIC void pt_dumptree(pt_Buffer snap, const char *tag) {
+    test_log("[TREE]\t %s: levels=%u root.cc=%u bytes=%lu\n", tag, snap->levels,
+           snap->root.child_count, test_lu(snap->bytes));
+    pt_dumpnode(&snap->root, -1, 0, snap->levels);
+}
+
+PT_STATIC void pt_dumpcursor(const pt_Cursor *C, const char *tag) {
+    (void)C;
+    (void)tag; /* TODO */
+}
+
+/* ================================================================ */
+/*  tree comparison                                                  */
+/* ================================================================ */
+
+PT_STATIC int pt_comparenode(
+        const pt_Node *a, const pt_Node *b, unsigned l, unsigned levels) {
+    unsigned i;
+    if (a->child_count != b->child_count) return 0;
+    for (i = 0; i < (unsigned)a->child_count; ++i) {
+        if (a->bytes[i] != b->bytes[i]) return 0;
+        if ((ptM_ishole(a, i) != 0) != (ptM_ishole(b, i) != 0)) return 0;
+        if (l == levels) {
+            if (ptM_ishole(a, i)) {
+                const pt_Hole *ha = (const pt_Hole *)a->children[i];
+                const pt_Hole *hb = (const pt_Hole *)b->children[i];
+                if (memcmp(ha->data, hb->data, a->bytes[i]) != 0) return 0;
+            } else {
+                if (memcmp((const char *)a->children[i],
+                           (const char *)b->children[i], a->bytes[i])
+                    != 0)
+                    return 0;
+            }
+        } else {
+            if (!pt_comparenode(a->children[i], b->children[i], l + 1, levels))
+                return 0;
+        }
+    }
+    return 1;
+}
+
+PT_STATIC int pt_comparetree(pt_Buffer a, pt_Buffer b) {
+    if (a->levels != b->levels) return 0;
+    if (a->bytes != b->bytes) return 0;
+    if (a->root.child_count != b->root.child_count) return 0;
+    if (a->root.child_count == 0) return 1;
+    return pt_comparenode(&a->root, &b->root, 0, a->levels);
+}
+
+/* ================================================================ */
+/*  leaf sequence checker                                            */
+/* ================================================================ */
+/* Verify leaf break bytes match expected rle pairs {count,value,..,0} */
+
+PT_STATIC int pt_checkleaves_rec(
+        const pt_Node *n, int l, int levels, unsigned **brs) {
+    (void)n;
+    (void)l;
+    (void)levels;
+    (void)brs;
+    /* TODO */
+    return 0;
+}
+
+PT_STATIC int pt_checkleaves(const pt_Buffer *S, unsigned **brs) {
+    (void)S;
+    /* TODO */
+    return (**brs == 0);
+}
+
+#define checkleavesV(c, ...)                                            \
+    do {                                                                \
+        unsigned  brs__[] = {__VA_ARGS__, 0};                           \
+        unsigned *pbrs__ = brs__;                                       \
+        if (!pt_checkleaves((c), &pbrs__)) {                            \
+            fprintf(stderr, "checkleavesV FAILED at %s:%d\n", __FILE__, \
+                    __LINE__);                                          \
+            pt_dumptree((c), "checkleavesV failed");                    \
+            assert(0 && "checkleavesV failed");                         \
+        }                                                               \
+    } while (0)
+
+/* ================================================================ */
+/*  tree construction helpers (leafV / botV / innerV / cacheV)       */
+/* ================================================================ */
+
+typedef struct {
+    void  *data;
+    size_t len;
+    int    is_hole;
+} pt_LeafValue;
+
+#define innerV(...)    innerV_(S, __VA_ARGS__, NULL)
+#define leafV(...)     leafV_(S, __VA_ARGS__, litV_(NULL, 0))
+#define litV(s)        litV_("" s, sizeof(s) - 1)
+#define holeV(s)       holeV_(S, "" s, sizeof(s) - 1)
+#define treeV(l, root) treeV_(S, l, root)
+
+#define pt_nonnull(c) (assert(c), c)
+
+#define editV(c, off, l, root)                 \
+    do {                                       \
+        pt_Buffer _tv_ = treeV_(S, l, root);   \
+        pt_seek((c), pt_nonnull(_tv_), (off)); \
+        (c)->dirty = 1;                        \
+    } while (0)
+
+static pt_LeafValue litV_(const char *s, size_t len) {
+    pt_LeafValue v;
+    v.data = (void *)s, v.len = len, v.is_hole = 0;
+    return v;
+}
+
+static pt_LeafValue holeV_(pt_State *S, const char *s, size_t len) {
+    pt_LeafValue v;
+    pt_Hole     *h = (pt_Hole *)ptP_alloc(S, &S->holes);
+    assert(len <= PT_MAX_HOLESIZE);
+    memcpy(h->data, s, len);
+    v.data = (void *)h, v.len = len, v.is_hole = 1;
+    return v;
+}
+
+PT_STATIC pt_Node *leafV_(pt_State *S, ...) {
+    va_list      ap;
+    unsigned     i, cc = 0;
+    pt_Node     *n;
+    pt_LeafValue v;
+    va_start(ap, S);
+    while (va_arg(ap, pt_LeafValue).data != NULL) cc++;
+    va_end(ap);
+    n = (pt_Node *)ptP_alloc(S, &S->nodes);
+    assert(n && cc <= PT_FANOUT);
+    ptN_setcc(n, cc), n->version = 0, n->mask = 0;
+    va_start(ap, S);
+    for (i = 0; i < cc; i++) {
+        v = va_arg(ap, pt_LeafValue);
+        n->children[i] = (pt_Node *)v.data;
+        ptM_sethole(n, i, v.is_hole);
+        n->bytes[i] = v.len;
+    }
+    va_end(ap);
+    return n;
+}
+
+PT_STATIC pt_Node *innerV_(pt_State *S, ...) {
+    va_list  ap;
+    unsigned i, cc = 0;
+    pt_Node *n, *c;
+    va_start(ap, S);
+    while (va_arg(ap, pt_Node *) != NULL) cc++;
+    va_end(ap);
+    n = (pt_Node *)ptP_alloc(S, &S->nodes);
+    assert(n && cc <= PT_FANOUT);
+    ptN_setcc(n, cc), n->version = 0, n->mask = 0;
+    va_start(ap, S);
+    for (i = 0; i < cc; i++) {
+        c = va_arg(ap, pt_Node *);
+        n->children[i] = c, n->bytes[i] = ptN_sumbytes(c, 0, c->child_count);
+        ptM_sethole(n, i, (int)c->mask);
+    }
+    va_end(ap);
+    return n;
+}
+
+PT_STATIC pt_Buffer treeV_(pt_State *S, unsigned levels, pt_Node *root) {
+    pt_Tree *t = (pt_Tree *)pt_from(S, NULL, 0);
+    unsigned i;
+    assert(t && root->child_count <= PT_FANOUT);
+    t->levels = (unsigned short)levels, t->root = *root;
+    ptP_free(&S->nodes, root);
+    t->bytes = 0;
+    for (i = 0; i < t->root.child_count; i++) t->bytes += t->root.bytes[i];
+    pt_checktree_allow_empty(t, 1);
+    return assert(t), t;
+}
+
+/* ================================================================ */
+/*  pt_asserttree — build expected tree and compare                    */
+/* ================================================================ */
+
+#define pt_asserttree(c, lvls, root)                                     \
+    do {                                                                 \
+        pt_Buffer __d = treeV_(S, lvls, root);                           \
+        if (!pt_comparetree((c), __d)) {                                 \
+            fprintf(stderr, "pt_asserttree FAILED at %s:%d\n", __FILE__, \
+                    __LINE__);                                           \
+            fprintf(stderr, "Expected:\n");                              \
+            pt_dumptree(__d, "expected");                                \
+            fprintf(stderr, "Actual:\n");                                \
+            pt_dumptree((c), "actual");                                  \
+            assert(0 && "pt_asserttree failed");                         \
+        }                                                                \
+        pt_release(__d);                                                 \
+    } while (0)
 
 /* T1: lifecycle */
 
-static void test_lifecycle(void) {
+TEST(lifecycle) {
     pt_State *S;
     pt_Buffer b, b2;
 
@@ -45,7 +451,7 @@ static void test_lifecycle(void) {
 
 /* T2: seek on empty tree */
 
-static void test_seek_empty(void) {
+TEST(seek_empty) {
     pt_State *S = pt_open(NULL, NULL);
     pt_Cursor c;
 
@@ -60,7 +466,7 @@ static void test_seek_empty(void) {
 
 /* T3: insert and append */
 
-static void test_insert_basic(void) {
+TEST(insert_basic) {
     pt_State *S = pt_open(NULL, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -87,7 +493,7 @@ static void test_insert_basic(void) {
 
 /* T3b: insert positions before / after / mid */
 
-static void test_insert_before(void) {
+TEST(insert_before) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -102,7 +508,7 @@ static void test_insert_before(void) {
     pt_close(S);
 }
 
-static void test_insert_after(void) {
+TEST(insert_after) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -118,7 +524,7 @@ static void test_insert_after(void) {
     pt_close(S);
 }
 
-static void test_insert_mid(void) {
+TEST(insert_mid) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -136,7 +542,7 @@ static void test_insert_mid(void) {
 
 /* T3c: split root (fill a levels-0 tree, then insert -> levels 1) */
 
-static void test_insert_split_root(void) {
+TEST(insert_split_root) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -159,7 +565,7 @@ static void test_insert_split_root(void) {
 
 /* T3d: seek to end (locend) then append after last piece */
 
-static void test_insert_locend(void) {
+TEST(insert_locend) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Buffer a;
@@ -181,7 +587,7 @@ static void test_insert_locend(void) {
 
 /* T3e: split a full leaf node (levels 1, no root split) */
 
-static void test_insert_split_leaf(void) {
+TEST(insert_split_leaf) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -207,7 +613,7 @@ static void test_insert_split_leaf(void) {
 /* T3f: deep tree (levels>=2) — exercises internal splitnode, splitroot,
  * multi-level upbytes, and the 2*levels+3 reserve budget (audit B3). */
 
-static void test_insert_deep(void) {
+TEST(insert_deep) {
     static char buf[300];
     pt_State   *S = pt_open(&test_alloc, NULL);
     pt_Buffer   b = pt_empty(S);
@@ -231,7 +637,7 @@ static void test_insert_deep(void) {
 
 /* T3g: COW — editing a committed levels-1 tree copies the path, source stays */
 
-static void test_insert_cow(void) {
+TEST(insert_cow) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Buffer a;
@@ -260,7 +666,7 @@ static void test_insert_cow(void) {
 
 /* T3h: two cursors fork from one buffer into independent versions */
 
-static void test_insert_multiversion(void) {
+TEST(insert_multiversion) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Buffer a;
@@ -297,7 +703,7 @@ static void test_insert_multiversion(void) {
 
 /* T3i: OOM at the reserve / fork allocation points (audit §5 rollback) */
 
-static void test_insert_oom_reserve(void) {
+TEST(insert_oom_reserve) {
     int       cnt = 1000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
     pt_Buffer b = pt_empty(S);
@@ -314,7 +720,7 @@ static void test_insert_oom_reserve(void) {
     pt_close(S);
 }
 
-static void test_insert_oom_fork(void) {
+TEST(insert_oom_fork) {
     int       cnt = 1000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
     pt_Buffer b = pt_empty(S);
@@ -333,7 +739,7 @@ static void test_insert_oom_fork(void) {
 
 /* T3j: physical-contiguity merge of adjacent literals (same buffer slices) */
 
-static void test_merge_right(void) {
+TEST(merge_right) {
     static const char buf[] = "abcdef";
     pt_State         *S = pt_open(&test_alloc, NULL);
     pt_Buffer         b = pt_empty(S);
@@ -349,7 +755,7 @@ static void test_merge_right(void) {
     pt_close(S);
 }
 
-static void test_merge_left(void) {
+TEST(merge_left) {
     static const char buf[] = "abcdef";
     pt_State         *S = pt_open(&test_alloc, NULL);
     pt_Buffer         b = pt_empty(S);
@@ -367,7 +773,7 @@ static void test_merge_left(void) {
 }
 
 /* L936-937: pt_append LEFT merge (poff==0, i>0, prev literal contiguous) */
-static void test_append_merge_left(void) {
+TEST(append_merge_left) {
     static const char buf[] = "ABCD";
     static const char sep[] = "XY";
     pt_State         *S = pt_open(&test_alloc, NULL);
@@ -400,7 +806,7 @@ static void test_append_merge_left(void) {
 
 /* T3k: differential — incremental advance must match a fresh pt_seek */
 
-static void test_advance_brute(void) {
+TEST(advance_brute) {
     static char buf[300];
     pt_State   *S = pt_open(&test_alloc, NULL);
     pt_Buffer   b = pt_empty(S);
@@ -429,7 +835,7 @@ static void test_advance_brute(void) {
 
 /* T3l: defensive NULL-parameter paths + clean (non-dirty) commit */
 
-static void test_null_params(void) {
+TEST(null_params) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Buffer got;
@@ -456,7 +862,7 @@ static void test_null_params(void) {
 
 /* T3m: split with cursor landing in the LEFT half (front insert) */
 
-static void test_insert_split_front(void) {
+TEST(insert_split_front) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -478,7 +884,7 @@ static void test_insert_split_front(void) {
 
 /* T3n: rollback discards the transient and restores the source */
 
-static void test_rollback(void) {
+TEST(rollback) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -496,7 +902,7 @@ static void test_rollback(void) {
 /* T3o: append onto a committed deep tree — cascade splits COW shared nodes
  * (splitnode's cownode copy branch, audit B3 interaction). */
 
-static void test_insert_committed_split(void) {
+TEST(insert_committed_split) {
     static char buf[500];
     pt_State   *S = pt_open(&test_alloc, NULL);
     pt_Buffer   a, b, e = pt_empty(S);
@@ -524,7 +930,7 @@ static void test_insert_committed_split(void) {
  * still shares its nodes. The `from` field must keep the source alive until
  * the transient is released (exposes the pre-from use-after-free bug). */
 
-static void test_release_order(void) {
+TEST(release_order) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer a, b, e = pt_empty(S);
     pt_Cursor c;
@@ -547,7 +953,7 @@ static void test_release_order(void) {
  * (external released it after fork). rollback's return value revives the
  * source: no dangling, caller owns the returned reference. */
 
-static void test_rollback_released_source(void) {
+TEST(rollback_released_source) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Buffer a, back;
@@ -570,7 +976,7 @@ static void test_rollback_released_source(void) {
 
 /* release order with two committed buffers (from-chain COW) */
 
-static void test_remove_release_order(void) {
+TEST(remove_release_order) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b0 = pt_from(S, "hello world foobar", 18);
     pt_Cursor c;
@@ -588,7 +994,7 @@ static void test_remove_release_order(void) {
 
 /* ================= remove: levels==0 literal deletions ================= */
 
-static void test_remove_same_mid(void) {
+TEST(remove_same_mid) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(0, leafV(litV("abcdef")));
     pt_Cursor c;
@@ -602,7 +1008,7 @@ static void test_remove_same_mid(void) {
     pt_close(S);
 }
 
-static void test_remove_same_prefix(void) {
+TEST(remove_same_prefix) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(0, leafV(litV("abcdef")));
     pt_Cursor c;
@@ -616,7 +1022,7 @@ static void test_remove_same_prefix(void) {
     pt_close(S);
 }
 
-static void test_remove_same_suffix(void) {
+TEST(remove_same_suffix) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(0, leafV(litV("abcdef")));
     pt_Cursor c;
@@ -630,7 +1036,7 @@ static void test_remove_same_suffix(void) {
     pt_close(S);
 }
 
-static void test_remove_piece_whole(void) {
+TEST(remove_piece_whole) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));
     pt_Cursor c;
@@ -644,7 +1050,7 @@ static void test_remove_piece_whole(void) {
     pt_close(S);
 }
 
-static void test_remove_cross(void) {
+TEST(remove_cross) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(0, leafV(litV("aaa"), litV("bbb"), litV("ccc")));
     pt_Cursor c;
@@ -658,7 +1064,7 @@ static void test_remove_cross(void) {
     pt_close(S);
 }
 
-static void test_remove_to_end(void) {
+TEST(remove_to_end) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));
     pt_Cursor c;
@@ -672,7 +1078,7 @@ static void test_remove_to_end(void) {
     pt_close(S);
 }
 
-static void test_remove_all(void) {
+TEST(remove_all) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(0, leafV(litV("aa"), litV("bb")));
     pt_Cursor c;
@@ -686,7 +1092,7 @@ static void test_remove_all(void) {
     pt_close(S);
 }
 
-static void test_remove_across_leaves(void) {
+TEST(remove_across_leaves) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(
             1, innerV(leafV(litV("aaa"), litV("bbb")),
@@ -702,7 +1108,7 @@ static void test_remove_across_leaves(void) {
     pt_close(S);
 }
 
-static void test_remove_deep_shrink(void) {
+TEST(remove_deep_shrink) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(
             2, innerV(innerV(leafV(litV("aa")), leafV(litV("bb"))),
@@ -722,7 +1128,7 @@ static void test_remove_deep_shrink(void) {
  * transient
  */
 
-static void test_edit_cow(void) {
+TEST(edit_cow) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer a, b = pt_empty(S);
     pt_Cursor c;
@@ -769,7 +1175,7 @@ static void test_edit_cow(void) {
 
 /* §8.1 edit_rollback: rollback discards holes, returns source buffer */
 
-static void test_edit_rollback(void) {
+TEST(edit_rollback) {
     pt_State *S = pt_open(&test_alloc, NULL);
 
     /* Path 1: source buffer held externally → rollback returns source */
@@ -804,7 +1210,7 @@ static void test_edit_rollback(void) {
 
 /* §8.1 edit_oom: reserve failure leaves tree untouched */
 
-static void test_edit_oom(void) {
+TEST(edit_oom) {
     int       cnt = 1000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
     pt_Buffer b = pt_empty(S);
@@ -879,7 +1285,7 @@ static void makeref(char *ref) {
     }
 }
 
-static void test_edit_brute(void) {
+TEST(edit_brute) {
     int const nb = 288;
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Cursor C;
@@ -891,12 +1297,12 @@ static void test_edit_brute(void) {
         maketree(S, &C, (size_t)pos);
         assert(pt_edit(&C, 0, "##", 2) == PT_OK);
         if (!pt_checktree(C.tree)) {
-            pt_log("edit_brute FAIL pos=%d\n", pos);
+            test_log("edit_brute FAIL pos=%d\n", pos);
             pt_dumptree(C.tree, "after edit");
             pt_checktree(C.tree), assert(0);
         }
         if (!pt_checkcursor(&C, (size_t)pos + 2)) {
-            pt_log("edit_brute cursor pos=%d off=%lu\n", pos, pt_lu(pt_offset(&C)));
+            test_log("edit_brute cursor pos=%d off=%lu\n", pos, test_lu(pt_offset(&C)));
             assert(0);
         }
         memcpy(expected, ref, (size_t)pos);
@@ -905,7 +1311,7 @@ static void test_edit_brute(void) {
         pt_seek(&C, C.tree, 0);
         nread = pt_read(&C, actual, 290);
         if (nread != 290 || memcmp(actual, expected, 290) != 0) {
-            pt_log("edit_brute content fail pos=%d nread=%lu\n", pos, pt_lu(nread));
+            test_log("edit_brute content fail pos=%d nread=%lu\n", pos, test_lu(nread));
             assert(0);
         }
         pt_release(C.tree);
@@ -916,7 +1322,7 @@ static void test_edit_brute(void) {
 
 /* §8.2 insert_brute: position-independent literal insert */
 
-static void test_insert_brute(void) {
+TEST(insert_brute) {
     int const nb = 288;
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Cursor C;
@@ -928,12 +1334,12 @@ static void test_insert_brute(void) {
         maketree(S, &C, (size_t)pos);
         assert(pt_insert(&C, "##", 2) == PT_OK);
         if (!pt_checktree(C.tree)) {
-            pt_log("insert_brute FAIL pos=%d\n", pos);
+            test_log("insert_brute FAIL pos=%d\n", pos);
             pt_dumptree(C.tree, "after insert");
             pt_checktree(C.tree), assert(0);
         }
         if (!pt_checkcursor(&C, (size_t)pos)) {
-            pt_log("insert_brute cursor pos=%d off=%lu\n", pos, pt_lu(pt_offset(&C)));
+            test_log("insert_brute cursor pos=%d off=%lu\n", pos, test_lu(pt_offset(&C)));
             assert(0);
         }
         memcpy(expected, ref, (size_t)pos);
@@ -942,7 +1348,7 @@ static void test_insert_brute(void) {
         pt_seek(&C, C.tree, 0);
         nread = pt_read(&C, actual, 290);
         if (nread != 290 || memcmp(actual, expected, 290) != 0) {
-            pt_log("insert_brute content fail pos=%d nread=%lu\n", pos, pt_lu(nread));
+            test_log("insert_brute content fail pos=%d nread=%lu\n", pos, test_lu(nread));
             assert(0);
         }
         pt_release(C.tree);
@@ -953,7 +1359,7 @@ static void test_insert_brute(void) {
 
 /* ================= pt_scratch tests ================= */
 
-static void test_peekscratch_roundtrip(void) {
+TEST(peekscratch_roundtrip) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -1031,7 +1437,7 @@ static void test_peekscratch_roundtrip(void) {
     pt_close(S);
 }
 
-static void test_peekscratch_params(void) {
+TEST(peekscratch_params) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -1056,7 +1462,7 @@ static void test_peekscratch_params(void) {
     pt_close(S);
 }
 
-static void test_peekscratch_adjacent(void) {
+TEST(peekscratch_adjacent) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -1106,7 +1512,7 @@ static void test_peekscratch_adjacent(void) {
 
 /* ================= arena tests ================= */
 
-static void test_arena_lazy(void) {
+TEST(arena_lazy) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -1134,7 +1540,7 @@ static void test_arena_lazy(void) {
     pt_close(S);
 }
 
-static void test_arena_reserve_full(void) {
+TEST(arena_reserve_full) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -1169,7 +1575,7 @@ static void test_arena_reserve_full(void) {
     pt_close(S);
 }
 
-static void test_arena_dirty_break(void) {
+TEST(arena_dirty_break) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -1204,7 +1610,7 @@ static void test_arena_dirty_break(void) {
     pt_close(S);
 }
 
-static void test_arena_reserve_reuse(void) {
+TEST(arena_reserve_reuse) {
     /* Exercise pt_reserve for-loop that traverses current chain and
        unlinks a non-head block with enough space (lines 742-750). */
     pt_State *S = pt_open(&test_alloc, NULL);
@@ -1245,7 +1651,7 @@ static void test_arena_reserve_reuse(void) {
     pt_close(S);
 }
 
-static void test_arena_literal_cold(void) {
+TEST(arena_literal_cold) {
     /* pt_literal cold-start: arena not built, *plen < PT_ARENA_SIZE */
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
@@ -1269,7 +1675,7 @@ static void test_arena_literal_cold(void) {
     pt_close(S);
 }
 
-static void test_arena_literal_params(void) {
+TEST(arena_literal_params) {
     /* pt_literal parameter validation returning NULL */
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
@@ -1294,7 +1700,7 @@ static void test_arena_literal_params(void) {
 /* ================= literal/pt_literal coverage ================= */
 
 /* L750: pt_literal returns NULL when arena.current == NULL */
-static void test_literal_arena_empty(void) {
+TEST(literal_arena_empty) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -1308,7 +1714,7 @@ static void test_literal_arena_empty(void) {
 }
 
 /* L750: pt_literal returns NULL when arena has insufficient remainder */
-static void test_literal_arena_short(void) {
+TEST(literal_arena_short) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -1326,7 +1732,7 @@ static void test_literal_arena_short(void) {
 
 /* ================= hole remove tests ================= */
 
-static void test_remove_params(void) {
+TEST(remove_params) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -1339,7 +1745,7 @@ static void test_remove_params(void) {
     pt_close(S);
 }
 
-static void test_remove_hole_whole(void) {
+TEST(remove_hole_whole) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -1355,7 +1761,7 @@ static void test_remove_hole_whole(void) {
     pt_close(S);
 }
 
-static void test_remove_hole_mid(void) {
+TEST(remove_hole_mid) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -1382,7 +1788,7 @@ static void test_remove_hole_mid(void) {
     pt_close(S);
 }
 
-static void test_remove_hole_boundary(void) {
+TEST(remove_hole_boundary) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -1405,7 +1811,7 @@ static void test_remove_hole_boundary(void) {
     pt_close(S);
 }
 
-static void test_remove_hole_mixed(void) {
+TEST(remove_hole_mixed) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -1440,7 +1846,7 @@ static void test_remove_hole_mixed(void) {
     pt_close(S);
 }
 
-static void test_remove_cow(void) {
+TEST(remove_cow) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Buffer a;
@@ -1461,7 +1867,7 @@ static void test_remove_cow(void) {
     pt_close(S);
 }
 
-static void test_remove_oom(void) {
+TEST(remove_oom) {
     int       cnt = 1000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
     pt_Buffer b = pt_empty(S);
@@ -1489,7 +1895,7 @@ static void test_remove_oom(void) {
     pt_close(S);
 }
 
-static void test_remove_brute(void) {
+TEST(remove_brute) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -1517,7 +1923,7 @@ static void test_remove_brute(void) {
             pt_locate(&cc, pos);
             assert(pt_remove(&cc, len) == PT_OK);
             if (!pt_checktree(cc.tree)) {
-                pt_log("FAIL: remove_brute pos=%lu len=%lu\n", pt_lu(pos), pt_lu(len));
+                test_log("FAIL: remove_brute pos=%lu len=%lu\n", test_lu(pos), test_lu(len));
                 assert(0);
             }
             assert(pt_bytes(cc.tree) == total - len);
@@ -1529,7 +1935,7 @@ static void test_remove_brute(void) {
     pt_close(S);
 }
 
-static void test_remove_stitch_full(void) {
+TEST(remove_stitch_full) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Cursor c;
     /* COW + cross-leaf eraserange: commit tree then remove across leaves */
@@ -1545,7 +1951,7 @@ static void test_remove_stitch_full(void) {
     pt_close(S);
 }
 
-static void test_remove_fold_balance(void) {
+TEST(remove_fold_balance) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Cursor c;
     /* levels=1: inner(leaf("a"), leaf("x","y","z","w"))
@@ -1562,7 +1968,7 @@ static void test_remove_fold_balance(void) {
     pt_close(S);
 }
 
-static void test_remove_hole_trim(void) {
+TEST(remove_hole_trim) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Cursor c;
     editV(&c, 1, 0, leafV(holeV("abc"), holeV("def")));
@@ -1576,7 +1982,7 @@ static void test_remove_hole_trim(void) {
 /* seam merge: delete a non-contiguous piece separating two同源buf残片,
    so the残片s become physically adjacent → mergeleaf fuses them.
    Covers: same node, cross node, multi-element cross node. */
-static void test_remove_merge_literal(void) {
+TEST(remove_merge_literal) {
     static const char buf[] = "abcdef";
     /* --- same node (levels=0): [abc][SEP][def] delete SEP --- */
     {
@@ -1649,7 +2055,7 @@ static void test_remove_merge_literal(void) {
 
 /* === hole merge tests (mergeleaf full+partial merge) === */
 
-static void test_remove_merge_hole_full(void) {
+TEST(remove_merge_hole_full) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Cursor c;
     editV(&c, 10, 1,
@@ -1663,7 +2069,7 @@ static void test_remove_merge_hole_full(void) {
     pt_close(S);
 }
 
-static void test_remove_merge_hole_split(void) {
+TEST(remove_merge_hole_split) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Cursor c;
     /* mergeleaf full merge: hole A(10) + hole B(5) = 15 ≤ 16 */
@@ -1681,7 +2087,7 @@ static void test_remove_merge_hole_split(void) {
    Two hole leaves (12+12=24B), delete 4B at boundary.
    mergeleaf: d=min(10,16-10)=6, partial, ptH_remove(rt,0,0,d).
    stitch: d>poff=0 → backwardnode. */
-static void test_remove_merge_hole_partial(void) {
+TEST(remove_merge_hole_partial) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Cursor c;
     editV(&c, 10, 1,
@@ -1711,7 +2117,7 @@ static void test_remove_merge_hole_partial(void) {
 
 /* === deep stitch + findroom/backwardnode === */
 
-static void test_remove_stitch_deep(void) {
+TEST(remove_stitch_deep) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b;
     pt_Cursor c;
@@ -1733,7 +2139,7 @@ static void test_remove_stitch_deep(void) {
 
 /* === trimright poff==0 + mask === */
 
-static void test_remove_trim_hole(void) {
+TEST(remove_trim_hole) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Cursor c;
     editV(&c, 0, 1,
@@ -1748,7 +2154,7 @@ static void test_remove_trim_hole(void) {
 
 /* === eraseleaf cross-piece hole === */
 
-static void test_remove_hole_eraseleaf(void) {
+TEST(remove_hole_eraseleaf) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -1799,7 +2205,7 @@ static pt_Buffer brute2_tree(pt_State *S, const char *src) {
 
 /* brute all (pos,len) removals on a full levels=2 tree, checking tree
  * invariants, byte count, content and cursor position after each */
-static void test_remove_brute2(void) {
+TEST(remove_brute2) {
     static char src[128];
     char        expect[64], rd[64];
     pt_State   *S = pt_open(&test_alloc, NULL);
@@ -1814,7 +2220,7 @@ static void test_remove_brute2(void) {
             assert(pt_remove(&c, len) == PT_OK);
             if (!pt_checktree_allow_empty(c.tree, 1)
                 || pt_bytes(c.tree) != 64 - len || !pt_checkcursor(&c, pos)) {
-                pt_log("FAIL: brute2 pos=%lu len=%lu\n", pt_lu(pos), pt_lu(len));
+                test_log("FAIL: brute2 pos=%lu len=%lu\n", test_lu(pos), test_lu(len));
                 pt_dumptree(c.tree, "brute2");
                 assert(0);
             }
@@ -1831,7 +2237,7 @@ static void test_remove_brute2(void) {
 
 /* L1102-1103: tail rmleaf → rebalance(l-1) → foldnode balances leaves
    (4+1 > FANOUT so balancenode path, tree stays legal) */
-static void test_remove_fold_balance2(void) {
+TEST(remove_fold_balance2) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(
             2, innerV(innerV(leafV(litV("a"), litV("b")),
@@ -1857,7 +2263,7 @@ static void test_remove_fold_balance2(void) {
 
 /* tail rmleaf → rebalance → foldnode merges leaves (2+1 <= FANOUT):
    inner cc drops to 1 while root cc == 2; tree must stay legal */
-static void test_remove_fold_merge(void) {
+TEST(remove_fold_merge) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(
             2, innerV(innerV(leafV(litV("a"), litV("b")),
@@ -1876,7 +2282,7 @@ static void test_remove_fold_merge(void) {
 }
 
 /* L1033-1038: ptD_findroom fl>=0 && c>0. */
-static void test_remove_findroom(void) {
+TEST(remove_findroom) {
     pt_Node  *root, *inner0, *inner1, *leaf0, *leaf1, *leaf2, *leaf3, *leaf4;
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b;
@@ -1928,7 +2334,7 @@ static pt_Buffer brute3_tree(pt_State *S, const char *src, const int *shape) {
     ptN_setcc(root, 4);
     return treeV_(S, 2, root);
 }
-static void test_remove_brute3(void) {
+TEST(remove_brute3) {
     static char      src[1024];
     static const int shapes[3][7] = {
             {4, 3, 2, 4, 2, 3, 4},
@@ -1951,7 +2357,7 @@ static void test_remove_brute3(void) {
                 if (!pt_checktree_allow_empty(c.tree, 1)
                     || pt_bytes(c.tree) != total - len
                     || !pt_checkcursor(&c, pos)) {
-                    pt_log("FAIL brute3 s=%d pos=%lu len=%lu\n", si, pt_lu(pos), pt_lu(len));
+                    test_log("FAIL brute3 s=%d pos=%lu len=%lu\n", si, test_lu(pos), test_lu(len));
                     assert(0);
                 }
                 pt_release(c.tree), pt_release(b);
@@ -1964,7 +2370,7 @@ static void test_remove_brute3(void) {
 
 /* ================= splice tests ================= */
 
-static void test_splice_basic(void) {
+TEST(splice_basic) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(0, leafV(litV("hello")));
     pt_Cursor c;
@@ -1978,7 +2384,7 @@ static void test_splice_basic(void) {
     pt_close(S);
 }
 
-static void test_splice_del0(void) {
+TEST(splice_del0) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(0, leafV(litV("abc")));
     pt_Cursor c;
@@ -1991,7 +2397,7 @@ static void test_splice_del0(void) {
     pt_close(S);
 }
 
-static void test_splice_null(void) {
+TEST(splice_null) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(0, leafV(litV("hello")));
     pt_Cursor c;
@@ -2007,7 +2413,7 @@ static void test_splice_null(void) {
 
 /* ================= stitch coverage: findroom/backwardnode ================= */
 
-static void test_remove_stitch_overflow(void) {
+TEST(remove_stitch_overflow) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(
             2, innerV(innerV(leafV(litV("a")), leafV(litV("b"))),
@@ -2024,7 +2430,7 @@ static void test_remove_stitch_overflow(void) {
 
 /* ================= fold balance coverage: balancenode ================= */
 
-static void test_remove_foldnode_balance(void) {
+TEST(remove_foldnode_balance) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(
             3, innerV(innerV(innerV(leafV(litV("a")), leafV(litV("b"))),
@@ -2042,7 +2448,7 @@ static void test_remove_foldnode_balance(void) {
 /* L1102-1103: ptD_rebalance foldnode path.
    levels=2: inner of 2 leaves where leaf0 has 1 piece.
    Removing that 1 piece → leaf cc=0 < 2, inner cc=2 > 1 → foldnode. */
-static void test_remove_foldnode(void) {
+TEST(remove_foldnode) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(
             2, innerV(innerV(leafV(litV("a")),
@@ -2058,7 +2464,7 @@ static void test_remove_foldnode(void) {
     pt_close(S);
 }
 
-static void test_from_basic(void) {
+TEST(from_basic) {
     static const char buf[] = "hello world";
     pt_State         *S = pt_open(&test_alloc, NULL);
     pt_Buffer         b = pt_from(S, buf, (size_t)strlen(buf));
@@ -2077,7 +2483,7 @@ static void test_from_basic(void) {
 
 /* ================= pt_edit tests ================= */
 
-static void test_edit_params(void) {
+TEST(edit_params) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -2091,7 +2497,7 @@ static void test_edit_params(void) {
     pt_close(S);
 }
 
-static void test_edit_empty(void) {
+TEST(edit_empty) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -2113,7 +2519,7 @@ static void test_edit_empty(void) {
     pt_close(S);
 }
 
-static void test_edit_fresh_lit_mid(void) {
+TEST(edit_fresh_lit_mid) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(0, leafV(litV("abcdef")));
     pt_Cursor c;
@@ -2139,7 +2545,7 @@ static void test_edit_fresh_lit_mid(void) {
     pt_close(S);
 }
 
-static void test_edit_fresh_boundary(void) {
+TEST(edit_fresh_boundary) {
     pt_State *S = pt_open(&test_alloc, NULL);
 
     /* poff==0: insert before piece */
@@ -2192,7 +2598,7 @@ static void test_edit_fresh_boundary(void) {
     pt_close(S);
 }
 
-static void test_edit_append_tail(void) {
+TEST(edit_append_tail) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -2219,7 +2625,7 @@ static void test_edit_append_tail(void) {
     pt_close(S);
 }
 
-static void test_edit_append_full(void) {
+TEST(edit_append_full) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -2257,7 +2663,7 @@ static void test_edit_append_full(void) {
     pt_close(S);
 }
 
-static void test_edit_prev_hole(void) {
+TEST(edit_prev_hole) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -2286,7 +2692,7 @@ static void test_edit_prev_hole(void) {
     pt_close(S);
 }
 
-static void test_edit_mid_fit(void) {
+TEST(edit_mid_fit) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -2313,7 +2719,7 @@ static void test_edit_mid_fit(void) {
     pt_close(S);
 }
 
-static void test_edit_mid_split(void) {
+TEST(edit_mid_split) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -2357,7 +2763,7 @@ static void test_edit_mid_split(void) {
     pt_close(S);
 }
 
-static void test_edit_del_then_ins(void) {
+TEST(edit_del_then_ins) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -2387,7 +2793,7 @@ static void test_edit_del_then_ins(void) {
     pt_close(S);
 }
 
-static void test_edit_del_only(void) {
+TEST(edit_del_only) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -2404,7 +2810,7 @@ static void test_edit_del_only(void) {
     pt_close(S);
 }
 
-static void test_edit_type_sequence(void) {
+TEST(edit_type_sequence) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -2435,7 +2841,7 @@ static void test_edit_type_sequence(void) {
     pt_close(S);
 }
 
-static void test_edit_split_tree(void) {
+TEST(edit_split_tree) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -2464,7 +2870,7 @@ static void test_edit_split_tree(void) {
     pt_close(S);
 }
 
-static void test_edit_upmask(void) {
+TEST(edit_upmask) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b;
     pt_Cursor c;
@@ -2505,7 +2911,7 @@ static void test_edit_upmask(void) {
 
 /* ================= pt_commit tests ================= */
 
-static void test_commit_single_hole(void) {
+TEST(commit_single_hole) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -2531,7 +2937,7 @@ static void test_commit_single_hole(void) {
 
 /* E11: consecutive holes → adjacent literals frozen contiguously → merged
  * into a single literal slot */
-static void test_commit_merge(void) {
+TEST(commit_merge) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Buffer snap;
@@ -2565,7 +2971,7 @@ static void test_commit_merge(void) {
     pt_close(S);
 }
 
-static void test_commit_mixed(void) {
+TEST(commit_mixed) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Buffer snap;
@@ -2592,7 +2998,7 @@ static void test_commit_mixed(void) {
     pt_close(S);
 }
 
-static void test_commit_deep(void) {
+TEST(commit_deep) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer snap;
     pt_Cursor c;
@@ -2615,7 +3021,7 @@ static void test_commit_deep(void) {
 
 /* commit exactly fills the arena block: the full block must retire to
  * the full list so pt_scratch stays valid afterwards */
-static void test_commit_fillblock(void) {
+TEST(commit_fillblock) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Buffer snap;
@@ -2638,7 +3044,7 @@ static void test_commit_fillblock(void) {
 }
 
 /* E7: freeze copies holes into scratch, handles page transition */
-static void test_commit_freshpage(void) {
+TEST(commit_freshpage) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Cursor c;
     pt_Buffer b = pt_empty(S);
@@ -2660,7 +3066,7 @@ static void test_commit_freshpage(void) {
     pt_close(S);
 }
 
-static void test_commit_clean(void) {
+TEST(commit_clean) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Buffer snap;
@@ -2674,7 +3080,7 @@ static void test_commit_clean(void) {
     pt_close(S);
 }
 
-static void test_commit_then_reseek(void) {
+TEST(commit_then_reseek) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Buffer snap;
@@ -2692,7 +3098,7 @@ static void test_commit_then_reseek(void) {
 }
 
 /* E11/E12: bytes/levels unchanged by freeze (single hole, no merge) */
-static void test_commit_bytes_invariant(void) {
+TEST(commit_bytes_invariant) {
     pt_State      *S = pt_open(&test_alloc, NULL);
     pt_Buffer      b = pt_empty(S);
     pt_Buffer      snap;
@@ -2721,7 +3127,7 @@ static void test_commit_bytes_invariant(void) {
 
 /* multi-page reserve chain (levels=1, 3 leaves with holes); freeze merges
  * the whole run into one literal and collapses the tree */
-static void test_commit_reserve_pages(void) {
+TEST(commit_reserve_pages) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer snap;
     pt_Cursor c;
@@ -2752,7 +3158,7 @@ static void test_commit_reserve_pages(void) {
 }
 
 /* E12 all-or-nothing: reservescratch allocf fail → NULL, tree untouched */
-static void test_commit_reservebuf_oom(void) {
+TEST(commit_reservebuf_oom) {
     int       cnt = 10000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
     pt_Buffer b = pt_empty(S);
@@ -2782,7 +3188,7 @@ static void test_commit_reservebuf_oom(void) {
 }
 
 /* §8.3 full round-trip: edit series → commit → content matches reference */
-static void test_edit_commit_roundtrip(void) {
+TEST(edit_commit_roundtrip) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_from(S, "Hello World", 11);
     pt_Cursor c;
@@ -2811,7 +3217,7 @@ static void test_edit_commit_roundtrip(void) {
 }
 
 /* §8.3 commit then seek+edit (new transient), verify independent version */
-static void test_edit_commit_edit(void) {
+TEST(edit_commit_edit) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_from(S, "Hello", 5);
     pt_Cursor c;
@@ -2860,7 +3266,7 @@ static void test_edit_commit_edit(void) {
    tree, pt_edit to create holes, assert pt_checktree passes, then commit
    and verify all masks cleared. */
 
-static void test_commit_deep2(void) {
+TEST(commit_deep2) {
     /* levels>=2 tree with a hole under an inner node: exercises the
        descend (FALSE) branch of ptC_holebytes/ptC_freeze, and verifies
        ptM_upmask propagates the hole bit to the root (leaf->root). */
@@ -2911,7 +3317,7 @@ static void test_commit_deep2(void) {
 
 /* ================= frozen-into-arena verification ================= */
 
-static void test_commit_reserve_leftover(void) {
+TEST(commit_reserve_leftover) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Buffer snap;
@@ -2964,7 +3370,7 @@ static void test_commit_reserve_leftover(void) {
 
 /* ================= reservescratch multi-page OOM rollback ================= */
 
-static void test_commit_reservebuf_oom_multi(void) {
+TEST(commit_reservebuf_oom_multi) {
     int       cnt = 10000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
     pt_Buffer b = pt_empty(S);
@@ -2999,7 +3405,7 @@ static void test_commit_reservebuf_oom_multi(void) {
 /* freeze fold pulls the right sibling (with unfrozen holes) into the
  * underfull leaf; second fixpoint round freezes them and merges the
  * arena seam into one literal */
-static void test_commit_stitch_seam(void) {
+TEST(commit_stitch_seam) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer snap;
     pt_Cursor c;
@@ -3017,7 +3423,7 @@ static void test_commit_stitch_seam(void) {
 
 /* holes in the LAST leaf: after merge the underfull tail folds into its
  * left sibling (foldnode picks the left pair) and the root collapses */
-static void test_commit_seam_left(void) {
+TEST(commit_seam_left) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer snap;
     pt_Cursor c;
@@ -3035,7 +3441,7 @@ static void test_commit_seam_left(void) {
 
 /* OOM inside ptC_freeze node reserve: commit returns NULL, tree stays
  * legal and dirty, cursor position survives, retry succeeds */
-static void test_commit_freeze_oom(void) {
+TEST(commit_freeze_oom) {
     int       cnt = 1000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
     pt_Cursor c;
@@ -3064,7 +3470,7 @@ static void test_commit_freeze_oom(void) {
 
 /* ================= read interface tests ================= */
 
-static void test_read_params(void) {
+TEST(read_params) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_from(S, "hello", 5);
     pt_Cursor c;
@@ -3135,7 +3541,7 @@ static void test_read_params(void) {
     pt_close(S);
 }
 
-static void test_piece_positions(void) {
+TEST(piece_positions) {
     pt_State   *S = pt_open(&test_alloc, NULL);
     pt_Buffer   b = treeV(0, leafV(litV("hello"), litV("world"), litV("!!!")));
     pt_Cursor   c;
@@ -3177,7 +3583,7 @@ static void test_piece_positions(void) {
     pt_close(S);
 }
 
-static void test_next_basic(void) {
+TEST(next_basic) {
     pt_State   *S = pt_open(&test_alloc, NULL);
     pt_Buffer   b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));
     pt_Cursor   c;
@@ -3223,7 +3629,7 @@ static void test_next_basic(void) {
     pt_close(S);
 }
 
-static void test_prev_basic(void) {
+TEST(prev_basic) {
     pt_State   *S = pt_open(&test_alloc, NULL);
     pt_Buffer   b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));
     pt_Cursor   c;
@@ -3260,7 +3666,7 @@ static void test_prev_basic(void) {
 }
 
 /* Single piece tree — pt_next/pt_prev edges */
-static void test_trav_single(void) {
+TEST(trav_single) {
     pt_State   *S = pt_open(&test_alloc, NULL);
     pt_Buffer   b = treeV(0, leafV(litV("hello")));
     pt_Cursor   c;
@@ -3297,7 +3703,7 @@ static void test_trav_single(void) {
 }
 
 /* Levels=1 forward traversal — exercises walk-up-then-down in pt_next */
-static void test_next_levels1(void) {
+TEST(next_levels1) {
     pt_State   *S = pt_open(&test_alloc, NULL);
     pt_Buffer   b = pt_empty(S);
     pt_Cursor   c;
@@ -3332,7 +3738,7 @@ static void test_next_levels1(void) {
 }
 
 /* Levels=1 backward traversal */
-static void test_prev_levels1(void) {
+TEST(prev_levels1) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(
             1, innerV(leafV(litV("aa"), litV("bb")),
@@ -3361,7 +3767,7 @@ static void test_prev_levels1(void) {
     pt_close(S);
 }
 
-static void test_read_basic(void) {
+TEST(read_basic) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(0, leafV(litV("hello world")));
     pt_Cursor c;
@@ -3394,7 +3800,7 @@ static void test_read_basic(void) {
     pt_close(S);
 }
 
-static void test_read_cross(void) {
+TEST(read_cross) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(0, leafV(litV("aaaa"), litV("bbbb"), litV("cccc")));
     pt_Cursor c;
@@ -3423,7 +3829,7 @@ static void test_read_cross(void) {
     pt_close(S);
 }
 
-static void test_read_full(void) {
+TEST(read_full) {
     pt_State   *S = pt_open(&test_alloc, NULL);
     static char ref[128];
     pt_Buffer   b;
@@ -3443,7 +3849,7 @@ static void test_read_full(void) {
     pt_close(S);
 }
 
-static void test_read_empty(void) {
+TEST(read_empty) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -3469,7 +3875,7 @@ static void test_read_empty(void) {
     pt_close(S);
 }
 
-static void test_read_cursor_mid(void) {
+TEST(read_cursor_mid) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_from(S, "abcdefghij", 10);
     pt_Cursor c;
@@ -3492,7 +3898,7 @@ static void test_read_cursor_mid(void) {
     pt_close(S);
 }
 
-static void test_trav_deep(void) {
+TEST(trav_deep) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(
             2, innerV(innerV(leafV(litV("aa"), litV("bb")),
@@ -3583,7 +3989,7 @@ static void maketree(pt_State *S, pt_Cursor *C, size_t off) {
     C->dirty = 1;
 }
 
-static void test_splice_brute(void) {
+TEST(splice_brute) {
     int const nb = 288;
     pt_State *S = pt_open(&test_alloc, NULL);
     int       r, pos, del, ins;
@@ -3608,15 +4014,15 @@ static void test_splice_brute(void) {
                 assert(r == PT_OK);
 
                 if (!pt_checktree(C.tree)) {
-                    pt_log("FAIL pos=%d del=%d ins=%d\n", pos, del, ins);
+                    test_log("FAIL pos=%d del=%d ins=%d\n", pos, del, ins);
                     pt_dumptree(C.tree, "after splice");
                     pt_checktree(C.tree);
                     assert(0);
                 }
 
                 if (!pt_checkcursor(&C, cursor_exp)) {
-                    pt_log("splice pos=%d del=%d ins=%d off=%lu exp=%lu\n", pos,
-                           del, ins, pt_lu(pt_offset(&C)), pt_lu(cursor_exp));
+                    test_log("splice pos=%d del=%d ins=%d off=%lu exp=%lu\n", pos,
+                           del, ins, test_lu(pt_offset(&C)), test_lu(cursor_exp));
                     assert(0);
                 }
 
@@ -3635,9 +4041,9 @@ static void test_splice_brute(void) {
                 nread = pt_read(&C, actual, expect_len);
                 if (nread != expect_len
                     || memcmp(actual, expected, expect_len) != 0) {
-                    pt_log("splice pos=%d del=%d ins=%d content fail"
+                    test_log("splice pos=%d del=%d ins=%d content fail"
                            " nread=%lu exp=%lu\n",
-                           pos, del, ins, pt_lu(nread), pt_lu(expect_len));
+                           pos, del, ins, test_lu(nread), test_lu(expect_len));
                     assert(0);
                 }
 
@@ -3654,7 +4060,7 @@ static void test_splice_brute(void) {
 
 /* deep tree with holes in multiple inner children;
  * exercises ptC_holebytes k>0 path and ptC_freeze inner-node traversal */
-static void test_commit_deep_holes(void) {
+TEST(commit_deep_holes) {
     static char buf[300];
     pt_State   *S = pt_open(&test_alloc, NULL);
     pt_Buffer   b = pt_empty(S);
@@ -3685,7 +4091,7 @@ static void test_commit_deep_holes(void) {
 }
 
 /* read fewer bytes than a piece — exercises pt_read m<n partial-read branch */
-static void test_read_partial(void) {
+TEST(read_partial) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Buffer a;
@@ -3712,7 +4118,7 @@ static void test_read_partial(void) {
 
 /* pt_prev crossing a multi-level inner-node boundary:
  * cursor at first leaf of its parent triggers the while(--l>=0) ascent */
-static void test_prev_cross_level(void) {
+TEST(prev_cross_level) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b;
     pt_Buffer a;
@@ -3747,7 +4153,7 @@ static void test_prev_cross_level(void) {
 
 /* deep remove that forces ptD_findroom → ptD_makechain:
  * cutrange empties all right siblings so stitch must make a chain */
-static void test_remove_findroom_deep(void) {
+TEST(remove_findroom_deep) {
     pt_State *S = pt_open(&test_alloc, NULL);
     /* build a levels=3 tree with small pieces so remove can
      * create the findroom scenario */
@@ -3773,7 +4179,7 @@ static void test_remove_findroom_deep(void) {
 
 /* edit a committed deep tree so the COW path inside ptI_splitchild
  * (nd = ptK_cow) is exercised on a node k levels deep */
-static void test_edit_cow_splitchild(void) {
+TEST(edit_cow_splitchild) {
     static char buf[300];
     pt_State   *S = pt_open(&test_alloc, NULL);
     pt_Buffer   b = pt_empty(S);
@@ -3796,7 +4202,7 @@ static void test_edit_cow_splitchild(void) {
 }
 
 /* error-return paths for public API null / invalid parameters */
-static void test_error_paths(void) {
+TEST(error_paths) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -3920,7 +4326,7 @@ static void test_error_paths(void) {
 
 /* remove from a committed deep tree where L and R share root child;
  * exercises ptD_cowpaths inner loop (L1240) */
-static void test_remove_cow_deep(void) {
+TEST(remove_cow_deep) {
     static char buf[300];
     pt_State   *S = pt_open(&test_alloc, NULL);
     pt_Buffer   b = pt_empty(S);
@@ -3949,7 +4355,7 @@ static void test_remove_cow_deep(void) {
 
 /* remove mid-piece from a literal in a deeply full tree;
  * triggers ptD_rmleaf splitroot+splitchild path (L1221-1222) */
-static void test_remove_literal_mid_fulltree(void) {
+TEST(remove_literal_mid_fulltree) {
     pt_State *S = pt_open(&test_alloc, NULL);
     /* build tree where every node (root to leaf) is full (cc=PT_FANOUT) */
     pt_Buffer b = treeV(
@@ -3985,7 +4391,7 @@ static void test_remove_literal_mid_fulltree(void) {
 }
 
 /* cov: ptD_rmleaf mid-literal split in a completely full tree */
-static void test_remove_cov_midsplit(void) {
+TEST(remove_cov_midsplit) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b;
     pt_Cursor c;
@@ -4008,7 +4414,7 @@ static void test_remove_cov_midsplit(void) {
 /* stitch where right-side pieces were zeroed out: exercises
  * ptD_stitch zero-byte removal path (L1164) and the stitching
  * cursor adjustment (L1175) */
-static void test_remove_stitch_zero(void) {
+TEST(remove_stitch_zero) {
     pt_State *S = pt_open(&test_alloc, NULL);
     /* remove that creates empty tail pieces that get cleaned up */
     pt_Buffer b = treeV(
@@ -4025,7 +4431,7 @@ static void test_remove_stitch_zero(void) {
 }
 
 /* splice with del==0 and NULL s — triggers early return branch */
-static void test_splice_null_del0(void) {
+TEST(splice_null_del0) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
@@ -4039,7 +4445,7 @@ static void test_splice_null_del0(void) {
 /* build a buffer via pt_reserve+pt_literal+pt_append from empty;
  * within one arena block (PT_ARENA_SIZE=1024) all pieces must
  * merge into a single-node tree because literals are contiguous */
-static void test_literal_single_node(void) {
+TEST(literal_single_node) {
     static char data[1024];
     pt_State   *S = pt_open(&test_alloc, NULL);
     pt_Buffer   b = pt_empty(S);
@@ -4091,7 +4497,7 @@ static void test_literal_single_node(void) {
 }
 
 /* cov: parameter/NULL error branches */
-static void test_error_cov_params(void) {
+TEST(error_cov_params) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(0, leafV(litV("ab")));
     pt_Cursor c;
@@ -4145,7 +4551,7 @@ static void test_error_cov_params(void) {
 }
 
 /* cov: pt_reserve / pt_literal OOM branches */
-static void test_reserve_cov_oom(void) {
+TEST(reserve_cov_oom) {
     int       cnt = 1000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
     pt_Buffer b = pt_empty(S);
@@ -4167,7 +4573,7 @@ static void test_reserve_cov_oom(void) {
 }
 
 /* cov: node reserve OK but tree fork (markdirty) fails */
-static void test_fork_cov_oom(void) {
+TEST(fork_cov_oom) {
     int       cnt = 1000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
     pt_Buffer b;
@@ -4196,7 +4602,7 @@ static void test_fork_cov_oom(void) {
 }
 
 /* cov: pt_edit hole reserve fails after beginedit succeeds */
-static void test_edit_cov_holeoom(void) {
+TEST(edit_cov_holeoom) {
     int       cnt = 1000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
     pt_Buffer b = pt_empty(S);
@@ -4218,7 +4624,7 @@ static void test_edit_cov_holeoom(void) {
 /* cov: pt_edit prev-hole exists but full (ptH_fit false).
  * Use imperative construction to avoid COW double-free on shared leaf
  * children that occurs when a levels=0 treeV tree is forked. */
-static void test_edit_cov_prevfull(void) {
+TEST(edit_cov_prevfull) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b;
     pt_Cursor c;
@@ -4241,7 +4647,7 @@ static void test_edit_cov_prevfull(void) {
 
 /* ================= compact ================= */
 
-static void test_compact_params(void) {
+TEST(compact_params) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_State *S2 = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_from(S, "hello", 5);
@@ -4259,7 +4665,7 @@ static void test_compact_params(void) {
     pt_close(S2), pt_close(S);
 }
 
-static void test_compact_basic(void) {
+TEST(compact_basic) {
     static const char big[] = "0123456789ABCDEF";
     pt_State         *S = pt_open(&test_alloc, NULL);
     pt_Buffer         b0 = pt_from(S, big, 16), b1, nb;
@@ -4295,7 +4701,7 @@ static void test_compact_basic(void) {
     pt_close(S);
 }
 
-static void test_compact_merge(void) {
+TEST(compact_merge) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b1, b2, nb;
     pt_Cursor c;
@@ -4333,7 +4739,7 @@ static pt_Buffer compact_makewide(pt_State *S, const char *src, int np) {
     return pt_commit(&c);
 }
 
-static void test_compact_deep(void) {
+TEST(compact_deep) {
     static const char src[] = "a-b-c-d-e-f-g-h-i-j-k-l-m-n-o-p-";
     pt_State         *S = pt_open(&test_alloc, NULL);
     pt_Buffer         b = compact_makewide(S, src, 16), nb;
@@ -4353,7 +4759,7 @@ static void test_compact_deep(void) {
     pt_close(S);
 }
 
-static void test_compact_tail_balance(void) {
+TEST(compact_tail_balance) {
     static const char src[] = "a-b-c-d-e-f-";
     pt_State         *S = pt_open(&test_alloc, NULL);
     pt_Buffer         b = compact_makewide(S, src, 6), nb;
@@ -4371,7 +4777,7 @@ static void test_compact_tail_balance(void) {
     pt_close(S);
 }
 
-static void test_compact_chain(void) {
+TEST(compact_chain) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b1, b2, b3, nb;
     pt_Cursor c;
@@ -4403,7 +4809,7 @@ static void test_compact_chain(void) {
     pt_close(S);
 }
 
-static void test_compact_oom(void) {
+TEST(compact_oom) {
     int       cnt = 1000, k;
     pt_State *S = pt_open(&oom_alloc, &cnt);
     pt_Buffer b1, b2, b3, nb;
@@ -4440,7 +4846,7 @@ static void test_compact_oom(void) {
     pt_close(S);
 }
 
-static void test_compact_oom_makechain(void) {
+TEST(compact_oom_makechain) {
     static const char src[] = "a-b-c-d-e-f-g-h-i-j-k-l-m-n-o-p-";
     int               cnt = 1000;
     pt_State         *S = pt_open(&oom_alloc, &cnt);
@@ -4470,161 +4876,5 @@ static void test_compact_oom_makechain(void) {
     pt_close(S);
 }
 
-#define TESTS(X)                   \
-    X(advance_brute)               \
-    X(append_merge_left)           \
-    X(arena_dirty_break)           \
-    X(arena_lazy)                  \
-    X(arena_literal_cold)          \
-    X(arena_literal_params)        \
-    X(arena_reserve_full)          \
-    X(arena_reserve_reuse)         \
-    X(commit_bytes_invariant)      \
-    X(commit_clean)                \
-    X(commit_deep)                 \
-    X(commit_deep2)                \
-    X(commit_fillblock)            \
-    X(commit_freshpage)            \
-    X(commit_mixed)                \
-    X(commit_merge)                \
-    X(commit_reserve_leftover)     \
-    X(commit_reserve_pages)        \
-    X(commit_reservebuf_oom)       \
-    X(commit_reservebuf_oom_multi) \
-    X(commit_freeze_oom)           \
-    X(commit_stitch_seam)          \
-    X(commit_seam_left)            \
-    X(commit_single_hole)          \
-    X(commit_then_reseek)          \
-    X(compact_params)              \
-    X(compact_basic)               \
-    X(compact_merge)               \
-    X(compact_deep)                \
-    X(compact_tail_balance)        \
-    X(compact_chain)               \
-    X(compact_oom)                 \
-    X(compact_oom_makechain)       \
-    X(edit_append_full)            \
-    X(edit_append_tail)            \
-    X(edit_brute)                  \
-    X(edit_commit_edit)            \
-    X(edit_commit_roundtrip)       \
-    X(edit_cov_holeoom)            \
-    X(edit_cov_prevfull)           \
-    X(edit_cow)                    \
-    X(edit_del_only)               \
-    X(edit_del_then_ins)           \
-    X(edit_empty)                  \
-    X(edit_fresh_boundary)         \
-    X(edit_fresh_lit_mid)          \
-    X(edit_mid_fit)                \
-    X(edit_mid_split)              \
-    X(edit_oom)                    \
-    X(edit_params)                 \
-    X(edit_prev_hole)              \
-    X(edit_rollback)               \
-    X(edit_split_tree)             \
-    X(edit_type_sequence)          \
-    X(edit_upmask)                 \
-    X(fork_cov_oom)                \
-    X(from_basic)                  \
-    X(insert_after)                \
-    X(insert_basic)                \
-    X(insert_before)               \
-    X(insert_committed_split)      \
-    X(insert_cow)                  \
-    X(insert_deep)                 \
-    X(insert_locend)               \
-    X(insert_mid)                  \
-    X(insert_multiversion)         \
-    X(insert_oom_fork)             \
-    X(insert_oom_reserve)          \
-    X(insert_split_front)          \
-    X(insert_split_leaf)           \
-    X(insert_split_root)           \
-    X(insert_brute)                \
-    X(lifecycle)                   \
-    X(literal_arena_empty)         \
-    X(literal_arena_short)         \
-    X(merge_left)                  \
-    X(merge_right)                 \
-    X(next_basic)                  \
-    X(next_levels1)                \
-    X(null_params)                 \
-    X(peekscratch_adjacent)        \
-    X(peekscratch_params)          \
-    X(peekscratch_roundtrip)       \
-    X(piece_positions)             \
-    X(prev_basic)                  \
-    X(read_cursor_mid)             \
-    X(prev_levels1)                \
-    X(read_basic)                  \
-    X(read_cross)                  \
-    X(read_empty)                  \
-    X(read_full)                   \
-    X(read_params)                 \
-    X(release_order)               \
-    X(reserve_cov_oom)             \
-    X(remove_across_leaves)        \
-    X(remove_all)                  \
-    X(remove_brute)                \
-    X(remove_brute2)               \
-    X(remove_brute3)               \
-    X(remove_cov_midsplit)         \
-    X(remove_cow)                  \
-    X(remove_cross)                \
-    X(remove_deep_shrink)          \
-    X(remove_findroom)             \
-    X(remove_fold_balance)         \
-    X(remove_fold_balance2)        \
-    X(remove_fold_merge)           \
-    X(remove_foldnode)             \
-    X(remove_foldnode_balance)     \
-    X(remove_hole_boundary)        \
-    X(remove_hole_eraseleaf)       \
-    X(remove_hole_mid)             \
-    X(remove_hole_mixed)           \
-    X(remove_hole_trim)            \
-    X(remove_hole_whole)           \
-    X(remove_merge_hole_full)      \
-    X(remove_merge_hole_partial)   \
-    X(remove_merge_hole_split)     \
-    X(remove_merge_literal)        \
-    X(remove_oom)                  \
-    X(remove_params)               \
-    X(remove_piece_whole)          \
-    X(remove_release_order)        \
-    X(remove_same_mid)             \
-    X(remove_same_prefix)          \
-    X(remove_same_suffix)          \
-    X(remove_stitch_deep)          \
-    X(remove_stitch_full)          \
-    X(remove_stitch_overflow)      \
-    X(remove_to_end)               \
-    X(remove_trim_hole)            \
-    X(rollback)                    \
-    X(rollback_released_source)    \
-    X(seek_empty)                  \
-    X(splice_basic)                \
-    X(splice_del0)                 \
-    X(splice_brute)                \
-    X(splice_del0)                 \
-    X(splice_null)                 \
-    X(commit_deep_holes)           \
-    X(read_partial)                \
-    X(prev_cross_level)            \
-    X(remove_findroom_deep)        \
-    X(edit_cow_splitchild)         \
-    X(error_cov_params)            \
-    X(error_paths)                 \
-    X(remove_cow_deep)             \
-    X(remove_literal_mid_fulltree) \
-    X(remove_stitch_zero)          \
-    X(splice_null_del0)            \
-    X(literal_single_node)         \
-    X(trav_deep)                   \
-    X(trav_single)
 
-#define X(name) {#name, test_##name},
-PT_TEST_MAIN("piecetab tests")
-#undef X
+#include "piecetab_test_fanout4.gen.inc"

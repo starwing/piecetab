@@ -7,7 +7,7 @@
 #include "lc_tests.h"
 
 /* foldleaf cursor switch (dl>0, *ls==o, left->right) */
-static void test_foldleaf_cursor_switch(void) {
+TEST(foldleaf_cursor_switch) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -23,7 +23,7 @@ static void test_foldleaf_cursor_switch(void) {
 }
 
 /* Large tree scan test: foldnode cursor adjust via scan-built tree */
-static void test_foldnode_cursor_scan(void) {
+TEST(foldnode_cursor_scan) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -39,7 +39,7 @@ static void test_foldnode_cursor_scan(void) {
 }
 
 /* foldnode cursor right (dn>0, *ns==o, scan-built tree) */
-static void test_foldnode_cursor_right(void) {
+TEST(foldnode_cursor_right) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -56,7 +56,7 @@ static void test_foldnode_cursor_right(void) {
 }
 
 /* foldnode cursor left (dn<0, *ns!=o, scan-built tree) */
-static void test_foldnode_cursor_left(void) {
+TEST(foldnode_cursor_left) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
@@ -73,7 +73,7 @@ static void test_foldnode_cursor_left(void) {
 }
 
 /* foldnode cursor left (dn<0, *ns!=o, cacheV-built tree) */
-static void test_foldnode_cursor_left_cacheV(void) {
+TEST(foldnode_cursor_left_cacheV) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(
             S, 2,
@@ -93,7 +93,7 @@ static void test_foldnode_cursor_left_cacheV(void) {
 }
 
 /* foldnode cursor right (dn>0, *ns==o, cacheV-built tree) */
-static void test_foldnode_cursor_right_cacheV(void) {
+TEST(foldnode_cursor_right_cacheV) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(
             S, 2,
@@ -111,14 +111,5 @@ static void test_foldnode_cursor_right_cacheV(void) {
     lc_close(S);
 }
 
-#define TESTS(X)                   \
-    X(foldleaf_cursor_switch)      \
-    X(foldnode_cursor_scan)        \
-    X(foldnode_cursor_right)       \
-    X(foldnode_cursor_left)        \
-    X(foldnode_cursor_left_cacheV) \
-    X(foldnode_cursor_right_cacheV)
 
-#define X(name) {#name, test_##name},
-LC_TEST_MAIN("linecache large-fanout tests")
-#undef X
+#include "linecache_test_fanout8.gen.inc"

@@ -21,7 +21,8 @@ notes/plans/
 *.log
 lc_insert_demo
 tests/pt_bench.c
-tests/lc_test4
-tests/lc_test8
-tests/pt_test4
+tests/linecache_test_fanout4
+tests/linecache_test_fanout8
+tests/piecetab_test_fanout4
+tests/*.gen.inc
 tmp_*
