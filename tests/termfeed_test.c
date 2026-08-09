@@ -37,9 +37,10 @@ static const char *mock_reader(void *ud, size_t *plen) {
 }
 
 /* feed_byte: feed a single byte and call tf_readkey once */
-static int feed_byte(tf_State *S, tf_Key *key, char b) {
+static int feed_byte(tf_State *S, tf_Key *key, int b) {
     MockReader mr;
-    mr.data = &b, mr.len = 1, mr.called = 0;
+    char       cb = (char)b;
+    mr.data = &cb, mr.len = 1, mr.called = 0;
     tf_feed(S, mock_reader, &mr);
     return tf_readkey(S, key);
 }
@@ -2705,7 +2706,7 @@ TEST(replay_seq) {
     /* set up replay source with 3 bytes: 'a', 0x80, 'b' */
     S.replay = 3;
     S.buf[TF_MAX_BUFLEN - 3] = 'a';
-    S.buf[TF_MAX_BUFLEN - 2] = 0x80;
+    S.buf[TF_MAX_BUFLEN - 2] = (char)0x80;
     S.buf[TF_MAX_BUFLEN - 1] = 'b';
     S.buf_len = 0;
 

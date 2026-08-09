@@ -357,9 +357,9 @@ static int tfU_decode(char *out, const char *seq, int len) {
 }
 
 static int tfU_encode(char *out, int cp) {
-    static const int  bound[] = {0x80, 0x800, 0x10000, 0x110000};
-    static const char lead[] = {0x00, 0xC0, 0xE0, 0xF0};
-    int               i, len = 1;
+    static const int           bound[] = {0x80, 0x800, 0x10000, 0x110000};
+    static const unsigned char lead[] = {0x00, 0xC0, 0xE0, 0xF0};
+    int                        i, len = 1;
     if (cp >= 0x110000) cp = 0xFFFD;
     while (cp >= bound[len - 1]) ++len;
     for (i = len; i > 1; --i) out[i - 1] = (char)(0x80 | (cp & 0x3F)), cp >>= 6;
