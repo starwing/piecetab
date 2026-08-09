@@ -61,10 +61,10 @@ static int feed_seq(tf_State *S, tf_Key *key, const char *seq, size_t len) {
 TEST(lifecycle) {
     tf_State S;
     tf_init(&S, NULL, NULL);
-    assert(S.state == TF_STATE_IDLE);
-    assert(S.flags == 0);
-    assert(S.pending_mod == 0);
-    assert(S.buf_len == 0);
+    asserteq(S.state, TF_STATE_IDLE);
+    asserteq(S.flags, 0);
+    asserteq(S.pending_mod, 0);
+    asserteq(S.buf_len, 0);
     tf_free(&S);
 
     /* default allocator: alloc=NULL → uses realloc internally */
@@ -80,22 +80,21 @@ TEST(flags) {
     tf_State S;
     tf_init(&S, NULL, NULL);
     /* set (overwrite) returns previous flags */
-    assert(tf_setflag(&S, TF_FLAG_KEEPC0) == 0);
-    assert(tf_setflag(&S, TF_FLAG_KEEPC0 | TF_FLAG_DELBS) == TF_FLAG_KEEPC0);
-    assert(
-            tf_setflag(&S, TF_FLAG_CONVERTKP)
-            == (TF_FLAG_KEEPC0 | TF_FLAG_DELBS));
+    asserteq(tf_setflag(&S, TF_FLAG_KEEPC0), 0);
+    asserteq(tf_setflag(&S, TF_FLAG_KEEPC0 | TF_FLAG_DELBS), TF_FLAG_KEEPC0);
+    asserteq(
+            tf_setflag(&S, TF_FLAG_CONVERTKP),
+            (TF_FLAG_KEEPC0 | TF_FLAG_DELBS));
     /* clear one bit: read-modify-write via returned value */
     tf_setflag(&S, TF_FLAG_DELBS | TF_FLAG_CONVERTKP);
-    assert(
-            tf_setflag(&S, TF_FLAG_DELBS)
-            == (TF_FLAG_DELBS | TF_FLAG_CONVERTKP));
+    asserteq(
+            tf_setflag(&S, TF_FLAG_DELBS), (TF_FLAG_DELBS | TF_FLAG_CONVERTKP));
     /* clear all */
-    assert(tf_setflag(&S, 0) == TF_FLAG_DELBS);
+    asserteq(tf_setflag(&S, 0), TF_FLAG_DELBS);
 
     /* null checks */
-    assert(tf_setflag(NULL, 0) == 0);
-    assert(tf_setflag(NULL, TF_FLAG_DELBS) == 0);
+    asserteq(tf_setflag(NULL, 0), 0);
+    asserteq(tf_setflag(NULL, TF_FLAG_DELBS), 0);
 
     tf_free(&S);
 }
@@ -118,10 +117,10 @@ TEST(feed_params) {
     asserteq(r, TF_NONE);
 
     /* null params */
-    assert(tf_readkey(NULL, &key) == TF_ERRPARAM);
-    assert(tf_readkey(&S, NULL) == TF_ERRPARAM);
-    assert(tf_flush(NULL, &key) == TF_ERRPARAM);
-    assert(tf_flush(&S, NULL) == TF_ERRPARAM);
+    asserteq(tf_readkey(NULL, &key), TF_ERRPARAM);
+    asserteq(tf_readkey(&S, NULL), TF_ERRPARAM);
+    asserteq(tf_flush(NULL, &key), TF_ERRPARAM);
+    asserteq(tf_flush(&S, NULL), TF_ERRPARAM);
 
     /* feed always discards the old chunk (even mid-replay) */
     S.replay = 1;
@@ -131,7 +130,7 @@ TEST(feed_params) {
     S.n = 5;
     tf_feed(&S, NULL, 0);
     asserteq(S.n, 0);
-    assert(S.p == NULL);
+    asserteq(S.p, NULL);
 
     tf_free(&S);
 }
@@ -286,7 +285,7 @@ TEST(idle_keepc0) {
     int      r;
 
     tf_init(&S, NULL, NULL);
-    assert(tf_setflag(&S, TF_FLAG_KEEPC0) == 0);
+    asserteq(tf_setflag(&S, TF_FLAG_KEEPC0), 0);
 
     /* C0 bytes become UNICODE(byte); NUL is always Ctrl-Space (termkey compat)
      */
@@ -1534,9 +1533,9 @@ TEST(cs_osc) {
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_OSC);
     asserteq(key.event, TF_EVENT_PRESS);
-    assert(tf_string(&S, &len) != NULL);
+    assertok(tf_string(&S, &len) != NULL);
     asserteq(len, 7);
-    assert(memcmp(tf_string(&S, &len), "0;title", 7) == 0);
+    asserteq(memcmp(tf_string(&S, &len), "0;title", 7), 0);
     tf_free(&S);
 }
 
@@ -1550,9 +1549,9 @@ TEST(cs_st) {
     r = feed_seq(&S, &key, "\x1b]test\x9c", 8);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_OSC);
-    assert(tf_string(&S, &len) != NULL);
+    assertok(tf_string(&S, &len) != NULL);
     asserteq(len, 4);
-    assert(memcmp(tf_string(&S, &len), "test", 4) == 0);
+    asserteq(memcmp(tf_string(&S, &len), "test", 4), 0);
     tf_free(&S);
 
     /* ST via ESC+\ */
@@ -1560,10 +1559,10 @@ TEST(cs_st) {
     r = feed_seq(&S, &key, "\x1b]ab\x1b\x5c", 7);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_OSC);
-    assert(tf_string(&S, &len) != NULL);
+    assertok(tf_string(&S, &len) != NULL);
     /* content "ab": trailing \x1b of ESC+\ removed, '\' not yet buffered */
     asserteq(len, 2);
-    assert(memcmp(tf_string(&S, &len), "ab", 2) == 0);
+    asserteq(memcmp(tf_string(&S, &len), "ab", 2), 0);
 
     /* ESC content inside OSC: \x1b]abc\x1b\ → content "abc" */
     /* The \x1b before \ is appended, then ST detection removes it. */
@@ -1571,9 +1570,9 @@ TEST(cs_st) {
     tf_init(&S, NULL, NULL);
     r = feed_seq(&S, &key, "\x1b]abc\x1b\x5c", 8);
     asserteq(r, TF_OK);
-    assert(tf_string(&S, &len) != NULL);
+    assertok(tf_string(&S, &len) != NULL);
     asserteq(len, 3);
-    assert(memcmp(tf_string(&S, &len), "abc", 3) == 0);
+    asserteq(memcmp(tf_string(&S, &len), "abc", 3), 0);
     tf_free(&S);
 
     /* content is exactly ESC: \x1b]\x1b\ → empty OSC (cs_len drops to 0) */
@@ -1581,7 +1580,7 @@ TEST(cs_st) {
     r = feed_seq(&S, &key, "\x1b]\x1b\x5c", 4);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_OSC);
-    assert(tf_string(&S, &len) != NULL);
+    assertok(tf_string(&S, &len) != NULL);
     asserteq(len, 0);
     tf_free(&S);
 }
@@ -1596,9 +1595,9 @@ TEST(cs_dcs_apc) {
     r = feed_seq(&S, &key, "\x1bP+qok\x07", 7);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_DCS);
-    assert(tf_string(&S, &len) != NULL);
+    assertok(tf_string(&S, &len) != NULL);
     asserteq(len, 4);
-    assert(memcmp(tf_string(&S, &len), "+qok", 4) == 0);
+    asserteq(memcmp(tf_string(&S, &len), "+qok", 4), 0);
     tf_free(&S);
 
     /* APC \x1b_title\a */
@@ -1606,9 +1605,9 @@ TEST(cs_dcs_apc) {
     r = feed_seq(&S, &key, "\x1b_title\x07", 8);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_APC);
-    assert(tf_string(&S, &len) != NULL);
+    assertok(tf_string(&S, &len) != NULL);
     asserteq(len, 5);
-    assert(memcmp(tf_string(&S, &len), "title", 5) == 0);
+    asserteq(memcmp(tf_string(&S, &len), "title", 5), 0);
     tf_free(&S);
 }
 
@@ -1638,9 +1637,9 @@ TEST(cs_cross) {
     r = feed_byte(&S, &key, 0x07);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_OSC);
-    assert(tf_string(&S, &len) != NULL);
+    assertok(tf_string(&S, &len) != NULL);
     asserteq(len, 2);
-    assert(memcmp(tf_string(&S, &len), "xy", 2) == 0);
+    asserteq(memcmp(tf_string(&S, &len), "xy", 2), 0);
     tf_free(&S);
 }
 
@@ -1660,7 +1659,7 @@ TEST(cs_alt) {
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_OSC);
     asserteq(key.modifiers, TF_MOD_ALT);
-    assert(S.pending_mod == 0);
+    asserteq(S.pending_mod, 0);
     tf_free(&S);
 }
 
@@ -1696,20 +1695,20 @@ TEST(cs_params) {
     tf_init(&S, NULL, NULL);
 
     /* tf_string with NULL/params - no CS key */
-    assert(tf_string(&S, &len) == NULL);
+    asserteq(tf_string(&S, &len), NULL);
     asserteq(len, 0);
 
     /* plen may be NULL */
-    assert(tf_string(&S, NULL) == NULL);
-    assert(tf_string(NULL, NULL) == NULL);
+    asserteq(tf_string(&S, NULL), NULL);
+    asserteq(tf_string(NULL, NULL), NULL);
 
     /* plen == NULL with CS content: returns buffer, skips plen */
-    assert(tf_string(NULL, &len) == NULL);
+    asserteq(tf_string(NULL, &len), NULL);
     tf_free(&S);
 
     tf_init(&S, NULL, NULL);
-    assert(feed_seq(&S, &key, "\x1b]test\x07", 8) == TF_OK);
-    assert(tf_string(&S, NULL) != NULL);
+    asserteq(feed_seq(&S, &key, "\x1b]test\x07", 8), TF_OK);
+    assertok(tf_string(&S, NULL) != NULL);
     tf_free(&S);
 }
 
@@ -1987,7 +1986,7 @@ TEST(cs_expand) {
     r = feed_byte(&S, &key, 0x07);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_OSC);
-    assert(tf_string(&S, &len) != NULL);
+    assertok(tf_string(&S, &len) != NULL);
     asserteq(len, 128);
     tf_free(&S);
 
@@ -2002,7 +2001,7 @@ TEST(cs_expand) {
         r = feed_seq(&S, &key, big, 303);
         asserteq(r, TF_OK);
         asserteq(key.type, TF_TYPE_OSC);
-        assert(tf_string(&S, &len) != NULL);
+        assertok(tf_string(&S, &len) != NULL);
         asserteq(len, 300);
         tf_free(&S);
     }
@@ -2012,7 +2011,7 @@ TEST(cs_expand) {
     r = feed_seq(&S, &key, "\x1b]a\\b\x07", 6);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_OSC);
-    assert(tf_string(&S, &len) != NULL);
+    assertok(tf_string(&S, &len) != NULL);
     asserteq(len, 3);
     assertstreq(tf_string(&S, NULL), "a\\b");
     tf_free(&S);
@@ -2022,7 +2021,7 @@ TEST(cs_expand) {
     r = feed_seq(&S, &key, "\x1b]\\x\x07", 5);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_OSC);
-    assert(tf_string(&S, &len) != NULL);
+    assertok(tf_string(&S, &len) != NULL);
     asserteq(len, 2);
     assertstreq(tf_string(&S, NULL), "\\x");
     tf_free(&S);
@@ -2894,7 +2893,7 @@ TEST(trie_allocfree) {
     TILookup tbl[] = {{"key_home", "\x1bOH"}, {NULL, NULL}};
     tf_init(&S, test_alloc, NULL);
     tf_load(&S, ti_lookup, tbl);
-    assert(S.root != NULL);
+    assertok(S.root != NULL);
     tf_free(&S); /* frees trie via test_alloc */
 }
 
@@ -2909,7 +2908,7 @@ TEST(trie_reload) {
     tf_init(&S, count_alloc, &c);
     tf_load(&S, ti_lookup, tbl);
     tf_load(&S, ti_lookup, tbl);
-    assert(c.live > 0);
+    assertok(c.live > 0);
     tf_free(&S);
     asserteq(c.live, 0); /* leaked trie nodes keep live > 0 */
     /* reloaded trie still matches */
@@ -3045,7 +3044,7 @@ TEST(canon_convertkp) {
 /* ─── Phase 8: sym name table ─── */
 
 TEST(symname_basic) {
-    assert(tf_name((int)TF_SYM_NONE) == NULL);
+    asserteq(tf_name((int)TF_SYM_NONE), NULL);
 
     assertstreq(tf_name((int)TF_SYM_BACKSPACE), "Backspace");
     assertstreq(tf_name((int)TF_SYM_TAB), "Tab");
@@ -3113,9 +3112,9 @@ TEST(symname_kp) {
 
 TEST(symname_oob) {
     /* out of bounds → NULL */
-    assert(tf_name(-1) == NULL);
-    assert(tf_name(TF_SYM_COUNT) == NULL);
-    assert(tf_name(9999) == NULL);
+    asserteq(tf_name(-1), NULL);
+    asserteq(tf_name(TF_SYM_COUNT), NULL);
+    asserteq(tf_name(9999), NULL);
 }
 
 TEST(sym_lookup) {
@@ -3156,7 +3155,7 @@ TEST(sym_roundtrip) {
     /* all syms except NONE round-trip */
     for (i = (int)TF_SYM_BACKSPACE; i < TF_SYM_COUNT; i++) {
         const char *name = tf_name(i);
-        assert(name != NULL);
+        assertok(name != NULL);
         asserteq(tf_sym(name), i);
     }
 }
@@ -3680,7 +3679,7 @@ TEST(parse_roundtrip) {
     k1.modifiers = TF_MOD_CTRL;
     n = tf_format(buf, sizeof(buf), &k1, TF_FMT_WRAPBRACKET);
     n = tf_parse(buf, &k2);
-    assert(n > 0);
+    assertok(n > 0);
     asserteq(k2.type, k1.type);
     asserteq(k2.d.codepoint, k1.d.codepoint);
     asserteq(k2.modifiers, k1.modifiers);
@@ -3691,7 +3690,7 @@ TEST(parse_roundtrip) {
     k1.d.sym = TF_SYM_ESCAPE;
     n = tf_format(buf, sizeof(buf), &k1, TF_FMT_WRAPBRACKET);
     n = tf_parse(buf, &k2);
-    assert(n > 0);
+    assertok(n > 0);
     asserteq(k2.type, k1.type);
     asserteq((long)k2.d.sym, (long)k1.d.sym);
 
@@ -3701,7 +3700,7 @@ TEST(parse_roundtrip) {
     k1.d.number = 1;
     n = tf_format(buf, sizeof(buf), &k1, TF_FMT_WRAPBRACKET);
     n = tf_parse(buf, &k2);
-    assert(n > 0);
+    assertok(n > 0);
     asserteq(k2.type, k1.type);
     asserteq(k2.d.number, k1.d.number);
 
@@ -3712,7 +3711,7 @@ TEST(parse_roundtrip) {
     k1.modifiers = TF_MOD_SUPER | TF_MOD_SHIFT;
     n = tf_format(buf, sizeof(buf), &k1, TF_FMT_WRAPBRACKET);
     n = tf_parse(buf, &k2);
-    assert(n > 0);
+    assertok(n > 0);
     asserteq(k2.type, k1.type);
     asserteq(k2.d.number, k1.d.number);
     asserteq(k2.modifiers, k1.modifiers);
@@ -3816,7 +3815,7 @@ TEST(kitty_text) {
     {
         const char *s = tf_string(&S, &slen);
         asserteq(slen, 1);
-        assert(memcmp(s, "A", 1) == 0);
+        asserteq(memcmp(s, "A", 1), 0);
     }
     tf_free(&S);
 }
@@ -3834,7 +3833,7 @@ TEST(kitty_text_multi) {
     {
         const char *s = tf_string(&S, &slen);
         asserteq(slen, 2);
-        assert(memcmp(s, "cd", 2) == 0);
+        asserteq(memcmp(s, "cd", 2), 0);
     }
     tf_free(&S);
 }
@@ -3988,7 +3987,8 @@ TEST(kitty_text_long) {
     asserteq(key.modifiers, TF_MOD_SHIFT);
     {
         const char *s = tf_string(&S, &slen);
-        assert(s != NULL && slen == 15);
+        assertok(s != NULL);
+        asserteq(slen, 15);
     }
     tf_free(&S);
 }
@@ -4918,7 +4918,7 @@ TEST(feed_replay_clear) {
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, '[');
     asserteq(key.modifiers, TF_MOD_ALT);
-    assert(S.replay > 0);
+    assertok(S.replay > 0);
     /* new reader mid-replay: old chunk remainder must be discarded */
     mr.data = "B", mr.len = 1, mr.called = 0;
     tf_feed(&S, mock_reader, &mr);
@@ -4969,11 +4969,11 @@ TEST(parse_fspace) {
     tf_Key key;
     int    n;
     n = tf_parse("<F 1>", &key);
-    assert(n > 0); /* pre-fix: -1 */
+    assertok(n > 0); /* pre-fix: -1 */
     asserteq(key.type, TF_TYPE_FUNCTION);
     asserteq(key.d.number, 1);
     n = tf_parse("<f 12>", &key);
-    assert(n > 0);
+    assertok(n > 0);
     asserteq(key.d.number, 12);
     /* no digits after F: single char falls back to codepoint, space fails */
     n = tf_parse("<F>", &key);
@@ -5043,7 +5043,7 @@ TEST(cs_bytexpand) {
     r = feed_byte(&S, &key, 0x07);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_OSC);
-    assert(tf_string(&S, &len) != NULL);
+    assertok(tf_string(&S, &len) != NULL);
     asserteq(len, 200);
     tf_free(&S);
 }
@@ -5300,11 +5300,11 @@ TEST(nextarg_edge) {
 
     /* fields: "1", "2:3" (final not included), then none */
     f = NULL;
-    assert(tfC_nextarg(&S, &f, &len));
+    assertok(tfC_nextarg(&S, &f, &len));
     asserteq(len, 1);
-    assert(tfC_nextarg(&S, &f, &len));
+    assertok(tfC_nextarg(&S, &f, &len));
     asserteq(len, 3);
-    assert(!tfC_nextarg(&S, &f, &len));
+    assertok(!tfC_nextarg(&S, &f, &len));
 
     /* subval: present / absent / empty sub */
     asserteq(tfC_subval("2:3x", 4, -1), 3);
@@ -5315,18 +5315,18 @@ TEST(nextarg_edge) {
     r = feed_seq(&S, &key, "\x1b[;1x", 5);
     asserteq(r, TF_OK);
     f = NULL;
-    assert(tfC_nextarg(&S, &f, &len));
+    assertok(tfC_nextarg(&S, &f, &len));
     asserteq(len, 0); /* empty field */
-    assert(tfC_nextarg(&S, &f, &len));
+    assertok(tfC_nextarg(&S, &f, &len));
     asserteq(len, 1); /* "1" */
 
     /* intermediate byte truncates: "$" */
     r = feed_seq(&S, &key, "\x1b[1$y", 5);
     asserteq(r, TF_OK);
     f = NULL;
-    assert(tfC_nextarg(&S, &f, &len));
+    assertok(tfC_nextarg(&S, &f, &len));
     asserteq(len, 1);
-    assert(!tfC_nextarg(&S, &f, &len));
+    assertok(!tfC_nextarg(&S, &f, &len));
 
     /* intermediate right after ';': field 2 absent (not empty) */
     r = feed_seq(&S, &key, "\x1b[1;$y", 6);
@@ -5335,15 +5335,15 @@ TEST(nextarg_edge) {
     asserteq(key.d.modereport.mode, 1);
     asserteq(key.d.modereport.value, -1);
     f = NULL;
-    assert(tfC_nextarg(&S, &f, &len));
+    assertok(tfC_nextarg(&S, &f, &len));
     asserteq(len, 1);
-    assert(!tfC_nextarg(&S, &f, &len));
+    assertok(!tfC_nextarg(&S, &f, &len));
 
     /* initial '?' skipped */
     r = feed_seq(&S, &key, "\x1b[?25x", 6);
     asserteq(r, TF_OK);
     f = NULL;
-    assert(tfC_nextarg(&S, &f, &len));
+    assertok(tfC_nextarg(&S, &f, &len));
     asserteq(len, 2); /* "25" */
     asserteq(tfC_fieldval(f, len, 0), 25);
 
@@ -5351,7 +5351,7 @@ TEST(nextarg_edge) {
     r = feed_seq(&S, &key, "\x1b[\x01x", 4);
     asserteq(r, TF_OK);
     f = NULL;
-    assert(tfC_nextarg(&S, &f, &len));
+    assertok(tfC_nextarg(&S, &f, &len));
     asserteq(tfC_fieldval(f, len, 0), 0); /* no digits → dflt */
 
     /* intermediate first byte: field NULL → handler dflt paths */
@@ -5375,7 +5375,7 @@ TEST(nextarg_edge) {
     /* empty params → no fields */
     S.buf_len = 0;
     f = NULL;
-    assert(!tfC_nextarg(&S, &f, &len));
+    assertok(!tfC_nextarg(&S, &f, &len));
 
     tf_free(&S);
 }
@@ -5587,6 +5587,5 @@ TEST(mouse_x10_raw) {
     asserteq(key.type, TF_TYPE_MOUSE);
     tf_free(&S);
 }
-
 
 #include "termfeed_test.gen.inc"

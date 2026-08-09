@@ -15,6 +15,7 @@
 
 #include <assert.h>
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,32 +31,44 @@
 /* TEST(name) — define a test function: static void test_##name(void) */
 #define TEST(name) static void test_##name(void)
 
-/* asserteq — abort if (a) != (b), as long */
-#define asserteq(a, b)                                                       \
-    do {                                                                     \
-        long _a = (long)(a), _b = (long)(b);                                 \
-        if (_a != _b) {                                                      \
-            test_log("FAIL %s:%d: %s == %ld, expected %ld\n", __FILE__,      \
-                     __LINE__, #a, _a, _b);                                  \
-            abort();                                                         \
-        }                                                                    \
+/* asserteq — abort if (a) != (b); ptrdiff_t holds pointer values whole,
+ * unlike long (32-bit on LLP64 MSVC, which truncates and warns C4311) */
+#define asserteq(a, b)                                                 \
+    do {                                                               \
+        ptrdiff_t _a = (ptrdiff_t)(a), _b = (ptrdiff_t)(b);            \
+        if (_a != _b) {                                                \
+            test_log(                                                  \
+                    "FAIL %s:%d: %s == %ld, expected %ld\n", __FILE__, \
+                    __LINE__, #a, (long)_a, (long)_b);                 \
+            abort();                                                   \
+        }                                                              \
+    } while (0)
+
+/* assertok — abort if (e) is false */
+#define assertok(e)                                               \
+    do {                                                          \
+        if (!(e)) {                                               \
+            test_log("FAIL %s:%d: %s\n", __FILE__, __LINE__, #e); \
+            abort();                                              \
+        }                                                         \
     } while (0)
 
 /* assertstreq — abort if strcmp(a, b) != 0 */
-#define assertstreq(a, b)                                                    \
-    do {                                                                     \
-        const char *_sa = (a), *_sb = (b);                                   \
-        if (strcmp(_sa, _sb) != 0) {                                         \
-            test_log("FAIL %s:%d: '%s' != '%s'\n", __FILE__, __LINE__, _sa,  \
-                     _sb);                                                   \
-            abort();                                                         \
-        }                                                                    \
+#define assertstreq(a, b)                                                  \
+    do {                                                                   \
+        const char *_sa = (a), *_sb = (b);                                 \
+        if (strcmp(_sa, _sb) != 0) {                                       \
+            test_log(                                                      \
+                    "FAIL %s:%d: '%s' != '%s'\n", __FILE__, __LINE__, _sa, \
+                    _sb);                                                  \
+            abort();                                                       \
+        }                                                                  \
     } while (0)
 
 /* check — for invariant-checker helpers: log and return 0 on failure */
-#define check(e, ...)                                                        \
-    do {                                                                     \
-        if (!(e)) return test_log(__VA_ARGS__), 0;                           \
+#define check(e, ...)                              \
+    do {                                           \
+        if (!(e)) return test_log(__VA_ARGS__), 0; \
     } while (0)
 
 /* ---- allocators ---- */
@@ -111,8 +124,8 @@ typedef struct {
     int  oom;
 } OomCount;
 
-TEST_STATIC void *oomcount_alloc(void *ud, void *ptr, size_t osize,
-                                 size_t nsize) {
+TEST_STATIC void *oomcount_alloc(
+        void *ud, void *ptr, size_t osize, size_t nsize) {
     OomCount *c = (OomCount *)ud;
     if (nsize == 0) return c->live -= (long)osize, free(ptr), NULL;
     if (c->oom <= 0) return NULL;
@@ -131,8 +144,8 @@ typedef struct {
 } test_entry;
 
 /* test_run — no args: run all; args: prefix match, '@' = first only */
-int test_run(const char *banner, const test_entry *entries, int argc,
-             char *argv[]) {
+int test_run(
+        const char *banner, const test_entry *entries, int argc, char *argv[]) {
     int i, j;
     test_log("=== %s ===\n", banner);
     if (argc == 1) {

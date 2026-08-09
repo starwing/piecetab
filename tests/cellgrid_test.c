@@ -3,6 +3,7 @@
 # define CG_IMPLEMENTATION
 #endif
 #include "cellgrid.h"
+
 #include "tests.h"
 
 /* ================================================================== */
@@ -58,10 +59,10 @@ void cg_initdebug(cg_DebugDiff *d, char *buf, size_t *plen) {
     d->buf = buf, d->plen = plen;
     *buf = '\0';
     d->base.scroll = dbg_scroll;
-    d->base.move   = dbg_move;
-    d->base.style  = dbg_style;
-    d->base.fill   = dbg_fill;
-    d->base.put    = dbg_put;
+    d->base.move = dbg_move;
+    d->base.style = dbg_style;
+    d->base.fill = dbg_fill;
+    d->base.put = dbg_put;
     d->base.finish = dbg_finish;
 }
 
@@ -72,9 +73,10 @@ static void assert_diff(cg_Grid *G, const char *expected) {
     cg_initdebug(&d, buf, &len);
     asserteq(cg_diff(G, &d.base), CG_OK);
     if (strcmp(buf, expected) != 0)
-        test_log("diff mismatch:\n  got:      %s\n  expected: %s\n", buf,
-               expected);
-    assert(strcmp(buf, expected) == 0);
+        test_log(
+                "diff mismatch:\n  got:      %s\n  expected: %s\n", buf,
+                expected);
+    assertstreq(buf, expected);
 }
 
 /* ================================================================== */
@@ -131,12 +133,10 @@ TEST(begin_zero) {
     cg_free(&g);
 }
 
-TEST(begin_null) {
-    asserteq(cg_begin(NULL, 0, 2, 3), CG_ERRPARAM);
-}
+TEST(begin_null) { asserteq(cg_begin(NULL, 0, 2, 3), CG_ERRPARAM); }
 
 TEST(begin_oom_init) {
-    int      cnt = 0;
+    int     cnt = 0;
     cg_Grid g, *gp = &g;
     cg_init(&g, oom_alloc, &cnt);
     asserteq(cg_begin(&g, 0, 2, 3), CG_ERRMEM);
@@ -145,7 +145,7 @@ TEST(begin_oom_init) {
 }
 
 TEST(begin_oom_resize) {
-    int      cnt = 0;
+    int     cnt = 0;
     cg_Grid g, *gp = &g;
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 2, 3);
@@ -453,8 +453,8 @@ TEST(putline_ascii) {
     asserteq(cg_putline(&g, 0, 0, "ab", 1), 2);
     asserteq(cg_cell(&g, 0, 0, NULL), 'a');
     asserteq(cg_cell(&g, 0, 1, NULL), 'b');
-    assert_diff(&g,
-        "[M 0 0][T 1][P 'a'][M 0 1][P 'b'][M 0 2][T 0][F 4 0x20][F]");
+    assert_diff(
+            &g, "[M 0 0][T 1][P 'a'][M 0 1][P 'b'][M 0 2][T 0][F 4 0x20][F]");
     cg_free(&g);
 }
 
@@ -466,13 +466,12 @@ TEST(putline_wide) {
     asserteq(cg_putline(&g, 0, 0, "\xe4\xb8\xad", 1), 2);
     asserteq(cg_cell(&g, 0, 0, NULL), 0x4e2d);
     asserteq(cg_cell(&g, 0, 1, NULL), -1);
-    assert_diff(&g,
-        "[M 0 0][T 1][P 0x4e2d][M 0 2][T 0][F 4 0x20][F]");
+    assert_diff(&g, "[M 0 0][T 1][P 0x4e2d][M 0 2][T 0][F 4 0x20][F]");
     cg_free(&g);
 }
 
 TEST(putline_params) {
-    char     buf[4];
+    char    buf[4];
     cg_Grid g, *gp = NULL;
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 2, 4);
@@ -503,8 +502,8 @@ TEST(putline_skip) {
     asserteq(cg_putline(&g, 0, 0, buf, 1), 1);
     asserteq(cg_cell(&g, 0, 0, NULL), 'X');
     asserteq(cg_cell(&g, 0, 1, NULL), 0x20);
-    assert_diff(&g,
-        "[M 0 0][T 1][P 'X'][M 0 1][T 0][P 0x20][P 0x20][P 0x20][F]");
+    assert_diff(
+            &g, "[M 0 0][T 1][P 'X'][M 0 1][T 0][P 0x20][P 0x20][P 0x20][F]");
     cg_free(&g);
 }
 
@@ -516,8 +515,7 @@ TEST(putline_2byte) {
     asserteq(cg_putline(&g, 0, 0, "\xc3\x80", 1), 2);
     asserteq(cg_cell(&g, 0, 0, NULL), 0xc0);
     asserteq(cg_cell(&g, 0, 1, NULL), -1);
-    assert_diff(&g,
-        "[M 0 0][T 1][P 0xc0][M 0 2][T 0][P 0x20][P 0x20][F]");
+    assert_diff(&g, "[M 0 0][T 1][P 0xc0][M 0 2][T 0][P 0x20][P 0x20][F]");
     cg_free(&g);
 }
 
@@ -529,8 +527,7 @@ TEST(putline_4byte) {
     asserteq(cg_putline(&g, 0, 0, "\xf0\x90\x80\x80", 1), 2);
     asserteq(cg_cell(&g, 0, 0, NULL), 0x10000);
     asserteq(cg_cell(&g, 0, 1, NULL), -1);
-    assert_diff(&g,
-        "[M 0 0][T 1][P 0x10000][M 0 2][T 0][P 0x20][P 0x20][F]");
+    assert_diff(&g, "[M 0 0][T 1][P 0x10000][M 0 2][T 0][P 0x20][P 0x20][F]");
     cg_free(&g);
 }
 
@@ -541,8 +538,7 @@ TEST(diff_wide_nocont) {
     cg_setwcwidth(&g, cw_double, NULL);
     cg_put(&g, 0, 0, 0x4e2d, 1);
     /* continuation cell (0,1) must NOT appear in diff */
-    assert_diff(&g,
-        "[M 0 0][T 1][P 0x4e2d][M 0 2][T 0][P 0x20][P 0x20][F]");
+    assert_diff(&g, "[M 0 0][T 1][P 0x4e2d][M 0 2][T 0][P 0x20][P 0x20][F]");
     cg_free(&g);
 }
 
@@ -583,7 +579,7 @@ TEST(getter_cell) {
 
 TEST(getter_back) {
     unsigned st;
-    cg_Grid g;
+    cg_Grid  g;
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 2, 3);
     asserteq(cg_back(&g, 0, 0, &st), ' ');
@@ -622,9 +618,7 @@ TEST(dirty_track) {
     cg_free(&g);
 }
 
-TEST(freeze_null) {
-    cg_freeze(NULL);
-}
+TEST(freeze_null) { cg_freeze(NULL); }
 
 TEST(freeze_empty) {
     cg_Grid g;
@@ -773,7 +767,8 @@ TEST(diff_scroll_expose_sd) {
     cg_putline(&g, 0, 0, " 865", 0);
     cg_putline(&g, 1, 0, " 866", 0);
     cg_putline(&g, 2, 0, " 867", 0);
-    assert_diff(&g,
+    assert_diff(
+            &g,
             "[S 1 3 1]"
             "[M 0 0][P 0x20][M 0 1][P '8'][M 0 2][P '6'][M 0 3][P '5']"
             "[F]");
@@ -795,7 +790,8 @@ TEST(diff_scroll_expose_su) {
     cg_putline(&g, 0, 0, " 866", 0);
     cg_putline(&g, 1, 0, " 867", 0);
     cg_putline(&g, 2, 0, " 868", 0);
-    assert_diff(&g,
+    assert_diff(
+            &g,
             "[S 1 3 -1]"
             "[M 2 0][P 0x20][M 2 1][P '8'][M 2 2][P '6'][M 2 3][P '8']"
             "[F]");
@@ -838,8 +834,10 @@ TEST(diff_clear_dirty) {
     cg_freeze(&g);
     cg_clear(&g);
     cg_begin(&g, 0, 2, 3);
-    assert_diff(&g, "[M 0 0][P 0x20][P 0x20][P 0x20]"
-                     "[M 1 0][P 0x20][P 0x20][P 0x20][F]");
+    assert_diff(
+            &g,
+            "[M 0 0][P 0x20][P 0x20][P 0x20]"
+            "[M 1 0][P 0x20][P 0x20][P 0x20][F]");
     cg_free(&g);
 }
 

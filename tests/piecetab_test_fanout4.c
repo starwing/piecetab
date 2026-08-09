@@ -17,7 +17,7 @@ PT_STATIC void pt_localfill(pt_Pool *pool, void **op, void *buf, size_t count) {
     size_t i;
     size_t sz = pool->obj_size;
     char  *base = (char *)buf;
-    assert(count > 0 && sz > sizeof(void *));
+    assertok(count > 0 && sz > sizeof(void *));
     *op = pool->freed;
     for (i = 1; i < count; ++i)
         *(void **)(base + (i - 1) * sz) = (void *)(base + i * sz);
@@ -56,44 +56,37 @@ PT_STATIC void pt_refillpool(pt_Pool *p, pt_Drain d) {
 
 PT_STATIC int pt_checknode(const pt_Node *n, int rl, int mc, int *has_hole) {
     int i, hh;
-    check(
-            n->child_count >= mc, "[chk] N[%p] rl=%d cc=%d<%d\n", (void *)n, rl,
-            n->child_count, mc);
-    check(
-            n->child_count <= PT_FANOUT, "[chk] N[%p] rl=%d cc=%d>%d\n",
-            (void *)n, rl, n->child_count, PT_FANOUT);
+    check(n->child_count >= mc, "[chk] N[%p] rl=%d cc=%d<%d\n", (void *)n, rl,
+          n->child_count, mc);
+    check(n->child_count <= PT_FANOUT, "[chk] N[%p] rl=%d cc=%d>%d\n",
+          (void *)n, rl, n->child_count, PT_FANOUT);
     *has_hole = 0;
     for (i = 0; i < n->child_count; ++i) {
         if (rl == 0) {
             if (ptM_ishole(n, i)) {
-                check(
-                        n->bytes[i] > 0 && n->bytes[i] <= PT_MAX_HOLESIZE,
-                        "[chk] HOLE rl=%d i=%d bytes=%lu > %d\n", rl, i,
-                        test_lu(n->bytes[i]), (int)PT_MAX_HOLESIZE);
+                check(n->bytes[i] > 0 && n->bytes[i] <= PT_MAX_HOLESIZE,
+                      "[chk] HOLE rl=%d i=%d bytes=%lu > %d\n", rl, i,
+                      test_lu(n->bytes[i]), (int)PT_MAX_HOLESIZE);
                 *has_hole = 1;
             } else {
-                check(
-                        n->bytes[i] > 0, "[chk] LITERAL rl=%d i=%d bytes=%lu\n",
-                        rl, i, test_lu(n->bytes[i]));
+                check(n->bytes[i] > 0, "[chk] LITERAL rl=%d i=%d bytes=%lu\n",
+                      rl, i, test_lu(n->bytes[i]));
                 if (i > 0 && !ptM_ishole(n, i - 1)) {
-                    check(
-                            ptN_lit(n, i - 1) + n->bytes[i - 1]
-                                    != ptN_lit(n, i),
-                            "[chk] ADJACENT literals i=%d,%d node=%p\n", i - 1,
-                            i, (void *)n);
+                    check(ptN_lit(n, i - 1) + n->bytes[i - 1] != ptN_lit(n, i),
+                          "[chk] ADJACENT literals i=%d,%d node=%p\n", i - 1, i,
+                          (void *)n);
                 }
             }
         } else {
             pt_Node *c = n->children[i];
             if (!pt_checknode(c, rl - 1, mc ? PT_FANOUT / 2 : 0, &hh)) return 0;
-            check(
-                    n->bytes[i] == ptN_sumbytes(c, 0, c->child_count),
-                    "[chk] INNER rl=%d i=%d bytes=%lu sum=%lu node=%p\n", rl, i,
-                    test_lu(n->bytes[i]), test_lu(ptN_sumbytes(c, 0, c->child_count)), (void *)c);
-            check(
-                    (ptM_ishole(n, i) != 0) == (hh != 0),
-                    "[chk] MASK rl=%d i=%d mask=%d has_hole=%d\n", rl, i,
-                    ptM_ishole(n, i) != 0, hh);
+            check(n->bytes[i] == ptN_sumbytes(c, 0, c->child_count),
+                  "[chk] INNER rl=%d i=%d bytes=%lu sum=%lu node=%p\n", rl, i,
+                  test_lu(n->bytes[i]),
+                  test_lu(ptN_sumbytes(c, 0, c->child_count)), (void *)c);
+            check((ptM_ishole(n, i) != 0) == (hh != 0),
+                  "[chk] MASK rl=%d i=%d mask=%d has_hole=%d\n", rl, i,
+                  ptM_ishole(n, i) != 0, hh);
             if (hh) *has_hole = 1;
         }
     }
@@ -102,33 +95,28 @@ PT_STATIC int pt_checknode(const pt_Node *n, int rl, int mc, int *has_hole) {
 
 PT_STATIC int pt_checktree_allow_empty(pt_Buffer snap, int allow_empty) {
     int hh = 0;
-    check(
-            snap->root.child_count != 0 || snap->bytes == 0,
-            "[chk] EMPTY root but bytes=%lu\n", test_lu(snap->bytes));
+    check(snap->root.child_count != 0 || snap->bytes == 0,
+          "[chk] EMPTY root but bytes=%lu\n", test_lu(snap->bytes));
     if (snap->root.child_count == 0) {
-        check(
-                snap->bytes == 0, "[chk] EMPTY tree has bytes=%lu\n",
-                test_lu(snap->bytes));
+        check(snap->bytes == 0, "[chk] EMPTY tree has bytes=%lu\n",
+              test_lu(snap->bytes));
     } else if (snap->levels > 0 || snap->root.child_count > 1)
         return pt_checknode(
                 &snap->root, snap->levels, allow_empty ? 0 : 1, &hh);
     else {
         if (ptM_ishole(&snap->root, 0)) {
-            check(
-                    snap->root.bytes[0] > 0
-                            && snap->root.bytes[0] <= PT_MAX_HOLESIZE,
-                    "[chk] SINGLE HOLE bytes=%lu > %d\n", test_lu(snap->root.bytes[0]),
-                    (int)PT_MAX_HOLESIZE);
+            check(snap->root.bytes[0] > 0
+                          && snap->root.bytes[0] <= PT_MAX_HOLESIZE,
+                  "[chk] SINGLE HOLE bytes=%lu > %d\n",
+                  test_lu(snap->root.bytes[0]), (int)PT_MAX_HOLESIZE);
         } else {
-            check(
-                    snap->root.bytes[0] > 0, "[chk] SINGLE LITERAL bytes=%lu\n",
-                    test_lu(snap->root.bytes[0]));
+            check(snap->root.bytes[0] > 0, "[chk] SINGLE LITERAL bytes=%lu\n",
+                  test_lu(snap->root.bytes[0]));
         }
     }
-    check(
-            snap->bytes == ptN_sumbytes(&snap->root, 0, snap->root.child_count),
-            "[chk] ROOT bytes=%lu sum=%lu\n", test_lu(snap->bytes),
-            test_lu(ptN_sumbytes(&snap->root, 0, snap->root.child_count)));
+    check(snap->bytes == ptN_sumbytes(&snap->root, 0, snap->root.child_count),
+          "[chk] ROOT bytes=%lu sum=%lu\n", test_lu(snap->bytes),
+          test_lu(ptN_sumbytes(&snap->root, 0, snap->root.child_count)));
     return 1;
 }
 
@@ -144,41 +132,34 @@ PT_STATIC int pt_checkcursor(pt_Cursor *C, size_t expected_off) {
     size_t   bsum = 0;
     int      i, l;
     pt_Node *p;
-    check(
-            pt_offset(C) == expected_off,
-            "[chk] OFFSET mismatch off=%lu expected=%lu\n", test_lu(pt_offset(C)),
-            test_lu(expected_off));
+    check(pt_offset(C) == expected_off,
+          "[chk] OFFSET mismatch off=%lu expected=%lu\n", test_lu(pt_offset(C)),
+          test_lu(expected_off));
     if (C->tree->root.child_count == 0) {
-        check(
-                C->poff == 0 && C->off == 0, "[chk] EMPTY poff=%lu off=%lu\n",
-                test_lu(C->poff), test_lu(C->off));
-        check(
-                C->paths[0] == &C->tree->root.children[0],
-                "[chk] EMPTY paths[0]=%p expected=%p\n", (void *)C->paths[0],
-                (void *)&C->tree->root.children[0]);
+        check(C->poff == 0 && C->off == 0, "[chk] EMPTY poff=%lu off=%lu\n",
+              test_lu(C->poff), test_lu(C->off));
+        check(C->paths[0] == &C->tree->root.children[0],
+              "[chk] EMPTY paths[0]=%p expected=%p\n", (void *)C->paths[0],
+              (void *)&C->tree->root.children[0]);
         return 1;
     }
     for (l = 0; l <= ptK_levels(C); ++l) {
         p = ptK_parent(C, l);
         i = ptK_idx(C, p, l);
-        check(
-                i >= 0 && i < p->child_count,
-                "[chk] PATHS[%d] invalid idx=%d cc=%u\n", l, i, p->child_count);
-        check(
-                C->paths[l] == &p->children[i],
-                "[chk] PATHS[%d] invalid ptr=%p expected=%p\n", l,
-                (void *)C->paths[l], (void *)&p->children[i]);
+        check(i >= 0 && i < p->child_count,
+              "[chk] PATHS[%d] invalid idx=%d cc=%u\n", l, i, p->child_count);
+        check(C->paths[l] == &p->children[i],
+              "[chk] PATHS[%d] invalid ptr=%p expected=%p\n", l,
+              (void *)C->paths[l], (void *)&p->children[i]);
         bsum += ptN_sumbytes(p, 0, i);
     }
-    check(
-            C->off == bsum, "[chk] OFF mismatch off=%lu sum=%lu\n", test_lu(C->off),
-            test_lu(bsum));
+    check(C->off == bsum, "[chk] OFF mismatch off=%lu sum=%lu\n",
+          test_lu(C->off), test_lu(bsum));
     p = ptK_parent(C, ptK_levels(C));
     i = ptK_idx(C, p, ptK_levels(C));
-    check(
-            C->poff <= p->bytes[i],
-            "[chk] POFF out of bounds poff=%lu bytes[%d]=%lu\n", test_lu(C->poff), i,
-            test_lu(p->bytes[i]));
+    check(C->poff <= p->bytes[i],
+          "[chk] POFF out of bounds poff=%lu bytes[%d]=%lu\n", test_lu(C->poff),
+          i, test_lu(p->bytes[i]));
     return 1;
 }
 
@@ -191,8 +172,9 @@ PT_STATIC void pt_dumpnode(const pt_Node *n, int idx, int l, int levels) {
     if (l == 0)
         test_log("Root(%p) cc=%u", (void *)n, cc);
     else
-        test_log("%*sN%u_%u(%p) cc=%u", l * 2, "", (unsigned)(l - 1),
-               (unsigned)idx, (void *)n, cc);
+        test_log(
+                "%*sN%u_%u(%p) cc=%u", l * 2, "", (unsigned)(l - 1),
+                (unsigned)idx, (void *)n, cc);
     for (i = 0; i < cc; ++i) test_log(" b[%u]=%lu", i, test_lu(n->bytes[i]));
     test_log("\n");
     if ((unsigned)l == (unsigned)levels || levels == 0) {
@@ -200,19 +182,22 @@ PT_STATIC void pt_dumpnode(const pt_Node *n, int idx, int l, int levels) {
             if (ptM_ishole(n, i)) {
                 const unsigned char *hd = (const unsigned char *)n->children[i];
                 unsigned             ki;
-                test_log("%*sL%u HOLE bytes=%lu data=", (l + 1) * 2, "", i,
-                       test_lu(n->bytes[i]));
+                test_log(
+                        "%*sL%u HOLE bytes=%lu data=", (l + 1) * 2, "", i,
+                        test_lu(n->bytes[i]));
                 for (ki = 0; ki < (unsigned)pt_min(n->bytes[i], 16); ++ki)
                     test_log("%02x", hd[ki]);
                 test_log(" '");
                 for (ki = 0; ki < (unsigned)pt_min(n->bytes[i], 16); ++ki)
-                    test_log("%c",
-                           hd[ki] >= 32 && hd[ki] < 127 ? (char)hd[ki] : '.');
+                    test_log(
+                            "%c",
+                            hd[ki] >= 32 && hd[ki] < 127 ? (char)hd[ki] : '.');
                 test_log("'\n");
             } else {
-                test_log("%*sL%u LIT bytes=%lu %.*s\n", (l + 1) * 2, "", i,
-                       test_lu(n->bytes[i]), (int)n->bytes[i],
-                       (const char *)n->children[i]);
+                test_log(
+                        "%*sL%u LIT bytes=%lu %.*s\n", (l + 1) * 2, "", i,
+                        test_lu(n->bytes[i]), (int)n->bytes[i],
+                        (const char *)n->children[i]);
             }
         }
     } else {
@@ -221,8 +206,9 @@ PT_STATIC void pt_dumpnode(const pt_Node *n, int idx, int l, int levels) {
 }
 
 PT_STATIC void pt_dumptree(pt_Buffer snap, const char *tag) {
-    test_log("[TREE]\t %s: levels=%u root.cc=%u bytes=%lu\n", tag, snap->levels,
-           snap->root.child_count, test_lu(snap->bytes));
+    test_log(
+            "[TREE]\t %s: levels=%u root.cc=%u bytes=%lu\n", tag, snap->levels,
+            snap->root.child_count, test_lu(snap->bytes));
     pt_dumpnode(&snap->root, -1, 0, snap->levels);
 }
 
@@ -298,7 +284,7 @@ PT_STATIC int pt_checkleaves(const pt_Buffer *S, unsigned **brs) {
             fprintf(stderr, "checkleavesV FAILED at %s:%d\n", __FILE__, \
                     __LINE__);                                          \
             pt_dumptree((c), "checkleavesV failed");                    \
-            assert(0 && "checkleavesV failed");                         \
+            abort();                                                    \
         }                                                               \
     } while (0)
 
@@ -336,7 +322,7 @@ static pt_LeafValue litV_(const char *s, size_t len) {
 static pt_LeafValue holeV_(pt_State *S, const char *s, size_t len) {
     pt_LeafValue v;
     pt_Hole     *h = (pt_Hole *)ptP_alloc(S, &S->holes);
-    assert(len <= PT_MAX_HOLESIZE);
+    assertok(len <= PT_MAX_HOLESIZE);
     memcpy(h->data, s, len);
     v.data = (void *)h, v.len = len, v.is_hole = 1;
     return v;
@@ -351,7 +337,7 @@ PT_STATIC pt_Node *leafV_(pt_State *S, ...) {
     while (va_arg(ap, pt_LeafValue).data != NULL) cc++;
     va_end(ap);
     n = (pt_Node *)ptP_alloc(S, &S->nodes);
-    assert(n && cc <= PT_FANOUT);
+    assertok(n && cc <= PT_FANOUT);
     ptN_setcc(n, cc), n->version = 0, n->mask = 0;
     va_start(ap, S);
     for (i = 0; i < cc; i++) {
@@ -372,7 +358,7 @@ PT_STATIC pt_Node *innerV_(pt_State *S, ...) {
     while (va_arg(ap, pt_Node *) != NULL) cc++;
     va_end(ap);
     n = (pt_Node *)ptP_alloc(S, &S->nodes);
-    assert(n && cc <= PT_FANOUT);
+    assertok(n && cc <= PT_FANOUT);
     ptN_setcc(n, cc), n->version = 0, n->mask = 0;
     va_start(ap, S);
     for (i = 0; i < cc; i++) {
@@ -387,7 +373,7 @@ PT_STATIC pt_Node *innerV_(pt_State *S, ...) {
 PT_STATIC pt_Buffer treeV_(pt_State *S, unsigned levels, pt_Node *root) {
     pt_Tree *t = (pt_Tree *)pt_from(S, NULL, 0);
     unsigned i;
-    assert(t && root->child_count <= PT_FANOUT);
+    assertok(t && root->child_count <= PT_FANOUT);
     t->levels = (unsigned short)levels, t->root = *root;
     ptP_free(&S->nodes, root);
     t->bytes = 0;
@@ -410,7 +396,7 @@ PT_STATIC pt_Buffer treeV_(pt_State *S, unsigned levels, pt_Node *root) {
             pt_dumptree(__d, "expected");                                \
             fprintf(stderr, "Actual:\n");                                \
             pt_dumptree((c), "actual");                                  \
-            assert(0 && "pt_asserttree failed");                         \
+            abort();                                                     \
         }                                                                \
         pt_release(__d);                                                 \
     } while (0)
@@ -422,18 +408,18 @@ TEST(lifecycle) {
     pt_Buffer b, b2;
 
     S = pt_open(NULL, NULL);
-    assert(S != NULL);
+    assertok(S != NULL);
 
     b = pt_empty(S);
-    assert(b != NULL);
-    assert(pt_version(b) == 0);
-    assert(pt_bytes(b) == 0);
+    assertok(b != NULL);
+    asserteq(pt_version(b), 0);
+    asserteq(pt_bytes(b), 0);
 
     pt_retain(b);
     pt_release(b);
 
     b2 = pt_empty(S);
-    assert(b2 != NULL);
+    assertok(b2 != NULL);
     pt_release(b);
     pt_release(b2);
 
@@ -441,9 +427,10 @@ TEST(lifecycle) {
     {
         void     *ud;
         pt_Alloc *af = pt_getallocf(S, &ud);
-        assert(af == S->allocf && ud == S->alloc_ud);
+        asserteq(af, S->allocf);
+        asserteq(ud, S->alloc_ud);
         af = pt_getallocf(S, NULL);
-        assert(af == S->allocf);
+        asserteq(af, S->allocf);
     }
 
     pt_close(S);
@@ -456,10 +443,10 @@ TEST(seek_empty) {
     pt_Cursor c;
 
     pt_seek(&c, pt_empty(S), 0);
-    assert(pt_offset(&c) == 0);
+    asserteq(pt_offset(&c), 0);
 
     pt_seek(&c, pt_empty(S), 100);
-    assert(pt_offset(&c) == 0); /* clamped */
+    asserteq(pt_offset(&c), 0); /* clamped */
 
     pt_close(S);
 }
@@ -474,18 +461,18 @@ TEST(insert_basic) {
 
     pt_seek(&c, b, 0);
     r = pt_insert(&c, "hello", 5);
-    assert(r == PT_OK);
-    assert(pt_offset(&c) == 0);
-    assert(pt_bytes(c.tree) == 5);
+    asserteq(r, PT_OK);
+    asserteq(pt_offset(&c), 0);
+    asserteq(pt_bytes(c.tree), 5);
 
     r = pt_insert(&c, " world", 6);
-    assert(r == PT_OK);
-    assert(pt_offset(&c) == 0); /* stay */
-    assert(pt_bytes(c.tree) == 11);
+    asserteq(r, PT_OK);
+    asserteq(pt_offset(&c), 0); /* stay */
+    asserteq(pt_bytes(c.tree), 11);
 
     pt_append(&c, "!", 1);
-    assert(pt_offset(&c) == 1); /* append advances cursor past inserted text */
-    assert(pt_bytes(c.tree) == 12);
+    asserteq(pt_offset(&c), 1); /* append advances cursor past inserted text */
+    asserteq(pt_bytes(c.tree), 12);
 
     pt_release(b);
     pt_close(S);
@@ -499,12 +486,13 @@ TEST(insert_before) {
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_insert(&c, "hello", 5);               /* ["hello"], cursor stays pos 0 */
-    assert(pt_insert(&c, "XX", 2) == PT_OK); /* poff==0 -> insert before */
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 0));
+    asserteq(pt_insert(&c, "XX", 2), PT_OK); /* poff==0 -> insert before */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 0));
     pt_asserttree(c.tree, 0, leafV(litV("XX"), litV("hello")));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -515,12 +503,13 @@ TEST(insert_after) {
     pt_seek(&c, b, 0);
     pt_insert(&c, "hello", 5);
     pt_advance(&c, 5);                       /* to end, poff==bytes[0] */
-    assert(pt_insert(&c, "YY", 2) == PT_OK); /* insert after */
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 5));
+    asserteq(pt_insert(&c, "YY", 2), PT_OK); /* insert after */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 5));
     pt_asserttree(c.tree, 0, leafV(litV("hello"), litV("YY")));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -531,12 +520,13 @@ TEST(insert_mid) {
     pt_seek(&c, b, 0);
     pt_insert(&c, "abcdef", 6);
     pt_advance(&c, 3); /* poff==3, middle of piece */
-    assert(pt_insert(&c, "XYZ", 3) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 3)); /* cursor stays at insert point */
+    asserteq(pt_insert(&c, "XYZ", 3), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 3)); /* cursor stays at insert point */
     pt_asserttree(c.tree, 0, leafV(litV("abc"), litV("XYZ"), litV("def")));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -552,14 +542,15 @@ TEST(insert_split_root) {
     pt_append(&c, "cc", 2);
     pt_append(&c, "dd", 2); /* root full: 4 pieces */
     pt_append(&c, "ee", 2); /* triggers splitroot */
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 10));
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 10));
     pt_asserttree(
             c.tree, 1,
             innerV(leafV(litV("aa"), litV("bb")),
                    leafV(litV("cc"), litV("dd"), litV("ee"))));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -573,15 +564,16 @@ TEST(insert_locend) {
     pt_seek(&c, b, 0);
     pt_append(&c, "foo", 3);
     pt_append(&c, "bar", 3);
-    a = pt_commit(&c);             /* ["foo","bar"] committed */
-    pt_seek(&c, a, 999);           /* clamp to end -> locend */
-    assert(pt_checkcursor(&c, 6)); /* off=3, poff=3 (last piece) */
-    assert(pt_append(&c, "baz", 3) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 9));
+    a = pt_commit(&c);               /* ["foo","bar"] committed */
+    pt_seek(&c, a, 999);             /* clamp to end -> locend */
+    assertok(pt_checkcursor(&c, 6)); /* off=3, poff=3 (last piece) */
+    asserteq(pt_append(&c, "baz", 3), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 9));
     pt_asserttree(c.tree, 0, leafV(litV("foo"), litV("bar"), litV("baz")));
     pt_release(c.tree), pt_release(a), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -599,14 +591,15 @@ TEST(insert_split_leaf) {
     pt_append(&c, "ee", 2); /* splitroot -> levels 1 */
     pt_append(&c, "ff", 2); /* fills nw leaf to 4 */
     pt_append(&c, "gg", 2); /* splits the full leaf node */
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 14));
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 14));
     pt_asserttree(
             c.tree, 1,
             innerV(leafV(litV("aa"), litV("bb")), leafV(litV("cc"), litV("dd")),
                    leafV(litV("ee"), litV("ff"), litV("gg"))));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -623,15 +616,16 @@ TEST(insert_deep) {
     for (k = 0; k < (int)sizeof(buf); ++k) buf[k] = (char)('!' + (k % 90));
     pt_seek(&c, b, 0);
     for (k = 0; k < n; ++k) {
-        assert(pt_append(&c, buf + k * 3, 2) == PT_OK);
+        asserteq(pt_append(&c, buf + k * 3, 2), PT_OK);
         pos += 2;
-        assert(pt_checktree(c.tree));
-        assert(pt_checkcursor(&c, pos));
-        assert(pt_bytes(c.tree) == pos);
+        assertok(pt_checktree(c.tree));
+        assertok(pt_checkcursor(&c, pos));
+        asserteq(pt_bytes(c.tree), pos);
     }
-    assert(c.tree->levels >= 2);
+    assertok(c.tree->levels >= 2);
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -647,10 +641,10 @@ TEST(insert_cow) {
     pt_append(&c, "dd", 2), pt_append(&c, "ee", 2); /* levels 1 */
     a = pt_commit(&c);
     pt_seek(&c, a, 0);                       /* edit committed source */
-    assert(pt_insert(&c, "ZZ", 2) == PT_OK); /* cowpath copies leaf pp */
-    assert(pt_version(c.tree) != pt_version(a));
-    assert(pt_checktree(c.tree) && pt_checktree(a));
-    assert(pt_checkcursor(&c, 0));
+    asserteq(pt_insert(&c, "ZZ", 2), PT_OK); /* cowpath copies leaf pp */
+    assertok(pt_version(c.tree) != pt_version(a));
+    assertok(pt_checktree(c.tree) && pt_checktree(a));
+    assertok(pt_checkcursor(&c, 0));
     pt_asserttree(
             a, 1,
             innerV(leafV(litV("aa"), litV("bb")),
@@ -660,7 +654,8 @@ TEST(insert_cow) {
             innerV(leafV(litV("ZZ"), litV("aa"), litV("bb")),
                    leafV(litV("cc"), litV("dd"), litV("ee"))));
     pt_release(c.tree), pt_release(a), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -676,12 +671,12 @@ TEST(insert_multiversion) {
     pt_append(&c1, "dd", 2), pt_append(&c1, "ee", 2);
     a = pt_commit(&c1);
     pt_seek(&c1, a, 0);
-    assert(pt_insert(&c1, "11", 2) == PT_OK); /* version v1 */
+    asserteq(pt_insert(&c1, "11", 2), PT_OK); /* version v1 */
     pt_seek(&c2, a, 10);
-    assert(pt_insert(&c2, "22", 2) == PT_OK); /* version v2, isolated */
-    assert(pt_version(a) != pt_version(c1.tree));
-    assert(pt_version(c1.tree) != pt_version(c2.tree));
-    assert(pt_checktree(a) && pt_checktree(c1.tree) && pt_checktree(c2.tree));
+    asserteq(pt_insert(&c2, "22", 2), PT_OK); /* version v2, isolated */
+    assertok(pt_version(a) != pt_version(c1.tree));
+    assertok(pt_version(c1.tree) != pt_version(c2.tree));
+    assertok(pt_checktree(a) && pt_checktree(c1.tree) && pt_checktree(c2.tree));
     pt_asserttree(
             a, 1,
             innerV(leafV(litV("aa"), litV("bb")),
@@ -697,7 +692,8 @@ TEST(insert_multiversion) {
     pt_release(c1.tree), pt_release(c2.tree);
     pt_release(a);
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -710,13 +706,15 @@ TEST(insert_oom_reserve) {
     pt_Cursor c;
     pt_seek(&c, b, 0);
     cnt = 0; /* next pool page alloc fails */
-    assert(pt_insert(&c, "x", 1) == PT_ERRMEM);
-    assert(!c.dirty && pt_bytes(c.tree) == 0); /* not forked, tree untouched */
-    cnt = 1000; /* recover: cursor still usable */
-    assert(pt_insert(&c, "ok", 2) == PT_OK);
-    assert(pt_bytes(c.tree) == 2);
+    asserteq(pt_insert(&c, "x", 1), PT_ERRMEM);
+    assertok(!c.dirty);
+    asserteq(pt_bytes(c.tree), 0); /* not forked, tree untouched */
+    cnt = 1000;                    /* recover: cursor still usable */
+    asserteq(pt_insert(&c, "ok", 2), PT_OK);
+    asserteq(pt_bytes(c.tree), 2);
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -728,12 +726,14 @@ TEST(insert_oom_fork) {
     pt_seek(&c, b, 0);
     cnt = 0; /* nodes reserve fails (pt_empty is sentinel, no freelist entry;
                 reserve OOM achieves fork failure) */
-    assert(pt_insert(&c, "x", 1) == PT_ERRMEM);
-    assert(!c.dirty && pt_bytes(c.tree) == 0);
+    asserteq(pt_insert(&c, "x", 1), PT_ERRMEM);
+    assertok(!c.dirty);
+    asserteq(pt_bytes(c.tree), 0);
     cnt = 1000;
-    assert(pt_insert(&c, "ok", 2) == PT_OK);
+    asserteq(pt_insert(&c, "ok", 2), PT_OK);
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -746,12 +746,13 @@ TEST(merge_right) {
     pt_Cursor         c;
     pt_seek(&c, b, 0);
     pt_insert(&c, buf + 3, 3);                  /* ["def"] */
-    assert(pt_insert(&c, buf + 0, 3) == PT_OK); /* "abc" before, contiguous */
-    assert(pt_checktree(c.tree));
+    asserteq(pt_insert(&c, buf + 0, 3), PT_OK); /* "abc" before, contiguous */
+    assertok(pt_checktree(c.tree));
     pt_asserttree(c.tree, 0, leafV(litV("abcdef")));
-    assert(pt_checkcursor(&c, 0));
+    assertok(pt_checkcursor(&c, 0));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -763,12 +764,13 @@ TEST(merge_left) {
     pt_seek(&c, b, 0);
     pt_insert(&c, buf + 0, 3); /* ["abc"] */
     pt_advance(&c, 3);
-    assert(pt_insert(&c, buf + 3, 3) == PT_OK); /* "def" after, contiguous */
-    assert(pt_checktree(c.tree));
+    asserteq(pt_insert(&c, buf + 3, 3), PT_OK); /* "def" after, contiguous */
+    assertok(pt_checktree(c.tree));
     pt_asserttree(c.tree, 0, leafV(litV("abcdef")));
-    assert(pt_checkcursor(&c, 3)); /* cursor rides merged piece */
+    assertok(pt_checkcursor(&c, 3)); /* cursor rides merged piece */
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -786,21 +788,23 @@ TEST(append_merge_left) {
     lf->child_count = 2;
     b = treeV(0, lf);
     pt_seek(&c, b, 2);
-    assert(pt_checkcursor(&c, 2));
-    assert(pt_append(&c, buf + 2, 2) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 4));
-    assert(pt_bytes(c.tree) == 6);
+    assertok(pt_checkcursor(&c, 2));
+    asserteq(pt_append(&c, buf + 2, 2), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 4));
+    asserteq(pt_bytes(c.tree), 6);
     pt_asserttree(c.tree, 0, leafV(litV("ABCD"), litV("XY")));
     {
         char   rd[16];
         size_t nr;
         pt_seek(&c, c.tree, 0);
         nr = pt_read(&c, rd, 6);
-        assert(nr == 6 && memcmp(rd, "ABCDXY", 6) == 0);
+        asserteq(nr, 6);
+        asserteq(memcmp(rd, "ABCDXY", 6), 0);
     }
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -819,17 +823,18 @@ TEST(advance_brute) {
     for (k = 0; k < n; ++k) pt_append(&c, buf + k * 3, 2);
     a = pt_commit(&c);
     total = pt_bytes(a);
-    assert(a->levels >= 2);
+    assertok(a->levels >= 2);
     for (from = 0; from <= total; from += 3)
         for (to = 0; to <= total; to += 5) {
             pt_seek(&c, a, from);
             pt_advance(&c, (pt_Delta)to - (pt_Delta)from);
             pt_seek(&ref, a, to);
-            assert(pt_offset(&c) == pt_offset(&ref));
-            assert(pt_checkcursor(&c, to));
+            asserteq(pt_offset(&c), pt_offset(&ref));
+            assertok(pt_checkcursor(&c, to));
         }
     pt_release(a), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -840,23 +845,25 @@ TEST(null_params) {
     pt_Buffer b = pt_empty(S);
     pt_Buffer got;
     pt_Cursor c;
-    assert(pt_version(NULL) == 0 && pt_bytes(NULL) == 0);
+    asserteq(pt_version(NULL), 0);
+    asserteq(pt_bytes(NULL), 0);
     pt_retain(NULL), pt_release(NULL), pt_rollback(NULL);
-    assert(pt_commit(NULL) == NULL);
-    assert(pt_seek(NULL, b, 0) == PT_ERRPARAM);
-    assert(pt_seek(&c, NULL, 0) == PT_ERRPARAM);
-    assert(pt_advance(NULL, 1) == PT_ERRPARAM);
-    assert(pt_insert(NULL, "x", 1) == PT_ERRPARAM);
-    assert(pt_append(NULL, "x", 1) == PT_ERRPARAM);
+    asserteq(pt_commit(NULL), NULL);
+    asserteq(pt_seek(NULL, b, 0), PT_ERRPARAM);
+    asserteq(pt_seek(&c, NULL, 0), PT_ERRPARAM);
+    asserteq(pt_advance(NULL, 1), PT_ERRPARAM);
+    asserteq(pt_insert(NULL, "x", 1), PT_ERRPARAM);
+    asserteq(pt_append(NULL, "x", 1), PT_ERRPARAM);
     pt_seek(&c, b, 0);
-    assert(pt_advance(&c, 5) == PT_OK); /* delta on empty tree */
-    assert(pt_insert(&c, NULL, 1) == PT_ERRPARAM);
-    assert(pt_insert(&c, "x", 0) == PT_OK); /* len==0 early return */
+    asserteq(pt_advance(&c, 5), PT_OK); /* delta on empty tree */
+    asserteq(pt_insert(&c, NULL, 1), PT_ERRPARAM);
+    asserteq(pt_insert(&c, "x", 0), PT_OK); /* len==0 early return */
     got = pt_commit(&c);                    /* not dirty -> retain+return */
-    assert(got == b);
+    asserteq(got, b);
     pt_release(got); /* balance the retain */
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -870,15 +877,16 @@ TEST(insert_split_front) {
     pt_append(&c, "aa", 2), pt_append(&c, "bb", 2);
     pt_append(&c, "cc", 2), pt_append(&c, "dd", 2); /* full levels 0 */
     pt_advance(&c, -8);                             /* back to pos 0 */
-    assert(pt_insert(&c, "ZZ", 2) == PT_OK);        /* splitroot, left half */
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 0));
+    asserteq(pt_insert(&c, "ZZ", 2), PT_OK);        /* splitroot, left half */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 0));
     pt_asserttree(
             c.tree, 1,
             innerV(leafV(litV("ZZ"), litV("aa"), litV("bb")),
                    leafV(litV("cc"), litV("dd"))));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -890,12 +898,16 @@ TEST(rollback) {
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_insert(&c, "hello", 5);
-    assert(c.dirty && pt_bytes(c.tree) == 5);
-    assert(pt_rollback(&c) == b);
-    assert(!c.dirty && c.tree == NULL && pt_bytes(b) == 0);
+    assertok(c.dirty);
+    asserteq(pt_bytes(c.tree), 5);
+    asserteq(pt_rollback(&c), b);
+    assertok(!c.dirty);
+    asserteq(c.tree, NULL);
+    asserteq(pt_bytes(b), 0);
     pt_release(b); /* balance the rollback retain */
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -912,17 +924,18 @@ TEST(insert_committed_split) {
     pt_seek(&c, e, 0);
     for (k = 0; k < 62; ++k) pt_append(&c, buf + k * 3, 2);
     a = pt_commit(&c);
-    assert(a->levels >= 2);
+    assertok(a->levels >= 2);
     pt_seek(&c, a, pt_bytes(a)); /* end of committed tree */
     for (k = 0; k < 40; ++k) {
-        assert(pt_append(&c, buf + 200 + k * 2, 2) == PT_OK);
-        assert(pt_checktree(c.tree));
+        asserteq(pt_append(&c, buf + 200 + k * 2, 2), PT_OK);
+        assertok(pt_checktree(c.tree));
     }
     b = c.tree;
-    assert(pt_checktree(a)); /* source unchanged & valid */
-    assert(pt_bytes(a) == 124);
+    assertok(pt_checktree(a)); /* source unchanged & valid */
+    asserteq(pt_bytes(a), 124);
     pt_release(e), pt_release(a), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -939,13 +952,14 @@ TEST(release_order) {
     pt_append(&c, "dd", 2), pt_append(&c, "ee", 2); /* levels 1 */
     a = pt_commit(&c);
     pt_seek(&c, a, 0);
-    assert(pt_insert(&c, "ZZ", 2) == PT_OK); /* transient b shares a's nodes */
+    asserteq(pt_insert(&c, "ZZ", 2), PT_OK); /* transient b shares a's nodes */
     b = c.tree;
-    pt_release(a);           /* release source FIRST; from keeps it alive */
-    assert(pt_checktree(b)); /* transient still valid (no use-after-free) */
-    pt_release(b);           /* frees b, then chained a, then b-ref */
+    pt_release(a);             /* release source FIRST; from keeps it alive */
+    assertok(pt_checktree(b)); /* transient still valid (no use-after-free) */
+    pt_release(b);             /* frees b, then chained a, then b-ref */
     pt_release(e);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -963,14 +977,17 @@ TEST(rollback_released_source) {
     pt_append(&c, "dd", 2), pt_append(&c, "ee", 2);
     a = pt_commit(&c);
     pt_seek(&c, a, 0);
-    assert(pt_insert(&c, "ZZ", 2) == PT_OK); /* fork; retain(a) via from */
+    asserteq(pt_insert(&c, "ZZ", 2), PT_OK); /* fork; retain(a) via from */
     pt_release(a);          /* external drops a; only from holds it */
     back = pt_rollback(&c); /* return value keeps a alive */
-    assert(back == a && c.tree == NULL);
-    assert(pt_checktree(back) && pt_bytes(back) == 10);
+    asserteq(back, a);
+    asserteq(c.tree, NULL);
+    assertok(pt_checktree(back));
+    asserteq(pt_bytes(back), 10);
     pt_release(back);
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -984,11 +1001,12 @@ TEST(remove_release_order) {
     pt_seek(&c, b0, 5);
     pt_insert(&c, "XYZ", 3);
     b1 = pt_commit(&c);
-    assert(pt_checktree(b1));
-    pt_release(b0);           /* release source first; b1 still shares nodes */
-    assert(pt_checktree(b1)); /* b1 not dangling */
+    assertok(pt_checktree(b1));
+    pt_release(b0); /* release source first; b1 still shares nodes */
+    assertok(pt_checktree(b1)); /* b1 not dangling */
     pt_release(b1);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -999,12 +1017,13 @@ TEST(remove_same_mid) {
     pt_Buffer b = treeV(0, leafV(litV("abcdef")));
     pt_Cursor c;
     pt_seek(&c, b, 2);
-    assert(pt_remove(&c, 2) == PT_OK); /* delete "cd" -> split into two */
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 2));
+    asserteq(pt_remove(&c, 2), PT_OK); /* delete "cd" -> split into two */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 2));
     pt_asserttree(c.tree, 0, leafV(litV("ab"), litV("ef")));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1013,12 +1032,13 @@ TEST(remove_same_prefix) {
     pt_Buffer b = treeV(0, leafV(litV("abcdef")));
     pt_Cursor c;
     pt_seek(&c, b, 0);
-    assert(pt_remove(&c, 2) == PT_OK); /* delete prefix "ab" */
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 0));
+    asserteq(pt_remove(&c, 2), PT_OK); /* delete prefix "ab" */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 0));
     pt_asserttree(c.tree, 0, leafV(litV("cdef")));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1027,12 +1047,13 @@ TEST(remove_same_suffix) {
     pt_Buffer b = treeV(0, leafV(litV("abcdef")));
     pt_Cursor c;
     pt_seek(&c, b, 4);
-    assert(pt_remove(&c, 2) == PT_OK); /* delete suffix "ef" */
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 4));
+    asserteq(pt_remove(&c, 2), PT_OK); /* delete suffix "ef" */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 4));
     pt_asserttree(c.tree, 0, leafV(litV("abcd")));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1041,12 +1062,13 @@ TEST(remove_piece_whole) {
     pt_Buffer b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));
     pt_Cursor c;
     pt_seek(&c, b, 2);
-    assert(pt_remove(&c, 2) == PT_OK); /* delete whole middle piece "bb" */
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 2));
+    asserteq(pt_remove(&c, 2), PT_OK); /* delete whole middle piece "bb" */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 2));
     pt_asserttree(c.tree, 0, leafV(litV("aa"), litV("cc")));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1055,12 +1077,13 @@ TEST(remove_cross) {
     pt_Buffer b = treeV(0, leafV(litV("aaa"), litV("bbb"), litV("ccc")));
     pt_Cursor c;
     pt_seek(&c, b, 2);
-    assert(pt_remove(&c, 5) == PT_OK); /* [2,7): a|bbb|c across 3 pieces */
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 2));
+    asserteq(pt_remove(&c, 5), PT_OK); /* [2,7): a|bbb|c across 3 pieces */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 2));
     pt_asserttree(c.tree, 0, leafV(litV("aa"), litV("cc")));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1069,12 +1092,13 @@ TEST(remove_to_end) {
     pt_Buffer b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));
     pt_Cursor c;
     pt_seek(&c, b, 2);
-    assert(pt_remove(&c, 4) == PT_OK); /* delete "bb"+"cc" to end */
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 2));
+    asserteq(pt_remove(&c, 4), PT_OK); /* delete "bb"+"cc" to end */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 2));
     pt_asserttree(c.tree, 0, leafV(litV("aa")));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1083,12 +1107,13 @@ TEST(remove_all) {
     pt_Buffer b = treeV(0, leafV(litV("aa"), litV("bb")));
     pt_Cursor c;
     pt_seek(&c, b, 0);
-    assert(pt_remove(&c, 4) == PT_OK); /* delete everything */
-    assert(pt_checktree(c.tree));
-    assert(pt_bytes(c.tree) == 0);
-    assert(pt_checkcursor(&c, 0));
+    asserteq(pt_remove(&c, 4), PT_OK); /* delete everything */
+    assertok(pt_checktree(c.tree));
+    asserteq(pt_bytes(c.tree), 0);
+    assertok(pt_checkcursor(&c, 0));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1099,12 +1124,13 @@ TEST(remove_across_leaves) {
                       leafV(litV("ccc"), litV("ddd"))));
     pt_Cursor c;
     pt_seek(&c, b, 2);
-    assert(pt_remove(&c, 7) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 2));
+    asserteq(pt_remove(&c, 7), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 2));
     pt_asserttree(c.tree, 0, leafV(litV("aa"), litV("ddd")));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1115,12 +1141,13 @@ TEST(remove_deep_shrink) {
                       innerV(leafV(litV("cc")))));
     pt_Cursor c;
     pt_seek(&c, b, 0);
-    assert(pt_remove(&c, 4) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 0));
+    asserteq(pt_remove(&c, 4), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 0));
     pt_asserttree(c.tree, 0, leafV(litV("cc")));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1133,43 +1160,48 @@ TEST(edit_cow) {
     pt_Buffer a, b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
-    assert(pt_edit(&c, 0, "hello world", 11) == PT_OK);
+    asserteq(pt_edit(&c, 0, "hello world", 11), PT_OK);
     a = pt_commit(&c);
-    assert(a != NULL && !c.dirty);
+    assertok(a != NULL && !c.dirty);
     /* fork: edit on committed buffer */
     pt_seek(&c, a, 5);
-    assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
-    assert(c.dirty);
-    assert(pt_version(c.tree) != pt_version(a));
-    assert(pt_checktree(c.tree) && pt_checktree(a));
+    asserteq(pt_edit(&c, 0, "XYZ", 3), PT_OK);
+    assertok(c.dirty);
+    assertok(pt_version(c.tree) != pt_version(a));
+    assertok(pt_checktree(c.tree) && pt_checktree(a));
     /* source unchanged */
     pt_asserttree(a, 0, leafV(litV("hello world")));
     /* transient has hole at position 5 */
-    assert(pt_bytes(c.tree) == 14);
+    asserteq(pt_bytes(c.tree), 14);
     {
         pt_Node *r = &c.tree->root;
-        assert(r->child_count == 3);
-        assert(!ptM_ishole(r, 0));
-        assert(r->bytes[0] == 5 && memcmp(r->children[0], "hello", 5) == 0);
-        assert(ptM_ishole(r, 1));
+        asserteq(r->child_count, 3);
+        assertok(!ptM_ishole(r, 0));
+        asserteq(r->bytes[0], 5);
+        asserteq(memcmp(r->children[0], "hello", 5), 0);
+        assertok(ptM_ishole(r, 1));
         {
             pt_Hole *h = (pt_Hole *)r->children[1];
-            assert(r->bytes[1] == 3 && memcmp(h->data, "XYZ", 3) == 0);
+            asserteq(r->bytes[1], 3);
+            asserteq(memcmp(h->data, "XYZ", 3), 0);
         }
-        assert(!ptM_ishole(r, 2));
-        assert(r->bytes[2] == 6 && memcmp(r->children[2], " world", 6) == 0);
+        assertok(!ptM_ishole(r, 2));
+        asserteq(r->bytes[2], 6);
+        asserteq(memcmp(r->children[2], " world", 6), 0);
     }
     /* source has no holes (committed) */
     {
         unsigned i;
         for (i = 0; i < a->root.child_count; ++i)
-            assert(!ptM_ishole(&a->root, i));
+            assertok(!ptM_ishole(&a->root, i));
     }
     /* independent versions: edit transient, verify source */
     pt_release(c.tree);
-    assert(pt_checktree(a) && pt_bytes(a) == 11);
+    assertok(pt_checktree(a));
+    asserteq(pt_bytes(a), 11);
     pt_release(a), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1183,13 +1215,17 @@ TEST(edit_rollback) {
         pt_Buffer b = pt_empty(S);
         pt_Cursor c;
         pt_seek(&c, b, 0);
-        assert(pt_edit(&c, 0, "hello", 5) == PT_OK);
-        assert(c.dirty && pt_bytes(c.tree) == 5);
-        assert(pt_rollback(&c) == b);
-        assert(!c.dirty && c.tree == NULL && pt_bytes(b) == 0);
+        asserteq(pt_edit(&c, 0, "hello", 5), PT_OK);
+        assertok(c.dirty);
+        asserteq(pt_bytes(c.tree), 5);
+        asserteq(pt_rollback(&c), b);
+        assertok(!c.dirty);
+        asserteq(c.tree, NULL);
+        asserteq(pt_bytes(b), 0);
         pt_release(b); /* balance the rollback retain */
         pt_release(b);
-        assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+        asserteq(S->nodes.live_obj, 0);
+        asserteq(S->holes.live_obj, 0);
     }
 
     /* Path 2: source only via from → rollback returns sentinel */
@@ -1197,12 +1233,15 @@ TEST(edit_rollback) {
         pt_Buffer b = pt_empty(S);
         pt_Cursor c;
         pt_seek(&c, b, 0);
-        assert(pt_edit(&c, 0, "hello", 5) == PT_OK);
+        asserteq(pt_edit(&c, 0, "hello", 5), PT_OK);
         pt_release(b); /* external drops source; sentinel stays alive */
-        assert(pt_rollback(&c) == b); /* sentinel, not NULL */
-        assert(!c.dirty && c.tree == NULL && pt_bytes(b) == 0);
+        asserteq(pt_rollback(&c), b); /* sentinel, not NULL */
+        assertok(!c.dirty);
+        asserteq(c.tree, NULL);
+        asserteq(pt_bytes(b), 0);
         pt_release(b);
-        assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+        asserteq(S->nodes.live_obj, 0);
+        asserteq(S->holes.live_obj, 0);
     }
 
     pt_close(S);
@@ -1220,15 +1259,17 @@ TEST(edit_oom) {
     pt_seek(&c, b, 0);
     cnt = 0; /* next allocf fails (nodes reserve) */
     r = pt_edit(&c, 0, "x", 1);
-    assert(r == PT_ERRMEM);
-    assert(!c.dirty && pt_bytes(c.tree) == 0); /* tree untouched */
+    asserteq(r, PT_ERRMEM);
+    assertok(!c.dirty);
+    asserteq(pt_bytes(c.tree), 0); /* tree untouched */
 
     cnt = 1000; /* recover */
-    assert(pt_edit(&c, 0, "ok", 2) == PT_OK);
-    assert(pt_bytes(c.tree) == 2);
+    asserteq(pt_edit(&c, 0, "ok", 2), PT_OK);
+    asserteq(pt_bytes(c.tree), 2);
 
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1295,15 +1336,17 @@ TEST(edit_brute) {
     makeref(ref);
     for (pos = 0; pos <= nb; ++pos) {
         maketree(S, &C, (size_t)pos);
-        assert(pt_edit(&C, 0, "##", 2) == PT_OK);
+        asserteq(pt_edit(&C, 0, "##", 2), PT_OK);
         if (!pt_checktree(C.tree)) {
             test_log("edit_brute FAIL pos=%d\n", pos);
             pt_dumptree(C.tree, "after edit");
-            pt_checktree(C.tree), assert(0);
+            pt_checktree(C.tree), abort();
         }
         if (!pt_checkcursor(&C, (size_t)pos + 2)) {
-            test_log("edit_brute cursor pos=%d off=%lu\n", pos, test_lu(pt_offset(&C)));
-            assert(0);
+            test_log(
+                    "edit_brute cursor pos=%d off=%lu\n", pos,
+                    test_lu(pt_offset(&C)));
+            abort();
         }
         memcpy(expected, ref, (size_t)pos);
         memcpy(expected + pos, "##", 2);
@@ -1311,11 +1354,14 @@ TEST(edit_brute) {
         pt_seek(&C, C.tree, 0);
         nread = pt_read(&C, actual, 290);
         if (nread != 290 || memcmp(actual, expected, 290) != 0) {
-            test_log("edit_brute content fail pos=%d nread=%lu\n", pos, test_lu(nread));
-            assert(0);
+            test_log(
+                    "edit_brute content fail pos=%d nread=%lu\n", pos,
+                    test_lu(nread));
+            abort();
         }
         pt_release(C.tree);
-        assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+        asserteq(S->nodes.live_obj, 0);
+        asserteq(S->holes.live_obj, 0);
     }
     pt_close(S);
 }
@@ -1332,15 +1378,17 @@ TEST(insert_brute) {
     makeref(ref);
     for (pos = 0; pos <= nb; ++pos) {
         maketree(S, &C, (size_t)pos);
-        assert(pt_insert(&C, "##", 2) == PT_OK);
+        asserteq(pt_insert(&C, "##", 2), PT_OK);
         if (!pt_checktree(C.tree)) {
             test_log("insert_brute FAIL pos=%d\n", pos);
             pt_dumptree(C.tree, "after insert");
-            pt_checktree(C.tree), assert(0);
+            pt_checktree(C.tree), abort();
         }
         if (!pt_checkcursor(&C, (size_t)pos)) {
-            test_log("insert_brute cursor pos=%d off=%lu\n", pos, test_lu(pt_offset(&C)));
-            assert(0);
+            test_log(
+                    "insert_brute cursor pos=%d off=%lu\n", pos,
+                    test_lu(pt_offset(&C)));
+            abort();
         }
         memcpy(expected, ref, (size_t)pos);
         memcpy(expected + pos, "##", 2);
@@ -1348,11 +1396,14 @@ TEST(insert_brute) {
         pt_seek(&C, C.tree, 0);
         nread = pt_read(&C, actual, 290);
         if (nread != 290 || memcmp(actual, expected, 290) != 0) {
-            test_log("insert_brute content fail pos=%d nread=%lu\n", pos, test_lu(nread));
-            assert(0);
+            test_log(
+                    "insert_brute content fail pos=%d nread=%lu\n", pos,
+                    test_lu(nread));
+            abort();
         }
         pt_release(C.tree);
-        assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+        asserteq(S->nodes.live_obj, 0);
+        asserteq(S->holes.live_obj, 0);
     }
     pt_close(S);
 }
@@ -1370,26 +1421,26 @@ TEST(peekscratch_roundtrip) {
 
     /* Arena not built yet → scratch returns NULL */
     cap = 123;
-    assert(pt_scratch(&c, &cap) == NULL);
-    assert(cap == 0);
+    asserteq(pt_scratch(&c, &cap), NULL);
+    asserteq(cap, 0);
 
     /* Build arena via pt_reserve */
     h = pt_reserve(&c, 0);
-    assert(h != NULL);
+    assertok(h != NULL);
 
     /* First scratch: head at h, cap == PT_ARENA_SIZE */
     cap = 0;
     h = pt_scratch(&c, &cap);
-    assert(h != NULL);
-    assert(cap == PT_ARENA_SIZE);
+    assertok(h != NULL);
+    asserteq(cap, PT_ARENA_SIZE);
 
     /* Re-scratch: same position, unchanged */
     {
         char  *h2;
         size_t cap2 = 0;
         h2 = pt_scratch(&c, &cap2);
-        assert(h2 == h);
-        assert(cap2 == cap);
+        asserteq(h2, h);
+        asserteq(cap2, cap);
     }
 
     /* Write 10 bytes to scratch area */
@@ -1401,15 +1452,15 @@ TEST(peekscratch_roundtrip) {
         char  *h3;
         size_t cap3 = 0;
         h3 = pt_scratch(&c, &cap3);
-        assert(h3 == h);
-        assert(cap3 == cap);
+        asserteq(h3, h);
+        asserteq(cap3, cap);
     }
 
     /* pt_literal: commit 10 bytes, return old head */
     {
         const char *h4 = (pt_reserve(&c, used), pt_literal(&c, used));
-        assert(h4 == h);
-        assert(used == 10);
+        asserteq(h4, h);
+        asserteq(used, 10);
     }
 
     /* Scratch after literal: position advanced by 10 */
@@ -1417,23 +1468,24 @@ TEST(peekscratch_roundtrip) {
         char  *h5;
         size_t cap5 = 0;
         h5 = pt_scratch(&c, &cap5);
-        assert(h5 == h + 10);
-        assert(cap5 == cap - 10);
+        asserteq(h5, h + 10);
+        asserteq(cap5, cap - 10);
     }
 
     /* Insert into tree, verify content */
     {
         char   buf[16];
         size_t blen;
-        assert(pt_insert(&c, h, 10) == PT_OK);
-        assert(pt_checktree(c.tree));
-        assert(pt_bytes(c.tree) == 10);
+        asserteq(pt_insert(&c, h, 10), PT_OK);
+        assertok(pt_checktree(c.tree));
+        asserteq(pt_bytes(c.tree), 10);
         blen = collect_bytes(c.tree, buf, sizeof(buf));
-        assert(blen == 10);
-        assert(memcmp(buf, "HelloWorld", 10) == 0);
+        asserteq(blen, 10);
+        asserteq(memcmp(buf, "HelloWorld", 10), 0);
     }
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1447,16 +1499,16 @@ TEST(peekscratch_params) {
 
     /* NULL cursor */
     cap = 123;
-    assert(pt_scratch(NULL, &cap) == NULL);
-    assert(cap == 123);
+    asserteq(pt_scratch(NULL, &cap), NULL);
+    asserteq(cap, 123);
 
     /* NULL plen */
-    assert(pt_scratch(&c, NULL) == NULL);
+    asserteq(pt_scratch(&c, NULL), NULL);
 
     /* Arena not built: scratch returns NULL, *plen set to 0 */
     cap = 456;
-    assert(pt_scratch(&c, &cap) == NULL);
-    assert(cap == 0);
+    asserteq(pt_scratch(&c, &cap), NULL);
+    asserteq(cap, 0);
 
     pt_release(b);
     pt_close(S);
@@ -1475,8 +1527,8 @@ TEST(peekscratch_adjacent) {
     pt_reserve(&c, 0);
     cap = 0;
     h1 = pt_scratch(&c, &cap);
-    assert(h1 != NULL);
-    assert(cap == PT_ARENA_SIZE);
+    assertok(h1 != NULL);
+    asserteq(cap, PT_ARENA_SIZE);
 
     /* Write 8 bytes, then literal to commit */
     used = 8;
@@ -1486,7 +1538,7 @@ TEST(peekscratch_adjacent) {
     /* Next scratch: adjacent at h1+8 */
     cap = 0;
     h2 = pt_scratch(&c, &cap);
-    assert(h2 == h1 + 8);
+    asserteq(h2, h1 + 8);
 
     /* Write 3 bytes, literal to commit */
     used = 3;
@@ -1497,16 +1549,17 @@ TEST(peekscratch_adjacent) {
     {
         char   buf[16];
         size_t blen;
-        assert(pt_insert(&c, h1, 8) == PT_OK);
+        asserteq(pt_insert(&c, h1, 8), PT_OK);
         pt_advance(&c, 8);
-        assert(pt_insert(&c, h2, 3) == PT_OK);
-        assert(pt_bytes(c.tree) == 11);
+        asserteq(pt_insert(&c, h2, 3), PT_OK);
+        asserteq(pt_bytes(c.tree), 11);
         blen = collect_bytes(c.tree, buf, sizeof(buf));
-        assert(blen == 11);
-        assert(memcmp(buf, "HelloABCXYZ", 11) == 0);
+        asserteq(blen, 11);
+        asserteq(memcmp(buf, "HelloABCXYZ", 11), 0);
     }
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1520,23 +1573,24 @@ TEST(arena_lazy) {
     pt_seek(&c, b, 0);
 
     /* Lazy: arena not built before any edit/reserve */
-    assert(c.tree->arena.current == NULL);
-    assert(c.tree->arena.full == NULL);
+    asserteq(c.tree->arena.current, NULL);
+    asserteq(c.tree->arena.full, NULL);
 
     /* pt_scratch before any reserve/literal returns NULL, *plen=0 */
     {
         size_t cap = 123;
-        assert(pt_scratch(&c, &cap) == NULL);
-        assert(cap == 0);
+        asserteq(pt_scratch(&c, &cap), NULL);
+        asserteq(cap, 0);
     }
 
     /* pt_reserve builds the arena */
-    assert(pt_reserve(&c, 0) != NULL);
-    assert(c.tree != b);
-    assert(c.tree->arena.current != NULL);
+    assertok(pt_reserve(&c, 0) != NULL);
+    assertok(c.tree != b);
+    assertok(c.tree->arena.current != NULL);
 
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1548,30 +1602,31 @@ TEST(arena_reserve_full) {
     pt_seek(&c, b, 0);
 
     /* First reserve: block allocated with PT_ARENA_SIZE */
-    assert(pt_reserve(&c, 0) != NULL);
-    assert(c.tree->arena.current != NULL);
+    assertok(pt_reserve(&c, 0) != NULL);
+    assertok(c.tree->arena.current != NULL);
 
     /* Fill the block: literal entire capacity → moves block to full chain */
     {
         size_t n = PT_ARENA_SIZE;
-        assert(pt_literal(&c, n) != NULL);
-        assert(n == PT_ARENA_SIZE);
+        assertok(pt_literal(&c, n) != NULL);
+        asserteq(n, PT_ARENA_SIZE);
     }
-    assert(c.tree->arena.current == NULL); /* head exhausted */
-    assert(c.tree->arena.full != NULL);    /* moved to full */
+    asserteq(c.tree->arena.current, NULL); /* head exhausted */
+    assertok(c.tree->arena.full != NULL);  /* moved to full */
 
     /* Next reserve allocates new block */
-    assert(pt_reserve(&c, 0) != NULL);
-    assert(c.tree->arena.current != NULL);
+    assertok(pt_reserve(&c, 0) != NULL);
+    assertok(c.tree->arena.current != NULL);
 
     /* Custom-sized reserve: block >= max(len, PT_ARENA_SIZE) */
     {
         char *p = pt_reserve(&c, 256);
-        assert(p != NULL);
+        assertok(p != NULL);
     }
 
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1582,31 +1637,32 @@ TEST(arena_dirty_break) {
     size_t    cap;
 
     pt_seek(&c, b, 0);
-    assert(!c.dirty);
+    assertok(!c.dirty);
 
     /* pt_scratch does NOT trigger dirty (read-only) */
-    assert(pt_scratch(&c, &cap) == NULL);
-    assert(!c.dirty);
-    assert(c.tree == b); /* no fork */
+    asserteq(pt_scratch(&c, &cap), NULL);
+    assertok(!c.dirty);
+    asserteq(c.tree, b); /* no fork */
 
     /* pt_reserve triggers dirty + builds arena */
-    assert(pt_reserve(&c, 0) != NULL);
-    assert(c.dirty);
-    assert(c.tree != b);
+    assertok(pt_reserve(&c, 0) != NULL);
+    assertok(c.dirty);
+    assertok(c.tree != b);
 
     /* Fork a second cursor from original buffer: independent arena */
     {
         pt_Cursor c2;
         pt_seek(&c2, b, 0);
-        assert(pt_reserve(&c2, 0) != NULL);
-        assert(c2.dirty);
-        assert(c2.tree != c.tree);
-        assert(c2.tree->arena.current != c.tree->arena.current);
+        assertok(pt_reserve(&c2, 0) != NULL);
+        assertok(c2.dirty);
+        assertok(c2.tree != c.tree);
+        assertok(c2.tree->arena.current != c.tree->arena.current);
         pt_release(c2.tree);
     }
 
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1622,32 +1678,33 @@ TEST(arena_reserve_reuse) {
     pt_seek(&c, b, 0);
 
     /* Build block A (head), consume a little */
-    assert(pt_reserve(&c, 100) != NULL);
+    assertok(pt_reserve(&c, 100) != NULL);
     n = 80;
-    assert(pt_literal(&c, n) != NULL);
-    assert(n == 80);
+    assertok(pt_literal(&c, n) != NULL);
+    asserteq(n, 80);
 
     /* Block A (size=1024, used=80, rem=944) cannot satisfy len=1000
        → allocate block B (size=1024, used=0), current = B → A */
-    assert(pt_reserve(&c, 1000) != NULL);
+    assertok(pt_reserve(&c, 1000) != NULL);
 
     /* Consume B heavily so B's remainder < the next request */
     n = 950;
-    assert(pt_literal(&c, n) != NULL);
-    assert(n == 950);
+    assertok(pt_literal(&c, n) != NULL);
+    asserteq(n, 950);
     /* now current = B(rem=74) → A(rem=944) */
 
     /* Request: head B(74) < 200, so loop skips B; A(944) >= 200
        → A unlinked from chain, moved to head. */
     p = pt_reserve(&c, 200);
-    assert(p != NULL);
-    assert(c.tree->arena.current != NULL);
+    assertok(p != NULL);
+    assertok(c.tree->arena.current != NULL);
 
     /* Verify we can write into it */
     memcpy(p, "test", 4);
 
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1660,18 +1717,21 @@ TEST(arena_literal_cold) {
     char     *p;
 
     pt_seek(&c, b, 0);
-    assert(c.tree->arena.current == NULL);
+    asserteq(c.tree->arena.current, NULL);
 
     n = 10;
-    p = pt_reserve(&c, n), assert(p != NULL);
-    p = (char *)pt_literal(&c, n), assert(p != NULL);
-    assert(c.tree->arena.current != NULL);
-    assert(c.tree->arena.current->size == PT_ARENA_SIZE);
-    assert(c.tree->arena.current->used == 10);
+    p = pt_reserve(&c, n);
+    assertok(p != NULL);
+    p = (char *)pt_literal(&c, n);
+    assertok(p != NULL);
+    assertok(c.tree->arena.current != NULL);
+    asserteq(c.tree->arena.current->size, PT_ARENA_SIZE);
+    asserteq(c.tree->arena.current->used, 10);
     memcpy(p, "hello", 5);
 
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1686,14 +1746,15 @@ TEST(arena_literal_params) {
 
     /* NULL cursor */
     n = 10;
-    assert(pt_literal(NULL, n) == NULL);
+    asserteq(pt_literal(NULL, n), NULL);
 
     /* *plen == 0 */
     n = 0;
-    assert(pt_literal(&c, n) == NULL);
+    asserteq(pt_literal(&c, n), NULL);
 
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1707,9 +1768,10 @@ TEST(literal_arena_empty) {
     size_t    n;
     pt_seek(&c, b, 0);
     n = 10;
-    assert(pt_literal(&c, n) == NULL);
+    asserteq(pt_literal(&c, n), NULL);
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1720,13 +1782,14 @@ TEST(literal_arena_short) {
     pt_Cursor c;
     size_t    n;
     pt_seek(&c, b, 0);
-    assert(pt_reserve(&c, 0) != NULL);
+    assertok(pt_reserve(&c, 0) != NULL);
     n = PT_ARENA_SIZE - 5;
-    assert(pt_literal(&c, n) != NULL);
+    assertok(pt_literal(&c, n) != NULL);
     n = 10;
-    assert(pt_literal(&c, n) == NULL);
+    asserteq(pt_literal(&c, n), NULL);
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1736,12 +1799,13 @@ TEST(remove_params) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
-    assert(pt_remove(NULL, 5) == PT_ERRPARAM);
+    asserteq(pt_remove(NULL, 5), PT_ERRPARAM);
     pt_seek(&c, b, 0);
-    assert(pt_remove(&c, 0) == PT_OK);   /* len==0 */
-    assert(pt_remove(&c, 100) == PT_OK); /* empty tree, clamped to 0 */
+    asserteq(pt_remove(&c, 0), PT_OK);   /* len==0 */
+    asserteq(pt_remove(&c, 100), PT_OK); /* empty tree, clamped to 0 */
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1750,14 +1814,16 @@ TEST(remove_hole_whole) {
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
-    assert(pt_edit(&c, 0, "hello", 5) == PT_OK); /* fork + hole in dirty tree */
-    assert(pt_bytes(c.tree) == 5 && c.dirty);
+    asserteq(pt_edit(&c, 0, "hello", 5), PT_OK); /* fork + hole in dirty tree */
+    asserteq(pt_bytes(c.tree), 5);
+    assertok(c.dirty);
     pt_locate(&c, 0);
-    assert(pt_remove(&c, 5) == PT_OK); /* remove entire hole */
-    assert(pt_checktree(c.tree));
-    assert(pt_bytes(c.tree) == 0);
+    asserteq(pt_remove(&c, 5), PT_OK); /* remove entire hole */
+    assertok(pt_checktree(c.tree));
+    asserteq(pt_bytes(c.tree), 0);
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1767,24 +1833,26 @@ TEST(remove_hole_mid) {
     pt_Cursor c;
     pt_seek(&c, b, 0);
     pt_edit(&c, 0, "hello world", 11); /* fork + hole in dirty tree */
-    assert(pt_bytes(c.tree) == 11 && c.dirty);
+    asserteq(pt_bytes(c.tree), 11);
+    assertok(c.dirty);
     pt_locate(&c, 2);                  /* pos 2: 'l' in "hello world" */
-    assert(pt_remove(&c, 5) == PT_OK); /* delete [2,7): "llo w" from hole */
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 2));
-    assert(pt_bytes(c.tree) == 6);
+    asserteq(pt_remove(&c, 5), PT_OK); /* delete [2,7): "llo w" from hole */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 2));
+    asserteq(pt_bytes(c.tree), 6);
     /* result: hole "heorld" (indices 0-1 + 7-11) = 6 bytes */
     {
         pt_Node *r = &c.tree->root;
-        assert(r->child_count == 1);
-        assert(ptM_ishole(r, 0));
+        asserteq(r->child_count, 1);
+        assertok(ptM_ishole(r, 0));
         {
-            assert(r->bytes[0] == 6);
-            assert(memcmp(((pt_Hole *)r->children[0])->data, "heorld", 6) == 0);
+            asserteq(r->bytes[0], 6);
+            asserteq(memcmp(((pt_Hole *)r->children[0])->data, "heorld", 6), 0);
         }
     }
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1799,15 +1867,17 @@ TEST(remove_hole_boundary) {
     pt_edit(&c, 0, "DEF", 3);
     pt_advance(&c, 3);
     pt_insert(&c, "ghi", 3);
-    assert(pt_bytes(c.tree) == 9 && c.dirty);
+    asserteq(pt_bytes(c.tree), 9);
+    assertok(c.dirty);
     /* delete [2,6): "c" (tail of lit) + "DEF" (whole hole) */
     pt_locate(&c, 2);
-    assert(pt_remove(&c, 4) == PT_OK);
-    assert(pt_checktree(c.tree));
+    asserteq(pt_remove(&c, 4), PT_OK);
+    assertok(pt_checktree(c.tree));
     /* result: "ab"(lit) + "ghi"(lit) — no hole left */
     pt_asserttree(c.tree, 0, leafV(litV("ab"), litV("ghi")));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1822,27 +1892,30 @@ TEST(remove_hole_mixed) {
     pt_edit(&c, 0, "DEF", 3);
     pt_advance(&c, 3);
     pt_insert(&c, "ghi", 3);
-    assert(pt_bytes(c.tree) == 9 && c.dirty);
+    asserteq(pt_bytes(c.tree), 9);
+    assertok(c.dirty);
     /* delete [1,5): "bc"(2 from lit") + "DE"(2 from hole) */
     pt_locate(&c, 1);
-    assert(pt_remove(&c, 4) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 1));
+    asserteq(pt_remove(&c, 4), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 1));
     /* result: "a"(lit) + hole"F"(1) + "ghi"(lit) */
-    assert(pt_bytes(c.tree) == 5);
+    asserteq(pt_bytes(c.tree), 5);
     {
         pt_Node *r = &c.tree->root;
-        assert(r->child_count == 3);
-        assert(!ptM_ishole(r, 0)); /* lit "a" */
-        assert(ptM_ishole(r, 1));  /* hole "F" */
-        assert(!ptM_ishole(r, 2)); /* lit "ghi" */
+        asserteq(r->child_count, 3);
+        assertok(!ptM_ishole(r, 0)); /* lit "a" */
+        assertok(ptM_ishole(r, 1));  /* hole "F" */
+        assertok(!ptM_ishole(r, 2)); /* lit "ghi" */
         {
             pt_Hole *h = (pt_Hole *)r->children[1];
-            assert(r->bytes[1] == 1 && h->data[0] == 'F');
+            asserteq(r->bytes[1], 1);
+            asserteq(h->data[0], 'F');
         }
     }
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1855,15 +1928,16 @@ TEST(remove_cow) {
     pt_insert(&c, "abcdef", 6);
     a = pt_commit(&c); /* committed buffer */
     pt_seek(&c, a, 2);
-    assert(pt_remove(&c, 2) == PT_OK); /* remove from committed tree */
-    assert(pt_checktree(c.tree));
-    assert(pt_checktree(a)); /* source unchanged */
-    assert(pt_bytes(a) == 6);
-    assert(pt_bytes(c.tree) == 4);
+    asserteq(pt_remove(&c, 2), PT_OK); /* remove from committed tree */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checktree(a)); /* source unchanged */
+    asserteq(pt_bytes(a), 6);
+    asserteq(pt_bytes(c.tree), 4);
     pt_asserttree(c.tree, 0, leafV(litV("ab"), litV("ef")));
     pt_asserttree(a, 0, leafV(litV("abcdef")));
     pt_release(c.tree), pt_release(a), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1876,22 +1950,23 @@ TEST(remove_oom) {
     int       r;
     /* Create a committed tree with content */
     pt_seek(&c, b, 0);
-    assert(pt_insert(&c, "abcd", 4) == PT_OK);
+    asserteq(pt_insert(&c, "abcd", 4), PT_OK);
     a = pt_commit(&c); /* c.tree == a, refcount remains 1 */
-    assert(pt_bytes(a) == 4);
+    asserteq(pt_bytes(a), 4);
     /* Drain freelist so reserve must allocate a new page */
     {
         pt_Drain d = pt_drainpool(&S->nodes);
         cnt = 0; /* next alloc fails */
         pt_seek(&c, a, 1);
         r = pt_remove(&c, 2);
-        assert(r == PT_ERRMEM);
-        assert(!c.dirty);
+        asserteq(r, PT_ERRMEM);
+        assertok(!c.dirty);
         cnt = 1000;
         pt_refillpool(&S->nodes, d);
     }
     pt_release(a), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1906,8 +1981,8 @@ TEST(remove_brute) {
     pt_append(&c, "ABCDEFGHIJ", 10);
     pt_append(&c, "abcdefghij", 10);
     total = pt_bytes(c.tree);
-    assert(total == 20);
-    assert(c.tree->levels == 0);
+    asserteq(total, 20);
+    asserteq(c.tree->levels, 0);
     /* brute all (pos,len) that yield positive deletion */
     for (pos = 0; pos < total; ++pos) {
         size_t maxlen = total - pos;
@@ -1918,20 +1993,23 @@ TEST(remove_brute) {
             pt_seek(&cc, fresh, 0);
             pt_append(&cc, "ABCDEFGHIJabcdefghij", 20);
             pt_release(fresh);
-            assert(pt_bytes(cc.tree) == 20);
+            asserteq(pt_bytes(cc.tree), 20);
             /* remove */
             pt_locate(&cc, pos);
-            assert(pt_remove(&cc, len) == PT_OK);
+            asserteq(pt_remove(&cc, len), PT_OK);
             if (!pt_checktree(cc.tree)) {
-                test_log("FAIL: remove_brute pos=%lu len=%lu\n", test_lu(pos), test_lu(len));
-                assert(0);
+                test_log(
+                        "FAIL: remove_brute pos=%lu len=%lu\n", test_lu(pos),
+                        test_lu(len));
+                abort();
             }
-            assert(pt_bytes(cc.tree) == total - len);
+            asserteq(pt_bytes(cc.tree), total - len);
             pt_release(cc.tree);
         }
     }
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1943,11 +2021,12 @@ TEST(remove_stitch_full) {
             1, innerV(leafV(litV("aa"), litV("bb")),
                       leafV(litV("cc"), litV("dd"))));
     pt_seek(&c, b, 2);
-    assert(pt_remove(&c, 4) == PT_OK); /* delete "bb"+"cc" cross-leaf */
-    assert(pt_checktree(c.tree));
-    assert(pt_bytes(c.tree) == 4); /* "aa"+"dd" */
+    asserteq(pt_remove(&c, 4), PT_OK); /* delete "bb"+"cc" cross-leaf */
+    assertok(pt_checktree(c.tree));
+    asserteq(pt_bytes(c.tree), 4); /* "aa"+"dd" */
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1961,10 +2040,11 @@ TEST(remove_fold_balance) {
             1, innerV(leafV(litV("a")),
                       leafV(litV("x"), litV("y"), litV("z"), litV("w"))));
     pt_seek(&c, b, 0);
-    assert(pt_remove(&c, 3) == PT_OK);
-    assert(pt_checktree_allow_empty(c.tree, 1));
+    asserteq(pt_remove(&c, 3), PT_OK);
+    assertok(pt_checktree_allow_empty(c.tree, 1));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1972,10 +2052,11 @@ TEST(remove_hole_trim) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Cursor c;
     editV(&c, 1, 0, leafV(holeV("abc"), holeV("def")));
-    assert(pt_remove(&c, 4) == PT_OK);
-    assert(pt_bytes(c.tree) == 2);
+    asserteq(pt_remove(&c, 4), PT_OK);
+    asserteq(pt_bytes(c.tree), 2);
     pt_release(c.tree);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -1997,11 +2078,12 @@ TEST(remove_merge_literal) {
         lf->child_count = 3;
         b = treeV(0, lf);
         pt_seek(&c, b, 3);
-        assert(pt_remove(&c, 3) == PT_OK);
-        assert(pt_checktree(c.tree) && pt_checkcursor(&c, 3));
+        asserteq(pt_remove(&c, 3), PT_OK);
+        assertok(pt_checktree(c.tree) && pt_checkcursor(&c, 3));
         pt_asserttree(c.tree, 0, leafV(litV("abcdef")));
         pt_release(c.tree), pt_release(b);
-        assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+        asserteq(S->nodes.live_obj, 0);
+        asserteq(S->holes.live_obj, 0);
         pt_close(S);
     }
     /* --- cross node (levels=1): [abc,P][Q,def] delete P+Q --- */
@@ -2020,11 +2102,12 @@ TEST(remove_merge_literal) {
         l1->child_count = 2;
         b = treeV(1, innerV(l0, l1));
         pt_seek(&c, b, 3);
-        assert(pt_remove(&c, 2) == PT_OK);
-        assert(pt_checktree(c.tree) && pt_checkcursor(&c, 3));
+        asserteq(pt_remove(&c, 2), PT_OK);
+        assertok(pt_checktree(c.tree) && pt_checkcursor(&c, 3));
         pt_asserttree(c.tree, 0, leafV(litV("abcdef")));
         pt_release(c.tree), pt_release(b);
-        assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+        asserteq(S->nodes.live_obj, 0);
+        asserteq(S->holes.live_obj, 0);
         pt_close(S);
     }
     /* --- multi-element cross node: [abc,X,Y][Z,def] delete X+Y+Z --- */
@@ -2044,11 +2127,12 @@ TEST(remove_merge_literal) {
         l1->child_count = 2;
         b = treeV(1, innerV(l0, l1));
         pt_seek(&c, b, 3);
-        assert(pt_remove(&c, 3) == PT_OK);
-        assert(pt_checktree(c.tree) && pt_checkcursor(&c, 3));
+        asserteq(pt_remove(&c, 3), PT_OK);
+        assertok(pt_checktree(c.tree) && pt_checkcursor(&c, 3));
         pt_asserttree(c.tree, 0, leafV(litV("abcdef")));
         pt_release(c.tree), pt_release(b);
-        assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+        asserteq(S->nodes.live_obj, 0);
+        asserteq(S->holes.live_obj, 0);
         pt_close(S);
     }
 }
@@ -2061,11 +2145,12 @@ TEST(remove_merge_hole_full) {
     editV(&c, 10, 1,
           innerV(leafV(holeV("AAAAAAAAAA"), litV("X")),
                  leafV(holeV("BBBBBB"))));
-    assert(pt_remove(&c, 1) == PT_OK);
-    assert(pt_checktree(c.tree) && pt_checkcursor(&c, 10));
-    assert(pt_bytes(c.tree) == 16);
+    asserteq(pt_remove(&c, 1), PT_OK);
+    assertok(pt_checktree(c.tree) && pt_checkcursor(&c, 10));
+    asserteq(pt_bytes(c.tree), 16);
     pt_release(c.tree);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2075,11 +2160,12 @@ TEST(remove_merge_hole_split) {
     /* mergeleaf full merge: hole A(10) + hole B(5) = 15 ≤ 16 */
     editV(&c, 10, 1,
           innerV(leafV(holeV("AAAAAAAAAA"), litV("X")), leafV(holeV("BBBBB"))));
-    assert(pt_remove(&c, 1) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_bytes(c.tree) == 15);
+    asserteq(pt_remove(&c, 1), PT_OK);
+    assertok(pt_checktree(c.tree));
+    asserteq(pt_bytes(c.tree), 15);
     pt_release(c.tree);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2092,26 +2178,27 @@ TEST(remove_merge_hole_partial) {
     pt_Cursor c;
     editV(&c, 10, 1,
           innerV(leafV(holeV("aaaaaaaaaaaa")), leafV(holeV("bbbbbbbbbbbb"))));
-    assert(pt_remove(&c, 4) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_bytes(c.tree) == 20);
-    assert(pt_checkcursor(&c, 10));
+    asserteq(pt_remove(&c, 4), PT_OK);
+    assertok(pt_checktree(c.tree));
+    asserteq(pt_bytes(c.tree), 20);
+    assertok(pt_checkcursor(&c, 10));
     {
         pt_Node *r = &c.tree->root;
-        assert(r->child_count == 2);
-        assert(r->bytes[0] == 16);
-        assert(r->bytes[1] == 4);
+        asserteq(r->child_count, 2);
+        asserteq(r->bytes[0], 16);
+        asserteq(r->bytes[1], 4);
     }
     {
         char   buf[32];
         size_t nr;
         pt_seek(&c, c.tree, 0);
         nr = pt_read(&c, buf, 20);
-        assert(nr == 20);
-        assert(memcmp(buf, "aaaaaaaaaabbbbbbbbbb", 20) == 0);
+        asserteq(nr, 20);
+        asserteq(memcmp(buf, "aaaaaaaaaabbbbbbbbbb", 20), 0);
     }
     pt_release(c.tree);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2128,12 +2215,13 @@ TEST(remove_stitch_deep) {
             innerV(leafV(litV("aa"), litV("bb")), leafV(litV("cc"), litV("dd")),
                    leafV(litV("ee"), litV("ff"))));
     pt_seek(&c, b, 2);                 /* start of "bb" */
-    assert(pt_remove(&c, 8) == PT_OK); /* delete "bb"+"cc"+"dd"+"ee" = 8B */
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 2));
-    assert(pt_bytes(c.tree) == 4); /* "aa"+"ff" remain */
+    asserteq(pt_remove(&c, 8), PT_OK); /* delete "bb"+"cc"+"dd"+"ee" = 8B */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 2));
+    asserteq(pt_bytes(c.tree), 4); /* "aa"+"ff" remain */
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2145,10 +2233,11 @@ TEST(remove_trim_hole) {
     editV(&c, 0, 1,
           innerV(leafV(holeV("xy"), litV("ab")),
                  leafV(litV("cd"), litV("ef"))));
-    assert(pt_remove(&c, 4) == PT_OK);
-    assert(pt_checktree(c.tree));
+    asserteq(pt_remove(&c, 4), PT_OK);
+    assertok(pt_checktree(c.tree));
     pt_release(c.tree);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2165,11 +2254,12 @@ TEST(remove_hole_eraseleaf) {
     pt_edit(&c, 0, "hole2", 5); /* hole("hole2") at pos 8 */
     pt_release(b);
     pt_locate(&c, 4);
-    assert(pt_remove(&c, 3) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 4));
+    asserteq(pt_remove(&c, 3), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 4));
     pt_release(c.tree);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2217,21 +2307,24 @@ TEST(remove_brute2) {
             pt_Buffer b = brute2_tree(S, src);
             pt_Cursor c;
             pt_seek(&c, b, pos);
-            assert(pt_remove(&c, len) == PT_OK);
+            asserteq(pt_remove(&c, len), PT_OK);
             if (!pt_checktree_allow_empty(c.tree, 1)
                 || pt_bytes(c.tree) != 64 - len || !pt_checkcursor(&c, pos)) {
-                test_log("FAIL: brute2 pos=%lu len=%lu\n", test_lu(pos), test_lu(len));
+                test_log(
+                        "FAIL: brute2 pos=%lu len=%lu\n", test_lu(pos),
+                        test_lu(len));
                 pt_dumptree(c.tree, "brute2");
-                assert(0);
+                abort();
             }
             pt_locate(&c, 0);
-            assert(pt_read(&c, rd, 64) == 64 - len);
-            assert(memcmp(rd, expect, pos) == 0);
-            assert(memcmp(rd + pos, expect + pos + len, 64 - pos - len) == 0);
+            asserteq(pt_read(&c, rd, 64), 64 - len);
+            asserteq(memcmp(rd, expect, pos), 0);
+            asserteq(memcmp(rd + pos, expect + pos + len, 64 - pos - len), 0);
             pt_release(c.tree), pt_release(b);
         }
     }
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2246,10 +2339,10 @@ TEST(remove_fold_balance2) {
                              leafV(litV("i"), litV("j")))));
     pt_Cursor c;
     pt_seek(&c, b, 9);
-    assert(pt_remove(&c, 1) == PT_OK); /* erase tail "j": leaf cc 2 -> 1 */
-    assert(pt_checktree(c.tree));
-    assert(pt_bytes(c.tree) == 9);
-    assert(pt_checkcursor(&c, 9));
+    asserteq(pt_remove(&c, 1), PT_OK); /* erase tail "j": leaf cc 2 -> 1 */
+    assertok(pt_checktree(c.tree));
+    asserteq(pt_bytes(c.tree), 9);
+    assertok(pt_checkcursor(&c, 9));
     pt_asserttree(
             c.tree, 2,
             innerV(innerV(leafV(litV("a"), litV("b")),
@@ -2257,7 +2350,8 @@ TEST(remove_fold_balance2) {
                    innerV(leafV(litV("e"), litV("f")),
                           leafV(litV("g"), litV("h"), litV("i")))));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2272,12 +2366,13 @@ TEST(remove_fold_merge) {
                              leafV(litV("i"), litV("j")))));
     pt_Cursor c;
     pt_seek(&c, b, 7);
-    assert(pt_remove(&c, 1) == PT_OK); /* erase tail "j": leaf cc 2 -> 1 */
-    assert(pt_checktree(c.tree));
-    assert(pt_bytes(c.tree) == 7);
-    assert(pt_checkcursor(&c, 7));
+    asserteq(pt_remove(&c, 1), PT_OK); /* erase tail "j": leaf cc 2 -> 1 */
+    assertok(pt_checktree(c.tree));
+    asserteq(pt_bytes(c.tree), 7);
+    assertok(pt_checkcursor(&c, 7));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2299,10 +2394,11 @@ TEST(remove_findroom) {
     root = innerV(inner0, inner1);
     b = treeV(2, root);
     pt_seek(&c, b, 12);
-    assert(pt_remove(&c, 6) == PT_OK);
-    assert(pt_checktree_allow_empty(c.tree, 1));
+    asserteq(pt_remove(&c, 6), PT_OK);
+    assertok(pt_checktree_allow_empty(c.tree, 1));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2353,18 +2449,21 @@ TEST(remove_brute3) {
             for (len = 1; len <= total - pos; ++len) {
                 pt_Buffer b = brute3_tree(S, src, shapes[si]);
                 pt_seek(&c, b, pos);
-                assert(pt_remove(&c, len) == PT_OK);
+                asserteq(pt_remove(&c, len), PT_OK);
                 if (!pt_checktree_allow_empty(c.tree, 1)
                     || pt_bytes(c.tree) != total - len
                     || !pt_checkcursor(&c, pos)) {
-                    test_log("FAIL brute3 s=%d pos=%lu len=%lu\n", si, test_lu(pos), test_lu(len));
-                    assert(0);
+                    test_log(
+                            "FAIL brute3 s=%d pos=%lu len=%lu\n", si,
+                            test_lu(pos), test_lu(len));
+                    abort();
                 }
                 pt_release(c.tree), pt_release(b);
             }
         }
     }
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2375,12 +2474,13 @@ TEST(splice_basic) {
     pt_Buffer b = treeV(0, leafV(litV("hello")));
     pt_Cursor c;
     pt_seek(&c, b, 1);
-    assert(pt_splice(&c, 3, "XYZ", 3) == PT_OK); /* del "ell", ins "XYZ" */
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 4)); /* cursor after remove+append: pos 1+3=4 */
+    asserteq(pt_splice(&c, 3, "XYZ", 3), PT_OK); /* del "ell", ins "XYZ" */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 4)); /* cursor after remove+append: pos 1+3=4 */
     pt_asserttree(c.tree, 0, leafV(litV("h"), litV("XYZ"), litV("o")));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2389,11 +2489,12 @@ TEST(splice_del0) {
     pt_Buffer b = treeV(0, leafV(litV("abc")));
     pt_Cursor c;
     pt_seek(&c, b, 0);
-    assert(pt_splice(&c, 0, "XYZ", 3) == PT_OK); /* del=0 → insert only */
-    assert(pt_checktree(c.tree));
+    asserteq(pt_splice(&c, 0, "XYZ", 3), PT_OK); /* del=0 → insert only */
+    assertok(pt_checktree(c.tree));
     pt_asserttree(c.tree, 0, leafV(litV("XYZ"), litV("abc")));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2402,12 +2503,13 @@ TEST(splice_null) {
     pt_Buffer b = treeV(0, leafV(litV("hello")));
     pt_Cursor c;
     pt_seek(&c, b, 1);
-    assert(pt_splice(&c, 3, NULL, 0) == PT_OK); /* del "ell", no insert */
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 1));
+    asserteq(pt_splice(&c, 3, NULL, 0), PT_OK); /* del "ell", no insert */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 1));
     pt_asserttree(c.tree, 0, leafV(litV("h"), litV("o")));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2421,10 +2523,11 @@ TEST(remove_stitch_overflow) {
                       innerV(leafV(litV("e")))));
     pt_Cursor c;
     pt_seek(&c, b, 0);
-    assert(pt_remove(&c, 3) == PT_OK);
-    assert(pt_checktree_allow_empty(c.tree, 1));
+    asserteq(pt_remove(&c, 3), PT_OK);
+    assertok(pt_checktree_allow_empty(c.tree, 1));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2438,10 +2541,11 @@ TEST(remove_foldnode_balance) {
                       innerV(innerV(leafV(litV("e"))))));
     pt_Cursor c;
     pt_seek(&c, b, 0);
-    assert(pt_remove(&c, 3) == PT_OK);
-    assert(pt_checktree_allow_empty(c.tree, 1));
+    asserteq(pt_remove(&c, 3), PT_OK);
+    assertok(pt_checktree_allow_empty(c.tree, 1));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2456,11 +2560,12 @@ TEST(remove_foldnode) {
                       innerV(leafV(litV("f")))));
     pt_Cursor c;
     pt_seek(&c, b, 0);
-    assert(pt_remove(&c, 1) == PT_OK);
-    assert(pt_checktree_allow_empty(c.tree, 1));
-    assert(pt_bytes(c.tree) == 5);
+    asserteq(pt_remove(&c, 1), PT_OK);
+    assertok(pt_checktree_allow_empty(c.tree, 1));
+    asserteq(pt_bytes(c.tree), 5);
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2469,15 +2574,17 @@ TEST(from_basic) {
     pt_State         *S = pt_open(&test_alloc, NULL);
     pt_Buffer         b = pt_from(S, buf, (size_t)strlen(buf));
     pt_Cursor         c;
-    assert(b && pt_bytes(b) == 11);
-    assert(pt_checktree(b));
+    assertok(b);
+    asserteq(pt_bytes(b), 11);
+    assertok(pt_checktree(b));
     pt_seek(&c, b, 0);
-    assert(pt_checkcursor(&c, 0));
+    assertok(pt_checkcursor(&c, 0));
     pt_seek(&c, b, 5);
-    assert(pt_insert(&c, "!", 1) == PT_OK); /* insert at space */
-    assert(pt_bytes(c.tree) == 12);
+    asserteq(pt_insert(&c, "!", 1), PT_OK); /* insert at space */
+    asserteq(pt_bytes(c.tree), 12);
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2487,13 +2594,14 @@ TEST(edit_params) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
-    assert(pt_edit(NULL, 0, "x", 1) == PT_ERRPARAM);
+    asserteq(pt_edit(NULL, 0, "x", 1), PT_ERRPARAM);
     pt_seek(&c, b, 0);
-    assert(pt_edit(&c, 0, "x", PT_MAX_HOLESIZE + 1) == PT_ERRPARAM);
-    assert(pt_edit(&c, 0, NULL, 1) == PT_ERRPARAM);
-    assert(pt_edit(&c, 0, NULL, 0) == PT_OK);
+    asserteq(pt_edit(&c, 0, "x", PT_MAX_HOLESIZE + 1), PT_ERRPARAM);
+    asserteq(pt_edit(&c, 0, NULL, 1), PT_ERRPARAM);
+    asserteq(pt_edit(&c, 0, NULL, 0), PT_OK);
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2502,20 +2610,22 @@ TEST(edit_empty) {
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
-    assert(pt_edit(&c, 0, "hello", 5) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 5));
+    asserteq(pt_edit(&c, 0, "hello", 5), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 5));
     {
         pt_Node *r = &c.tree->root;
-        assert(r->child_count == 1);
-        assert(ptM_ishole(r, 0));
+        asserteq(r->child_count, 1);
+        assertok(ptM_ishole(r, 0));
         {
             pt_Hole *h = (pt_Hole *)r->children[0];
-            assert(r->bytes[0] == 5 && memcmp(h->data, "hello", 5) == 0);
+            asserteq(r->bytes[0], 5);
+            asserteq(memcmp(h->data, "hello", 5), 0);
         }
     }
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2524,24 +2634,28 @@ TEST(edit_fresh_lit_mid) {
     pt_Buffer b = treeV(0, leafV(litV("abcdef")));
     pt_Cursor c;
     pt_seek(&c, b, 3);
-    assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 6));
+    asserteq(pt_edit(&c, 0, "XYZ", 3), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 6));
     {
         pt_Node *r = &c.tree->root;
-        assert(r->child_count == 3);
-        assert(!ptM_ishole(r, 0));
-        assert(r->bytes[0] == 3 && memcmp(r->children[0], "abc", 3) == 0);
-        assert(ptM_ishole(r, 1));
+        asserteq(r->child_count, 3);
+        assertok(!ptM_ishole(r, 0));
+        asserteq(r->bytes[0], 3);
+        asserteq(memcmp(r->children[0], "abc", 3), 0);
+        assertok(ptM_ishole(r, 1));
         {
             pt_Hole *h = (pt_Hole *)r->children[1];
-            assert(r->bytes[1] == 3 && memcmp(h->data, "XYZ", 3) == 0);
+            asserteq(r->bytes[1], 3);
+            asserteq(memcmp(h->data, "XYZ", 3), 0);
         }
-        assert(!ptM_ishole(r, 2));
-        assert(r->bytes[2] == 3 && memcmp(r->children[2], "def", 3) == 0);
+        assertok(!ptM_ishole(r, 2));
+        asserteq(r->bytes[2], 3);
+        asserteq(memcmp(r->children[2], "def", 3), 0);
     }
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2553,20 +2667,21 @@ TEST(edit_fresh_boundary) {
         pt_Buffer b = treeV(0, leafV(litV("abcdef")));
         pt_Cursor c;
         pt_seek(&c, b, 0);
-        assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
-        assert(pt_checktree(c.tree));
-        assert(pt_checkcursor(&c, 3));
+        asserteq(pt_edit(&c, 0, "XYZ", 3), PT_OK);
+        assertok(pt_checktree(c.tree));
+        assertok(pt_checkcursor(&c, 3));
         {
             pt_Node *r = &c.tree->root;
-            assert(r->child_count == 2);
-            assert(ptM_ishole(r, 0));
+            asserteq(r->child_count, 2);
+            assertok(ptM_ishole(r, 0));
             {
                 pt_Hole *h = (pt_Hole *)r->children[0];
-                assert(r->bytes[0] == 3 && memcmp(h->data, "XYZ", 3) == 0);
+                asserteq(r->bytes[0], 3);
+                asserteq(memcmp(h->data, "XYZ", 3), 0);
             }
-            assert(!ptM_ishole(r, 1));
-            assert(r->bytes[1] == 6
-                   && memcmp(r->children[1], "abcdef", 6) == 0);
+            assertok(!ptM_ishole(r, 1));
+            asserteq(r->bytes[1], 6);
+            asserteq(memcmp(r->children[1], "abcdef", 6), 0);
         }
         pt_release(c.tree), pt_release(b);
     }
@@ -2576,25 +2691,27 @@ TEST(edit_fresh_boundary) {
         pt_Buffer b = treeV(0, leafV(litV("abcdef")));
         pt_Cursor c;
         pt_seek(&c, b, 6);
-        assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
-        assert(pt_checktree(c.tree));
-        assert(pt_checkcursor(&c, 9));
+        asserteq(pt_edit(&c, 0, "XYZ", 3), PT_OK);
+        assertok(pt_checktree(c.tree));
+        assertok(pt_checkcursor(&c, 9));
         {
             pt_Node *r = &c.tree->root;
-            assert(r->child_count == 2);
-            assert(!ptM_ishole(r, 0));
-            assert(r->bytes[0] == 6
-                   && memcmp(r->children[0], "abcdef", 6) == 0);
-            assert(ptM_ishole(r, 1));
+            asserteq(r->child_count, 2);
+            assertok(!ptM_ishole(r, 0));
+            asserteq(r->bytes[0], 6);
+            asserteq(memcmp(r->children[0], "abcdef", 6), 0);
+            assertok(ptM_ishole(r, 1));
             {
                 pt_Hole *h = (pt_Hole *)r->children[1];
-                assert(r->bytes[1] == 3 && memcmp(h->data, "XYZ", 3) == 0);
+                asserteq(r->bytes[1], 3);
+                asserteq(memcmp(h->data, "XYZ", 3), 0);
             }
         }
         pt_release(c.tree), pt_release(b);
     }
 
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2603,25 +2720,26 @@ TEST(edit_append_tail) {
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
-    assert(pt_edit(&c, 0, "hello", 5) == PT_OK);
-    assert(c.dirty);
+    asserteq(pt_edit(&c, 0, "hello", 5), PT_OK);
+    assertok(c.dirty);
     pt_release(b);
     pt_locate(&c, 5);
-    assert(pt_edit(&c, 0, " world", 6) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 11));
+    asserteq(pt_edit(&c, 0, " world", 6), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 11));
     {
         pt_Node *r = &c.tree->root;
-        assert(r->child_count == 1);
-        assert(ptM_ishole(r, 0));
+        asserteq(r->child_count, 1);
+        assertok(ptM_ishole(r, 0));
         {
             pt_Hole *h = (pt_Hole *)r->children[0];
-            assert(r->bytes[0] == 11
-                   && memcmp(h->data, "hello world", 11) == 0);
+            asserteq(r->bytes[0], 11);
+            asserteq(memcmp(h->data, "hello world", 11), 0);
         }
     }
     pt_release(c.tree);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2636,30 +2754,32 @@ TEST(edit_append_full) {
         for (i = 0; i < 14; ++i) bigbuf[i] = 'a';
         bigbuf[14] = '\0';
         pt_seek(&c, b, 0);
-        assert(pt_edit(&c, 0, bigbuf, 14) == PT_OK);
+        asserteq(pt_edit(&c, 0, bigbuf, 14), PT_OK);
     }
     pt_release(b);
     pt_locate(&c, 14);
-    assert(pt_edit(&c, 0, "bbbbb", 5) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 19));
+    asserteq(pt_edit(&c, 0, "bbbbb", 5), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 19));
     {
         pt_Node *r = &c.tree->root;
-        assert(r->child_count == 2);
-        assert(ptM_ishole(r, 0));
-        assert(ptM_ishole(r, 1));
+        asserteq(r->child_count, 2);
+        assertok(ptM_ishole(r, 0));
+        assertok(ptM_ishole(r, 1));
         {
             pt_Hole *ha = (pt_Hole *)r->children[0];
-            assert(r->bytes[0] == 14);
-            for (i = 0; i < 14; ++i) assert(ha->data[i] == 'a');
+            asserteq(r->bytes[0], 14);
+            for (i = 0; i < 14; ++i) asserteq(ha->data[i], 'a');
         }
         {
             pt_Hole *hb = (pt_Hole *)r->children[1];
-            assert(r->bytes[1] == 5 && memcmp(hb->data, "bbbbb", 5) == 0);
+            asserteq(r->bytes[1], 5);
+            asserteq(memcmp(hb->data, "bbbbb", 5), 0);
         }
     }
     pt_release(c.tree);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2673,22 +2793,25 @@ TEST(edit_prev_hole) {
     pt_release(b);
     /* seek to 5: boundary after hole "hello", start of lit "XYZ" */
     pt_locate(&c, 5);
-    assert(pt_edit(&c, 0, "abc", 3) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 8));
+    asserteq(pt_edit(&c, 0, "abc", 3), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 8));
     {
         pt_Node *r = &c.tree->root;
-        assert(r->child_count == 2);
-        assert(ptM_ishole(r, 0));
+        asserteq(r->child_count, 2);
+        assertok(ptM_ishole(r, 0));
         {
             pt_Hole *h = (pt_Hole *)r->children[0];
-            assert(r->bytes[0] == 8 && memcmp(h->data, "helloabc", 8) == 0);
+            asserteq(r->bytes[0], 8);
+            asserteq(memcmp(h->data, "helloabc", 8), 0);
         }
-        assert(!ptM_ishole(r, 1));
-        assert(r->bytes[1] == 3 && memcmp(r->children[1], "XYZ", 3) == 0);
+        assertok(!ptM_ishole(r, 1));
+        asserteq(r->bytes[1], 3);
+        asserteq(memcmp(r->children[1], "XYZ", 3), 0);
     }
     pt_release(c.tree);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2697,25 +2820,26 @@ TEST(edit_mid_fit) {
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
-    assert(pt_edit(&c, 0, "hello world", 11) == PT_OK);
-    assert(c.dirty);
+    asserteq(pt_edit(&c, 0, "hello world", 11), PT_OK);
+    assertok(c.dirty);
     pt_release(b);
     pt_locate(&c, 5);
-    assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 8));
+    asserteq(pt_edit(&c, 0, "XYZ", 3), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 8));
     {
         pt_Node *r = &c.tree->root;
-        assert(r->child_count == 1);
-        assert(ptM_ishole(r, 0));
+        asserteq(r->child_count, 1);
+        assertok(ptM_ishole(r, 0));
         {
             pt_Hole *h = (pt_Hole *)r->children[0];
-            assert(r->bytes[0] == 14);
-            assert(memcmp(h->data, "helloXYZ world", 14) == 0);
+            asserteq(r->bytes[0], 14);
+            asserteq(memcmp(h->data, "helloXYZ world", 14), 0);
         }
     }
     pt_release(c.tree);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2730,36 +2854,38 @@ TEST(edit_mid_split) {
         for (i = 0; i < 12; ++i) splbuf[i] = 'a';
         splbuf[12] = '\0';
         pt_seek(&c, b, 0);
-        assert(pt_edit(&c, 0, splbuf, 12) == PT_OK);
+        asserteq(pt_edit(&c, 0, splbuf, 12), PT_OK);
     }
     pt_release(b);
     pt_locate(&c, 6);
-    assert(pt_edit(&c, 0, "bbbbb", 5) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 11));
+    asserteq(pt_edit(&c, 0, "bbbbb", 5), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 11));
     {
         pt_Node *r = &c.tree->root;
-        assert(r->child_count == 3);
-        assert(ptM_ishole(r, 0));
-        assert(ptM_ishole(r, 1));
-        assert(ptM_ishole(r, 2));
+        asserteq(r->child_count, 3);
+        assertok(ptM_ishole(r, 0));
+        assertok(ptM_ishole(r, 1));
+        assertok(ptM_ishole(r, 2));
         {
             pt_Hole *hl = (pt_Hole *)r->children[0];
-            assert(r->bytes[0] == 6);
-            for (i = 0; i < 6; ++i) assert(hl->data[i] == 'a');
+            asserteq(r->bytes[0], 6);
+            for (i = 0; i < 6; ++i) asserteq(hl->data[i], 'a');
         }
         {
             pt_Hole *hm = (pt_Hole *)r->children[1];
-            assert(r->bytes[1] == 5 && memcmp(hm->data, "bbbbb", 5) == 0);
+            asserteq(r->bytes[1], 5);
+            asserteq(memcmp(hm->data, "bbbbb", 5), 0);
         }
         {
             pt_Hole *hr = (pt_Hole *)r->children[2];
-            assert(r->bytes[2] == 6);
-            for (i = 0; i < 6; ++i) assert(hr->data[i] == 'a');
+            asserteq(r->bytes[2], 6);
+            for (i = 0; i < 6; ++i) asserteq(hr->data[i], 'a');
         }
     }
     pt_release(c.tree);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2771,25 +2897,28 @@ TEST(edit_del_then_ins) {
     pt_insert(&c, "hello world", 11);
     pt_release(b);
     pt_locate(&c, 3);
-    assert(pt_edit(&c, 2, "XYZ", 3) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 6));
+    asserteq(pt_edit(&c, 2, "XYZ", 3), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 6));
     {
         pt_Node *r = &c.tree->root;
-        assert(r->child_count == 3);
-        assert(!ptM_ishole(r, 0));
-        assert(r->bytes[0] == 3 && memcmp(r->children[0], "hel", 3) == 0);
-        assert(ptM_ishole(r, 1));
+        asserteq(r->child_count, 3);
+        assertok(!ptM_ishole(r, 0));
+        asserteq(r->bytes[0], 3);
+        asserteq(memcmp(r->children[0], "hel", 3), 0);
+        assertok(ptM_ishole(r, 1));
         {
             pt_Hole *h = (pt_Hole *)r->children[1];
-            assert(r->bytes[1] == 3 && memcmp(h->data, "XYZ", 3) == 0);
+            asserteq(r->bytes[1], 3);
+            asserteq(memcmp(h->data, "XYZ", 3), 0);
         }
-        assert(!ptM_ishole(r, 2));
-        assert(r->bytes[2] == 6);
-        assert(memcmp(r->children[2], " world", 6) == 0);
+        assertok(!ptM_ishole(r, 2));
+        asserteq(r->bytes[2], 6);
+        asserteq(memcmp(r->children[2], " world", 6), 0);
     }
     pt_release(c.tree);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2801,12 +2930,13 @@ TEST(edit_del_only) {
     pt_insert(&c, "hello world", 11);
     pt_release(b);
     pt_locate(&c, 3);
-    assert(pt_edit(&c, 5, NULL, 0) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 3));
+    asserteq(pt_edit(&c, 5, NULL, 0), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 3));
     pt_asserttree(c.tree, 0, leafV(litV("hel"), litV("rld")));
     pt_release(c.tree);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2818,26 +2948,27 @@ TEST(edit_type_sequence) {
     pt_seek(&c, b, 0);
     for (k = 0; k < n; ++k) {
         char ch = (char)('a' + (k % 26));
-        assert(pt_edit(&c, 0, &ch, 1) == PT_OK);
-        assert(pt_checktree(c.tree));
-        assert(pt_checkcursor(&c, (size_t)(k + 1)));
+        asserteq(pt_edit(&c, 0, &ch, 1), PT_OK);
+        assertok(pt_checktree(c.tree));
+        assertok(pt_checkcursor(&c, (size_t)(k + 1)));
     }
     /* all 15 chars merged into a single hole via branch A */
     {
         pt_Node *r = &c.tree->root;
-        assert(r->child_count == 1);
-        assert(ptM_ishole(r, 0));
+        asserteq(r->child_count, 1);
+        assertok(ptM_ishole(r, 0));
         {
-            assert(r->bytes[0] == (size_t)n);
+            asserteq(r->bytes[0], (size_t)n);
             {
                 pt_Hole *h = (pt_Hole *)r->children[0];
                 for (k = 0; k < n; ++k)
-                    assert(h->data[k] == (char)('a' + (k % 26)));
+                    asserteq(h->data[k], (char)('a' + (k % 26)));
             }
         }
     }
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2852,9 +2983,9 @@ TEST(edit_split_tree) {
     pt_append(&c, "dd", 2);
     pt_release(b);
     pt_locate(&c, 2);
-    assert(pt_edit(&c, 0, "ZZ", 2) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 4));
+    asserteq(pt_edit(&c, 0, "ZZ", 2), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 4));
     /* expected: levels=1, inner(left: lit"aa", hole"ZZ", lit"bb",
        right: lit"cc", lit"dd") */
     {
@@ -2862,11 +2993,12 @@ TEST(edit_split_tree) {
         pt_Node  *exp_rf = leafV(litV("cc"), litV("dd"));
         pt_Node  *exp_in = innerV(exp_lf, exp_rf);
         pt_Buffer expected = treeV(1, exp_in);
-        assert(pt_comparetree(c.tree, expected));
+        assertok(pt_comparetree(c.tree, expected));
         pt_release(expected);
     }
     pt_release(c.tree);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2881,31 +3013,38 @@ TEST(edit_upmask) {
             1, innerV(leafV(litV("aa"), litV("bb")),
                       leafV(litV("cc"), litV("dd"))));
     pt_seek(&c, b, 1);
-    assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 4));
+    asserteq(pt_edit(&c, 0, "XYZ", 3), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 4));
     r = &c.tree->root;
-    assert(ptM_ishole(r, 0));
-    assert(!ptM_ishole(r, 1));
+    assertok(ptM_ishole(r, 0));
+    assertok(!ptM_ishole(r, 1));
     leaf0 = r->children[0];
-    assert(leaf0->child_count == 4);
-    assert(!ptM_ishole(leaf0, 0));
-    assert(leaf0->bytes[0] == 1 && memcmp(leaf0->children[0], "a", 1) == 0);
-    assert(ptM_ishole(leaf0, 1));
+    asserteq(leaf0->child_count, 4);
+    assertok(!ptM_ishole(leaf0, 0));
+    asserteq(leaf0->bytes[0], 1);
+    asserteq(memcmp(leaf0->children[0], "a", 1), 0);
+    assertok(ptM_ishole(leaf0, 1));
     hole = (pt_Hole *)leaf0->children[1];
-    assert(leaf0->bytes[1] == 3 && memcmp(hole->data, "XYZ", 3) == 0);
-    assert(!ptM_ishole(leaf0, 2));
-    assert(leaf0->bytes[2] == 1 && memcmp(leaf0->children[2], "a", 1) == 0);
-    assert(!ptM_ishole(leaf0, 3));
-    assert(leaf0->bytes[3] == 2 && memcmp(leaf0->children[3], "bb", 2) == 0);
+    asserteq(leaf0->bytes[1], 3);
+    asserteq(memcmp(hole->data, "XYZ", 3), 0);
+    assertok(!ptM_ishole(leaf0, 2));
+    asserteq(leaf0->bytes[2], 1);
+    asserteq(memcmp(leaf0->children[2], "a", 1), 0);
+    assertok(!ptM_ishole(leaf0, 3));
+    asserteq(leaf0->bytes[3], 2);
+    asserteq(memcmp(leaf0->children[3], "bb", 2), 0);
     leaf1 = r->children[1];
-    assert(leaf1->child_count == 2);
-    assert(!ptM_ishole(leaf1, 0));
-    assert(leaf1->bytes[0] == 2 && memcmp(leaf1->children[0], "cc", 2) == 0);
-    assert(!ptM_ishole(leaf1, 1));
-    assert(leaf1->bytes[1] == 2 && memcmp(leaf1->children[1], "dd", 2) == 0);
+    asserteq(leaf1->child_count, 2);
+    assertok(!ptM_ishole(leaf1, 0));
+    asserteq(leaf1->bytes[0], 2);
+    asserteq(memcmp(leaf1->children[0], "cc", 2), 0);
+    assertok(!ptM_ishole(leaf1, 1));
+    asserteq(leaf1->bytes[1], 2);
+    asserteq(memcmp(leaf1->children[1], "dd", 2), 0);
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2917,21 +3056,23 @@ TEST(commit_single_hole) {
     pt_Cursor c;
     pt_Buffer snap;
     pt_seek(&c, b, 0);
-    assert(pt_edit(&c, 0, "hello", 5) == PT_OK);
-    assert(c.dirty);
+    asserteq(pt_edit(&c, 0, "hello", 5), PT_OK);
+    assertok(c.dirty);
     snap = pt_commit(&c);
-    assert(snap != NULL);
-    assert(!c.dirty && c.tree == NULL);
-    assert(pt_checktree(snap));
+    assertok(snap != NULL);
+    assertok(!c.dirty);
+    asserteq(c.tree, NULL);
+    assertok(pt_checktree(snap));
     {
         const pt_Node *r = &snap->root;
-        assert(r->child_count == 1);
-        assert(!ptM_ishole(r, 0));
-        assert(r->bytes[0] == 5);
-        assert(memcmp(r->children[0], "hello", 5) == 0);
+        asserteq(r->child_count, 1);
+        assertok(!ptM_ishole(r, 0));
+        asserteq(r->bytes[0], 5);
+        asserteq(memcmp(r->children[0], "hello", 5), 0);
     }
     pt_release(snap), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2948,26 +3089,27 @@ TEST(commit_merge) {
         char bigbuf[64];
         for (i = 0; i < 14; ++i) bigbuf[i] = 'a';
         bigbuf[14] = '\0';
-        assert(pt_edit(&c, 0, bigbuf, 14) == PT_OK);
+        asserteq(pt_edit(&c, 0, bigbuf, 14), PT_OK);
     }
-    assert(pt_edit(&c, 0, "!!", 2) == PT_OK); /* fills to CAP=16 */
-    assert(pt_edit(&c, 0, "XY", 2) == PT_OK); /* over CAP → 2nd hole */
+    asserteq(pt_edit(&c, 0, "!!", 2), PT_OK); /* fills to CAP=16 */
+    asserteq(pt_edit(&c, 0, "XY", 2), PT_OK); /* over CAP → 2nd hole */
     {
         pt_Node *r = &c.tree->root;
-        assert(r->child_count == 2);
-        assert(ptM_ishole(r, 0) && ptM_ishole(r, 1));
+        asserteq(r->child_count, 2);
+        assertok(ptM_ishole(r, 0) && ptM_ishole(r, 1));
     }
     snap = pt_commit(&c);
-    assert(snap != NULL);
-    assert(pt_checktree(snap));
+    assertok(snap != NULL);
+    assertok(pt_checktree(snap));
     {
         const pt_Node *r = &snap->root;
-        assert(r->child_count == 1);
-        assert(!ptM_ishole(r, 0));
-        assert(r->bytes[0] == PT_MAX_HOLESIZE + 2);
+        asserteq(r->child_count, 1);
+        assertok(!ptM_ishole(r, 0));
+        asserteq(r->bytes[0], PT_MAX_HOLESIZE + 2);
     }
     pt_release(snap), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -2985,16 +3127,17 @@ TEST(commit_mixed) {
     pt_insert(&c, "ghi", 3);  /* lit at pos 6 */
     pt_release(b);
     pt_locate(&c, 0);
-    assert(pt_edit(&c, 0, "x", 1) == PT_OK);
+    asserteq(pt_edit(&c, 0, "x", 1), PT_OK);
     snap = pt_commit(&c);
-    assert(snap != NULL);
-    assert(pt_checktree(snap));
+    assertok(snap != NULL);
+    assertok(pt_checktree(snap));
     {
         const pt_Node *r = &snap->root;
-        for (i = 0; i < (int)r->child_count; ++i) assert(!ptM_ishole(r, i));
+        for (i = 0; i < (int)r->child_count; ++i) assertok(!ptM_ishole(r, i));
     }
     pt_release(snap);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3005,17 +3148,18 @@ TEST(commit_deep) {
     editV(&c, 0, 1,
           innerV(leafV(holeV("abc"), litV("x")),
                  leafV(litV("def"), litV("ghi"))));
-    assert(pt_edit(&c, 0, "XYZ", 3) == PT_OK);
+    asserteq(pt_edit(&c, 0, "XYZ", 3), PT_OK);
     snap = pt_commit(&c);
-    assert(snap != NULL);
-    assert(pt_checktree(snap));
+    assertok(snap != NULL);
+    assertok(pt_checktree(snap));
     {
         const pt_Node *r = &snap->root;
         int            i;
-        for (i = 0; i < (int)r->child_count; ++i) assert(!ptM_ishole(r, i));
+        for (i = 0; i < (int)r->child_count; ++i) assertok(!ptM_ishole(r, i));
     }
     pt_release(snap);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3028,18 +3172,21 @@ TEST(commit_fillblock) {
     pt_Cursor c;
     size_t    cap;
     pt_seek(&c, b, 0);
-    assert(pt_reserve(&c, 0) != NULL); /* PT_ARENA_SIZE block */
-    assert(pt_scratch(&c, &cap) != NULL);
-    assert(pt_literal(&c, cap - 8) != NULL);        /* leave exactly 8 bytes */
-    assert(pt_edit(&c, 0, "12345678", 8) == PT_OK); /* 8-byte hole */
+    assertok(pt_reserve(&c, 0) != NULL); /* PT_ARENA_SIZE block */
+    assertok(pt_scratch(&c, &cap) != NULL);
+    assertok(pt_literal(&c, cap - 8) != NULL);      /* leave exactly 8 bytes */
+    asserteq(pt_edit(&c, 0, "12345678", 8), PT_OK); /* 8-byte hole */
     snap = pt_commit(&c); /* freeze consumes the last 8 bytes */
-    assert(snap != NULL && !c.dirty);
-    assert(pt_checktree(snap));
-    assert(snap->arena.full != NULL && snap->arena.current == NULL);
+    assertok(snap != NULL && !c.dirty);
+    assertok(pt_checktree(snap));
+    assertok(snap->arena.full != NULL);
+    asserteq(snap->arena.current, NULL);
     pt_seek(&c, snap, 0);
-    assert(pt_scratch(&c, &cap) == NULL && cap == 0);
+    asserteq(pt_scratch(&c, &cap), NULL);
+    asserteq(cap, 0);
     pt_release(snap), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3051,18 +3198,19 @@ TEST(commit_freshpage) {
     pt_Buffer snap;
     /* Single edit → 1 hole; commit copies data into scratch */
     pt_seek(&c, b, 0);
-    assert(pt_edit(&c, 0, "aaaaaaaaaaaaaaa", 15) == PT_OK);
+    asserteq(pt_edit(&c, 0, "aaaaaaaaaaaaaaa", 15), PT_OK);
     snap = pt_commit(&c);
-    assert(snap != NULL && !c.dirty);
-    assert(pt_checktree(snap));
+    assertok(snap != NULL && !c.dirty);
+    assertok(pt_checktree(snap));
     {
         const pt_Node *r = &snap->root;
-        assert(r->child_count == 1);
-        assert(!ptM_ishole(r, 0));
-        assert(r->bytes[0] == 15);
+        asserteq(r->child_count, 1);
+        assertok(!ptM_ishole(r, 0));
+        asserteq(r->bytes[0], 15);
     }
     pt_release(snap), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3073,10 +3221,11 @@ TEST(commit_clean) {
     pt_Cursor c;
     pt_seek(&c, b, 0);
     snap = pt_commit(&c);
-    assert(snap == b);
+    asserteq(snap, b);
     pt_release(snap);
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3086,14 +3235,15 @@ TEST(commit_then_reseek) {
     pt_Buffer snap;
     pt_Cursor c;
     pt_seek(&c, b, 0);
-    assert(pt_edit(&c, 0, "abcdef", 6) == PT_OK);
+    asserteq(pt_edit(&c, 0, "abcdef", 6), PT_OK);
     snap = pt_commit(&c);
-    assert(snap != NULL);
+    assertok(snap != NULL);
     pt_seek(&c, snap, 3);
-    assert(pt_offset(&c) == 3);
-    assert(pt_checkcursor(&c, 3));
+    asserteq(pt_offset(&c), 3);
+    assertok(pt_checkcursor(&c, 3));
     pt_release(snap), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3107,21 +3257,22 @@ TEST(commit_bytes_invariant) {
     unsigned       levels_before;
     unsigned short cc_before;
     pt_seek(&c, b, 0);
-    assert(pt_edit(&c, 0, "abc", 3) == PT_OK); /* hole("abc") at pos 0 */
-    assert(pt_edit(&c, 0, "DE", 2) == PT_OK);  /* appends hole("DE") */
+    asserteq(pt_edit(&c, 0, "abc", 3), PT_OK); /* hole("abc") at pos 0 */
+    asserteq(pt_edit(&c, 0, "DE", 2), PT_OK);  /* appends hole("DE") */
     pt_release(b);
     pt_locate(&c, 0);
-    assert(pt_edit(&c, 0, "XY", 2) == PT_OK); /* front-insert into hole */
+    asserteq(pt_edit(&c, 0, "XY", 2), PT_OK); /* front-insert into hole */
     bytes_before = pt_bytes(c.tree);
     levels_before = c.tree->levels;
     cc_before = c.tree->root.child_count;
     snap = pt_commit(&c);
-    assert(snap != NULL);
-    assert(pt_bytes(snap) == bytes_before);
-    assert(snap->levels == levels_before);
-    assert(snap->root.child_count == cc_before);
+    assertok(snap != NULL);
+    asserteq(pt_bytes(snap), bytes_before);
+    asserteq(snap->levels, levels_before);
+    asserteq(snap->root.child_count, cc_before);
     pt_release(snap);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3139,21 +3290,23 @@ TEST(commit_reserve_pages) {
                        holeV("aaaaaaaaaaaaaaaa"), holeV("aaaaaaaaaaaaaaaa")),
                  leafV(holeV("aaaaaaaaaaaaaaaa"), holeV("aaaaaaaaaaaaaaaa"),
                        holeV("aaaaaaaaaaaaaaaa"), holeV("aaaaaaaaaaaaaaaa"))));
-    assert(pt_edit(&c, 0, ".", 1) == PT_OK);
+    asserteq(pt_edit(&c, 0, ".", 1), PT_OK);
     snap = pt_commit(&c);
-    assert(snap != NULL);
-    assert(pt_checktree(snap));
-    assert(snap->levels == 0 && snap->root.child_count == 1);
-    assert(pt_bytes(snap) == 193);
+    assertok(snap != NULL);
+    assertok(pt_checktree(snap));
+    asserteq(snap->levels, 0);
+    asserteq(snap->root.child_count, 1);
+    asserteq(pt_bytes(snap), 193);
     {
         char rd[200];
         pt_seek(&c, snap, 0);
-        assert(pt_read(&c, rd, 193) == 193);
-        assert(rd[0] == '.');
-        for (i = 1; i < 193; ++i) assert(rd[i] == 'a');
+        asserteq(pt_read(&c, rd, 193), 193);
+        asserteq(rd[0], '.');
+        for (i = 1; i < 193; ++i) asserteq(rd[i], 'a');
     }
     pt_release(snap);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3171,19 +3324,21 @@ TEST(commit_reservebuf_oom) {
         char bigbuf[64];
         for (i = 0; i < 15; ++i) bigbuf[i] = 'a';
         bigbuf[15] = '\0';
-        assert(pt_edit(&c, 0, bigbuf, 15) == PT_OK);
+        asserteq(pt_edit(&c, 0, bigbuf, 15), PT_OK);
     }
     bytes_before = pt_bytes(c.tree);
-    assert(c.dirty && bytes_before == 15);
+    assertok(c.dirty);
+    asserteq(bytes_before, 15);
     cnt = 0; /* kill allocf — next alloc (scratch page) fails */
-    assert(pt_commit(&c) == NULL);
-    assert(c.dirty == 1);                     /* tree not frozen */
-    assert(pt_bytes(c.tree) == bytes_before); /* bytes unchanged */
-    assert(pt_checktree(c.tree));
+    asserteq(pt_commit(&c), NULL);
+    asserteq(c.dirty, 1);                     /* tree not frozen */
+    asserteq(pt_bytes(c.tree), bytes_before); /* bytes unchanged */
+    assertok(pt_checktree(c.tree));
     /* cleanup: transient still has holes → release normally */
     pt_release(c.tree);
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3194,25 +3349,26 @@ TEST(edit_commit_roundtrip) {
     pt_Cursor c;
     pt_Buffer snap;
     pt_seek(&c, b, 5);
-    assert(pt_edit(&c, 1, "XY", 2) == PT_OK); /* replace " " with "XY" */
+    asserteq(pt_edit(&c, 1, "XY", 2), PT_OK); /* replace " " with "XY" */
     snap = pt_commit(&c);
-    assert(snap != NULL);
-    assert(!c.dirty);
-    assert(pt_checktree(snap));
-    assert(pt_bytes(snap) == 12);
+    assertok(snap != NULL);
+    assertok(!c.dirty);
+    assertok(pt_checktree(snap));
+    asserteq(pt_bytes(snap), 12);
     {
         const pt_Node *r = &snap->root;
-        assert(r->child_count == 3);
-        assert(!ptM_ishole(r, 0) && !ptM_ishole(r, 1) && !ptM_ishole(r, 2));
-        assert(r->bytes[0] == 5);
-        assert(r->bytes[1] == 2);
-        assert(r->bytes[2] == 5);
-        assert(memcmp(r->children[0], "Hello", 5) == 0);
-        assert(memcmp(r->children[1], "XY", 2) == 0);
-        assert(memcmp(r->children[2], "World", 5) == 0);
+        asserteq(r->child_count, 3);
+        assertok(!ptM_ishole(r, 0) && !ptM_ishole(r, 1) && !ptM_ishole(r, 2));
+        asserteq(r->bytes[0], 5);
+        asserteq(r->bytes[1], 2);
+        asserteq(r->bytes[2], 5);
+        asserteq(memcmp(r->children[0], "Hello", 5), 0);
+        asserteq(memcmp(r->children[1], "XY", 2), 0);
+        asserteq(memcmp(r->children[2], "World", 5), 0);
     }
     pt_release(snap), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3223,31 +3379,36 @@ TEST(edit_commit_edit) {
     pt_Cursor c;
     pt_Buffer snap, snap2;
     pt_seek(&c, b, 2);
-    assert(pt_edit(&c, 0, "XY", 2) == PT_OK); /* "HeXYlo" */
+    asserteq(pt_edit(&c, 0, "XY", 2), PT_OK); /* "HeXYlo" */
     snap = pt_commit(&c);
-    assert(snap != NULL && !c.dirty);
+    assertok(snap != NULL && !c.dirty);
     /* second edit on committed snapshot */
     pt_seek(&c, snap, 4);
-    assert(pt_edit(&c, 0, "!", 1) == PT_OK);
-    assert(c.dirty && pt_bytes(c.tree) == 8);
+    asserteq(pt_edit(&c, 0, "!", 1), PT_OK);
+    assertok(c.dirty);
+    asserteq(pt_bytes(c.tree), 8);
     snap2 = pt_commit(&c);
-    assert(snap2 != NULL);
-    assert(!c.dirty && pt_checktree(snap2) && pt_bytes(snap2) == 8);
+    assertok(snap2 != NULL);
+    assertok(!c.dirty);
+    assertok(pt_checktree(snap2));
+    asserteq(pt_bytes(snap2), 8);
     {
         const pt_Node *r = &snap2->root;
         int            i;
         size_t         total = 0;
         for (i = 0; i < (int)r->child_count; ++i) {
-            assert(!ptM_ishole(r, i));
+            assertok(!ptM_ishole(r, i));
             total += r->bytes[i];
         }
-        assert(total == 8);
+        asserteq(total, 8);
     }
     /* first snapshot unchanged (bytes before 2nd edit) */
-    assert(pt_bytes(snap) == 7 && pt_checktree(snap));
+    asserteq(pt_bytes(snap), 7);
+    assertok(pt_checktree(snap));
     /* cleanup: release snap2 (2nd committed) → cascades to snap, then b */
     pt_release(snap2), pt_release(snap), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3281,37 +3442,40 @@ TEST(commit_deep2) {
     for (k = 0; k < 200; ++k) buf[k] = (char)('!' + (k % 90));
     pt_seek(&c, b, 0);
     /* stride-3 take-2 keeps pieces non-contiguous (no mergelit) -> deep tree */
-    for (k = 0; k < n; ++k) assert(pt_append(&c, buf + k * 3, 2) == PT_OK);
-    assert(c.tree->levels >= 2);
+    for (k = 0; k < n; ++k) asserteq(pt_append(&c, buf + k * 3, 2), PT_OK);
+    assertok(c.tree->levels >= 2);
     a = pt_commit(&c);
-    assert(a != NULL && !c.dirty);
+    assertok(a != NULL && !c.dirty);
     pt_release(b);
-    assert(pt_checktree(a));
+    assertok(pt_checktree(a));
     len0 = collect_bytes(a, exp0, sizeof(exp0)); /* ground truth content */
 
     /* edit a levels>=2 committed tree: fork + insert a hole under an inner */
     pt_seek(&c, a, 7);
-    assert(pt_edit(&c, 0, "ZZ", 2) == PT_OK);
-    assert(c.tree->levels >= 2);
-    assert(pt_checktree(c.tree)); /* upmask fix: root mask sees the hole */
+    asserteq(pt_edit(&c, 0, "ZZ", 2), PT_OK);
+    assertok(c.tree->levels >= 2);
+    assertok(pt_checktree(c.tree)); /* upmask fix: root mask sees the hole */
     memcpy(exp1, exp0, 7);
     exp1[7] = 'Z', exp1[8] = 'Z';
     memcpy(exp1 + 9, exp0 + 7, len0 - 7);
     len1 = len0 + 2;
     gl = collect_bytes(c.tree, got, sizeof(got));
-    assert(gl == len1 && memcmp(got, exp1, len1) == 0);
+    asserteq(gl, len1);
+    asserteq(memcmp(got, exp1, len1), 0);
 
     a2 = pt_commit(&c); /* freeze: must descend into inner subtree */
-    assert(a2 != NULL && !c.dirty);
-    assert(S->holes.live_obj == 0); /* every hole frozen -> descend worked */
-    assert(pt_checktree(a2));
-    assert(pt_bytes(a2) == len1);
+    assertok(a2 != NULL && !c.dirty);
+    asserteq(S->holes.live_obj, 0); /* every hole frozen -> descend worked */
+    assertok(pt_checktree(a2));
+    asserteq(pt_bytes(a2), len1);
     gl = collect_bytes(a2, got, sizeof(got));
-    assert(gl == len1 && memcmp(got, exp1, len1) == 0);
+    asserteq(gl, len1);
+    asserteq(memcmp(got, exp1, len1), 0);
 
     pt_release(a);
     pt_release(a2);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3329,17 +3493,18 @@ TEST(commit_reserve_leftover) {
     for (i = 0; i < 31; ++i) {
         static char bigbuf[17];
         memset(bigbuf, (char)('A' + (i % 26)), 16);
-        assert(pt_edit(&c, 0, bigbuf, 16) == PT_OK);
+        asserteq(pt_edit(&c, 0, bigbuf, 16), PT_OK);
     }
-    assert(c.dirty);
+    assertok(c.dirty);
     /* Commit: freeze hole data into tree arena; the contiguous run
      * merges into a single literal and the tree collapses */
     snap = pt_commit(&c);
-    assert(snap != NULL && !c.dirty);
-    assert(pt_checktree(snap));
-    assert(snap->levels == 0 && snap->root.child_count == 1);
-    assert(!ptM_ishole(&snap->root, 0));
-    assert(pt_bytes(snap) == 31 * 16);
+    assertok(snap != NULL && !c.dirty);
+    assertok(pt_checktree(snap));
+    asserteq(snap->levels, 0);
+    asserteq(snap->root.child_count, 1);
+    assertok(!ptM_ishole(&snap->root, 0));
+    asserteq(pt_bytes(snap), 31 * 16);
 
     /* Verify data content via pt_read */
     {
@@ -3347,24 +3512,25 @@ TEST(commit_reserve_leftover) {
         size_t n;
         pt_seek(&c, snap, 0);
         n = pt_read(&c, buf, sizeof(buf));
-        assert(n == 31 * 16);
+        asserteq(n, 31 * 16);
         for (i = 0; i < 31; ++i) {
             int j;
             for (j = 0; j < 16; ++j)
-                assert(buf[i * 16 + j] == (char)('A' + (i % 26)));
+                asserteq(buf[i * 16 + j], (char)('A' + (i % 26)));
         }
     }
 
     /* Arena block exists with used == total */
     {
         pt_Block *ab = snap->arena.current;
-        assert(ab != NULL);
-        assert(ab->used == 31 * 16);
+        assertok(ab != NULL);
+        asserteq(ab->used, 31 * 16);
     }
 
     /* Release: arena freed, live_obj zero */
     pt_release(snap), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3383,22 +3549,23 @@ TEST(commit_reservebuf_oom_multi) {
     for (i = 0; i < 32; ++i) {
         static char bigbuf[17];
         memset(bigbuf, 'x', 16);
-        assert(pt_edit(&c, 0, bigbuf, 16) == PT_OK);
+        asserteq(pt_edit(&c, 0, bigbuf, 16), PT_OK);
     }
     bytes_before = pt_bytes(c.tree);
-    assert(c.dirty && bytes_before > 0);
+    assertok(c.dirty && bytes_before > 0);
 
     cnt = 0; /* pt_reserve ptA_alloc fails */
-    assert(pt_commit(&c) == NULL);
+    asserteq(pt_commit(&c), NULL);
     /* Tree must be unchanged (E12 all-or-nothing) */
-    assert(c.dirty == 1);
-    assert(pt_bytes(c.tree) == bytes_before);
-    assert(pt_checktree(c.tree));
+    asserteq(c.dirty, 1);
+    asserteq(pt_bytes(c.tree), bytes_before);
+    assertok(pt_checktree(c.tree));
 
     /* Cleanup: tree still has holes, release normally */
     cnt = 10000;
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3413,11 +3580,14 @@ TEST(commit_stitch_seam) {
           innerV(leafV(holeV("ab"), holeV("cd")),
                  leafV(holeV("ef"), litV("XY"))));
     snap = pt_commit(&c);
-    assert(snap != NULL && c.tree == NULL && !c.dirty);
-    assert(pt_checktree(snap));
+    assertok(snap != NULL);
+    asserteq(c.tree, NULL);
+    assertok(!c.dirty);
+    assertok(pt_checktree(snap));
     pt_asserttree(snap, 0, leafV(litV("abcdef"), litV("XY")));
     pt_release(snap);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3431,11 +3601,13 @@ TEST(commit_seam_left) {
           innerV(leafV(litV("ab"), litV("cd")),
                  leafV(holeV("ef"), holeV("gh"))));
     snap = pt_commit(&c);
-    assert(snap != NULL && c.tree == NULL);
-    assert(pt_checktree(snap));
+    assertok(snap != NULL);
+    asserteq(c.tree, NULL);
+    assertok(pt_checktree(snap));
     pt_asserttree(snap, 0, leafV(litV("ab"), litV("cd"), litV("efgh")));
     pt_release(snap);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3452,19 +3624,22 @@ TEST(commit_freeze_oom) {
     pt_locate(&c, 3);
     d = pt_drainpool(&S->nodes);
     cnt = 1; /* arena block alloc ok; freezestep node reserve fails */
-    assert(pt_commit(&c) == NULL);
-    assert(c.dirty && c.tree != NULL);
-    assert(pt_checktree(c.tree));
-    assert(pt_offset(&c) == 3 && pt_checkcursor(&c, 3));
+    asserteq(pt_commit(&c), NULL);
+    assertok(c.dirty && c.tree != NULL);
+    assertok(pt_checktree(c.tree));
+    asserteq(pt_offset(&c), 3);
+    assertok(pt_checkcursor(&c, 3));
     pt_refillpool(&S->nodes, d), cnt = 1000;
     {
         pt_Buffer snap = pt_commit(&c);
-        assert(snap != NULL && c.tree == NULL);
-        assert(pt_checktree(snap));
+        assertok(snap != NULL);
+        asserteq(c.tree, NULL);
+        assertok(pt_checktree(snap));
         pt_asserttree(snap, 0, leafV(litV("abcdef"), litV("XY")));
         pt_release(snap);
     }
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3478,51 +3653,55 @@ TEST(read_params) {
     char      buf[8];
 
     /* pt_piece NULL checks */
-    assert(pt_piece(NULL, &n) == NULL);
+    asserteq(pt_piece(NULL, &n), NULL);
 
     /* pt_next NULL checks */
-    assert(pt_next(NULL, &n) == NULL);
+    asserteq(pt_next(NULL, &n), NULL);
 
     /* pt_prev NULL checks */
-    assert(pt_prev(NULL, &n) == NULL);
+    asserteq(pt_prev(NULL, &n), NULL);
 
     /* pt_read NULL checks */
-    assert(pt_read(NULL, buf, 5) == 0);
+    asserteq(pt_read(NULL, buf, 5), 0);
     pt_seek(&c, b, 0);
-    assert(pt_read(&c, NULL, 5) == 0);
+    asserteq(pt_read(&c, NULL, 5), 0);
 
     /* pt_next at end (poff==bytes[i]) */
     pt_seek(&c, b, 5);
     {
         const char *p = pt_next(&c, &n);
-        assert(p == NULL && n == 0);
+        asserteq(p, NULL);
+        asserteq(n, 0);
     }
 
     /* pt_prev at start (off==0) */
     pt_seek(&c, b, 0);
     {
         const char *p = pt_prev(&c, &n);
-        assert(p == NULL && n == 0);
+        asserteq(p, NULL);
+        asserteq(n, 0);
     }
 
     /* pt_prev with poff>0 (return current piece start) */
     pt_seek(&c, b, 3);
     {
         const char *p = pt_prev(&c, &n);
-        assert(p != NULL && n == 3);
-        assert(memcmp(p, "hel", 3) == 0);
-        assert(pt_offset(&c) == 0);
+        assertok(p != NULL);
+        asserteq(n, 3);
+        asserteq(memcmp(p, "hel", 3), 0);
+        asserteq(pt_offset(&c), 0);
     }
 
     /* pt_read with len=0 */
     pt_seek(&c, b, 0);
-    assert(pt_read(&c, buf, 0) == 0);
+    asserteq(pt_read(&c, buf, 0), 0);
 
     /* pt_piece with poff past piece len */
     pt_seek(&c, b, 5);
     {
         const char *p = pt_piece(&c, &n);
-        assert(p == NULL && n == 0);
+        asserteq(p, NULL);
+        asserteq(n, 0);
     }
 
     /* C->tree == NULL branches (zeroed cursor) */
@@ -3530,14 +3709,15 @@ TEST(read_params) {
         pt_Cursor cz;
         size_t    zn;
         memset(&cz, 0, sizeof(cz));
-        assert(pt_piece(&cz, &zn) == NULL);
-        assert(pt_next(&cz, &zn) == NULL);
-        assert(pt_prev(&cz, &zn) == NULL);
-        assert(pt_read(&cz, buf, 5) == 0);
+        asserteq(pt_piece(&cz, &zn), NULL);
+        asserteq(pt_next(&cz, &zn), NULL);
+        asserteq(pt_prev(&cz, &zn), NULL);
+        asserteq(pt_read(&cz, buf, 5), 0);
     }
 
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3551,35 +3731,45 @@ TEST(piece_positions) {
     /* Start of first piece */
     pt_seek(&c, pt_nonnull(b), 0);
     p = pt_piece(&c, &n);
-    assert(p != NULL && n == 5 && memcmp(p, "hello", 5) == 0);
+    assertok(p != NULL);
+    asserteq(n, 5);
+    asserteq(memcmp(p, "hello", 5), 0);
 
     /* Middle of first piece */
     pt_seek(&c, b, 2);
     p = pt_piece(&c, &n);
-    assert(p != NULL && n == 3 && memcmp(p, "llo", 3) == 0);
+    assertok(p != NULL);
+    asserteq(n, 3);
+    asserteq(memcmp(p, "llo", 3), 0);
 
     /* Boundary between pieces */
     pt_seek(&c, b, 5);
     p = pt_piece(&c, &n);
-    assert(p != NULL && n == 5 && memcmp(p, "world", 5) == 0);
+    assertok(p != NULL);
+    asserteq(n, 5);
+    asserteq(memcmp(p, "world", 5), 0);
 
     /* End of last piece */
     pt_seek(&c, b, 10);
     p = pt_piece(&c, &n);
-    assert(p != NULL && n == 3 && memcmp(p, "!!!", 3) == 0);
+    assertok(p != NULL);
+    asserteq(n, 3);
+    asserteq(memcmp(p, "!!!", 3), 0);
 
     /* Past end */
     pt_seek(&c, b, 13);
     p = pt_piece(&c, &n);
-    assert(p == NULL && n == 0);
+    asserteq(p, NULL);
+    asserteq(n, 0);
 
     /* pt_piece with NULL plen */
     pt_seek(&c, b, 0);
     p = pt_piece(&c, NULL);
-    assert(p != NULL);
+    assertok(p != NULL);
 
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3593,39 +3783,50 @@ TEST(next_basic) {
     /* Forward from start: piece then next */
     pt_seek(&c, b, 0);
     p = pt_piece(&c, &n);
-    assert(p != NULL && n == 2 && memcmp(p, "aa", 2) == 0);
-    assert(pt_offset(&c) == 0);
+    assertok(p != NULL);
+    asserteq(n, 2);
+    asserteq(memcmp(p, "aa", 2), 0);
+    asserteq(pt_offset(&c), 0);
 
     p = pt_next(&c, &n);
-    assert(p != NULL && n == 2 && memcmp(p, "bb", 2) == 0);
-    assert(pt_offset(&c) == 2);
+    assertok(p != NULL);
+    asserteq(n, 2);
+    asserteq(memcmp(p, "bb", 2), 0);
+    asserteq(pt_offset(&c), 2);
 
     p = pt_next(&c, &n);
-    assert(p != NULL && n == 2 && memcmp(p, "cc", 2) == 0);
-    assert(pt_offset(&c) == 4);
+    assertok(p != NULL);
+    asserteq(n, 2);
+    asserteq(memcmp(p, "cc", 2), 0);
+    asserteq(pt_offset(&c), 4);
 
     /* No more pieces */
     p = pt_next(&c, &n);
-    assert(p == NULL && n == 0);
-    assert(pt_offset(&c) == 6);
+    asserteq(p, NULL);
+    asserteq(n, 0);
+    asserteq(pt_offset(&c), 6);
 
     /* Forward from middle */
     pt_seek(&c, b, 2);
     p = pt_next(&c, &n);
-    assert(p != NULL && n == 2 && memcmp(p, "cc", 2) == 0);
-    assert(pt_offset(&c) == 4);
+    assertok(p != NULL);
+    asserteq(n, 2);
+    asserteq(memcmp(p, "cc", 2), 0);
+    asserteq(pt_offset(&c), 4);
 
     p = pt_next(&c, &n);
-    assert(p == NULL && n == 0);
-    assert(pt_offset(&c) == 6);
+    asserteq(p, NULL);
+    asserteq(n, 0);
+    asserteq(pt_offset(&c), 6);
 
     /* pt_next with NULL plen */
     pt_seek(&c, b, 0);
     p = pt_next(&c, NULL);
-    assert(p != NULL);
+    assertok(p != NULL);
 
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3639,29 +3840,37 @@ TEST(prev_basic) {
     /* Backward from end */
     pt_seek(&c, b, 6);
     p = pt_prev(&c, &n);
-    assert(p != NULL && n == 2 && memcmp(p, "cc", 2) == 0);
-    assert(pt_offset(&c) == 4);
+    assertok(p != NULL);
+    asserteq(n, 2);
+    asserteq(memcmp(p, "cc", 2), 0);
+    asserteq(pt_offset(&c), 4);
 
     p = pt_prev(&c, &n);
-    assert(p != NULL && n == 2 && memcmp(p, "bb", 2) == 0);
-    assert(pt_offset(&c) == 2);
+    assertok(p != NULL);
+    asserteq(n, 2);
+    asserteq(memcmp(p, "bb", 2), 0);
+    asserteq(pt_offset(&c), 2);
 
     p = pt_prev(&c, &n);
-    assert(p != NULL && n == 2 && memcmp(p, "aa", 2) == 0);
-    assert(pt_offset(&c) == 0);
+    assertok(p != NULL);
+    asserteq(n, 2);
+    asserteq(memcmp(p, "aa", 2), 0);
+    asserteq(pt_offset(&c), 0);
 
     /* No more previous */
     p = pt_prev(&c, &n);
-    assert(p == NULL && n == 0);
+    asserteq(p, NULL);
+    asserteq(n, 0);
 
     /* pt_prev with NULL plen at piece boundary (poff==0, off>0)
      * to hit the L619 return with plen==NULL */
     pt_seek(&c, b, 4); /* start of "cc", poff==0 */
     p = pt_prev(&c, NULL);
-    assert(p != NULL);
+    assertok(p != NULL);
 
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3676,29 +3885,38 @@ TEST(trav_single) {
     /* Forward: current piece via pt_piece, then next stops */
     pt_seek(&c, b, 0);
     p = pt_piece(&c, &n);
-    assert(p != NULL && n == 5 && memcmp(p, "hello", 5) == 0);
+    assertok(p != NULL);
+    asserteq(n, 5);
+    asserteq(memcmp(p, "hello", 5), 0);
 
     p = pt_next(&c, &n);
-    assert(p == NULL && n == 0);
-    assert(pt_offset(&c) == 5);
+    asserteq(p, NULL);
+    asserteq(n, 0);
+    asserteq(pt_offset(&c), 5);
 
     p = pt_next(&c, &n);
-    assert(p == NULL && n == 0);
+    asserteq(p, NULL);
+    asserteq(n, 0);
 
     /* Backward from middle */
     pt_seek(&c, b, 3);
     p = pt_prev(&c, &n);
-    assert(p != NULL && n == 3 && memcmp(p, "hel", 3) == 0);
-    assert(pt_offset(&c) == 0);
+    assertok(p != NULL);
+    asserteq(n, 3);
+    asserteq(memcmp(p, "hel", 3), 0);
+    asserteq(pt_offset(&c), 0);
 
     /* Backward from end */
     pt_seek(&c, b, 5);
     p = pt_prev(&c, &n);
-    assert(p != NULL && n == 5 && memcmp(p, "hello", 5) == 0);
-    assert(pt_offset(&c) == 0);
+    assertok(p != NULL);
+    asserteq(n, 5);
+    asserteq(memcmp(p, "hello", 5), 0);
+    asserteq(pt_offset(&c), 0);
 
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3718,7 +3936,7 @@ TEST(next_levels1) {
     pt_append(&c, "dd", 2);
     pt_append(&c, "ee", 2);
     pt_release(b);
-    assert(c.tree->levels == 1);
+    asserteq(c.tree->levels, 1);
 
     /* Full forward */
     pt_seek(&c, c.tree, 0);
@@ -3729,11 +3947,13 @@ TEST(next_levels1) {
             memcpy(fwd + off, p, n), off += n;
             pt_next(&c, &n);
         }
-        assert(off == 10 && memcmp(fwd, "aabbccddee", 10) == 0);
+        asserteq(off, 10);
+        asserteq(memcmp(fwd, "aabbccddee", 10), 0);
     }
 
     pt_release(c.tree);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3753,17 +3973,21 @@ TEST(prev_levels1) {
         char   rev[16];
         size_t end = 8;
         while ((p = pt_prev(&c, &n)) != NULL) end -= n, memcpy(rev + end, p, n);
-        assert(end == 0 && memcmp(rev, "aabbccdd", 8) == 0);
+        asserteq(end, 0);
+        asserteq(memcmp(rev, "aabbccdd", 8), 0);
     }
 
     /* From "cc" (start of leaf 1), prev jumps to "bb" (leaf 0) */
     pt_seek(&c, b, 4);
     p = pt_prev(&c, &n);
-    assert(p != NULL && n == 2 && memcmp(p, "bb", 2) == 0);
-    assert(pt_offset(&c) == 2);
+    assertok(p != NULL);
+    asserteq(n, 2);
+    asserteq(memcmp(p, "bb", 2), 0);
+    asserteq(pt_offset(&c), 2);
 
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3777,26 +4001,30 @@ TEST(read_basic) {
     /* Read partial from start */
     pt_seek(&c, b, 0);
     r = pt_read(&c, buf, 5);
-    assert(r == 5 && memcmp(buf, "hello", 5) == 0);
-    assert(pt_offset(&c) == 5);
+    asserteq(r, 5);
+    asserteq(memcmp(buf, "hello", 5), 0);
+    asserteq(pt_offset(&c), 5);
 
     /* Read remaining */
     r = pt_read(&c, buf, 32);
-    assert(r == 6 && memcmp(buf, " world", 6) == 0);
-    assert(pt_offset(&c) == 11);
+    asserteq(r, 6);
+    asserteq(memcmp(buf, " world", 6), 0);
+    asserteq(pt_offset(&c), 11);
 
     /* Read past end */
     r = pt_read(&c, buf, 32);
-    assert(r == 0);
+    asserteq(r, 0);
 
     /* Read from middle */
     pt_seek(&c, b, 6);
     r = pt_read(&c, buf, 5);
-    assert(r == 5 && memcmp(buf, "world", 5) == 0);
-    assert(pt_offset(&c) == 11);
+    asserteq(r, 5);
+    asserteq(memcmp(buf, "world", 5), 0);
+    asserteq(pt_offset(&c), 11);
 
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3810,22 +4038,25 @@ TEST(read_cross) {
     /* Read across first two pieces exactly */
     pt_seek(&c, b, 2);
     r = pt_read(&c, buf, 6);
-    assert(r == 6 && memcmp(buf, "aabbbb", 6) == 0);
-    assert(pt_offset(&c) == 8);
+    asserteq(r, 6);
+    asserteq(memcmp(buf, "aabbbb", 6), 0);
+    asserteq(pt_offset(&c), 8);
 
     /* Read across multiple pieces to end */
     pt_seek(&c, b, 6);
     r = pt_read(&c, buf, 32);
-    assert(r == 6 && memcmp(buf, "bbcccc", 6) == 0);
+    asserteq(r, 6);
+    asserteq(memcmp(buf, "bbcccc", 6), 0);
 
     /* Read full tree */
     pt_seek(&c, b, 0);
     r = pt_read(&c, buf, 32);
-    assert(r == 12);
-    assert(memcmp(buf, "aaaabbbbcccc", 12) == 0);
+    asserteq(r, 12);
+    asserteq(memcmp(buf, "aaaabbbbcccc", 12), 0);
 
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3842,10 +4073,12 @@ TEST(read_full) {
     b = pt_from(S, ref, 128);
     pt_seek(&c, b, 0);
     r = pt_read(&c, buf, 256);
-    assert(r == 128 && memcmp(buf, ref, 128) == 0);
-    assert(pt_offset(&c) == 128);
+    asserteq(r, 128);
+    asserteq(memcmp(buf, ref, 128), 0);
+    asserteq(pt_offset(&c), 128);
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3858,20 +4091,23 @@ TEST(read_empty) {
 
     pt_seek(&c, b, 0);
     r = pt_read(&c, buf, 5);
-    assert(r == 0);
+    asserteq(r, 0);
 
     /* pt_next/pt_prev on empty tree */
     {
         const char *p;
         size_t      n;
         p = pt_next(&c, &n);
-        assert(p == NULL && n == 0);
+        asserteq(p, NULL);
+        asserteq(n, 0);
         p = pt_prev(&c, &n);
-        assert(p == NULL && n == 0);
+        asserteq(p, NULL);
+        asserteq(n, 0);
     }
 
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3885,16 +4121,19 @@ TEST(read_cursor_mid) {
     /* Read from middle of content (not piece boundary) */
     pt_seek(&c, pt_nonnull(b), 3);
     r = pt_read(&c, buf, 4);
-    assert(r == 4 && memcmp(buf, "defg", 4) == 0);
-    assert(pt_offset(&c) == 7);
+    asserteq(r, 4);
+    asserteq(memcmp(buf, "defg", 4), 0);
+    asserteq(pt_offset(&c), 7);
 
     /* Read remaining after mid-read */
     r = pt_read(&c, buf, 10);
-    assert(r == 3 && memcmp(buf, "hij", 3) == 0);
-    assert(pt_offset(&c) == 10);
+    asserteq(r, 3);
+    asserteq(memcmp(buf, "hij", 3), 0);
+    asserteq(pt_offset(&c), 10);
 
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -3912,13 +4151,16 @@ TEST(trav_deep) {
     pt_seek(&c, b, 0);
     for (p = pt_piece(&c, &n); n > 0; p = pt_next(&c, &n))
         memcpy(fwd + off, p, n), off += n;
-    assert(off == 16 && memcmp(fwd, "aabbccddeeffgghh", 16) == 0);
+    asserteq(off, 16);
+    asserteq(memcmp(fwd, "aabbccddeeffgghh", 16), 0);
     pt_seek(&c, b, pt_bytes(b));
     while ((p = pt_prev(&c, &n)) != NULL) end -= n, memcpy(rev + end, p, n);
-    assert(end == 0 && memcmp(rev, "aabbccddeeffgghh", 16) == 0);
-    assert(pt_offset(&c) == 0);
+    asserteq(end, 0);
+    asserteq(memcmp(rev, "aabbccddeeffgghh", 16), 0);
+    asserteq(pt_offset(&c), 0);
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4011,19 +4253,21 @@ TEST(splice_brute) {
                     r = pt_splice(&C, (size_t)del, "!", 1);
                 else
                     r = pt_splice(&C, (size_t)del, NULL, 0);
-                assert(r == PT_OK);
+                asserteq(r, PT_OK);
 
                 if (!pt_checktree(C.tree)) {
                     test_log("FAIL pos=%d del=%d ins=%d\n", pos, del, ins);
                     pt_dumptree(C.tree, "after splice");
                     pt_checktree(C.tree);
-                    assert(0);
+                    abort();
                 }
 
                 if (!pt_checkcursor(&C, cursor_exp)) {
-                    test_log("splice pos=%d del=%d ins=%d off=%lu exp=%lu\n", pos,
-                           del, ins, test_lu(pt_offset(&C)), test_lu(cursor_exp));
-                    assert(0);
+                    test_log(
+                            "splice pos=%d del=%d ins=%d off=%lu exp=%lu\n",
+                            pos, del, ins, test_lu(pt_offset(&C)),
+                            test_lu(cursor_exp));
+                    abort();
                 }
 
                 if (ins) {
@@ -4041,14 +4285,16 @@ TEST(splice_brute) {
                 nread = pt_read(&C, actual, expect_len);
                 if (nread != expect_len
                     || memcmp(actual, expected, expect_len) != 0) {
-                    test_log("splice pos=%d del=%d ins=%d content fail"
-                           " nread=%lu exp=%lu\n",
-                           pos, del, ins, test_lu(nread), test_lu(expect_len));
-                    assert(0);
+                    test_log(
+                            "splice pos=%d del=%d ins=%d content fail"
+                            " nread=%lu exp=%lu\n",
+                            pos, del, ins, test_lu(nread), test_lu(expect_len));
+                    abort();
                 }
 
                 pt_release(C.tree);
-                assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+                asserteq(S->nodes.live_obj, 0);
+                asserteq(S->holes.live_obj, 0);
             }
 
     pt_close(S);
@@ -4070,23 +4316,24 @@ TEST(commit_deep_holes) {
     for (k = 0; k < 300; ++k) buf[k] = (char)('!' + (k % 90));
     pt_seek(&c, b, 0);
     for (k = 0; k < n; ++k) pt_append(&c, buf + k * 3, 2);
-    assert(c.tree->levels >= 2);
+    assertok(c.tree->levels >= 2);
     pt_locate(&c, 5);
     pt_edit(&c, 0, "AAAA", 4);
     pt_locate(&c, 55);
     pt_edit(&c, 0, "BBBB", 4);
     pt_locate(&c, 100);
     pt_edit(&c, 0, "CCCC", 4);
-    assert(c.dirty);
+    assertok(c.dirty);
     snap = pt_commit(&c);
-    assert(snap != NULL && !c.dirty);
+    assertok(snap != NULL && !c.dirty);
     pt_checktree(snap);
     {
         const pt_Node *r = &snap->root;
-        for (k = 0; k < (int)r->child_count; ++k) assert(!ptM_ishole(r, k));
+        for (k = 0; k < (int)r->child_count; ++k) assertok(!ptM_ishole(r, k));
     }
     pt_release(snap), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4103,16 +4350,18 @@ TEST(read_partial) {
     a = pt_commit(&c);
     pt_seek(&c, a, 1);
     nr = pt_read(&c, rd, 2);
-    assert(nr == 2 && memcmp(rd, "BC", 2) == 0);
-    assert(pt_checkcursor(&c, 3));
+    asserteq(nr, 2);
+    asserteq(memcmp(rd, "BC", 2), 0);
+    assertok(pt_checkcursor(&c, 3));
     {
         const char *p;
         size_t      n;
         p = pt_piece(&c, &n);
-        assert(memcmp(p, "D", n) == 0);
+        asserteq(memcmp(p, "D", n), 0);
     }
     pt_release(a), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4129,7 +4378,7 @@ TEST(prev_cross_level) {
     pt_seek(&c, pt_empty(S), 0);
     for (k = 0; k < 40; ++k) pt_append(&c, buf + k * 3, 2);
     a = pt_commit(&c);
-    assert(a->levels >= 2);
+    assertok(a->levels >= 2);
     /* position at the first leaf of the second inner child of level 1
      * (inner1 children[0]), then prev crosses back into inner0 */
     {
@@ -4137,17 +4386,19 @@ TEST(prev_cross_level) {
         size_t         inner0_bytes = ptN_sumbytes(
                 r->children[0], 0, r->children[0]->child_count);
         pt_seek(&c, a, inner0_bytes); /* start of first leaf in inner[1] */
-        assert(pt_offset(&c) == inner0_bytes && c.poff == 0);
+        asserteq(pt_offset(&c), inner0_bytes);
+        asserteq(c.poff, 0);
         {
             const char *p;
             size_t      n;
             p = pt_prev(&c, &n);
-            assert(p != NULL && n > 0);
-            assert(pt_offset(&c) == inner0_bytes - n);
+            assertok(p != NULL && n > 0);
+            asserteq(pt_offset(&c), inner0_bytes - n);
         }
     }
     pt_release(a), pt_release(b = pt_empty(S));
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4168,12 +4419,13 @@ TEST(remove_findroom_deep) {
     pt_Cursor c;
     pt_seek(&c, b, 1);
     /* remove everything from position 1 to end, leaving "a" */
-    assert(pt_remove(&c, 15) == PT_OK);
-    assert(pt_checktree(c.tree));
+    asserteq(pt_remove(&c, 15), PT_OK);
+    assertok(pt_checktree(c.tree));
     pt_asserttree(c.tree, 0, leafV(litV("a")));
-    assert(pt_checkcursor(&c, 1));
+    assertok(pt_checkcursor(&c, 1));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4190,14 +4442,15 @@ TEST(edit_cow_splitchild) {
     pt_seek(&c, b, 0);
     for (k = 0; k < 60; ++k) pt_append(&c, buf + k * 3, 2);
     a = pt_commit(&c);
-    assert(a->levels >= 2);
+    assertok(a->levels >= 2);
     /* re-seek in the middle of a full leaf and insert to force splitchild */
     pt_seek(&c, a, 20);
-    assert(pt_insert(&c, "ZZ", 2) == PT_OK);
+    asserteq(pt_insert(&c, "ZZ", 2), PT_OK);
     pt_checktree(c.tree);
     pt_checktree(a); /* source still valid after COW */
     pt_release(c.tree), pt_release(a), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4211,69 +4464,69 @@ TEST(error_paths) {
     pt_seek(&c, b, 0);
 
     /* pt_locate with NULL or bad tree */
-    assert(pt_locate(NULL, 0) == PT_ERRPARAM);
+    asserteq(pt_locate(NULL, 0), PT_ERRPARAM);
     c.tree = NULL;
-    assert(pt_locate(&c, 0) == PT_ERRPARAM);
+    asserteq(pt_locate(&c, 0), PT_ERRPARAM);
     c.tree = (pt_Tree *)b;
 
     /* pt_reserve with NULL / dirty fail */
-    assert(pt_reserve(NULL, 0) == NULL);
+    asserteq(pt_reserve(NULL, 0), NULL);
     c.tree = NULL;
-    assert(pt_reserve(&c, 0) == NULL);
+    asserteq(pt_reserve(&c, 0), NULL);
     c.tree = (pt_Tree *)b;
 
     /* pt_scratch with NULL args */
-    assert(pt_scratch(NULL, &cap) == NULL);
+    asserteq(pt_scratch(NULL, &cap), NULL);
     cap = 99;
-    assert(pt_scratch(&c, NULL) == NULL);
-    assert(pt_scratch(&c, &cap) == NULL || cap == 0);
+    asserteq(pt_scratch(&c, NULL), NULL);
+    assertok(pt_scratch(&c, &cap) == NULL || cap == 0);
 
     /* pt_literal with NULL / len==0 */
-    assert(pt_literal(NULL, 1) == NULL);
-    assert(pt_literal(&c, 0) == NULL);
+    asserteq(pt_literal(NULL, 1), NULL);
+    asserteq(pt_literal(&c, 0), NULL);
 
     /* pt_edit param checks */
-    assert(pt_edit(NULL, 1, "x", 1) == PT_ERRPARAM);
+    asserteq(pt_edit(NULL, 1, "x", 1), PT_ERRPARAM);
     c.tree = NULL;
-    assert(pt_edit(&c, 1, "x", 1) == PT_ERRPARAM);
+    asserteq(pt_edit(&c, 1, "x", 1), PT_ERRPARAM);
     c.tree = (pt_Tree *)b;
 
     /* pt_edit len too large */
-    assert(pt_edit(&c, 0, "x", PT_MAX_HOLESIZE + 1) == PT_ERRPARAM);
+    asserteq(pt_edit(&c, 0, "x", PT_MAX_HOLESIZE + 1), PT_ERRPARAM);
 
     /* pt_append NULL */
-    assert(pt_append(NULL, "x", 1) == PT_ERRPARAM);
-    assert(pt_append(&c, NULL, 1) == PT_ERRPARAM);
+    asserteq(pt_append(NULL, "x", 1), PT_ERRPARAM);
+    asserteq(pt_append(&c, NULL, 1), PT_ERRPARAM);
 
     /* pt_remove / pt_splice NULL */
-    assert(pt_remove(NULL, 1) == PT_ERRPARAM);
+    asserteq(pt_remove(NULL, 1), PT_ERRPARAM);
     c.tree = NULL;
-    assert(pt_remove(&c, 1) == PT_ERRPARAM);
+    asserteq(pt_remove(&c, 1), PT_ERRPARAM);
     c.tree = (pt_Tree *)b;
-    assert(pt_splice(NULL, 1, "x", 1) == PT_ERRPARAM);
+    asserteq(pt_splice(NULL, 1, "x", 1), PT_ERRPARAM);
     c.tree = NULL;
-    assert(pt_splice(&c, 1, "x", 1) == PT_ERRPARAM);
+    asserteq(pt_splice(&c, 1, "x", 1), PT_ERRPARAM);
     c.tree = (pt_Tree *)b;
 
     /* pt_rollback: not dirty → returns retained buffer, cursor detached */
-    assert(pt_rollback(&c) == b);
-    assert(c.tree == NULL);
+    asserteq(pt_rollback(&c), b);
+    asserteq(c.tree, NULL);
     pt_release(b); /* balance the rollback retain */
 
     /* pt_piece/pt_next/pt_prev NULL cursor */
-    assert(pt_piece(NULL, NULL) == NULL);
-    assert(pt_next(NULL, NULL) == NULL);
-    assert(pt_prev(NULL, NULL) == NULL);
-    assert(pt_read(NULL, NULL, 0) == 0);
+    asserteq(pt_piece(NULL, NULL), NULL);
+    asserteq(pt_next(NULL, NULL), NULL);
+    asserteq(pt_prev(NULL, NULL), NULL);
+    asserteq(pt_read(NULL, NULL, 0), 0);
 
     /* pt_empty NULL */
-    assert(pt_empty(NULL) == NULL);
+    asserteq(pt_empty(NULL), NULL);
 
     /* pt_advance backward overflow: d<0 and |d|>off clamps to start */
     pt_seek(&c, b, 0);
     pt_insert(&c, "abc", 3);
-    assert(pt_advance(&c, -100) == PT_OK); /* clamp to 0 */
-    assert(pt_offset(&c) == 0);
+    asserteq(pt_advance(&c, -100), PT_OK); /* clamp to 0 */
+    asserteq(pt_offset(&c), 0);
 
     /* pt_next at end: exhaust pieces then returns NULL */
     {
@@ -4281,24 +4534,27 @@ TEST(error_paths) {
         size_t      n;
         pt_locate(&c, 0);
         p = pt_piece(&c, &n); /* "abc" */
-        assert(p && n == 3);
+        assertok(p);
+        asserteq(n, 3);
         p = pt_next(&c, &n); /* past end → NULL */
-        assert(p == NULL);
+        asserteq(p, NULL);
     }
 
     pt_seek(&c, b, 0);                          /* back to empty */
-    assert(pt_append(&c, "hello", 5) == PT_OK); /* piece for prev test */
+    asserteq(pt_append(&c, "hello", 5), PT_OK); /* piece for prev test */
     {
         pt_Buffer   a = pt_commit(&c); /* commit to test prev */
         const char *p;
         size_t      n;
-        assert(a != NULL);
+        assertok(a != NULL);
         pt_seek(&c, a, 5);   /* end */
         p = pt_prev(&c, &n); /* "hello" */
-        assert(p && memcmp(p, "hello", 5) == 0);
-        assert(n == 5);
+        assertok(p);
+        asserteq(memcmp(p, "hello", 5), 0);
+        asserteq(n, 5);
         p = pt_prev(&c, &n); /* before start → NULL */
-        assert(p == NULL && n == 0);
+        asserteq(p, NULL);
+        asserteq(n, 0);
         /* plen=NULL variants for pt_piece/pt_next/pt_prev */
         pt_locate(&c, 0);
         pt_piece(&c, NULL); /* current piece, no len */
@@ -4309,18 +4565,19 @@ TEST(error_paths) {
     }
 
     /* pt_from NULL S / bad s */
-    assert(pt_from(NULL, NULL, 0) == NULL);
-    assert(pt_from(S, NULL, 1) == NULL);
+    asserteq(pt_from(NULL, NULL, 0), NULL);
+    asserteq(pt_from(S, NULL, 1), NULL);
 
     /* pt_getallocf */
-    assert(pt_getallocf(NULL, NULL) == NULL);
+    asserteq(pt_getallocf(NULL, NULL), NULL);
 
     /* pt_reset / pt_close NULL (no crash) */
     pt_reset(NULL);
     pt_close(NULL);
 
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4337,19 +4594,20 @@ TEST(remove_cow_deep) {
     pt_seek(&c, b, 0);
     for (k = 0; k < 40; ++k) pt_append(&c, buf + k * 3, 2);
     a = pt_commit(&c);
-    assert(a->levels >= 2);
+    assertok(a->levels >= 2);
     /* remove range within first root child only */
     {
         const pt_Node *r = &a->root;
         size_t         child0_bytes = ptN_sumbytes(
                 r->children[0], 0, r->children[0]->child_count);
         pt_seek(&c, a, 2);
-        assert(pt_remove(&c, child0_bytes - 4) == PT_OK);
+        asserteq(pt_remove(&c, child0_bytes - 4), PT_OK);
         pt_checktree(c.tree);
         pt_checktree(a);
     }
     pt_release(c.tree), pt_release(a), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4383,10 +4641,11 @@ TEST(remove_literal_mid_fulltree) {
     pt_Cursor c;
     pt_seek(&c, b, 3);
     /* remove 1 byte from middle of piece "bb" (position 3 = "b" in "bb") */
-    assert(pt_remove(&c, 1) == PT_OK);
-    assert(pt_checktree(c.tree));
+    asserteq(pt_remove(&c, 1), PT_OK);
+    assertok(pt_checktree(c.tree));
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4402,12 +4661,13 @@ TEST(remove_cov_midsplit) {
                    leafV(litV("iii"), litV("jjj"), litV("kkk"), litV("lll")),
                    leafV(litV("mmm"), litV("nnn"), litV("ooo"), litV("ppp"))));
     pt_seek(&c, b, 1);
-    assert(pt_remove(&c, 1) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 1));
-    assert(pt_bytes(c.tree) == 47);
+    asserteq(pt_remove(&c, 1), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 1));
+    asserteq(pt_bytes(c.tree), 47);
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4423,10 +4683,11 @@ TEST(remove_stitch_zero) {
     pt_Cursor c;
     pt_seek(&c, b, 2);
     /* remove exactly the piece "ccc" leaving an empty slot */
-    assert(pt_remove(&c, 3) == PT_OK);
+    asserteq(pt_remove(&c, 3), PT_OK);
     pt_checktree(c.tree);
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4436,9 +4697,10 @@ TEST(splice_null_del0) {
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     pt_seek(&c, b, 0);
-    assert(pt_splice(&c, 0, NULL, 0) == PT_OK);
+    asserteq(pt_splice(&c, 0, NULL, 0), PT_OK);
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4462,37 +4724,38 @@ TEST(literal_single_node) {
 
     {
         buf = pt_reserve(&c, 1024); /* one arena block */
-        assert(buf != NULL);
+        assertok(buf != NULL);
         pt_scratch(&c, &cap);
-        assert(cap >= 1024);
+        assertok(cap >= 1024);
     }
 
     for (k = 0; k < 1024; k += 16) {
         chunk = (size_t)(k + 16 <= 1024 ? 16 : 1024 - k);
 
         pt_scratch(&c, &cap);
-        assert(cap >= chunk);
+        assertok(cap >= chunk);
 
         buf = (char *)pt_scratch(&c, &cap);
-        assert(cap >= chunk);
+        assertok(cap >= chunk);
         memcpy(buf, data + k, chunk);
 
         lit = pt_literal(&c, chunk);
-        assert(lit != NULL);
-        assert(lit == buf);
+        assertok(lit != NULL);
+        asserteq(lit, buf);
 
         pt_append(&c, lit, chunk);
         total += chunk;
     }
 
-    assert(c.tree->levels == 0);
-    assert(c.tree->root.child_count == 1);
-    assert(pt_bytes(c.tree) == total);
-    assert(pt_offset(&c) == total);
+    asserteq(c.tree->levels, 0);
+    asserteq(c.tree->root.child_count, 1);
+    asserteq(pt_bytes(c.tree), total);
+    asserteq(pt_offset(&c), total);
     pt_checktree(c.tree);
 
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4505,48 +4768,49 @@ TEST(error_cov_params) {
     size_t    n;
     { /* pt_open allocf fails */
         int cnt0 = 0;
-        assert(pt_open(&oom_alloc, &cnt0) == NULL);
+        asserteq(pt_open(&oom_alloc, &cnt0), NULL);
     }
     { /* pt_from trees pool page alloc fails */
         int       cnt1 = 1000;
         pt_State *S2 = pt_open(&oom_alloc, &cnt1);
         cnt1 = 0;
-        assert(pt_from(S2, "x", 1) == NULL);
+        asserteq(pt_from(S2, "x", 1), NULL);
         pt_close(S2);
     }
-    assert(pt_from(NULL, "x", 1) == NULL);
-    assert(pt_from(S, NULL, 1) == NULL);
-    assert(pt_getallocf(NULL, NULL) == NULL);
+    asserteq(pt_from(NULL, "x", 1), NULL);
+    asserteq(pt_from(S, NULL, 1), NULL);
+    asserteq(pt_getallocf(NULL, NULL), NULL);
     memset(&c, 0, sizeof(c));
-    assert(pt_advance(&c, 1) == PT_ERRPARAM);
-    assert(pt_locate(&c, 0) == PT_ERRPARAM);
-    assert(pt_commit(&c) == NULL);
-    assert(pt_rollback(&c) == NULL);
-    assert(pt_scratch(&c, &n) == NULL);
-    assert(pt_literal(&c, 1) == NULL);
-    assert(pt_reserve(&c, 1) == NULL);
-    assert(pt_append(&c, "x", 1) == PT_ERRPARAM);
-    assert(pt_remove(&c, 1) == PT_ERRPARAM);
-    assert(pt_splice(&c, 1, "x", 1) == PT_ERRPARAM);
-    assert(pt_edit(&c, 1, "x", 1) == PT_ERRPARAM);
-    assert(pt_piece(&c, &n) == NULL);
-    assert(pt_next(&c, &n) == NULL);
-    assert(pt_prev(&c, &n) == NULL);
-    assert(pt_read(&c, buf, 1) == 0);
+    asserteq(pt_advance(&c, 1), PT_ERRPARAM);
+    asserteq(pt_locate(&c, 0), PT_ERRPARAM);
+    asserteq(pt_commit(&c), NULL);
+    asserteq(pt_rollback(&c), NULL);
+    asserteq(pt_scratch(&c, &n), NULL);
+    asserteq(pt_literal(&c, 1), NULL);
+    asserteq(pt_reserve(&c, 1), NULL);
+    asserteq(pt_append(&c, "x", 1), PT_ERRPARAM);
+    asserteq(pt_remove(&c, 1), PT_ERRPARAM);
+    asserteq(pt_splice(&c, 1, "x", 1), PT_ERRPARAM);
+    asserteq(pt_edit(&c, 1, "x", 1), PT_ERRPARAM);
+    asserteq(pt_piece(&c, &n), NULL);
+    asserteq(pt_next(&c, &n), NULL);
+    asserteq(pt_prev(&c, &n), NULL);
+    asserteq(pt_read(&c, buf, 1), 0);
     pt_seek(&c, b, 2);
-    assert(pt_piece(&c, NULL) == NULL);
-    assert(pt_next(&c, NULL) == NULL);
+    asserteq(pt_piece(&c, NULL), NULL);
+    asserteq(pt_next(&c, NULL), NULL);
     pt_locate(&c, 0);
-    assert(pt_prev(&c, NULL) == NULL);
-    assert(pt_scratch(&c, NULL) == NULL);
-    assert(pt_literal(&c, 0) == NULL);
-    assert(pt_splice(&c, 0, "x", 0) == PT_OK);
-    assert(pt_splice(&c, 0, NULL, 5) == PT_OK);
-    assert(pt_splice(&c, 1, "x", 0) == PT_OK);
-    assert(pt_checktree(c.tree));
+    asserteq(pt_prev(&c, NULL), NULL);
+    asserteq(pt_scratch(&c, NULL), NULL);
+    asserteq(pt_literal(&c, 0), NULL);
+    asserteq(pt_splice(&c, 0, "x", 0), PT_OK);
+    asserteq(pt_splice(&c, 0, NULL, 5), PT_OK);
+    asserteq(pt_splice(&c, 1, "x", 0), PT_OK);
+    assertok(pt_checktree(c.tree));
     pt_release(pt_rollback(&c)); /* returns retained b */
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4558,17 +4822,18 @@ TEST(reserve_cov_oom) {
     pt_Cursor c;
     pt_seek(&c, b, 0);
     cnt = 0;
-    assert(pt_reserve(&c, 4) == NULL);
-    assert(pt_literal(&c, 1) == NULL);
-    assert(!c.dirty);
+    asserteq(pt_reserve(&c, 4), NULL);
+    asserteq(pt_literal(&c, 1), NULL);
+    assertok(!c.dirty);
     cnt = 1000;
-    assert(pt_insert(&c, "x", 1) == PT_OK);
-    assert(c.dirty);
+    asserteq(pt_insert(&c, "x", 1), PT_OK);
+    assertok(c.dirty);
     cnt = 0;
-    assert(pt_reserve(&c, 4) == NULL);
+    asserteq(pt_reserve(&c, 4), NULL);
     cnt = 1000;
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4581,23 +4846,24 @@ TEST(fork_cov_oom) {
     pt_Drain  td, nd;
     b = pt_from(S, "abcd", 4);
     pt_seek(&c, b, 0);
-    assert(pt_insert(&c, "x", 1) == PT_OK);
-    assert(pt_rollback(&c) == b);
+    asserteq(pt_insert(&c, "x", 1), PT_OK);
+    asserteq(pt_rollback(&c), b);
     pt_release(b); /* balance the rollback retain */
     td = pt_drainpool(&S->trees);
     cnt = 0;
     pt_seek(&c, b, 1);
-    assert(pt_insert(&c, "y", 1) == PT_ERRMEM);
-    assert(pt_remove(&c, 2) == PT_ERRMEM);
-    assert(pt_splice(&c, 2, "z", 1) == PT_ERRMEM);
-    assert(!c.dirty);
+    asserteq(pt_insert(&c, "y", 1), PT_ERRMEM);
+    asserteq(pt_remove(&c, 2), PT_ERRMEM);
+    asserteq(pt_splice(&c, 2, "z", 1), PT_ERRMEM);
+    assertok(!c.dirty);
     nd = pt_drainpool(&S->nodes);
-    assert(pt_splice(&c, 2, "z", 1) == PT_ERRMEM);
+    asserteq(pt_splice(&c, 2, "z", 1), PT_ERRMEM);
     pt_refillpool(&S->nodes, nd);
     pt_refillpool(&S->trees, td);
     cnt = 1000;
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4609,15 +4875,16 @@ TEST(edit_cov_holeoom) {
     pt_Cursor c;
     pt_Drain  d;
     pt_seek(&c, b, 0);
-    assert(pt_edit(&c, 0, "x", 1) == PT_OK);
+    asserteq(pt_edit(&c, 0, "x", 1), PT_OK);
     d = pt_drainpool(&S->holes);
     cnt = 0;
-    assert(pt_edit(&c, 0, "y", 1) == PT_ERRMEM);
+    asserteq(pt_edit(&c, 0, "y", 1), PT_ERRMEM);
     pt_refillpool(&S->holes, d);
     cnt = 1000;
-    assert(pt_edit(&c, 0, "y", 1) == PT_OK);
+    asserteq(pt_edit(&c, 0, "y", 1), PT_OK);
     pt_release(c.tree), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4630,18 +4897,19 @@ TEST(edit_cov_prevfull) {
     pt_Cursor c;
     b = pt_empty(S);
     pt_seek(&c, b, 0);
-    assert(pt_edit(&c, 0, "0123456789abcdef", 16) == PT_OK);
+    asserteq(pt_edit(&c, 0, "0123456789abcdef", 16), PT_OK);
     pt_append(&c, "XY", 2);
     pt_release(b); /* empty sentinel, no-op */
     pt_locate(&c, 16);
-    assert(pt_edit(&c, 0, "zz", 2) == PT_OK);
-    assert(pt_checktree(c.tree));
-    assert(pt_checkcursor(&c, 18));
+    asserteq(pt_edit(&c, 0, "zz", 2), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 18));
     pt_asserttree(
             c.tree, 0,
             leafV(holeV("0123456789abcdef"), holeV("zz"), litV("XY")));
     pt_release(c.tree);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4651,17 +4919,18 @@ TEST(compact_params) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_State *S2 = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_from(S, "hello", 5);
-    assert(pt_compact(NULL, b) == NULL);
-    assert(pt_compact(S, NULL) == NULL);
-    assert(pt_compact(S2, b) == NULL); /* foreign state */
-    assert(pt_compact(S, pt_empty(S)) == pt_empty(S));
+    asserteq(pt_compact(NULL, b), NULL);
+    asserteq(pt_compact(S, NULL), NULL);
+    asserteq(pt_compact(S2, b), NULL); /* foreign state */
+    asserteq(pt_compact(S, pt_empty(S)), pt_empty(S));
     {
         pt_Buffer z = pt_from(S, NULL, 0); /* zero-byte blob */
-        assert(pt_compact(S, z) == pt_empty(S));
+        asserteq(pt_compact(S, z), pt_empty(S));
         pt_release(z);
     }
     pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S2), pt_close(S);
 }
 
@@ -4673,31 +4942,33 @@ TEST(compact_basic) {
     const char       *old;
 
     pt_seek(&c, b0, 8);
-    assert(pt_edit(&c, 0, "xy", 2) == PT_OK);
+    asserteq(pt_edit(&c, 0, "xy", 2), PT_OK);
     b1 = pt_commit(&c);
-    assert(b1 != NULL);
+    assertok(b1 != NULL);
     old = (const char *)b1->root.children[1]; /* internal "xy" */
 
     nb = pt_compact(S, b1);
-    assert(nb != NULL && nb->from == &S->empty);
-    assert(pt_checktree(nb));
+    assertok(nb != NULL);
+    asserteq(nb->from, &S->empty);
+    assertok(pt_checktree(nb));
     pt_asserttree(nb, 0, leafV(litV("01234567"), litV("xy"), litV("89ABCDEF")));
     /* external pieces keep the original pointers (zero-copy) */
-    assert((const char *)nb->root.children[0] == big);
-    assert((const char *)nb->root.children[2] == big + 8);
+    asserteq((const char *)nb->root.children[0], big);
+    asserteq((const char *)nb->root.children[2], big + 8);
     /* internal piece migrated into nb's own arena */
-    assert((const char *)nb->root.children[1] != old);
-    assert(nb->arena.current != NULL);
+    assertok((const char *)nb->root.children[1] != old);
+    assertok(nb->arena.current != NULL);
 
     /* old chain released: new blob must stay intact (ASAN guards) */
     pt_release(b1), pt_release(b0);
     {
         char buf[32];
-        assert(collect_bytes(nb, buf, 32) == 18);
-        assert(memcmp(buf, "01234567xy89ABCDEF", 18) == 0);
+        asserteq(collect_bytes(nb, buf, 32), 18);
+        asserteq(memcmp(buf, "01234567xy89ABCDEF", 18), 0);
     }
     pt_release(nb);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4707,26 +4978,30 @@ TEST(compact_merge) {
     pt_Cursor c;
 
     pt_seek(&c, pt_empty(S), 0);
-    assert(pt_edit(&c, 0, "ab", 2) == PT_OK);
+    asserteq(pt_edit(&c, 0, "ab", 2), PT_OK);
     b1 = pt_commit(&c);
     pt_seek(&c, b1, 2);
-    assert(pt_edit(&c, 0, "cd", 2) == PT_OK);
+    asserteq(pt_edit(&c, 0, "cd", 2), PT_OK);
     b2 = pt_commit(&c);
-    assert(b1 && b2 && b2->root.child_count == 2);
+    assertok(b1);
+    assertok(b2);
+    asserteq(b2->root.child_count, 2);
 
     /* both pieces internal: copied back-to-back, hence merged */
     nb = pt_compact(S, b2);
-    assert(nb != NULL && nb->from == &S->empty);
+    assertok(nb != NULL);
+    asserteq(nb->from, &S->empty);
     pt_asserttree(nb, 0, leafV(litV("abcd")));
 
     pt_release(b2), pt_release(b1);
     {
         char buf[8];
-        assert(collect_bytes(nb, buf, 8) == 4);
-        assert(memcmp(buf, "abcd", 4) == 0);
+        asserteq(collect_bytes(nb, buf, 8), 4);
+        asserteq(memcmp(buf, "abcd", 4), 0);
     }
     pt_release(nb);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4735,7 +5010,7 @@ static pt_Buffer compact_makewide(pt_State *S, const char *src, int np) {
     pt_Cursor c;
     int       i;
     pt_seek(&c, pt_empty(S), 0);
-    for (i = 0; i < np; ++i) assert(pt_append(&c, src + 2 * i, 1) == PT_OK);
+    for (i = 0; i < np; ++i) asserteq(pt_append(&c, src + 2 * i, 1), PT_OK);
     return pt_commit(&c);
 }
 
@@ -4745,17 +5020,20 @@ TEST(compact_deep) {
     pt_Buffer         b = compact_makewide(S, src, 16), nb;
 
     nb = pt_compact(S, b); /* full leaves: root deepening, no fold */
-    assert(nb != NULL && nb->from == &S->empty);
-    assert(pt_checktree(nb));
-    assert(nb->levels == 1 && nb->root.child_count == 4);
-    assert(nb->arena.current == NULL); /* all external: zero-copy */
+    assertok(nb != NULL);
+    asserteq(nb->from, &S->empty);
+    assertok(pt_checktree(nb));
+    asserteq(nb->levels, 1);
+    asserteq(nb->root.child_count, 4);
+    asserteq(nb->arena.current, NULL); /* all external: zero-copy */
     {
         char buf[20];
-        assert(collect_bytes(nb, buf, 20) == 16);
-        assert(memcmp(buf, "abcdefghijklmnop", 16) == 0);
+        asserteq(collect_bytes(nb, buf, 20), 16);
+        asserteq(memcmp(buf, "abcdefghijklmnop", 16), 0);
     }
     pt_release(nb), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4765,15 +5043,16 @@ TEST(compact_tail_balance) {
     pt_Buffer         b = compact_makewide(S, src, 6), nb;
 
     nb = pt_compact(S, b); /* trailing leaf underfull: balanced [3,3] */
-    assert(nb != NULL);
-    assert(pt_checktree(nb));
+    assertok(nb != NULL);
+    assertok(pt_checktree(nb));
     pt_asserttree(
             nb, 1,
             innerV(leafV(litV_(src, 1), litV_(src + 2, 1), litV_(src + 4, 1)),
                    leafV(litV_(src + 6, 1), litV_(src + 8, 1),
                          litV_(src + 10, 1))));
     pt_release(nb), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4784,28 +5063,30 @@ TEST(compact_chain) {
 
     /* three generations: three arenas, ranges array must grow (cap 2) */
     pt_seek(&c, pt_empty(S), 0);
-    assert(pt_edit(&c, 0, "aa", 2) == PT_OK);
+    asserteq(pt_edit(&c, 0, "aa", 2), PT_OK);
     b1 = pt_commit(&c);
     pt_seek(&c, b1, 2);
-    assert(pt_edit(&c, 0, "bb", 2) == PT_OK);
+    asserteq(pt_edit(&c, 0, "bb", 2), PT_OK);
     b2 = pt_commit(&c);
     pt_seek(&c, b2, 4);
-    assert(pt_edit(&c, 0, "cc", 2) == PT_OK);
+    asserteq(pt_edit(&c, 0, "cc", 2), PT_OK);
     b3 = pt_commit(&c);
-    assert(b1 && b2 && b3);
+    assertok(b1 && b2 && b3);
 
     nb = pt_compact(S, b3); /* ancestor-arena literals are internal too */
-    assert(nb != NULL && nb->from == &S->empty);
+    assertok(nb != NULL);
+    asserteq(nb->from, &S->empty);
     pt_asserttree(nb, 0, leafV(litV("aabbcc")));
 
     pt_release(b3), pt_release(b2), pt_release(b1);
     {
         char buf[8];
-        assert(collect_bytes(nb, buf, 8) == 6);
-        assert(memcmp(buf, "aabbcc", 6) == 0);
+        asserteq(collect_bytes(nb, buf, 8), 6);
+        asserteq(memcmp(buf, "aabbcc", 6), 0);
     }
     pt_release(nb);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4818,15 +5099,15 @@ TEST(compact_oom) {
 
     /* three generations so ranges collect must grow (cap 2) */
     pt_seek(&c, pt_empty(S), 0);
-    assert(pt_edit(&c, 0, "aa", 2) == PT_OK);
+    asserteq(pt_edit(&c, 0, "aa", 2), PT_OK);
     b1 = pt_commit(&c);
     pt_seek(&c, b1, 2);
-    assert(pt_edit(&c, 0, "bb", 2) == PT_OK);
+    asserteq(pt_edit(&c, 0, "bb", 2), PT_OK);
     b2 = pt_commit(&c);
     pt_seek(&c, b2, 4);
-    assert(pt_edit(&c, 0, "cc", 2) == PT_OK);
+    asserteq(pt_edit(&c, 0, "cc", 2), PT_OK);
     b3 = pt_commit(&c);
-    assert(b1 && b2 && b3);
+    assertok(b1 && b2 && b3);
 
     pre = S->nodes.live_obj;
     for (k = 0;; ++k) {
@@ -4834,15 +5115,16 @@ TEST(compact_oom) {
         cnt = k;
         nb = pt_compact(S, b3);
         if (nb != NULL) break;
-        assert(k < 64);
-        assert(S->nodes.live_obj == pre);       /* failure leaks nothing */
-        assert(collect_bytes(b3, buf, 8) == 6); /* source intact */
-        assert(memcmp(buf, "aabbcc", 6) == 0);
+        assertok(k < 64);
+        asserteq(S->nodes.live_obj, pre);       /* failure leaks nothing */
+        asserteq(collect_bytes(b3, buf, 8), 6); /* source intact */
+        asserteq(memcmp(buf, "aabbcc", 6), 0);
     }
     cnt = 1000;
     pt_asserttree(nb, 0, leafV(litV("aabbcc")));
     pt_release(nb), pt_release(b3), pt_release(b2), pt_release(b1);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
 
@@ -4854,27 +5136,27 @@ TEST(compact_oom_makechain) {
     pt_Drain          d;
     size_t            pre;
 
-    assert(b != NULL);
+    assertok(b != NULL);
     pre = S->nodes.live_obj;
     d = pt_drainpool(&S->nodes); /* force makechain onto page alloc */
     cnt = 0;
     nb = pt_compact(S, b);
-    assert(nb == NULL);
+    asserteq(nb, NULL);
     pt_refillpool(&S->nodes, d), cnt = 1000;
-    assert(S->nodes.live_obj == pre);
+    asserteq(S->nodes.live_obj, pre);
 
     nb = pt_compact(S, b); /* recovery */
-    assert(nb != NULL);
-    assert(pt_checktree(nb));
+    assertok(nb != NULL);
+    assertok(pt_checktree(nb));
     {
         char buf[20];
-        assert(collect_bytes(nb, buf, 20) == 16);
-        assert(memcmp(buf, "abcdefghijklmnop", 16) == 0);
+        asserteq(collect_bytes(nb, buf, 20), 16);
+        asserteq(memcmp(buf, "abcdefghijklmnop", 16), 0);
     }
     pt_release(nb), pt_release(b);
-    assert(S->nodes.live_obj == 0 && S->holes.live_obj == 0);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
     pt_close(S);
 }
-
 
 #include "piecetab_test_fanout4.gen.inc"

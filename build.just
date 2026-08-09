@@ -14,10 +14,10 @@ dbg-run t inc *tests='':
 
 cov-run t inc *tests='':
     lua tests/gen_entries.lua {{ t }}.c {{ t }}.gen.inc
-    {{ CC }} {{ CFLAGS }} {{ inc }} --coverage -Wno-unused-function -O0 -o {{ t }} {{ t }}.c && ./{{ t }} {{ tests }}
+    {{ CC }} {{ CFLAGS }} {{ inc }} -DNDEBUG --coverage -Wno-unused-function -O0 -o {{ t }} {{ t }}.c && ./{{ t }} {{ tests }}
 
 clean-gcda:
-    rm -f tests/*.gcda tests/*.gcno ./*.gcda ./*.gcno *.info build/*/*.gcda build/*/*.gcno lua/*.gcda lua/*.gcno
+    rm -f tests/*.gcda tests/*.gcno ./*.gcda ./*.gcno *.info build/*/*.gcda build/*/*.gcno lua/*.gcda lua/*.gcno lua/luajit/*.gcda lua/luajit/*.gcno
 
 cov-show src:
     lcov --capture --directory . --rc branch_coverage=1 --output-file coverage.info --no-external --ignore-errors unsupported,inconsistent --filter range
@@ -28,7 +28,10 @@ cov-show src:
 
 cov-lines src:
     @awk '/^DA:/ && /,0$/ {gsub(/DA:|,0/,""); print $0}' lcov.info \
-    | sort -n | while read ln; do echo "L$ln: $(sed -n ${ln}p {{ src }})"; done
+    | sort -n | while read ln; do \
+        src=$(sed -n "${ln}p" {{ src }} 2>/dev/null); \
+        case "$src" in *assert*) ;; *) echo "L$ln: $src";; esac; \
+    done
 
 cov-unbranched src:
     @awk -F'[:,]' '/^BRDA:/ && $5==0 {print $2}' lcov.info \
