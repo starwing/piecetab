@@ -17,6 +17,16 @@
 不管编码），linecache 只管行断点，undotree 管理版本图并为任意两版本计算差分。
 三者组合即得支持 O(log n) 偏移 ↔ 行号双向导航和 undo/redo 的完整编辑器 buffer。
 
+外围库将核心扩展为完整编辑器：
+
+- **`cellgrid.h`** — 屏幕 buffer + diff 层：网格单元、滚动/移动/填充
+  原语，以及用于高效屏幕更新的重绘差分驱动。
+- **`termfeed.h`** — libtermkey 风格的终端输入状态机：原始字节 →
+  解码按键（CSI/SS3、UTF-8、Alt 键、鼠标、OSC52）。
+
+全部遵循同一 stb 风格布局：单头 C89 实现、`lua/` 下的 Lua 绑定、
+`tests/` 下的测试文件。
+
 ## AI 使用
 - 所有实现（stb 头文件）均为手写，AI 用于寻找解决方案、辅助设计和生成文档。
 - 所有测试均由 AI 编写，人工review，用于验证实现的正确性，并确保代码满足需求和规范。
@@ -205,7 +215,9 @@ int main(void) {
 - `lua/` — Lua 侧：每个库一个绑定 `name.c` + API 声明 `name.d.lua`，
   以及 `editor.lua` demo 和 `tests/`（Lua 测试）。绑定构建产物：
   `lua/*.so`（Lua 5.5，主运行时）与 `lua/luajit/*.so`（LuaJIT，兼容验证）
-- `tests/` — C 测试：每个库一个 `*_test.c` 及各自的 `*_tests.h` 辅助
+- `tests/` — C 测试：每个库一个 `*_test.c`；`tests.h`（共享 runner 与
+  断言）、`gen_entries.lua`（测试条目生成器）、`lc_tests.h`
+  （linecache 特有辅助，两个 fanout 变体共享）
 - `docs/`、`notes/` — API 参考文档与设计记录
 
 ## 文档
@@ -215,6 +227,9 @@ int main(void) {
 - [`docs/undotree.zh.md`](docs/undotree.zh.md) — undotree API 参考与集成指引
 - [`notes/`](notes/) — 设计文档：架构总览（`brief_*.md`）、算法设计
   （`design_*.md`）、区间删除算法演进史
+
+外围库（`cellgrid.h`、`termfeed.h`）尚无 API 文档——参见各自
+`lua/*.d.lua` 声明与 `notes/design_cellgrid.md`、`notes/design_termfeed.md`。
 
 ## 测试
 

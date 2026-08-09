@@ -20,6 +20,17 @@ breaks, undotree manages the version graph and computes diffs between any
 two versions. Combine them to get a full editor buffer with O(log n)
 offset ↔ line navigation and undo/redo.
 
+Peripheral libraries extend the core toward a full editor:
+
+- **`cellgrid.h`** — a screen buffer with a diff layer: grid cells,
+  scroll/move/fill primitives, and a redraw-diff driver for efficient
+  screen updates.
+- **`termfeed.h`** — a libtermkey-style terminal input state machine:
+  raw bytes to decoded keys (CSI/SS3, UTF-8, alt keys, mouse, OSC52).
+
+All of them follow the same stb-style layout: single-header C89
+implementation, a Lua binding in `lua/`, and a test file in `tests/`.
+
 ## AI Usage
 - All implements (stb header) are written by hand, AI used to find solutions, help with design, and generate documentation.
 - All tests are written by AI, reviewed by human, used to verify the correctness of the implementation, and to ensure that the code meets the requirements and specifications.
@@ -221,8 +232,10 @@ All libraries accept a custom allocator (`lc_Alloc` / `pt_Alloc`
   per library, the `editor.lua` demo, and `tests/` with Lua tests.
   Bindings build to `lua/*.so` (Lua 5.5, primary) and `lua/luajit/*.so`
   (LuaJIT, compat)
-- `tests/` — C tests: one `*_test.c` per library plus per-library
-  `*_tests.h` helpers
+- `tests/` — C tests: one `*_test.c` per library; `tests.h` (shared
+  runner + asserts), `gen_entries.lua` (test-entry generator),
+  `lc_tests.h` (linecache-specific helpers shared by both fanout
+  variants)
 - `docs/`, `notes/` — API reference docs and design records
 
 ## Documentation
@@ -233,6 +246,10 @@ All libraries accept a custom allocator (`lc_Alloc` / `pt_Alloc`
   implementation notes ([中文](docs/linecache.zh.md))
 - [`docs/undotree.md`](docs/undotree.md) — undotree API reference &
   integration guide ([中文](docs/undotree.zh.md))
+
+Peripheral libraries (`cellgrid.h`, `termfeed.h`) have no API docs yet —
+see their `lua/*.d.lua` declarations and `notes/design_cellgrid.md`,
+`notes/design_termfeed.md`.
 - [`notes/`](notes/) — design documents: architecture overviews
   (`brief_*.md`), algorithm designs (`design_*.md`), and the range-delete
   algorithm evolution history
