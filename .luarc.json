@@ -1,8 +1,10 @@
 {
     "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
     "workspace.library": [
-        "mods/cellgrid",
-        "mods/termfeed"
+        "lua/piecetab.d.lua",
+        "lua/cellgrid.d.lua",
+        "lua/termfeed.d.lua",
+        "lua/lua-utf8.d.lua"
     ],
     "runtime.version": "Lua 5.4",
     "workspace.ignoreDir": [
