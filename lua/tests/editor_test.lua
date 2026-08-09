@@ -106,14 +106,14 @@ end
 
 function TestNormal:testWordMotions()
   self.e:dispatch("w")
-  lu.assertEquals(self.e.doc:column(), 5) -- 跳过 "line"+空格，停在 'o' 前
+  lu.assertEquals(self.e.doc:column(), 5) -- skips "line"+space, at 'o'
   self.e:dispatch("b")
   lu.assertEquals(self.e.doc:column(), 0)
 end
 
 function TestNormal:testZeroAndDollar()
   self.e:dispatch("$")
-  lu.assertEquals(self.e.doc:column(), 8) -- "line one" 尾（列 8，brief 原 7 错）
+  lu.assertEquals(self.e.doc:column(), 8) -- end of "line one" (col 8)
   self.e:dispatch("0")
   lu.assertEquals(self.e.doc:column(), 0)
 end
@@ -136,19 +136,19 @@ function TestNormal:testDdDeletesLine()
 end
 
 function TestNormal:testPendingGeneric()
-  -- 自定义组合键 "zz" 验证泛化 pending（不依赖内置）
+  -- custom combo "zz" verifies generic pending (not builtin-dependent)
   local e2 = make_ed("")
   local hit = 0
   e2:keymap("normal", "zz", function() hit = hit + 1 end)
   e2:dispatch("z")
-  lu.assertEquals(hit, 0) -- 等第二键
+  lu.assertEquals(hit, 0) -- waits for second key
   e2:dispatch("z")
   lu.assertEquals(hit, 1)
 end
 
 function TestNormal:testPendingMissFallsThrough()
   self.e:dispatch("g")
-  self.e:dispatch("x") -- gx 未绑定 → x 生效
+  self.e:dispatch("x") -- gx unbound -> x acts
   lu.assertEquals(self.e.doc:read("l"):sub(1, 1), "i")
 end
 

@@ -110,6 +110,8 @@ Term.RESET   = "\27[0m"
 
 -- ================================================================
 -- Section 2: Text/cursor pure functions
+-- Char motion and column math here are C-module incubation
+-- candidates (see notes/design_editor.md); keep them marked.
 -- ================================================================
 
 local function word_class(byte)
@@ -142,6 +144,7 @@ end
 
 -- Move cursor by n characters (-1 = left, +1 = right)
 local function cursor_move_char(doc, n)
+  -- TODO(C): promote char motion to C (pt or new module)
   local off = doc:offset()
   if n < 0 and off <= 0 then return end
   local buf = doc:buffer()
@@ -202,6 +205,7 @@ end
 
 -- 0-based display column within text (before byte offset 'byte').
 local function text_byte_to_dcol(text, byte, tabstop)
+  -- TODO(C): promote column math to C (cellgrid family)
   if byte <= 0 then return 0 end
   local col = 0
   local i = 1

@@ -152,6 +152,21 @@ q! 修复、模式切换、pending 组合键）。
 - 多文件拆分：维持单文件，膨胀到 ~900 行再议
 - 文档：README editor 小节更新（Ed.new/open 用法 + 外围库挂载示例）
 
+## 六b、C 模块孵化候选（demo 定位：C 库孵化平台）
+
+editor.lua 是 C 模块库的 demo——cellgrid/termfeed 均由 editor demo 需求
+孵化。当前仍留在 Lua 侧的计算，凡属"库级算法"均打 `TODO(C)` 标记，
+按需孵化：
+
+| 候选 | 位置 | 说明 |
+|---|---|---|
+| 字符移动原语 | `cursor_move_char` + `utf8_char_len`/`utf8_prev_start` | UTF-8 字符边界 walk；可入 pt 或独立 C 模块（配合 undo 对齐） |
+| 显示列换算 | `text_byte_to_dcol`/`text_dcol_to_byte`（tab 展开 + 宽字符） | cellgrid 家族候选；render_line 的 tab 逻辑（Task 5 迁移）同属此候选 |
+| 单词移动 | `move_word_forward/backward` + `word_class` | 暂留 Lua（vim 语义属编辑器逻辑）；若入 kana/多语言分词再 C 化 |
+| 渲染管线 | render_line 的 style 批量 putline | spantree 落地后与 highlighter 合并进 C 渲染路径 |
+
+`word_class` 为纯查表小函数，永久留 Lua 亦可，不标记。
+
 ## 七、实施顺序
 
 1. `lua-utf8.d.lua` + `.luarc.json`（已完成）
