@@ -159,6 +159,36 @@ int main(void) {
 }
 ```
 
+### editor.lua
+
+`editor.lua` is an AI-written modal editor demo that wires the libraries
+together: a piecetab/linecache buffer (`pt.doc`), a cellgrid screen
+buffer, and termfeed terminal input. `Ed.new(content?, term?, grid?)`
+builds an editor from a string; `Ed.open(filename, term?, grid?)` loads
+a file; both accept injected term/grid objects (tests use fakes). It
+also serves as a C-module incubation ground — helpers marked `TODO(C)`
+(char motion, column math) are candidates for promotion into C.
+
+```lua
+local Ed = require("editor")
+
+local e = Ed.open("file.txt")            -- or Ed.new("hello\nworld")
+e:keymap("normal", "G", function(self)
+  self.doc:seek("line", self.doc:breaks() - 1)
+end)
+e:command("hello", function(self, arg, bang)
+  self.msg = "hello, " .. arg
+end)
+```
+
+Custom keys/commands hook into the per-mode registries (`mode` is
+`"normal"` / `"insert"` / `"command"`). Built-in keys: `h/j/k/l`, `w/b`,
+`0/$`, `gg/G`, `x`, `dd`, `i/a/o/O`, `u`/`<C-r>`, `:`; commands:
+`:w`, `:q`, `:wq`, `:e`.
+
+Run the tests with `just lua-ed`; smoke-test interactively with
+`lua editor.lua [file]`.
+
 ## API Overview
 
 ### piecetab.h

@@ -143,6 +143,33 @@ int main(void) {
 }
 ```
 
+### editor.lua
+
+`editor.lua` 是 AI 编写的模态编辑器 demo，将各库串联起来：piecetab/
+linecache 文档 buffer（`pt.doc`）、cellgrid 屏幕 buffer、termfeed 终端
+输入。`Ed.new(content?, term?, grid?)` 由字符串构建编辑器，
+`Ed.open(filename, term?, grid?)` 加载文件；两者均接受注入的 term/grid
+对象（测试使用 fake）。它同时充当 C 模块孵化场——标注 `TODO(C)` 的
+辅助函数（字符移动、列计算）是晋升为 C 的候选。
+
+```lua
+local Ed = require("editor")
+
+local e = Ed.open("file.txt")            -- 或 Ed.new("hello\nworld")
+e:keymap("normal", "G", function(self)
+  self.doc:seek("line", self.doc:breaks() - 1)
+end)
+e:command("hello", function(self, arg, bang)
+  self.msg = "hello, " .. arg
+end)
+```
+
+自定义按键/命令挂入各模式注册表（`mode` 为 `"normal"` / `"insert"`
+/ `"command"`）。内置按键：`h/j/k/l`、`w/b`、`0/$`、`gg/G`、`x`、
+`dd`、`i/a/o/O`、`u`/`<C-r>`、`:`；命令：`:w`、`:q`、`:wq`、`:e`。
+
+测试：`just lua-ed`；交互 smoke：`lua editor.lua [file]`。
+
 ## API 总览
 
 ### piecetab.h

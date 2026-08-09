@@ -26,7 +26,7 @@ function utf8.offset(s, n, i) end
 --- @param s string
 --- @param i? integer
 --- @param j? integer
---- @return integer...
+--- @return integer ...
 function utf8.codepoint(s, i, j) end
 
 --- Returns an iterator over the UTF-8 characters of s.
@@ -42,7 +42,7 @@ function utf8.codes(s, i, j) end
 --- @param s string
 --- @param i? integer
 --- @param j? integer
---- @return integer...
+--- @return integer ...
 function utf8.byte(s, i, j) end
 
 --- Returns a string with each argument converted to a UTF-8 byte sequence.
@@ -62,7 +62,7 @@ function utf8.find(s, pattern, init, plain) end
 --- Returns an iterator over all non-overlapping matches of pattern in s.
 --- @param s string
 --- @param pattern string
---- @return fun(): string...
+--- @return fun(): string ...
 function utf8.gmatch(s, pattern) end
 
 --- Replaces every occurrence of pattern with repl, returning the new string
@@ -95,7 +95,7 @@ function utf8.lower(s) end
 --- @param s string
 --- @param pattern string
 --- @param init? integer
---- @return string...
+--- @return string ...
 function utf8.match(s, pattern, init) end
 
 --- Returns the reverse of s. Reverses by character, not by byte.
