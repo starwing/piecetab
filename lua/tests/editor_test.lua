@@ -5,10 +5,10 @@
 local dir = arg[0]:match("^(.*)[/\\]") or "."
 local root = dir .. "/../.."
 package.path = root .. "/?.lua;" .. dir .. "/?.lua;" .. package.path
-package.cpath = (_G["jit"] and root .. "/build/luajit/?.so;"
-    or root .. "/build/lua55/?.so;")
+package.cpath = (_G["jit"] and root .. "/lua/luajit/?.so;"
+    or root .. "/lua/?.so;")
     .. package.cpath
-    .. ";./build/lua55/?.so;/opt/homebrew/lib/lua/5.5/?.so;/opt/homebrew/lib/lua/5.4/?.so"
+    .. ";./lua/?.so;/opt/homebrew/lib/lua/5.5/?.so;/opt/homebrew/lib/lua/5.4/?.so"
 
 local lu = require "luaunit"
 local ed = require "editor"

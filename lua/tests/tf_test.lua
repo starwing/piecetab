@@ -4,8 +4,8 @@
 local dir = arg[0]:match("^(.*)[/\\]") or "."
 local root = dir .. "/../.."
 package.path = dir .. "/?.lua;" .. package.path
-package.cpath = (_G["jit"] and root .. "/build/luajit/?.so;"
-    or root .. "/build/lua55/?.so;") .. package.cpath
+package.cpath = (_G["jit"] and root .. "/lua/luajit/?.so;"
+    or root .. "/lua/?.so;") .. package.cpath
 
 local lu = require "luaunit"
 local tf = require "termfeed"

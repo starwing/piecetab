@@ -1,0 +1,45 @@
+# lua bindings: build, test, coverage. CWD = lua/ (just -f sets it)
+# run from repo root: just -f lua/justfile [pt|cg|tf|ed|cov-*|lines|clean]
+
+import '../build.just'
+
+INCS := "-I. -I.."
+
+lua-build mod:
+    mkdir -p luajit
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o {{ mod }}.so {{ mod }}.c
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o luajit/{{ mod }}.so {{ mod }}.c
+
+lua-run t *args='':
+    lua tests/{{ t }}.lua {{ args }}
+    luajit tests/{{ t }}.lua {{ args }}
+
+pt *args='': (lua-build "piecetab") (lua-run "pt_test" args)
+cg *args='': (lua-build "cellgrid") (lua-run "cg_test" args)
+tf *args='': (lua-build "termfeed") (lua-run "tf_test" args)
+# editor demo needs lua-utf8 rock (PUC Lua only)
+ed *args='': (lua-build "piecetab") (lua-build "cellgrid") (lua-build "termfeed")
+    lua tests/editor_test.lua {{ args }}
+
+cov mod t:
+    rm -f *.gcda luajit/*.gcda
+    mkdir -p luajit
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o {{ mod }}.so {{ mod }}.c
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o luajit/{{ mod }}.so {{ mod }}.c
+    lua tests/{{ t }}.lua && luajit tests/{{ t }}.lua
+    lcov --capture --directory . --base-directory . --rc branch_coverage=1 --output-file lua_coverage.info --ignore-errors mismatch
+    lcov --extract lua_coverage.info '*/{{ mod }}.c' --rc branch_coverage=1 --output-file lcov.info
+    @echo ""
+    @echo "=== {{ mod }}.c coverage ==="
+    lcov --list --rc branch_coverage=1 lcov.info
+
+cov-pt: (cov "piecetab" "pt_test")
+cov-cg: (cov "cellgrid" "cg_test")
+cov-tf: (cov "termfeed" "tf_test")
+
+lines mod:
+    @awk '/^DA:/ && /,0$/ {gsub(/DA:|,0/,""); print $0}' lcov.info \
+    | sort -n | while read ln; do echo "L$ln: $(sed -n ${ln}p {{ mod }}.c)"; done
+
+clean: clean-gcda
+    rm -f *.so luajit/*.so *.gcda luajit/*.gcda lua_coverage.info lcov.info

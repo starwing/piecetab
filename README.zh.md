@@ -198,6 +198,16 @@ int main(void) {
 所有库均可在 `*_open` 时传入自定义分配器（`lc_Alloc` / `pt_Alloc`
 / `ut_Alloc`，Lua 风格 realloc 签名）。
 
+## 目录结构
+
+- `*.h` — stb 风格单头文件库（纯 C89，自包含）：`piecetab.h`、
+  `linecache.h`、`undotree.h`、`cellgrid.h`、`termfeed.h`
+- `lua/` — Lua 侧：每个库一个绑定 `name.c` + API 声明 `name.d.lua`，
+  以及 `editor.lua` demo 和 `tests/`（Lua 测试）。绑定构建产物：
+  `lua/*.so`（Lua 5.5，主运行时）与 `lua/luajit/*.so`（LuaJIT，兼容验证）
+- `tests/` — C 测试：每个库一个 `*_test.c` 及各自的 `*_tests.h` 辅助
+- `docs/`、`notes/` — API 参考文档与设计记录
+
 ## 文档
 
 - [`docs/piecetab.zh.md`](docs/piecetab.zh.md) — piecetab API 参考与实现笔记
@@ -215,7 +225,10 @@ int main(void) {
 just lc     # linecache 测试
 just pt     # piecetab 测试
 just ut     # undotree 测试
+just cg     # cellgrid 测试
+just tf     # termfeed 测试
 just cov    # 覆盖率报告
+just lua-pt # Lua 绑定测试（另有 lua-cg、lua-tf、lua-ed）
 ```
 
 编码规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。

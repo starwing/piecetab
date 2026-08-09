@@ -213,6 +213,18 @@ Override before including the implementation:
 All libraries accept a custom allocator (`lc_Alloc` / `pt_Alloc`
 / `ut_Alloc`, Lua-style realloc signature) at `*_open`.
 
+## Repository Layout
+
+- `*.h` — stb-style single-header libraries (pure C89, self-contained):
+  `piecetab.h`, `linecache.h`, `undotree.h`, `cellgrid.h`, `termfeed.h`
+- `lua/` — Lua side: one binding `name.c` + API declaration `name.d.lua`
+  per library, the `editor.lua` demo, and `tests/` with Lua tests.
+  Bindings build to `lua/*.so` (Lua 5.5, primary) and `lua/luajit/*.so`
+  (LuaJIT, compat)
+- `tests/` — C tests: one `*_test.c` per library plus per-library
+  `*_tests.h` helpers
+- `docs/`, `notes/` — API reference docs and design records
+
 ## Documentation
 
 - [`docs/piecetab.md`](docs/piecetab.md) — piecetab API reference &
@@ -235,7 +247,10 @@ coverage** and ~90% branch coverage.
 just lc     # linecache tests
 just pt     # piecetab tests
 just ut     # undotree tests
+just cg     # cellgrid tests
+just tf     # termfeed tests
 just cov    # coverage report
+just lua-pt # lua binding tests (also lua-cg, lua-tf, lua-ed)
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for coding conventions.

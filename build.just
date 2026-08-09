@@ -15,7 +15,7 @@ cov-run t inc *tests='':
     {{ CC }} {{ CFLAGS }} {{ inc }} --coverage -Wno-unused-function -O0 -o {{ t }} {{ t }}.c && ./{{ t }} {{ tests }}
 
 clean-gcda:
-    rm -f tests/*.gcda tests/*.gcno ./*.gcda ./*.gcno *.info build/*/*.gcda build/*/*.gcno mods/*/*.gcda mods/*/*.gcno
+    rm -f tests/*.gcda tests/*.gcno ./*.gcda ./*.gcno *.info build/*/*.gcda build/*/*.gcno lua/*.gcda lua/*.gcno
 
 cov-show src:
     lcov --capture --directory . --rc branch_coverage=1 --output-file coverage.info --no-external --ignore-errors unsupported,inconsistent

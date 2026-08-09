@@ -3,7 +3,7 @@
 -- 用法: lua editor.lua [file]
 
 package.cpath = package.cpath ..
-    ";./build/lua55/?.so;./build/luajit/?.so;/opt/homebrew/lib/lua/5.5/?.so;/opt/homebrew/lib/lua/5.4/?.so"
+    ";./lua/?.so;./lua/luajit/?.so;/opt/homebrew/lib/lua/5.5/?.so;/opt/homebrew/lib/lua/5.4/?.so"
 local pt = require("piecetab")
 local cg = require("cellgrid")
 
