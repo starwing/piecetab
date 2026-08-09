@@ -409,7 +409,6 @@ local function install_normal_keys(self)
   n["<C-r>"] = function(self) self.doc:redo() end
   n["<C-l>"] = function(self) self.grid:clear() end
   n[":"] = function(self) self.mode = "COMMAND"; self.cmdline = "" end
-  n["<Enter>"] = function(self) if #self.cmdline > 0 then exec_command(self) end end
   n["<Up>"] = n.k
   n["<Down>"] = n.j
   n["<Left>"] = n.h

@@ -71,8 +71,14 @@ function TestSkeleton:testCommandRegister()
   local e = make_ed("")
   local got
   e:command("w", function(self, arg, bang) got = { arg, bang } end)
-  e.cmdline = "w file"
-  e:dispatch("<Enter>") -- Enter executes the pending :command
+  e:dispatch(":")
+  e:dispatch("w")
+  e:dispatch(" ")
+  e:dispatch("f")
+  e:dispatch("i")
+  e:dispatch("l")
+  e:dispatch("e")
+  e:dispatch("<Enter>")
   lu.assertNotNil(got)
 end
 
@@ -273,21 +279,27 @@ function TestCommand:testBangParsed() -- regression: q! dead-code branch
   local e2 = make_ed("")
   local got
   e2:command("q", function(self, arg, bang) got = bang end)
-  e2.cmdline = "q!"
+  e2:dispatch(":")
+  e2:dispatch("q")
+  e2:dispatch("!")
   e2:dispatch("<Enter>")
   lu.assertTrue(got)
 end
 
-function TestCommand:testSaveWithFilename()
+function TestCommand:testSaveWritesFile()
   local path = os.tmpname()
+  local f = assert(io.open(path, "w")); f:write("ab\n"); f:close()
   local e = Ed.open(path)
   e.log = function() end
+  e:dispatch("i")
+  e:dispatch("X")
+  e:dispatch("<Escape>")
   e:dispatch(":")
   e:dispatch("w")
   e:dispatch("<Enter>")
-  local f = assert(io.open(path, "r"))
-  local content = f:read("*a"); f:close()
-  lu.assertEquals(content, "")
+  local out = assert(io.open(path, "r"))
+  lu.assertEquals(out:read("*a"), "Xab\n")
+  out:close()
   os.remove(path)
 end
 
@@ -297,6 +309,37 @@ function TestCommand:testQuitSetsDone()
   e:dispatch("q")
   e:dispatch("<Enter>")
   lu.assertTrue(e.done)
+end
+
+function TestCommand:testWqSavesAndQuits()
+  local path = os.tmpname()
+  local f = assert(io.open(path, "w")); f:write("a\n"); f:close()
+  local e = Ed.open(path)
+  e.log = function() end
+  e:dispatch(":")
+  e:dispatch("wq")
+  e:dispatch("<Enter>")
+  lu.assertTrue(e.done)
+  local out = assert(io.open(path, "r"))
+  lu.assertEquals(out:read("*a"), "a\n")
+  out:close()
+  os.remove(path)
+end
+
+function TestCommand:testEreloadsFile()
+  local path = os.tmpname()
+  local f = assert(io.open(path, "w")); f:write("one\n"); f:close()
+  local e = Ed.open(path)
+  e.log = function() end
+  e:dispatch("i")
+  e:dispatch("<Escape>")
+  e:dispatch(":")
+  e:dispatch("e ")
+  e:dispatch(path)
+  e:dispatch("<Enter>")
+  lu.assertEquals(e.filename, path)
+  lu.assertEquals(e.doc:breaks(), 1)
+  os.remove(path)
 end
 
 os.exit(lu.LuaUnit.run(), true)
