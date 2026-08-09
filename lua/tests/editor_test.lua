@@ -152,4 +152,10 @@ function TestNormal:testPendingMissFallsThrough()
   lu.assertEquals(self.e.doc:read("l"):sub(1, 1), "i")
 end
 
+function TestNormal:testMsgClearedOnNormalKey()
+  self.e.msg = "written"
+  self.e:dispatch("j")
+  lu.assertEquals(self.e.msg, "")
+end
+
 os.exit(lu.LuaUnit.run(), true)

@@ -381,9 +381,9 @@ local function install_normal_keys(self)
   n.a = function(self) cursor_move_char(self.doc, 1); self.mode = "INSERT" end
   n.o = function(self) open_line(self, 1) end
   n.O = function(self) open_line(self, -1) end
-  n.u = function(self) self.doc:undo(); self.msg = "" end
-  n["<C-r>"] = function(self) self.doc:redo(); self.msg = "" end
-  n["<C-l>"] = function(self) self.grid:clear(); self.msg = "" end
+  n.u = function(self) self.doc:undo() end
+  n["<C-r>"] = function(self) self.doc:redo() end
+  n["<C-l>"] = function(self) self.grid:clear() end
   n[":"] = function(self) self.mode = "COMMAND"; self.cmdline = "" end
   n["<Up>"] = n.k
   n["<Down>"] = n.j
@@ -480,10 +480,14 @@ mode_dispatch.normal = function(self, key)
     local combo = self.pending_key .. key
     local fn = self.keymaps.normal[combo]
     self.pending_key = nil
-    if fn then fn(self, combo); return end
+    if fn then fn(self, combo); self.msg = ""; return end
   end
   local fn = self.keymaps.normal[key]
-  if fn then fn(self, key); return end
+  if fn then fn(self, key); self.msg = ""; return end
+  if key == "<Escape>" or key == "<C-c>" then
+    self.msg = ""
+    return
+  end
   for combo in pairs(self.keymaps.normal) do
     if #combo > 1 and combo:sub(1, 1) == key then
       self.pending_key = key
