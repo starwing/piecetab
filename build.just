@@ -20,11 +20,11 @@ clean-gcda:
     rm -f tests/*.gcda tests/*.gcno ./*.gcda ./*.gcno *.info build/*/*.gcda build/*/*.gcno lua/*.gcda lua/*.gcno
 
 cov-show src:
-    lcov --capture --directory . --rc branch_coverage=1 --output-file coverage.info --no-external --ignore-errors unsupported,inconsistent
+    lcov --capture --directory . --rc branch_coverage=1 --output-file coverage.info --no-external --ignore-errors unsupported,inconsistent --filter range
     lcov --extract coverage.info {{ src }} --rc branch_coverage=1 --ignore-errors inconsistent --output-file lcov.info
     @echo ""
     @echo "=== {{ src }} coverage ==="
-    lcov --list --rc branch_coverage=1 --ignore-errors inconsistent lcov.info
+    lcov --ignore-errors inconsistent --list --rc branch_coverage=1 lcov.info
 
 cov-lines src:
     @awk '/^DA:/ && /,0$/ {gsub(/DA:|,0/,""); print $0}' lcov.info \

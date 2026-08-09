@@ -19,11 +19,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* snprintf is C99; glibc hides it under strict C89, so declare it ourselves */
-#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 199901L
-extern int snprintf(char *s, size_t n, const char *fmt, ...);
-#endif
-
 #define test_log(...) fprintf(stderr, __VA_ARGS__)
 #define test_lu(x)    ((unsigned long)(x))
 

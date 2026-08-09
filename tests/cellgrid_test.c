@@ -1,3 +1,4 @@
+#define _DEFAULT_SOURCE /* glibc: declare snprintf under strict C89 */
 #ifndef CG_IMPLEMENTATION
 # define CG_IMPLEMENTATION
 #endif
