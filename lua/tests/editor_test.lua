@@ -111,6 +111,20 @@ function TestSkeleton:testQuitSetsDone()
   lu.assertTrue(e.done)
 end
 
+function TestSkeleton:testKeymapReturnsSelf()
+  -- keymap/command return self for chaining
+  local e = make_ed("")
+  lu.assertEquals(e:keymap("normal", "q", function() end), e)
+  lu.assertEquals(e:command("qq", function() end), e)
+end
+
+function TestSkeleton:testDispatchAfterQuit()
+  -- main loop exits on done: dispatch must not crash, no render side effects
+  local e = make_ed("")
+  e:quit()
+  e:dispatch("j")
+end
+
 TestNormal = {}
 
 function TestNormal:setUp()
@@ -183,6 +197,18 @@ function TestNormal:testMsgClearedOnNormalKey()
   self.e.msg = "written"
   self.e:dispatch("j")
   lu.assertEquals(self.e.msg, "")
+end
+
+function TestNormal:testUndoRedo()
+  self.e:dispatch("i")
+  self.e:dispatch("X")
+  self.e:dispatch("<Escape>")
+  self.e:dispatch("u")
+  self.e.doc:seek("set", 0) -- cursor home; assert content, not cursor rest
+  lu.assertNotStrContains(self.e.doc:read("l"), "X")
+  self.e:dispatch("<C-r>")
+  self.e.doc:seek("set", 0)
+  lu.assertStrContains(self.e.doc:read("l"), "X")
 end
 
 function TestNormal:testOOpensLineBelow()
@@ -445,6 +471,17 @@ function TestScroll:setUp()
   self.e = make_ed(make_doc())
 end
 
+function TestScroll:testContentRendered()
+  -- document content bytes must appear in frame output (regression:
+  -- render content path was only covered via lnum/status/scroll before).
+  -- cellgrid diff emits per-cell CUP + char (no contiguous text runs), so
+  -- assert content chars land at the expected screen columns.
+  local s = frame(self.e)
+  lu.assertStrContains(s, "\27[1;5H\27[0ml") -- "line 1": 'l' at col 5
+  lu.assertStrContains(s, "\27[1;10H1")      -- "line 1": '1' at col 10
+  lu.assertStrContains(s, "\27[5;10H5")      -- "line 5": '5' at col 10
+end
+
 function TestScroll:testDownScrollEmitsSu()
   -- j to the last visible row (row 4 of 5), then one more j scrolls
   for _ = 1, 4 do
@@ -505,6 +542,28 @@ end
 -- ======== Status bar ========
 
 TestOps = {}
+
+function TestOps:setUp()
+  self.e = make_ed("")
+end
+
+function TestOps:testLineNumbersTrackScroll()
+  -- bottom line number must stay correct while scrolling
+  local e = make_ed(make_doc())
+  for _ = 1, 19 do
+    keystroke(e, "j")
+  end
+  local s = frame(e)
+  lu.assertStrContains(s, "20") -- last line visible, numbered 20
+  lu.assertEquals(e.doc:line(), 19)
+end
+
+function TestOps:testInsertAndRender()
+  self.e:dispatch("i")
+  local s = keystroke(self.e, "x")
+  lu.assertStrContains(s, "x") -- inserted char rendered in frame
+  self.e:dispatch("<Escape>")
+end
 
 function TestOps:testStatusBarShowsMode()
   local e = make_ed("")
