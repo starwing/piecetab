@@ -9,6 +9,7 @@
 > **行为标准（用户裁定，Task 5 后生效）：与 Vim/Neovim 对应行为等价，
 > 非旧 editor.lua 等价。旧实现只是迁移起点，其 bug（如 status L 列恒 0）
 > 不保留。**
+> `$`/ESC 行首已按 vim 语义修正（final review）。
 
 ## 一、决策（与用户讨论确认）
 
@@ -57,7 +58,7 @@ scroll_line/grid/term/tabstop(=4)/log/done`。
   `Ed.newterm()`（鸭子类型，测试传 fake 表），grid 缺省 `cg.new()`
 - `Ed.open(filename, term?, grid?)`：读文件
 - `Ed.newterm()`：默认终端工厂——未来换 unibilium 替代物的唯一替换点
-- 可配项（tabstop、log）为公开实例字段，测试 `e.log = nil` 禁日志
+- 可配项（tabstop、log）为公开实例字段，测试 `e.log = function() end` 禁日志
 - main 不单持 term 变量：`e.term:enter()` / `e.term:getkey()` /
   `e.term:leave()` 全走实例字段
 
@@ -134,7 +135,7 @@ local function make_ed(content)
                  flush = function() end,
                  size = function() return ROWS, COLS end }
   local e = Ed.new(content, term)
-  e.log = nil
+  e.log = function() end
   return e
 end
 ```

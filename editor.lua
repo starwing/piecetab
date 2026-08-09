@@ -433,7 +433,12 @@ local function install_normal_keys(self)
   n["$"] = function(self)
     local lnum = self.doc:line()
     self.doc:seek("line", lnum)
-    self.doc:seek("cur", line_endcol(self, lnum))
+    local text = self.doc:read("l") or ""
+    self.doc:seek("line", lnum) -- read advanced past the line; rewind
+    if #text > 0 then
+      -- vim: stop on the last char, not after it (multi-byte aware)
+      self.doc:seek("cur", utf8.offset(text, 0, #text) - 1) -- last char start
+    end
   end
   n.gg = function(self) self.doc:seek("line", 0) end
   n.G = function(self) self.doc:seek("line", self.doc:breaks() - 1) end
@@ -463,7 +468,7 @@ end
 local function ins_escape(self)
   self.mode = "NORMAL"
   self.doc:commit()
-  if self.doc:offset() > 0 then cursor_move_char(self.doc, -1) end
+  if self.doc:column() > 0 then cursor_move_char(self.doc, -1) end
   self.msg = ""
 end
 

@@ -157,9 +157,30 @@ end
 
 function TestNormal:testZeroAndDollar()
   self.e:dispatch("$")
-  lu.assertEquals(self.e.doc:column(), 8) -- end of "line one" (col 8)
+  lu.assertEquals(self.e.doc:column(), 7) -- on 'e', last char of "line one"
   self.e:dispatch("0")
   lu.assertEquals(self.e.doc:column(), 0)
+end
+
+function TestNormal:testDollarOnUtf8Line()
+  local e = make_ed("你好\n")
+  e:dispatch("$")
+  lu.assertEquals(e.doc:column(), 3) -- start of "好"
+end
+
+function TestNormal:testDollarXKeepsLine()
+  self.e:dispatch("$")
+  self.e:dispatch("x") -- deletes 'e', not the newline
+  lu.assertEquals(self.e.doc:breaks(), 3)
+end
+
+function TestNormal:testDollarAInsertsAtEnd()
+  self.e:dispatch("$")
+  self.e:dispatch("a") -- insert after last char
+  self.e:dispatch("X")
+  self.e:dispatch("<Escape>")
+  self.e.doc:seek("set", 0)
+  lu.assertEquals(self.e.doc:read("*a"), "line oneX\nline two\nline three\n")
 end
 
 function TestNormal:testGgG()
@@ -277,6 +298,15 @@ function TestInsert:testEscapeMovesLeft()
   self.e:dispatch("i")
   self.e:dispatch("<Escape>")
   lu.assertEquals(self.e.doc:column(), 0) -- ESC moves cursor one char left
+end
+
+function TestInsert:testEscapeAtLineStartStays()
+  local e = make_ed("ab\ncd\n")
+  e.doc:seek("line", 1) -- start of "cd"
+  e:dispatch("i")
+  e:dispatch("<Escape>")
+  lu.assertEquals(e.doc:line(), 1) -- vim: line start ESC stays, no wrap
+  lu.assertEquals(e.doc:column(), 0)
 end
 
 function TestInsert:testControlKeyFiltered()
