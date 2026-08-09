@@ -1,20 +1,10 @@
+#define _DEFAULT_SOURCE /* glibc: declare snprintf under strict C89 */
 #define TF_IMPLEMENTATION
 #include "termfeed.h"
+
 #include "tests.h"
 
 /* ─── allocators ─── */
-
-/* live-byte counter: net allocated bytes must return to 0 after tf_free */
-static void *count_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
-    size_t *live = (size_t *)ud;
-    if (nsize == 0) {
-        free(ptr);
-        *live -= osize;
-        return NULL;
-    }
-    *live += nsize - osize;
-    return realloc(ptr, nsize);
-}
 
 /* fills newly-grown tail with 0xA5 so uninitialized bytes are detectable */
 static void *fill_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
@@ -1576,6 +1566,7 @@ TEST(cs_st) {
 
     /* ESC content inside OSC: \x1b]abc\x1b\ → content "abc" */
     /* The \x1b before \ is appended, then ST detection removes it. */
+    tf_free(&S);
     tf_init(&S, NULL, NULL);
     r = feed_seq(&S, &key, "\x1b]abc\x1b\x5c", 8);
     asserteq(r, TF_OK);
@@ -2522,6 +2513,7 @@ TEST(flush_cs) {
     asserteq(S.state, TF_STATE_IDLE);
 
     /* \x1b] (no content) → flush → ALT+] only, straight IDLE */
+    tf_free(&S);
     tf_init(&S, NULL, NULL);
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
@@ -2909,16 +2901,16 @@ TEST(trie_allocfree) {
 TEST(trie_reload) {
     tf_State S;
     tf_Key   key;
-    size_t   live = 0;
+    Count    c = {0};
     int      r;
     TILookup tbl[] = {
             {"key_home", "\x1b[1~"}, {"key_left", "\x1b[D"}, {NULL, NULL}};
-    tf_init(&S, count_alloc, &live);
+    tf_init(&S, count_alloc, &c);
     tf_load(&S, ti_lookup, tbl);
     tf_load(&S, ti_lookup, tbl);
-    assert(live > 0);
+    assert(c.live > 0);
     tf_free(&S);
-    asserteq((long)live, 0); /* leaked trie nodes keep live > 0 */
+    asserteq(c.live, 0); /* leaked trie nodes keep live > 0 */
     /* reloaded trie still matches */
     tf_init(&S, NULL, NULL);
     tf_load(&S, ti_lookup, tbl);

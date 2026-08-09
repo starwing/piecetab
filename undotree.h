@@ -213,9 +213,13 @@ struct ut_State {
 static int utV_resize_(ut_State *S, void **pA, unsigned cap, size_t objsz) {
     utV_Header *hdr, *old = (*pA ? utV_hdr(*pA) : NULL);
     if (old == NULL && cap == 0) return UT_OK;
+    if (cap == 0)
+        /* nsize==0 frees (lua_Alloc semantics); old is non-NULL here */
+        return S->allocf(S->ud, old, utV_sz(old->cap, objsz), 0), *pA = NULL,
+               UT_OK;
     hdr = (utV_Header *)S->allocf(
             S->ud, old, old ? utV_sz(old->cap, objsz) : 0, utV_sz(cap, objsz));
-    if (hdr == NULL) return (cap == 0) ? (*pA = NULL, UT_OK) : UT_ERRMEM;
+    if (hdr == NULL) return UT_ERRMEM;
     if (!old) hdr->len = hdr->cap = 0;
     return hdr->cap = cap, *pA = (void *)(hdr + 1), UT_OK;
 }

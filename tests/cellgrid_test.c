@@ -81,12 +81,12 @@ static void assert_diff(cg_Grid *G, const char *expected) {
 /* ================================================================== */
 
 TEST(init_params) {
-    cg_Grid g;
+    cg_Grid g, *gp = &g;
     asserteq(cg_init(NULL, test_alloc, NULL), CG_ERRPARAM);
     asserteq(cg_init(&g, test_alloc, NULL), CG_OK);
-    asserteq(cg_rows(&g), 0);
-    asserteq(cg_cols(&g), 0);
-    asserteq(cg_top(&g), 0);
+    asserteq(cg_rows(gp), 0);
+    asserteq(cg_cols(gp), 0);
+    asserteq(cg_top(gp), 0);
     cg_free(&g);
 }
 
@@ -112,21 +112,21 @@ TEST(init_default_alloc) {
 /* ================================================================== */
 
 TEST(begin_first) {
-    cg_Grid g;
+    cg_Grid g, *gp = &g;
     cg_init(&g, test_alloc, NULL);
     asserteq(cg_begin(&g, 5, 2, 3), CG_OK);
-    asserteq(cg_rows(&g), 2);
-    asserteq(cg_cols(&g), 3);
-    asserteq(cg_top(&g), 5);
+    asserteq(cg_rows(gp), 2);
+    asserteq(cg_cols(gp), 3);
+    asserteq(cg_top(gp), 5);
     cg_free(&g);
 }
 
 TEST(begin_zero) {
-    cg_Grid g;
+    cg_Grid g, *gp = &g;
     cg_init(&g, test_alloc, NULL);
     asserteq(cg_begin(&g, 0, 0, 5), CG_ERRPARAM);
     asserteq(cg_begin(&g, 0, 5, 0), CG_ERRPARAM);
-    asserteq(cg_rows(&g), 0);
+    asserteq(cg_rows(gp), 0);
     cg_free(&g);
 }
 
@@ -136,23 +136,23 @@ TEST(begin_null) {
 
 TEST(begin_oom_init) {
     int      cnt = 0;
-    cg_Grid g;
+    cg_Grid g, *gp = &g;
     cg_init(&g, oom_alloc, &cnt);
     asserteq(cg_begin(&g, 0, 2, 3), CG_ERRMEM);
-    asserteq(cg_rows(&g), 0);
+    asserteq(cg_rows(gp), 0);
     cg_free(&g);
 }
 
 TEST(begin_oom_resize) {
     int      cnt = 0;
-    cg_Grid g;
+    cg_Grid g, *gp = &g;
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 2, 3);
     cg_put(&g, 0, 0, 'A', 0);
     g.allocf = oom_alloc, g.ud = &cnt;
     asserteq(cg_begin(&g, 0, 4, 5), CG_ERRMEM);
-    asserteq(cg_rows(&g), 2);
-    asserteq(cg_cols(&g), 3);
+    asserteq(cg_rows(gp), 2);
+    asserteq(cg_cols(gp), 3);
     asserteq(cg_cell(&g, 0, 0, NULL), 'A');
     cg_free(&g);
 }
@@ -163,42 +163,42 @@ static int cw_double(void *ud, int cp) {
 }
 
 TEST(begin_resize_grow) {
-    cg_Grid g;
+    cg_Grid g, *gp = &g;
     cg_init(&g, test_alloc, NULL);
     cg_setwcwidth(&g, cw_double, NULL);
     cg_begin(&g, 0, 2, 3);
     cg_put(&g, 0, 0, 'A', 1);
     cg_begin(&g, 1, 4, 5);
-    asserteq(cg_rows(&g), 4);
-    asserteq(cg_cols(&g), 5);
-    asserteq(cg_top(&g), 1);
+    asserteq(cg_rows(gp), 4);
+    asserteq(cg_cols(gp), 5);
+    asserteq(cg_top(gp), 1);
     asserteq(cg_cell(&g, 0, 0, NULL), 'A');
     cg_free(&g);
 }
 
 TEST(begin_resize_shrink) {
-    cg_Grid g;
+    cg_Grid g, *gp = &g;
     cg_init(&g, test_alloc, NULL);
     cg_setwcwidth(&g, cw_double, NULL);
     cg_begin(&g, 0, 4, 5);
     cg_put(&g, 0, 2, 'B', 1);
     cg_begin(&g, 2, 2, 3);
-    asserteq(cg_rows(&g), 2);
-    asserteq(cg_cols(&g), 3);
-    asserteq(cg_top(&g), 2);
+    asserteq(cg_rows(gp), 2);
+    asserteq(cg_cols(gp), 3);
+    asserteq(cg_top(gp), 2);
     asserteq(cg_cell(&g, 0, 2, NULL), 'B');
     cg_free(&g);
 }
 
 TEST(begin_same) {
-    cg_Grid g;
+    cg_Grid g, *gp = &g;
     cg_init(&g, test_alloc, NULL);
     cg_setwcwidth(&g, cw_double, NULL);
     cg_begin(&g, 0, 2, 3);
     cg_put(&g, 0, 0, 'X', 1);
     cg_begin(&g, 10, 2, 3);
-    asserteq(cg_rows(&g), 2);
-    asserteq(cg_top(&g), 10);
+    asserteq(cg_rows(gp), 2);
+    asserteq(cg_top(gp), 10);
     asserteq(cg_cell(&g, 0, 0, NULL), 'X');
     cg_free(&g);
 }
@@ -559,12 +559,12 @@ TEST(putline_atend) {
 /* ================================================================== */
 
 TEST(getter_values) {
-    cg_Grid g;
+    cg_Grid g, *gp = &g;
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 3, 2, 5);
-    asserteq(cg_rows(&g), 2);
-    asserteq(cg_cols(&g), 5);
-    asserteq(cg_top(&g), 3);
+    asserteq(cg_rows(gp), 2);
+    asserteq(cg_cols(gp), 5);
+    asserteq(cg_top(gp), 3);
     cg_free(&g);
 }
 
@@ -1032,27 +1032,27 @@ TEST(empty_grid) {
 }
 
 TEST(resize_cols) {
-    cg_Grid g;
+    cg_Grid g, *gp = &g;
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 2, 3);
     cg_setwcwidth(&g, cw_double, NULL);
     cg_put(&g, 0, 0, 'A', 0);
     cg_freeze(&g);
     cg_begin(&g, 0, 2, 5);
-    asserteq(cg_cols(&g), 5);
+    asserteq(cg_cols(gp), 5);
     asserteq(cg_cell(&g, 0, 0, NULL), 'A');
     cg_free(&g);
 }
 
 TEST(resize_rows) {
-    cg_Grid g;
+    cg_Grid g, *gp = &g;
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 2, 3);
     cg_setwcwidth(&g, cw_double, NULL);
     cg_put(&g, 0, 0, 'A', 0);
     cg_freeze(&g);
     cg_begin(&g, 0, 4, 3);
-    asserteq(cg_rows(&g), 4);
+    asserteq(cg_rows(gp), 4);
     asserteq(cg_cell(&g, 0, 0, NULL), 'A');
     cg_free(&g);
 }

@@ -622,10 +622,10 @@ static int tfD_utf8start(tf_State *S, tf_Key *key, int b) {
     int  len = tfU_utf8len(b);
     assert(len >= 2 && len <= 6);
     if (S->n < (size_t)(len - 1)) {
-        S->buf[0] = tfB(b), S->buf_len = 1;
+        S->buf[0] = (char)tfB(b), S->buf_len = 1;
         return (S->state = TF_STATE_UTF8, S->node = NULL), TF_AGAIN;
     }
-    seq[0] = tfB(b), memcpy(seq + 1, S->p, len - 1);
+    seq[0] = (char)tfB(b), memcpy(seq + 1, S->p, len - 1);
     tfK_utf8(key, seq, len), tfK_flushmod(S, key);
     S->p += len - 1, S->n -= len - 1;
     return (S->state = TF_STATE_IDLE), TF_OK;
@@ -634,7 +634,7 @@ static int tfD_utf8start(tf_State *S, tf_Key *key, int b) {
 static int tfD_utf8(tf_State *S, tf_Key *key, int b) {
     int len;
     assert(S->buf_len > 0 && S->buf_len < 7);
-    S->buf[S->buf_len++] = tfB(b);
+    S->buf[S->buf_len++] = (char)tfB(b);
     len = tfU_utf8len(tfB(S->buf[0]));
     if (S->buf_len < len) return TF_AGAIN;
     tfK_utf8(key, S->buf, len), tfK_flushmod(S, key);
@@ -688,7 +688,7 @@ static int tfD_cs(tf_State *S, tf_Key *key, int b) {
         S->cs_len -= 1; /* drop the \e of \e\ (current \ never buffered) */
         return tfD_cskey(S, key), TF_OK;
     }
-    if (ch = tfB(b), tfD_append(S, &ch, 1) != TF_OK)
+    if (ch = (char)tfB(b), tfD_append(S, &ch, 1) != TF_OK)
         return S->state = TF_STATE_IDLE, TF_ERRMEM;
     return TF_AGAIN;
 }
@@ -1074,10 +1074,10 @@ static int tfD_csidispatch(tf_State *S, tf_Key *key) {
 
 static int tfD_csi(tf_State *S, tf_Key *key, int b) {
     if (S->buf_len < TF_MAX_BUFLEN - 1 || b >= 0x40) {
-        S->buf[S->buf_len++] = tfB(b);
+        S->buf[S->buf_len++] = (char)tfB(b);
         return b >= 0x40 ? tfD_csidispatch(S, key) : TF_AGAIN;
     }
-    S->buf[S->buf_len++] = tfB(b); /* reserved slot: replay includes b */
+    S->buf[S->buf_len++] = (char)tfB(b); /* reserved slot: replay includes b */
     tfK_codepoint(key, '['), key->modifiers = TF_MOD_ALT, S->pending_mod = 0;
     memmove(S->buf + TF_MAX_BUFLEN - S->buf_len, S->buf,
             (size_t)S->buf_len); /* full buf: tail move is a no-op */
@@ -1087,7 +1087,7 @@ static int tfD_csi(tf_State *S, tf_Key *key, int b) {
 
 static int tfD_mousex10(tf_State *S, tf_Key *key, int b) {
     assert(S->buf_len < 4); /* buf[0] = 'M', raw at [1..3] */
-    S->buf[S->buf_len++] = tfB(b);
+    S->buf[S->buf_len++] = (char)tfB(b);
     if (S->buf_len < 4) return TF_AGAIN;
     tfM_decodeX10(key, S->buf + 1), tfK_flushmod(S, key);
     return (S->state = TF_STATE_IDLE, S->buf_len = 0), TF_OK;
@@ -1119,7 +1119,7 @@ static int tfS_kpkey(int cmd, int ckp, tf_Key *key) {
 static void tfS_altreplay(tf_State *S, tf_Key *key, int b) {
     tfK_codepoint(key, 'O');
     key->modifiers = TF_MOD_ALT;
-    S->buf[TF_MAX_BUFLEN - 1] = tfB(b);
+    S->buf[TF_MAX_BUFLEN - 1] = (char)tfB(b);
     S->replay = 1, S->buf_len = 0;
     S->pending_mod = 0, S->state = TF_STATE_IDLE;
 }

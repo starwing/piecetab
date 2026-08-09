@@ -1616,5 +1616,30 @@ TEST(mapoffset_zero) {
     ut_deltree(S, T), ut_close(S);
 }
 
+/* leak: full lifecycle (record/commit/diff/deltree/close) leaves 0 live */
+TEST(leak_lifecycle) {
+    Count    c = {0};
+    ut_State *S = ut_open(&count_alloc, &c);
+    ut_Tree  *T = ut_newtree(S, NULL);
+    int       i;
+    for (i = 0; i < 20; i++) ut_record(T, (size_t)i, 1, 2);
+    ut_commit(T, NULL);
+    ut_diff(T, ut_freshvid(S), ut_root(T));
+    ut_deltree(S, T), ut_close(S);
+    assert(c.live == 0);
+}
+
+/* leak: OOM failure path cleans up all partial allocations */
+TEST(leak_oom_cleanup) {
+    OomCount c = {0, 4};
+    ut_State *S = ut_open(&oomcount_alloc, &c);
+    ut_Tree  *T = ut_newtree(S, NULL);
+    ut_record(T, 0, 3, 5);
+    ut_record(T, 100, 1, 2);
+    assert(ut_commit(T, NULL) == NULL);
+    ut_deltree(S, T), ut_close(S);
+    assert(c.live == 0);
+}
+
 
 #include "undotree_test.gen.inc"

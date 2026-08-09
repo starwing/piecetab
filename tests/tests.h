@@ -19,6 +19,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* snprintf is C99; glibc hides it under strict C89, so declare it ourselves */
+#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 199901L
+extern int snprintf(char *s, size_t n, const char *fmt, ...);
+#endif
+
 #define test_log(...) fprintf(stderr, __VA_ARGS__)
 #define test_lu(x)    ((unsigned long)(x))
 
@@ -80,6 +85,38 @@ TEST_STATIC void *oom_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
     if (!cnt || *cnt <= 0) return NULL;
     (*cnt)--;
     return realloc(ptr, nsize);
+}
+
+/* counting allocators — track live bytes so tests can assert no leaks */
+
+typedef struct {
+    long live;
+} Count;
+
+TEST_STATIC void *count_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
+    Count *c = (Count *)ud;
+    if (nsize == 0) return c->live -= (long)osize, free(ptr), NULL;
+    if (ptr) c->live -= (long)osize;
+    ptr = realloc(ptr, nsize);
+    if (!ptr) abort();
+    return c->live += (long)nsize, ptr;
+}
+
+typedef struct {
+    long live;
+    int  oom;
+} OomCount;
+
+TEST_STATIC void *oomcount_alloc(void *ud, void *ptr, size_t osize,
+                                 size_t nsize) {
+    OomCount *c = (OomCount *)ud;
+    if (nsize == 0) return c->live -= (long)osize, free(ptr), NULL;
+    if (c->oom <= 0) return NULL;
+    c->oom--;
+    if (ptr) c->live -= (long)osize;
+    ptr = realloc(ptr, nsize);
+    if (!ptr) abort();
+    return c->live += (long)nsize, ptr;
 }
 
 /* ---- runner ---- */
