@@ -627,52 +627,52 @@ end
 -- built-in normal keymaps (per-instance, called from Ed.new)
 local function install_normal_keys(self)
   local n = self.keymaps.normal
-  n.h = function(self) cursor_move_char(self.doc, -1) end
-  n.l = function(self) cursor_move_char(self.doc, 1) end
-  n.j = function(self) move_vert(self.doc, 1) end
-  n.k = function(self) move_vert(self.doc, -1) end
-  n.w = function(self) move_word_forward(self.doc) end
-  n.b = function(self) move_word_backward(self.doc) end
-  n["0"] = function(self) self.doc:seek("line", self.doc:line()) end
-  n["$"] = function(self)
-    local lnum = self.doc:line()
-    self.doc:seek("line", lnum)
-    local text = self.doc:read("l") or ""
-    self.doc:seek("line", lnum) -- read advanced past the line; rewind
+  n.h = function(ed) cursor_move_char(ed.doc, -1) end
+  n.l = function(ed) cursor_move_char(ed.doc, 1) end
+  n.j = function(ed) move_vert(ed.doc, 1) end
+  n.k = function(ed) move_vert(ed.doc, -1) end
+  n.w = function(ed) move_word_forward(ed.doc) end
+  n.b = function(ed) move_word_backward(ed.doc) end
+  n["0"] = function(ed) ed.doc:seek("line", ed.doc:line()) end
+  n["$"] = function(ed)
+    local lnum = ed.doc:line()
+    ed.doc:seek("line", lnum)
+    local text = ed.doc:read("l") or ""
+    ed.doc:seek("line", lnum) -- read advanced past the line; rewind
     if #text > 0 then
       -- vim: stop on the last char, not after it (multi-byte aware)
-      self.doc:seek("cur", utf8.offset(text, 0, #text) - 1) -- last char start
+      ed.doc:seek("cur", utf8.offset(text, 0, #text) - 1) -- last char start
     end
   end
-  n.gg = function(self) self.doc:seek("line", 0) end
-  n.G = function(self) self.doc:seek("line", self.doc:breaks() - 1) end
-  n.x = function(self)
-    self:docedit(1, ""); self.doc:commit()
+  n.gg = function(ed) ed.doc:seek("line", 0) end
+  n.G = function(ed) ed.doc:seek("line", ed.doc:breaks() - 1) end
+  n.x = function(ed)
+    ed:docedit(1, ""); ed.doc:commit()
   end
-  n.dd = function(self)
-    local lnum = self.doc:line()
-    local llen = self.doc:linelen(lnum)
-    self.doc:seek("line", lnum)
-    self:docedit(llen, "")
-    self.doc:commit()
+  n.dd = function(ed)
+    local lnum = ed.doc:line()
+    local llen = ed.doc:linelen(lnum)
+    ed.doc:seek("line", lnum)
+    ed:docedit(llen, "")
+    ed.doc:commit()
   end
-  n.i = function(self) self.mode = "INSERT" end
-  n.a = function(self)
-    cursor_move_char(self.doc, 1); self.mode = "INSERT"
+  n.i = function(ed) ed.mode = "INSERT" end
+  n.a = function(ed)
+    cursor_move_char(ed.doc, 1); ed.mode = "INSERT"
   end
-  n.o = function(self) open_line(self, 1) end
-  n.O = function(self) open_line(self, -1) end
-  n.u = function(self)
-    self.doc:undo()
-    if self.hl then self.hl:reset() end
+  n.o = function(ed) open_line(ed, 1) end
+  n.O = function(ed) open_line(ed, -1) end
+  n.u = function(ed)
+    ed.doc:undo()
+    if ed.hl then ed.hl:reset() end
   end
-  n["<C-r>"] = function(self)
-    self.doc:redo()
-    if self.hl then self.hl:reset() end
+  n["<C-r>"] = function(ed)
+    ed.doc:redo()
+    if ed.hl then ed.hl:reset() end
   end
-  n["<C-l>"] = function(self) self.grid:clear() end
-  n[":"] = function(self)
-    self.mode = "COMMAND"; self.cmdline = ""
+  n["<C-l>"] = function(ed) ed.grid:clear() end
+  n[":"] = function(ed)
+    ed.mode = "COMMAND"; ed.cmdline = ""
   end
   n["<Up>"] = n.k
   n["<Down>"] = n.j
@@ -720,80 +720,80 @@ local function install_insert_keys(self)
   i["<Escape>"] = ins_escape
   i["<Backspace>"] = ins_backspace
   i["<Delete>"] = ins_delete
-  i["<Enter>"] = function(self) self:docedit(0, "\n") end
-  i["<Tab>"] = function(self) self:docedit(0, "\t") end
-  i["<C-c>"] = function(self)
-    self.mode = "NORMAL"
-    self.msg = ""
+  i["<Enter>"] = function(ed) ed:docedit(0, "\n") end
+  i["<Tab>"] = function(ed) ed:docedit(0, "\t") end
+  i["<C-c>"] = function(ed)
+    ed.mode = "NORMAL"
+    ed.msg = ""
   end
-  i["<Up>"] = function(self) move_vert(self.doc, -1) end
-  i["<Down>"] = function(self) move_vert(self.doc, 1) end
-  i["<Left>"] = function(self) cursor_move_char(self.doc, -1) end
-  i["<Right>"] = function(self) cursor_move_char(self.doc, 1) end
-  i["<Home>"] = function(self) self.doc:seek("line", self.doc:line()) end
-  i["<End>"] = function(self)
-    local lnum = self.doc:line()
-    self.doc:seek("line", lnum)
-    self.doc:seek("cur", line_endcol(self, lnum))
+  i["<Up>"] = function(ed) move_vert(ed.doc, -1) end
+  i["<Down>"] = function(ed) move_vert(ed.doc, 1) end
+  i["<Left>"] = function(ed) cursor_move_char(ed.doc, -1) end
+  i["<Right>"] = function(ed) cursor_move_char(ed.doc, 1) end
+  i["<Home>"] = function(ed) ed.doc:seek("line", ed.doc:line()) end
+  i["<End>"] = function(ed)
+    local lnum = ed.doc:line()
+    ed.doc:seek("line", lnum)
+    ed.doc:seek("cur", line_endcol(ed, lnum))
   end
-  i["<PageUp>"] = function(self)
-    local rows = self.term:size()
-    for _ = 1, rows - 2 do move_vert(self.doc, -1) end
+  i["<PageUp>"] = function(ed)
+    local rows = ed.term:size()
+    for _ = 1, rows - 2 do move_vert(ed.doc, -1) end
   end
-  i["<PageDown>"] = function(self)
-    local rows = self.term:size()
-    for _ = 1, rows - 2 do move_vert(self.doc, 1) end
+  i["<PageDown>"] = function(ed)
+    local rows = ed.term:size()
+    for _ = 1, rows - 2 do move_vert(ed.doc, 1) end
   end
 end
 
 -- built-in command keymaps (per-instance, called from Ed.new)
 local function install_command_keys(self)
   local c = self.keymaps.command
-  c["<Escape>"] = function(self)
-    self.mode = "NORMAL"; self.cmdline = ""
+  c["<Escape>"] = function(ed)
+    ed.mode = "NORMAL"; ed.cmdline = ""
   end
-  c["<C-c>"] = function(self)
-    self.mode = "NORMAL"; self.cmdline = ""
+  c["<C-c>"] = function(ed)
+    ed.mode = "NORMAL"; ed.cmdline = ""
   end
   c["<Enter>"] = exec_command
-  c["<Backspace>"] = function(self) self.cmdline = self.cmdline:sub(1, -2) end
+  c["<Backspace>"] = function(ed) ed.cmdline = ed.cmdline:sub(1, -2) end
 end
 
 -- built-in :commands (per-instance, called from Ed.new)
 local function install_builtin_commands(self)
   local c = self.commands
-  c.w = function(self, arg, bang)
-    if not self.filename then
-      self.msg = "No filename"; return
+  c.w = function(ed, arg, bang)
+    if not ed.filename then
+      ed.msg = "No filename"; return
     end
-    local f = io.open(self.filename, "w")
+    local f = io.open(ed.filename, "w")
     if not f then
-      self.msg = "Cannot write: " .. self.filename; return
+      ed.msg = "Cannot write: " .. ed.filename; return
     end
-    local data = self.doc:dump()
+    local data = ed.doc:dump()
     f:write(data); f:close()
-    self.saved_vid = self.doc:version()
-    self.msg = '"' .. self.filename .. '" written'
+    ed.saved_vid = ed.doc:version()
+    ed.msg = '"' .. ed.filename .. '" written'
   end
-  c.q = function(self, arg, bang) self:quit() end
-  c.wq = function(self, arg, bang)
-    c.w(self); c.q(self)
+  c.q = function(ed, arg, bang) ed:quit() end
+  c.wq = function(ed, arg, bang)
+    c.w(ed); c.q(ed)
   end
-  c.e = function(self, arg, bang)
+  c.e = function(ed, arg, bang)
     if not arg or arg == "" then
-      self.msg = "No filename"; return
+      ed.msg = "No filename"; return
     end
     local f = io.open(arg, "r")
     local content = ""
     if f then
       content = f:read("*a"); f:close()
     end
-    self.doc = content ~= "" and pt.doc(content) or pt.doc(nil)
-    self.filename = arg
-    self:open_language(ext_lang(arg))
-    self.saved_vid = self.doc:version()
-    self.scroll_line = 0
-    self.msg = '"' .. arg .. '" loaded, ' .. self.doc:breaks() .. " lines"
+    ed.doc = content ~= "" and pt.doc(content) or pt.doc(nil)
+    ed.filename = arg
+    ed:open_language(ext_lang(arg))
+    ed.saved_vid = ed.doc:version()
+    ed.scroll_line = 0
+    ed.msg = '"' .. arg .. '" loaded, ' .. ed.doc:breaks() .. " lines"
   end
 end
 
@@ -1031,26 +1031,26 @@ end
 -- Section 5: mode_dispatch skeleton (filled by Tasks 2/3/4)
 -- ================================================================
 
-mode_dispatch.normal = function(self, key)
-  if self.pending_key then
-    local combo = self.pending_key .. key
-    local fn = self.keymaps.normal[combo]
-    self.pending_key = nil
+mode_dispatch.normal = function(ed, key)
+  if ed.pending_key then
+    local combo = ed.pending_key .. key
+    local fn = ed.keymaps.normal[combo]
+    ed.pending_key = nil
     if fn then
-      fn(self, combo); self.msg = ""; return
+      fn(ed, combo); ed.msg = ""; return
     end
   end
-  local fn = self.keymaps.normal[key]
+  local fn = ed.keymaps.normal[key]
   if fn then
-    fn(self, key); self.msg = ""; return
+    fn(ed, key); ed.msg = ""; return
   end
   if key == "<Escape>" or key == "<C-c>" then
-    self.msg = ""
+    ed.msg = ""
     return
   end
-  for combo in pairs(self.keymaps.normal) do
+  for combo in pairs(ed.keymaps.normal) do
     if #combo > 1 and combo:sub(1, 1) == key then
-      self.pending_key = key
+      ed.pending_key = key
       return
     end
   end
