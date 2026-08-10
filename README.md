@@ -169,6 +169,11 @@ a file; both accept injected term/grid objects (tests use fakes). It
 also serves as a C-module incubation ground — helpers marked `TODO(C)`
 (char motion, column math) are candidates for promotion into C.
 
+Syntax highlighting: files opened with a `.c`/`.h`/`.lua` extension get
+tree-sitter highlighting (keyword/string/comment/function styles) via the
+`treesitter` Lua binding (see `lua/treesitter.c`). `Ed:open_language(lang)`
+enables it manually. Editing updates highlights incrementally.
+
 ```lua
 local Ed = require("editor")
 
@@ -298,7 +303,12 @@ just cg     # cellgrid tests
 just tf     # termfeed tests
 just cov    # coverage report
 just lua-pt # lua binding tests (also lua-cg, lua-tf, lua-ed)
+just lua-ts # treesitter binding tests (grammars via misc/fetch_grammars.sh)
 ```
+
+Dependencies: `libtree-sitter` (homebrew `tree-sitter`) for the
+treesitter binding; grammars are fetched and compiled by
+`misc/fetch_grammars.sh` (run by `just lua-ts-grammars`).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for coding conventions.
 
