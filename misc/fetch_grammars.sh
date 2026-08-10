@@ -27,6 +27,6 @@ for spec in "$@"; do
   scanner=""
   if [ -f "$srcdir/src/scanner.c" ]; then scanner="$srcdir/src/scanner.c"; fi
   ${CC:-cc} -O2 -fPIC -shared -I"$srcdir/src" \
-    -o "$out/tree_sitter_$lang.so" "$srcdir/src/parser.c" $scanner
-  echo "  -> $out/tree_sitter_$lang.so"
+    -o "$out/$lang.so" "$srcdir/src/parser.c" $scanner
+  echo "  -> $out/$lang.so"
 done
