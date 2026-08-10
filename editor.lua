@@ -603,7 +603,7 @@ end
 ---@field term editor.Term
 ---@field grid cellgrid.Grid
 ---@field keymaps table<string, table<string, fun(self: editor.Ed, key: string)>>
----@field commands table<string, fun(self: editor.Ed, arg: string, bang: boolean)>
+---@field commands table<string, fun(self: editor.Ed, arg?: string, bang?: boolean)>
 local Ed = {}
 
 -- forward declaration: filled in Section 5 (dispatch reads it via upvalue)
@@ -806,7 +806,7 @@ do
   end
 
   --- @param content? string
-  --- @param term? table  duck-typed, default Ed.newterm()
+  --- @param term? editor.Term  duck-typed, default Ed.newterm()
   --- @param grid? cellgrid.Grid
   --- @return editor.Ed
   function Ed.new(content, term, grid)
@@ -835,7 +835,7 @@ do
   end
 
   --- @param filename string
-  --- @param term? table
+  --- @param term? editor.Term
   --- @param grid? cellgrid.Grid
   --- @return editor.Ed
   function Ed.open(filename, term, grid)
