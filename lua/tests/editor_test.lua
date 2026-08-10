@@ -68,7 +68,7 @@ end
 
 function TestSkeleton:testNewEmptyDoc()
   local e = make_ed()
-  lu.assertEquals(e.doc:breaks(), 0) -- empty doc: 0 lines (see pt_test testLineCountEmpty)
+  lu.assertEquals(e.doc:breaks(), 0) -- empty doc: 0 lines (see piecetab_test testLineCountEmpty)
 end
 
 function TestSkeleton:testOpenReadsFile()
@@ -282,7 +282,7 @@ end
 function TestInsert:testOThenTextEscCursorOnLastChar()
   -- regression: o + "abcdef" + ESC must land on 'f' (L2,6 display).
   -- Root cause is in pt (commit after partial linecache sync corrupts
-  -- the line view); see pt_test testCommitAfterPartialSync.
+  -- the line view); see piecetab_test testCommitAfterPartialSync.
   local e = make_ed("#!/usr/bin/env lua\nx\n")
   e:dispatch("o")
   for c in ("abcdef"):gmatch(".") do e:dispatch(c) end
