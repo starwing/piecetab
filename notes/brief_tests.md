@@ -30,6 +30,32 @@
 - 覆盖率：`just <xx>-cov`（生成 lcov.info）、`just <xx>-lines`（未覆盖行源码）、`just <xx>-unbranched`（未覆盖分支）、`just cov`（全量）、`just clean`
 - **Lua 绑定测试在 `lua/justfile`**，命名与根 justfile 对齐：`just lua/pt`、`just lua/ts`、`just lua/ts-cov`、`just lua/ts-lines`、`just lua/clean`（`just lua/<recipe>` 自动执行该目录下 justfile）。根 justfile 不设其他位置 justfile 的入口
 
+## Lua 测试（luaunit）
+
+- 文件 `lua/tests/<name>_test.lua`，harness 用 luaunit（vendored 于
+  `lua/tests/luaunit.lua`）；`just lua/<t>` 跑 PUC + LuaJIT 双运行时
+- 过滤：`lua tests/<name>_test.lua -p Pattern`（匹配测试类/方法名）
+- **os.exit 铁律**：`os.exit(lu.LuaUnit.run(), true)` 必须在文件**末尾**
+  —— run() 执行时遍历 _G 收集测试，定义在其后的类**永不执行**且无任何
+  报错（测试数不增 = 中招）。已两次踩坑（TestSc、TestDoc 追加后静默
+  丢失），追加测试后必核对测试计数
+- **grid cell 断言优先**：`e.grid:cell(r, c)` → (cp, style) 直接读屏幕
+  矩阵，比渲染字节流 `assertStrContains`（CSI 序列）稳定——多层高亮后
+  CSI 嵌颜色码更脆弱；字节流断言只在测 diff 输出本身时用
+- **布局先算再断言**：
+  - grid 列 = 内容列 + lnum_width + 1（默认 lnum_width=3，内容 col 0 →
+    grid col 4）
+  - pt_edit 插入会分裂出 hole piece（`[0,off)` + hole + 剩余），piece
+    数 = 1 + 编辑次数；断言 piece 布局前先用 `doc:piece("len"/"next")`
+    遍历 dump 实际结构（或先跑调试脚本验证）
+  - 多层合成断言用 `e.sc:intern({fg=.., bg=..})` 取 handle 对比，不写
+    死 handle 数值（intern 顺序依赖渲染时机）
+- **调试**：独立脚本（/tmp/*.lua）+ fake term + `io.write` 复现渲染，
+    对应 C 侧 `test_log`（AGENTS.md 调试节）；渲染断言用 cell() 逐格
+    打印；「单跑对、测试环境错」先查 os.exit 位置与全局状态污染
+- 断言 API：`assertEquals` / `assertTrue` / `assertNotEquals` /
+  `assertNil` / `assertStrContains`（luaunit 内建）
+
 ## 测试文件与命名
 
 - 文件：`<name>_test.c`（如 `undotree_test.c`）；带配置 tag 时 `<name>_test_<tag>.c`，tag 自描述（`linecache_test_fanout4.c` 用 `LC_FANOUT=4`）。无配置的库不写 tag

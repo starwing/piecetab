@@ -219,8 +219,21 @@ just pt                    # piecetab.h 全量
 just pt @test_name         # 只跑第一个匹配
 just pt test_prefix        # 跑所有前缀匹配
 just lc / just ut / just cg / just tf   # 其他库全量
-just lua/ts                # treesitter 绑定（lua/justfile，见 brief_tests.md）
+just lua/ts                # treesitter 绑定——lua 相关命令统一用
+                           # `just lua/xxx`，just 自动查找 lua/justfile
+                           # 并执行其中的 xxx（详见 brief_tests.md）
 ```
+
+### Lua 侧调试（editor/绑定）
+
+- **临时脚本复现**：`/tmp/*.lua` + fake term（`{write/flush/move/size}`）
+  require editor 后直接 `e:render()` + `io.write` 打印——对应 C 侧
+  `test_log`；渲染断言用 `e.grid:cell(r, c)` 逐格打印 (cp, style)
+- **piece 布局 dump**：`doc:piece("len"/"next")` 遍历打印（断言 piece
+  高亮前先验证实际结构，pt_edit 插入会分裂 hole piece）
+- 「单跑脚本对、测试环境错」：先查 `os.exit` 是否在测试文件末尾
+  （run() 收集 _G，其后的类永不执行，见 brief_tests.md Lua 节）
+- editor 侧日志：`e.log`（默认写 editor.log）；测试里 `e.log = function() end` 禁用
 
 ---
 
