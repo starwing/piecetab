@@ -602,8 +602,8 @@ end
 ---@field done boolean
 ---@field term editor.Term
 ---@field grid cellgrid.Grid
----@field keymaps table<string, table<string, function>>
----@field commands table<string, function>
+---@field keymaps table<string, table<string, fun(self: editor.Ed, key: string)>>
+---@field commands table<string, fun(self: editor.Ed, arg: string, bang: boolean)>
 local Ed = {}
 
 -- forward declaration: filled in Section 5 (dispatch reads it via upvalue)
