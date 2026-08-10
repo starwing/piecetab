@@ -344,8 +344,104 @@ local function open_line(self, dir)
 end
 
 -- ================================================================
--- Section 3: Highlight module (tree-sitter syntax highlighting)
+-- Section 3: Highlight module (style compositor + tree-sitter)
 -- ================================================================
+
+-- Style compositor: interns attr-field tables to unique handles. Cellgrid
+-- treats style ids as opaque handles; the compositor owns the attr ->
+-- handle -> CSI conversion. Field values: fg/bg = 256-color index or
+-- {r,g,b} table; boolean keys (bold/underline/...) = set attribute.
+
+--- @class editor.Sc
+--- @field by_attr table<string, integer>
+--- @field attr_by table<integer, table>
+--- @field next_id integer
+local sc = {}
+
+local SGR_ATTR = {
+  bold = 1, dim = 2, italic = 3, underline = 4, reverse = 7,
+}
+
+do
+  sc.__index = sc
+
+  --- @return editor.Sc
+  function sc.new()
+    local self = setmetatable({ by_attr = {}, attr_by = {}, next_id = 0 }, sc)
+    self:intern({}) -- style 0 = default (empty) attr
+    return self
+  end
+
+  -- Canonical key: sorted "k:v" parts; booleans as bare "k"; {r,g,b} as
+  -- "k:rgb(r,g,b)". Nil/false fields are unset and skipped.
+  --- @param attr table
+  --- @return string
+  local function canon(attr)
+    local parts = {}
+    for k, v in pairs(attr) do
+      if v then
+        if type(v) == "table" then
+          parts[#parts + 1] = k .. ":rgb(" .. v.r .. "," .. v.g .. "," .. v.b .. ")"
+        elseif v ~= true then
+          parts[#parts + 1] = k .. ":" .. tostring(v)
+        else
+          parts[#parts + 1] = k
+        end
+      end
+    end
+    table.sort(parts)
+    return table.concat(parts, ",")
+  end
+
+  -- Intern an attr table to a unique handle; identical attrs share one.
+  --- @param attr table
+  --- @return integer
+  function sc:intern(attr)
+    local key = canon(attr)
+    local id = self.by_attr[key]
+    if id then return id end
+    id = self.next_id
+    self.next_id = id + 1
+    self.by_attr[key] = id
+    self.attr_by[id] = attr
+    return id
+  end
+
+  -- Inverse lookup: handle -> attr table (compositor-owned, do not mutate).
+  --- @param id integer
+  --- @return table
+  function sc:attr(id)
+    return self.attr_by[id]
+  end
+
+  -- SGR escape for a handle: reset + attribute codes (diff emits this on
+  -- style change, so each entry must be a full state).
+  --- @param id integer
+  --- @return string?
+  function sc:csi(id)
+    local a = self.attr_by[id]
+    if not a then return nil end
+    local codes = {}
+    for k, v in pairs(a) do
+      if v then
+        if k == "fg" or k == "bg" then
+          local pre = (k == "fg") and "38" or "48"
+          if type(v) == "table" then
+            codes[#codes + 1] = pre .. ";2;" .. v.r .. ";" .. v.g .. ";" .. v.b
+          else
+            codes[#codes + 1] = pre .. ";5;" .. v
+          end
+        else
+          local n = SGR_ATTR[k]
+          if n then codes[#codes + 1] = tostring(n) end
+        end
+      end
+    end
+    if #codes == 0 then return "\27[0m" end
+    table.sort(codes)
+    return "\27[0m\27[" .. table.concat(codes, ";") .. "m"
+  end
+end
 
 local hl = {}
 
@@ -804,6 +900,11 @@ do
   --- @return editor.Term
   function Ed.newterm(opts)
     return Term.new(opts)
+  end
+
+  --- @return editor.Sc
+  function Ed.newsc()
+    return sc.new()
   end
 
   --- @param content? string

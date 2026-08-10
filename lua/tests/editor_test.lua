@@ -728,3 +728,52 @@ function TestSyntax:testNoLanguageNoHighlight()
 end
 
 os.exit(lu.LuaUnit.run(), true)
+
+TestSc = {}
+
+function TestSc:testInternReuse()
+  local s = Ed.newsc()
+  lu.assertEquals(s:intern({ fg = 207 }), s:intern({ fg = 207 }))
+  lu.assertEquals(s:intern({}), 0) -- default attr pre-interned as style 0
+end
+
+function TestSc:testInternDistinct()
+  local s = Ed.newsc()
+  lu.assertNotEquals(s:intern({ fg = 1 }), s:intern({ bg = 1 }))
+  lu.assertNotEquals(s:intern({ fg = 1 }), s:intern({ fg = 2 }))
+  lu.assertNotEquals(s:intern({ bold = true }), s:intern({ underline = true }))
+end
+
+function TestSc:testInternFieldOrderIrrelevant()
+  local s = Ed.newsc()
+  lu.assertEquals(s:intern({ fg = 1, bold = true }),
+                  s:intern({ bold = true, fg = 1 }))
+end
+
+function TestSc:testInternUnsetSkipped()
+  local s = Ed.newsc()
+  lu.assertEquals(s:intern({ bold = true }),
+                  s:intern({ bold = true, underline = false, dim = nil }))
+end
+
+function TestSc:testInverseLookup()
+  local s = Ed.newsc()
+  local id = s:intern({ fg = 207, bg = { r = 1, g = 2, b = 3 }, bold = true })
+  local a = s:attr(id)
+  lu.assertEquals(a.fg, 207)
+  lu.assertEquals(a.bg.r, 1)
+  lu.assertTrue(a.bold)
+  lu.assertNil(s:attr(id + 999))
+end
+
+function TestSc:testCsiGeneration()
+  local s = Ed.newsc()
+  lu.assertEquals(s:csi(0), "\27[0m")
+  lu.assertEquals(s:csi(s:intern({})), "\27[0m")
+  lu.assertEquals(s:csi(s:intern({ fg = 207 })), "\27[0m\27[38;5;207m")
+  lu.assertEquals(s:csi(s:intern({ bold = true, bg = 237 })),
+                  "\27[0m\27[1;48;5;237m")
+  lu.assertEquals(s:csi(s:intern({ fg = { r = 1, g = 2, b = 3 } })),
+                  "\27[0m\27[38;2;1;2;3m")
+  lu.assertNil(s:csi(999))
+end
