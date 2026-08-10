@@ -1915,7 +1915,7 @@ static int LtsL_require(lua_State *L) {
 static void lts_stash_moddir(lua_State *L) {
     char dir[512] = ".";
     int found = 0;
-    const char *modname = "treesitter.so";
+    const char *modname = "treesitter";
     lua_getglobal(L, "package");   /* +1 package */
     lua_getfield(L, -1, "cpath");  /* +1 cpath */
     if (lua_isstring(L, -1)) {
@@ -1943,6 +1943,13 @@ static void lts_stash_moddir(lua_State *L) {
                     && (size_t)(slash - path) < sizeof(dir) - 1) {
                     memcpy(dir, path, (size_t)(slash - path));
                     dir[slash - path] = '\0';
+                    /* grammars live beside the project bindings, not
+                     * under the luajit/ build subdir */
+                    {
+                        char *last = strrchr(dir, '/');
+                        if (last != NULL && strcmp(last + 1, "luajit") == 0)
+                            *last = '\0';
+                    }
                     found = 1;
                 }
             }
