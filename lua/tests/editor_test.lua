@@ -672,10 +672,11 @@ function TestStyleTable:testFullStateReset()
   -- SGR codes are cumulative: each style CSI must fully reset prior
   -- state, or a DIM->color transition (line number -> keyword) leaks
   -- the DIM attribute onto the colored cell
-  for st, csi in pairs(Ed.DIFF_STYLE) do
-    if st ~= 0 then
-      lu.assertStrContains(csi, "\27[0m", false, "style " .. tostring(st))
-    end
+  local s = Ed.newsc()
+  local attrs = { { fg = 207 }, { bg = 237, dim = true },
+                  { bold = true, underline = true } }
+  for i, a in ipairs(attrs) do
+    lu.assertStrContains(s:csi(s:intern(a)), "\27[0m", false, "attr " .. i)
   end
 end
 
@@ -688,13 +689,14 @@ function TestSyntax:testKeywordC()
   e:open_language("c")
   frame(e)
   local _, st = e.grid:cell(0, 4) -- content col 0 ('i' of int)
-  local cp2, st2 = e.grid:cell(0, 4)
-  lu.assertEquals(st, Ed.STYLE_KEYWORD)
+  lu.assertEquals(st, e.sc:intern(Ed.ATTR_KEYWORD))
   local _, st2 = e.grid:cell(0, 8) -- content col 4 ('m' of main)
-  assert(st2 ~= Ed.STYLE_KEYWORD, "main should not be keyword: " .. tostring(st2))
-  assert(st2 == Ed.STYLE_FUNCTION, "main should be function: " .. tostring(st2))
+  assert(st2 ~= e.sc:intern(Ed.ATTR_KEYWORD),
+         "main should not be keyword: " .. tostring(st2))
+  assert(st2 == e.sc:intern(Ed.ATTR_FUNCTION),
+         "main should be function: " .. tostring(st2))
   local _, st3 = e.grid:cell(0, 21) -- content col 17 ('r' of return)
-  lu.assertEquals(st3, Ed.STYLE_KEYWORD)
+  lu.assertEquals(st3, e.sc:intern(Ed.ATTR_KEYWORD))
 end
 
 function TestSyntax:testCommentStringC()
@@ -703,9 +705,9 @@ function TestSyntax:testCommentStringC()
   e:open_language("c")
   frame(e)
   local _, st = e.grid:cell(0, 11) -- content col 7 ('/' of comment)
-  lu.assertEquals(st, Ed.STYLE_COMMENT)
+  lu.assertEquals(st, e.sc:intern(Ed.ATTR_COMMENT))
   local _, st2 = e.grid:cell(0, 32) -- content col 28 ('"' of string)
-  lu.assertEquals(st2, Ed.STYLE_STRING)
+  lu.assertEquals(st2, e.sc:intern(Ed.ATTR_STRING))
 end
 
 function TestSyntax:testEditUpdatesHighlight()
@@ -717,17 +719,15 @@ function TestSyntax:testEditUpdatesHighlight()
 
   frame(e)
   local _, st = e.grid:cell(0, 21) -- content col 17 ("eturn" start)
-  lu.assertNotEquals(st, Ed.STYLE_KEYWORD) -- "eturn" is not a keyword
+  lu.assertNotEquals(st, e.sc:intern(Ed.ATTR_KEYWORD))
 end
 
 function TestSyntax:testNoLanguageNoHighlight()
   local e = make_ed("int main(void) { return 0; }\n")
   frame(e)
   local _, st = e.grid:cell(0, 4) -- content col 0
-  lu.assertEquals(st, 0) -- STYLE_NORMAL
+  lu.assertEquals(st, 0) -- default handle
 end
-
-os.exit(lu.LuaUnit.run(), true)
 
 TestSc = {}
 
@@ -777,3 +777,104 @@ function TestSc:testCsiGeneration()
                   "\27[0m\27[38;2;1;2;3m")
   lu.assertNil(s:csi(999))
 end
+
+TestLayers = {}
+
+-- 3 pieces: "aaaa" + "XY" + " bbbb" via two mid-doc edits
+local function make_pieces(content)
+  local e = make_ed(content)
+  e.doc:seek("set", 4)
+  e:docedit(0, "XY") -- split into 2 pieces
+  e.doc:seek("set", 8)
+  e:docedit(0, "Z") -- split into 3 pieces
+  e.show_pieces = true
+  return e
+end
+
+function TestLayers:testPiecesAlternate()
+  -- pieces [0,4) "aaaa" gray, [4,6) "XY" plain, [6,11) "Z bbbb" gray
+  local e = make_pieces("aaaa bbbb\n")
+  frame(e)
+  local bg = e.sc:intern(Ed.ATTR_GRAY_BG)
+  local _, st = e.grid:cell(0, 4) -- 'a' (piece 1)
+  lu.assertEquals(st, bg)
+  local _, st2 = e.grid:cell(0, 8) -- 'X' (piece 2, plain)
+  lu.assertEquals(st2, 0)
+  local _, st3 = e.grid:cell(0, 12) -- 'Z' (piece 4, plain)
+  lu.assertEquals(st3, 0)
+  local _, st4 = e.grid:cell(0, 13) -- 'b' (piece 5)
+  lu.assertEquals(st4, bg)
+end
+
+function TestLayers:testPiecesToggleCommand()
+  local e = make_pieces("aaaa bbbb\n")
+  lu.assertTrue(e.show_pieces)
+  e:dispatch(":") -- not needed; command path below
+  e.commands.pieces(e, "", false)
+  lu.assertFalse(e.show_pieces)
+end
+
+function TestLayers:testPieceGrayOnlyOnOddPieces()
+  -- even piece must NOT carry gray (piece 2 = plain)
+  local e = make_pieces("aaaa bbbb\n")
+  frame(e)
+  local _, st = e.grid:cell(0, 9) -- 'Y' (piece 2)
+  lu.assertEquals(st, 0)
+end
+
+function TestLayers:testLayeredCompose()
+  -- syntax fg + piece bg on same cell: key-level partial fold
+  local e = make_ed("int x\n")
+  e:open_language("c")
+  e.doc:seek("set", 4)
+  e:docedit(0, "Q") -- 2 pieces: [0,4) "int " gray, [4,7) "Qx\n" plain
+  e.show_pieces = true
+  frame(e)
+  local bg = e.sc:intern(Ed.ATTR_GRAY_BG)
+  local kw = e.sc:intern(Ed.ATTR_KEYWORD)
+  local both = e.sc:intern({ fg = 207, bg = 237 })
+  local _, st = e.grid:cell(0, 4) -- 'i' (piece 1): keyword + gray bg
+  lu.assertEquals(st, both)
+  local _, st2 = e.grid:cell(0, 8) -- 'Q' (piece 2, plain): no syntax
+  lu.assertEquals(st2, 0)
+  local _, st3 = e.grid:cell(0, 9) -- 'x' (piece 3): gray only
+  lu.assertEquals(st3, bg)
+  lu.assertNotEquals(kw, bg)
+end
+
+function TestLayers:testPieceAcrossLineBoundary()
+  -- "aaaXYa\nbbbb\n": pieces [0,3) gray, [3,5) plain, [5,12) gray —
+  -- the gray piece crosses the line break
+  local e = make_ed("aaaa\nbbbb\n")
+  e.doc:seek("set", 3)
+  e:docedit(0, "XY")
+  e.show_pieces = true
+  frame(e)
+  local bg = e.sc:intern(Ed.ATTR_GRAY_BG)
+  local _, st = e.grid:cell(0, 4) -- 'a' col 0 (piece 1)
+  lu.assertEquals(st, bg)
+  local _, st2 = e.grid:cell(0, 8) -- 'Y' col 4 (piece 2, same row)
+  lu.assertEquals(st2, 0)
+  local _, st3 = e.grid:cell(1, 4) -- row 1 col 0 (piece 3, gray)
+  lu.assertEquals(st3, bg)
+end
+
+-- "char *s = \"XYaaaa\";\n": pieces [0,12) gray, [12,14) plain,
+-- [14,20) gray; the string literal "XYaaaa" spans the piece boundary —
+-- fg-only on the plain piece, fg+bg on the gray piece
+function TestLayers:testMergeLayersUnsetPassesThrough()
+  local e = make_ed('char *s = "aaaa";\n')
+  e:open_language("c")
+  e.doc:seek("set", 12) -- at the opening quote
+  e:docedit(0, "XY")
+  e.show_pieces = true
+  frame(e)
+  local _, st = e.grid:cell(0, 4) -- 'c' of char (piece 1): keyword + gray
+  lu.assertEquals(st, e.sc:intern({ fg = 207, bg = 237 }))
+  local _, st2 = e.grid:cell(0, 16) -- '"' (piece 2, plain): string fg only
+  lu.assertEquals(st2, e.sc:intern(Ed.ATTR_STRING))
+  local _, st3 = e.grid:cell(0, 18) -- 'a' (piece 3, gray): string + gray
+  lu.assertEquals(st3, e.sc:intern({ fg = 114, bg = 237 }))
+end
+
+os.exit(lu.LuaUnit.run(), true)

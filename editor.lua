@@ -125,26 +125,13 @@ Term.REVERSE         = "\27[7m"
 Term.DIM             = "\27[2m"
 Term.RESET           = "\27[0m"
 
--- grid cell style IDs (see DIFF_STYLE for CSI mapping)
-local STYLE_NORMAL   = 0
-local STYLE_DIM      = 1
-local STYLE_GRAY     = 3
-local STYLE_KEYWORD  = 10
-local STYLE_STRING   = 11
-local STYLE_COMMENT  = 12
-local STYLE_FUNCTION = 13
-
--- style ID -> CSI; SGR is cumulative: the diff emits a style CSI only on
--- ID changes, so each entry must be a full state (reset included)
-local DIFF_STYLE     = {
-  [0]  = "\27[0m",                 -- RESET
-  [1]  = "\27[0m\27[2m",           -- DIM
-  [3]  = "\27[0m\27[48;5;237m",    -- gray bg
-  [10] = "\27[0m\27[38;5;207m",    -- keyword (pink)
-  [11] = "\27[0m\27[38;5;114m",    -- string (green)
-  [12] = "\27[0m\27[38;5;245m",    -- comment (gray fg)
-  [13] = "\27[0m\27[38;5;81m",     -- function (blue)
-}
+-- attribute field tables (interned into grid style handles by sc)
+local ATTR_DIM      = { dim = true }
+local ATTR_GRAY_BG  = { bg = 237 }
+local ATTR_KEYWORD  = { fg = 207 }
+local ATTR_STRING   = { fg = 114 }
+local ATTR_COMMENT  = { fg = 245 }
+local ATTR_FUNCTION = { fg = 81 }
 
 -- ================================================================
 -- Section 2: Text/cursor pure functions
@@ -521,11 +508,11 @@ local HL_QUERIES = {
   ]],
 }
 
-local HL_STYLES = {
-  comment      = STYLE_COMMENT,
-  string       = STYLE_STRING,
-  keyword      = STYLE_KEYWORD,
-  ["function"] = STYLE_FUNCTION,
+local HL_ATTRS = {
+  comment      = ATTR_COMMENT,
+  string       = ATTR_STRING,
+  keyword      = ATTR_KEYWORD,
+  ["function"] = ATTR_FUNCTION,
 }
 
 --- Create a highlighter for a language ("c"/"lua"), nil if unsupported.
@@ -577,26 +564,97 @@ function hl:ensure()
   self.dirty = false
 end
 
---- Query spans for a byte range: {offset, length, style} (0-based offsets).
+--- Query spans for a byte range: {offset, length, attr} (0-based offsets).
 function hl:query_region(start, endoff)
   self:ensure()
   if not self.tree then return {} end
   local c = self.query:exec(self.tree.root)
   c:set_byte_range(start + 1, endoff)
-  local stylemap, spans = HL_STYLES, {}
+  local attrmap, spans = HL_ATTRS, {}
   while true do
     local ci = c:next_capture()
     if not ci then break end
     local node = c[ci]
     local _, cid = c:captures(ci)
-    local style = stylemap[self.query:capture_name_for_id(cid)]
-    if style then
+    local attr = attrmap[self.query:capture_name_for_id(cid)]
+    if attr then
       spans[#spans + 1] = {
         offset = node.start_byte - 1,
         length = node.end_byte - node.start_byte,
-        style = style
+        attr = attr
       }
     end
+  end
+  return spans
+end
+
+-- Fold layered writer spans into one attr span list. Higher layers
+-- override keys set on lower ones (key-level partial merge); unset keys
+-- pass through. Input/output: {offset, length, attr} (0-based).
+--- @param layers table array of span arrays, low to high
+--- @param start integer
+--- @param endoff integer (exclusive)
+--- @return table
+local function merge_layers(layers, start, endoff)
+  local bounds = {}
+  for _, spans in ipairs(layers) do
+    for _, sp in ipairs(spans) do
+      bounds[#bounds + 1] = sp.offset
+      bounds[#bounds + 1] = sp.offset + sp.length
+    end
+  end
+  table.sort(bounds)
+  local out, lo = {}, start
+  local function fold(hi)
+    local attr = {}
+    for _, spans in ipairs(layers) do
+      for _, sp in ipairs(spans) do
+        if sp.offset <= lo and lo < sp.offset + sp.length then
+          for k, v in pairs(sp.attr) do
+            if v then attr[k] = v end
+          end
+        end
+      end
+    end
+    out[#out + 1] = { offset = lo, length = hi - lo, attr = attr }
+  end
+  for _, hi in ipairs(bounds) do
+    if hi <= lo then
+      -- duplicate boundary, skip
+    elseif hi >= endoff then
+      fold(endoff)
+      lo = endoff
+      break
+    else
+      fold(hi)
+      lo = hi
+    end
+  end
+  if lo < endoff then fold(endoff) end
+  return out
+end
+
+-- Piece-boundary writer (pull mode, no cache): scan all pieces, alternate
+-- gray background on odd pieces to visualize piecetab layout on screen.
+--- @param doc piecetab.Doc
+--- @param start integer
+--- @param endoff integer (exclusive)
+--- @return table
+local function piece_spans(doc, start, endoff)
+  local spans, odd = {}, true
+  doc:seek("set", 0)
+  local len = doc:piece("len")
+  while len > 0 do
+    local off = doc:offset()
+    if odd and off + len > start and off < endoff then
+      spans[#spans + 1] = {
+        offset = math.max(off, start),
+        length = math.min(off + len, endoff) - math.max(off, start),
+        attr = ATTR_GRAY_BG,
+      }
+    end
+    odd = not odd
+    len = doc:piece("next")
   end
   return spans
 end
@@ -635,7 +693,7 @@ end
 local function render_line(g, row, col, text, segs, tabstop)
   local byte = 1
   local batch_start = 1
-  local cur_style = STYLE_NORMAL
+  local cur_style = 0
   local seg_idx = 1
   local dc = 0
 
@@ -643,12 +701,12 @@ local function render_line(g, row, col, text, segs, tabstop)
     while seg_idx <= #segs do
       local s = segs[seg_idx]
       if b >= s.start and b < s.start + s.len then
-        return s.style or STYLE_NORMAL
+        return s.style or 0
       end
       if b < s.start then break end
       seg_idx = seg_idx + 1
     end
-    return STYLE_NORMAL
+    return 0
   end
 
   local function flush()
@@ -876,6 +934,9 @@ local function install_builtin_commands(self)
   c.wq = function(ed, arg, bang)
     c.w(ed); c.q(ed)
   end
+  c.pieces = function(ed, arg, bang)
+    ed.show_pieces = not ed.show_pieces
+  end
   c.e = function(ed, arg, bang)
     if not arg or arg == "" then
       ed.msg = "No filename"; return
@@ -927,6 +988,9 @@ do
     self.done = false
     self.term = term or Ed.newterm()
     self.grid = grid or cg.new()
+    self.sc = sc.new()
+    self.styles = { dim = self.sc:intern(ATTR_DIM) }
+    self.show_pieces = false
     self.keymaps = { normal = {}, insert = {}, command = {} }
     self.commands = {}
     install_normal_keys(self)
@@ -1015,13 +1079,23 @@ do
 
     local saved_off = self.doc:offset()
     local spans
-    if self.hl then
+    if self.hl or self.show_pieces then
       self.doc:seek("line", self.scroll_line)
       local s_off = self.doc:offset()
       self.doc:seek("line", math.min(self.scroll_line + visrows, total_lines))
       local e_off = self.doc:offset()
       self.doc:seek("set", saved_off)
-      spans = self.hl:query_region(s_off, e_off)
+      local layers = {}
+      if self.hl then
+        layers[#layers + 1] = self.hl:query_region(s_off, e_off)
+      end
+      if self.show_pieces then
+        layers[#layers + 1] = piece_spans(self.doc, s_off, e_off)
+      end
+      spans = merge_layers(layers, s_off, e_off)
+      for _, sp in ipairs(spans) do
+        sp.style = self.sc:intern(sp.attr)
+      end
     end
     local g = self.grid
     g:begin(self.scroll_line, visrows, cols)
@@ -1033,11 +1107,11 @@ do
       local line_idx = self.scroll_line + row - 1
       if line_idx < total_lines then
         local s = string.format(lnum_fmt, line_idx + 1)
-        g:putline(r0, 0, s, STYLE_DIM)
+        g:putline(r0, 0, s, self.styles.dim)
         g:clearrow(r0, #s, cols)
       else
         g:clearrow(r0, 0, cols)
-        g:put(r0, lnum_width + 1, 0x7e, STYLE_DIM)
+        g:put(r0, lnum_width + 1, 0x7e, self.styles.dim)
       end
     end
 
@@ -1072,7 +1146,10 @@ do
     end
 
     -- flush grid diff
-    local csi = g:diff(DIFF_STYLE)
+    local sc = self.sc
+    local csi = g:diff(setmetatable({}, {
+      __index = function(_, id) return sc:csi(id) end,
+    }))
     self.log("  diff: csi_len=%d", #csi)
     self.term:write(csi)
 
@@ -1219,13 +1296,12 @@ if arg and arg[0] and arg[0]:match("editor%.lua$") then
   main(arg)
 end
 
-Ed.STYLE_NORMAL   = STYLE_NORMAL
-Ed.STYLE_DIM      = STYLE_DIM
-Ed.STYLE_GRAY     = STYLE_GRAY
-Ed.STYLE_KEYWORD  = STYLE_KEYWORD
-Ed.STYLE_STRING   = STYLE_STRING
-Ed.STYLE_COMMENT  = STYLE_COMMENT
-Ed.STYLE_FUNCTION = STYLE_FUNCTION
-Ed.DIFF_STYLE     = DIFF_STYLE
+-- attr tables for tests (intern via e.sc:intern(Ed.ATTR_*) to get handles)
+Ed.ATTR_DIM      = ATTR_DIM
+Ed.ATTR_GRAY_BG  = ATTR_GRAY_BG
+Ed.ATTR_KEYWORD  = ATTR_KEYWORD
+Ed.ATTR_STRING   = ATTR_STRING
+Ed.ATTR_COMMENT  = ATTR_COMMENT
+Ed.ATTR_FUNCTION = ATTR_FUNCTION
 
 return Ed
