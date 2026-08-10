@@ -11,7 +11,7 @@
    猜错的成本远大于多问一句。
 2. **隔离再定位**——组合操作（如 splice = remove + append）先拆分，单独验证每步，
    确定问题在哪一步引入的。
-3. **日志佐证一切**——对你的推理不要自信。在每个关键点插 `pt_log` 打印实际值，
+3. **日志佐证一切**——对你的推理不要自信。在每个关键点插 `test_log` 打印实际值，
    用日志证据代替猜测。
 4. **先跑最小复现**——如果 brute 测试有大量组合，先缩小到单个失败参数
    （如 `if (!(pos==3)) continue;`），快速迭代。
@@ -38,7 +38,7 @@ if (!(pos == 3 && del == 3 && ins == 1)) continue;
 
 ```c
 pt_Cursor C2;
-maketree(S, &C2, pos);
+maketree(S, &C2, pos);   /* 测试 helper（tests/tests.h）按需构造树 */
 r = pt_remove(&C2, del);
 assert(r == PT_OK);
 assert(pt_checktree(C2.tree)); /* ← 关键：隔离 remove */
@@ -84,8 +84,8 @@ dn = lcD_balancenode(ns, (*ns == o), ds);
 在可疑函数的入口和关键分支打印参数：
 
 ```c
-pt_log("[foldnode] ENTER l=%d i=%d cl=%d cr=%d o=%s\n",
-       l, i, cl, cr, (*ns == o) ? "L" : "R");
+test_log("[foldnode] ENTER l=%d i=%d cl=%d cr=%d o=%s\n",
+         l, i, cl, cr, (*ns == o) ? "L" : "R");
 ```
 
 **日志应分层递进**：先看函数级（谁调了谁），再看值级（参数是什么），最后看分支级（进了哪个路径）。
@@ -209,22 +209,17 @@ levels = 3 的树：
 
 ### 调试打印宏
 
-```c
-#define pt_log(...) fprintf(stderr, __VA_ARGS__)
-```
-
-定义在 `tests/pt_tests.h:18`，piecetab.h 中可直接使用（测试编译时已先 include pt_tests.h）。
-LSP 可能报错 `implicit declaration`，忽略即可。
+`test_log(...)` 定义在 `tests/tests.h:28`（stderr 日志，勿用 lldb）。
+树/游标打印工具见 `tests/lc_tests.h`（`lc_dumptree`、`lc_checktree` 等）。
 
 ### 运行测试
 
 ```bash
-just pt                    # 跑 piecetab.h 的全量测试
+just pt                    # piecetab.h 全量
 just pt @test_name         # 只跑第一个匹配
 just pt test_prefix        # 跑所有前缀匹配
-just lc                    # 跑 linecache.h 的全量测试
-just lc @test_name         # 跑 linecache.h 的全量测试
-just lc test_prefix        # 跑 linecache.h 的全量测试
+just lc / just ut / just cg / just tf   # 其他库全量
+just lua/ts                # treesitter 绑定（lua/justfile，见 brief_tests.md）
 ```
 
 ---
@@ -299,7 +294,7 @@ rmleaf 只处理了 `cc==0`（空 leaf）的情况，没处理"删除末尾 piec
 unsigned long cats[5] = {0}; clock_t t;
 t = clock(); /* phase A */ cats[0] += clock() - t;
 ...
-pt_log("[prof] A=%lu B=%lu C=%lu\n", cats[0], cats[1], cats[2]);
+test_log("[prof] A=%lu B=%lu C=%lu\n", cats[0], cats[1], cats[2]);
 ```
 
 **教训**：

@@ -275,7 +275,7 @@ just pt-lines         # 未覆盖行源码
 | ----------------------------- | ---------------------------------------- |
 | `notes/design_piecetab_v2.md` | 架构设计（命名漂移见 §十一，模型仍准确） |
 | `notes/brief_linecache.md`    | 姊妹库 linecache 总览（变量命名表通用）  |
-| `notes/guide_debug.md`        | 调试指引                                 |
+| `notes/brief_debug.md`        | 调试指引                                 |
 
 本地文档（未随仓库发布）：`notes/plans/` 存设计文档（分代 arena——已实现，
 含 pt_compact 定案记录；marktree——未实现），`notes/archive/` 存历史开发

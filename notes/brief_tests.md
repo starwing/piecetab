@@ -28,6 +28,7 @@
 - 无参数：运行全部；`just lc splice`：前缀匹配所有 `splice*`
 - `just lc @splice_trailing`：`@` 仅运行首个匹配
 - 覆盖率：`just <xx>-cov`（生成 lcov.info）、`just <xx>-lines`（未覆盖行源码）、`just <xx>-unbranched`（未覆盖分支）、`just cov`（全量）、`just clean`
+- **Lua 绑定测试在 `lua/justfile`**，命名与根 justfile 对齐：`just lua/pt`、`just lua/ts`、`just lua/ts-cov`、`just lua/ts-lines`、`just lua/clean`（`just lua/<recipe>` 自动执行该目录下 justfile）。根 justfile 不设其他位置 justfile 的入口
 
 ## 测试文件与命名
 

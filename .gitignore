@@ -10,6 +10,7 @@ editor.md
 chat.json
 notes/archive/
 notes/plans/
+notes/reports/
 *.info
 *.gcda
 *.gcno
@@ -30,4 +31,4 @@ tests/linecache_test_fanout4
 tests/linecache_test_fanout8
 tests/piecetab_test_fanout4
 tests/*.gen.inc
-tmp_*
+tmp_*notes/reports/

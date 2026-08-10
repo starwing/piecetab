@@ -384,3 +384,31 @@ descend 落点），而非 find/next/descend 三个小函数分散逻辑。
 （`tfC_kitty` 的 `cp<0` 块、`kittyfind` 块均如此收编）。单语句
 `if (x) return;` 不算裸 return——递归基例、OOM 尽力而为、API 参数
 校验等天然形态可保留，不强行改。
+
+### 30. 覆盖率缺口先问"能消除吗"，再问"能覆盖吗"
+
+**教训（treesitter.c 绑定 44.9% → 100% 行/94.1% 分支）**：第一轮写豁免清单
+是错的——绝大多数缺口是**可以改写掉的逻辑**，不是不可达代码。先按下列
+手段消除，剩下的才是豁免：
+
+1. **相信 API，删防御检查**——TS/Lua 保证的枚举、越界、非 NULL 契约，
+   检查分支删掉（`lts_checkenum`、error_type/quantifier 越界、`tname==NULL`、
+   `L==NULL`、`name != NULL` 三元）。删前确认契约在 API 文档（严格输入，
+   放松输出）。
+2. **统一 > 特例**——条件分支幂等时无条件化：缓存刷新 `else if (tree 不同)`
+   → 恒刷新（同树幂等，异树修 stale）。
+3. **尾调用消除 else 块**——`if/else if/else` 改提前 return +
+   `return luaL_typeerror(...)` 尾调用（error 函数不返回，编译器不报）。
+4. **死分支删除**——恒真条件（所有 userdata 有 metatable →
+   `lua_getmetatable` 去 if；luaopen 单次 → 9 处 `if (luaL_newmetatable)`
+   去 if；所有对象有 mt → `luaL_getmetatable` 直查）。
+5. **三元替代 if/break**——循环内 `if (end) seg=end+1; else break;`
+   → `seg = end ? end+1 : seg+seglen`（三元两路均可执行）。
+6. **测试盲区先查参数求值顺序**——`c:exec(q, t.root)` 里 `t.root` 先 error，
+   `lts_checkquery` 根本没执行——先确认目标行真的可达，再补测试。
+7. **gcov 行号映射**——条件编译（`#if LUA_VERSION_NUM < 502`）分支、宏展开
+   分支的未覆盖行可能是映射偏移，先跑测试确认再决定豁免。
+
+豁免清单只留：结构保证（fields 表恒函数）、平台分支（Windows `\\`、
+5.1 fopen）、依赖外部配置的分支（cpath 段顺序）。最终报告见
+`notes/reports/coverage_treesitter.md`。

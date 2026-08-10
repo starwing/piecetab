@@ -106,4 +106,4 @@ Never delete existing tests.
 - Prefer `assert_tree` shape matching over loose predicates so structural
   regressions surface immediately.
 - Debugging: add temporary `test_log(...)` output rather than reaching
-  for a debugger. See `notes/guide_debug.md`.
+  for a debugger. See `notes/brief_debug.md`.
