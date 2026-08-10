@@ -1479,4 +1479,24 @@ function TestDoc:testEditNegativeAmount()
     lu.assertError(function() d:splice(-1, "x") end)
 end
 
+
+function TestDoc:testSeekLineFragmentTail()
+    -- trailing fragment ("x" has no \n): breaks() = lc_breaks + 1,
+    -- seek("line", breaks) must land at fragment start, not error
+    local d = pt.doc("x")
+    lu.assertEquals(d:breaks(), 1)
+    d:seek("line", 1)
+    lu.assertEquals(d:offset(), 0) -- fragment start = lc_bytes (nothing loaded)
+    lu.assertEquals(d:read("l"), "x")
+    d:seek("line", 0)
+    lu.assertEquals(d:offset(), 0)
+    -- full line at end (fragment follows)
+    d = pt.doc("a\nb")
+    lu.assertEquals(d:breaks(), 2)
+    d:seek("line", 2)
+    lu.assertEquals(d:offset(), 2) -- fragment start: a=0, \n=1, b=2
+    lu.assertEquals(d:read("l"), "b")
+end
+
+
 os.exit(lu.LuaUnit.run(), true)

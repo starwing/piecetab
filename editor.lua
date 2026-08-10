@@ -635,13 +635,14 @@ local function merge_layers(layers, start, endoff)
 end
 
 -- Piece-boundary writer (pull mode, no cache): scan all pieces, alternate
--- gray background on odd pieces to visualize piecetab layout on screen.
+-- gray background on even pieces (first piece plain) to visualize
+-- piecetab layout on screen.
 --- @param doc piecetab.Doc
 --- @param start integer
 --- @param endoff integer (exclusive)
 --- @return table
 local function piece_spans(doc, start, endoff)
-  local spans, odd = {}, true
+  local spans, odd = {}, false
   doc:seek("set", 0)
   local len = doc:piece("len")
   while len > 0 do
@@ -990,7 +991,7 @@ do
     self.grid = grid or cg.new()
     self.sc = sc.new()
     self.styles = { dim = self.sc:intern(ATTR_DIM) }
-    self.show_pieces = false
+    self.show_pieces = true -- piece-boundary visualization (debug aid)
     self.keymaps = { normal = {}, insert = {}, command = {} }
     self.commands = {}
     install_normal_keys(self)

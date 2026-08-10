@@ -571,7 +571,10 @@ static int lpt_seekpos(lua_State *L, lpt_Doc *d, const char *whence) {
         size_t    lnum = (size_t)off, br;
         lc_Cursor C;
         lpt_checkerror(L, lpt_docsync(d, lnum, -1));
+        /* doc-line semantics: breaks() = lc_breaks + trailing fragment
+         * line; seek("line", breaks) lands at the fragment start */
         br = lc_breaks(d->lc);
+        if (lc_bytes(d->lc) < pt_bytes(pt_buffer(&d->C))) ++br;
         luaL_argcheck(L, lnum <= br, 3, "line out of range");
         if (lnum == br)
             pt_locate(&d->C, lc_bytes(d->lc));
