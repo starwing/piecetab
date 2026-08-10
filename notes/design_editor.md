@@ -21,7 +21,7 @@
 | 按键/命令 | **注册表 API**：`e:keymap(mode, key, fn)` / `e:command(name, fn)`，内置同样走注册表 |
 | 高亮模块 | 现状 + 类型标注，spantree 落地时再重构（YAGNI） |
 | 类型定义 | 新建 `lua/lua-utf8.d.lua`（luautf8 仓库无官方定义，按 README v0.2.x 公开 API 写，可回推上游）；`.luarc.json` workspace.library 修正为四个 `.d.lua` 实际路径 |
-| 测试 | luaunit（与 cg/tf/pt 测试一致），`just lua-ed` 不变 |
+| 测试 | luaunit（与 cg/tf/pt 测试一致），`just lua/ed` 不变 |
 
 ## 二、类结构
 
@@ -178,4 +178,4 @@ editor.lua 是 C 模块库的 demo——cellgrid/termfeed 均由 editor demo 需
 2. 重写 editor.lua（Term → Ed 结构 → 注册表 → render → main）
 3. 改写 editor_test.lua（既有 7 测试先通过）
 4. 新增按键/命令测试组
-5. `just lua-ed` 全绿 + README 更新
+5. `just lua/ed` 全绿 + README 更新

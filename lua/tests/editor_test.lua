@@ -1,5 +1,5 @@
 -- editor.lua class skeleton tests (luaunit harness).
--- run: just lua-ed (cwd = lua/)
+-- run: just lua/ed
 -- Requires the lua-utf8 rock (same cpath as editor.lua itself).
 local dir = arg[0]:match("^(.*)[/\\]") or "."
 local root = dir .. "/../.."

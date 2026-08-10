@@ -191,7 +191,7 @@ Custom keys/commands hook into the per-mode registries (`mode` is
 `0/$`, `gg/G`, `x`, `dd`, `i/a/o/O`, `u`/`<C-r>`, `:`; commands:
 `:w`, `:q`, `:wq`, `:e`.
 
-Run the tests with `just lua-ed`; smoke-test interactively with
+Run the tests with `just lua/ed`; smoke-test interactively with
 `lua editor.lua [file]`.
 
 ## API Overview
@@ -296,19 +296,24 @@ coverage builds via lcov. All libraries maintain **100% line / function
 coverage** and ~90% branch coverage.
 
 ```sh
+# C tests (one runner per lib)
 just lc     # linecache tests
 just pt     # piecetab tests
 just ut     # undotree tests
 just cg     # cellgrid tests
 just tf     # termfeed tests
 just cov    # coverage report
-just lua-pt # lua binding tests (also lua-cg, lua-tf, lua-ed)
-just lua-ts # treesitter binding tests (grammars via misc/fetch_grammars.sh)
+
+# Lua binding tests — just lua/<recipe> runs lua/justfile
+just lua/pt  # piecetab binding (also lua/cg, lua/tf, lua/ed)
+just lua/ts  # treesitter binding tests
+just lua/ts-cov  # treesitter binding coverage
+just lua/ts-lines  # treesitter uncovered lines
 ```
 
 Dependencies: `libtree-sitter` (homebrew `tree-sitter`) for the
 treesitter binding; grammars are fetched and compiled by
-`misc/fetch_grammars.sh` (run by `just lua-ts-grammars`).
+`misc/fetch_grammars.sh` (run by `just lua/ts-grammars`).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for coding conventions.
 

@@ -1,38 +1,38 @@
-# lua bindings: build, test, coverage. CWD = lua/ (just -f sets it)
-# run from repo root: just -f lua/justfile [pt|cg|tf|ed|cov-*|lines|clean]
+# lua bindings: build, test, coverage. CWD = lua/ (just lua/<recipe> sets it)
+# run from repo root: just lua/<name> | just lua/<name>-cov | just lua/<name>-lines | just lua/clean
 
 import '../build.just'
 
 INCS := "-I. -I.."
 
-lua-build mod:
+build mod:
     mkdir -p luajit
     {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o {{ mod }}.so {{ mod }}.c
     {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o luajit/{{ mod }}.so {{ mod }}.c
 
-lua-run t *args='':
+run t *args='':
     lua tests/{{ t }}.lua {{ args }}
     luajit tests/{{ t }}.lua {{ args }}
 
-pt *args='': (lua-build "piecetab") (lua-run "pt_test" args)
-cg *args='': (lua-build "cellgrid") (lua-run "cg_test" args)
-tf *args='': (lua-build "termfeed") (lua-run "tf_test" args)
+pt *args='': (build "piecetab") (run "pt_test" args)
+cg *args='': (build "cellgrid") (run "cg_test" args)
+tf *args='': (build "termfeed") (run "tf_test" args)
 # editor demo needs lua-utf8 rock (PUC Lua only)
-ed *args='': (lua-build "piecetab") (lua-build "cellgrid") (lua-build "termfeed")
+ed *args='': (build "piecetab") (build "cellgrid") (build "termfeed")
     lua tests/editor_test.lua {{ args }}
 
 TS_INC := "-I/opt/homebrew/include"
 TS_LIB := "-L/opt/homebrew/lib -ltree-sitter"
 
-lua-ts-grammars *langs='c lua':
+ts-grammars *langs='c lua':
     ../misc/fetch_grammars.sh {{langs}}
 
-lua-ts-build: lua-ts-grammars
+build-ts: ts-grammars
     mkdir -p luajit
     {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} {{ TS_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o treesitter.so treesitter.c {{ TS_LIB }}
     {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} {{ TS_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o luajit/treesitter.so treesitter.c {{ TS_LIB }}
 
-lua-ts-test: (lua-run "treesitter_test" "")
+ts *args='': (build-ts) (run "treesitter_test" args)
 
 cov mod t:
     rm -f *.gcda luajit/*.gcda
@@ -46,13 +46,30 @@ cov mod t:
     @echo "=== {{ mod }}.c coverage ==="
     lcov --list --rc branch_coverage=1 lcov.info
 
-cov-pt: (cov "piecetab" "pt_test")
-cov-cg: (cov "cellgrid" "cg_test")
-cov-tf: (cov "termfeed" "tf_test")
+pt-cov: (cov "piecetab" "pt_test")
+cg-cov: (cov "cellgrid" "cg_test")
+tf-cov: (cov "termfeed" "tf_test")
+
+ts-cov:
+    rm -f *.gcda luajit/*.gcda
+    mkdir -p luajit
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} {{ TS_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o treesitter.so treesitter.c {{ TS_LIB }}
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} {{ TS_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o luajit/treesitter.so treesitter.c {{ TS_LIB }}
+    lua tests/treesitter_test.lua && luajit tests/treesitter_test.lua
+    lcov --capture --directory . --base-directory . --rc branch_coverage=1 --output-file lua_coverage.info --ignore-errors mismatch
+    lcov --extract lua_coverage.info '*/treesitter.c' --rc branch_coverage=1 --output-file lcov.info
+    @echo ""
+    @echo "=== treesitter.c coverage ==="
+    lcov --list --rc branch_coverage=1 lcov.info
 
 lines mod:
     @awk '/^DA:/ && /,0$/ {gsub(/DA:|,0/,""); print $0}' lcov.info \
     | sort -n | while read ln; do echo "L$ln: $(sed -n ${ln}p {{ mod }}.c)"; done
+
+pt-lines: (lines "piecetab")
+cg-lines: (lines "cellgrid")
+tf-lines: (lines "termfeed")
+ts-lines: (lines "treesitter")
 
 clean: clean-gcda
     rm -f *.so luajit/*.so *.gcda luajit/*.gcda lua_coverage.info lcov.info

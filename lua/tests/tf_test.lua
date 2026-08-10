@@ -1,4 +1,4 @@
--- termfeed Lua binding tests. run: just lua-tf (cwd = repo root)
+-- termfeed Lua binding tests. run: just lua/tf
 -- Coverage: termfeed.c binding code; OOM paths (ltf_checkerror TF_ERRMEM)
 --   and lookup-alloc failure are not Lua-reachable (defensive, reported).
 local dir = arg[0]:match("^(.*)[/\\]") or "."

@@ -1,4 +1,4 @@
--- piecetab Lua binding tests. run: just lua-pt (cwd = repo root)
+-- piecetab Lua binding tests. run: just lua/pt
 local dir = arg[0]:match("^(.*)[/\\]") or "."
 local root = dir .. "/../.."
 package.path = dir .. "/?.lua;" .. package.path

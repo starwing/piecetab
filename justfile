@@ -35,26 +35,7 @@ ut-unbranched: (cov-unbranched "undotree.h")
 cg-unbranched: (cov-unbranched "cellgrid.h")
 tf-unbranched: (cov-unbranched "termfeed.h")
 
-# lua bindings & tests (delegate to lua/justfile, cwd = lua/)
-
-lua-run t *args='':
-    @just -f lua/justfile {{t}} {{args}}
-lua-pt *args='': (lua-run "pt" args)
-lua-cg *args='': (lua-run "cg" args)
-lua-tf *args='': (lua-run "tf" args)
-lua-ed *args='': (lua-run "ed" args)
-
-lua-cov t:
-    @just -f lua/justfile cov-{{t}}
-lua-pt-cov: (lua-cov "pt")
-lua-cg-cov: (lua-cov "cg")
-lua-tf-cov: (lua-cov "tf")
-
-lua-lines t:
-    @just -f lua/justfile lines {{t}}
-lua-pt-lines: (lua-lines "piecetab")
-lua-cg-lines: (lua-lines "cellgrid")
-lua-tf-lines: (lua-lines "termfeed")
+# lua bindings & tests live in lua/justfile — run with: just lua/<recipe>
 
 clean: clean-gcda
     rm -f tests/linecache_test_fanout4 tests/linecache_test_fanout8 tests/piecetab_test_fanout4 tests/undotree_test tests/cellgrid_test tests/termfeed_test

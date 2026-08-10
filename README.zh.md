@@ -168,7 +168,7 @@ end)
 / `"command"`）。内置按键：`h/j/k/l`、`w/b`、`0/$`、`gg/G`、`x`、
 `dd`、`i/a/o/O`、`u`/`<C-r>`、`:`；命令：`:w`、`:q`、`:wq`、`:e`。
 
-测试：`just lua-ed`；交互 smoke：`lua editor.lua [file]`。
+测试：`just lua/ed`；交互 smoke：`lua editor.lua [file]`。
 
 ## API 总览
 
@@ -264,13 +264,19 @@ end)
 构建。所有库均保持 **100% 行/函数覆盖**与约 90% 分支覆盖。
 
 ```sh
+# C 测试（每库一个 runner）
 just lc     # linecache 测试
 just pt     # piecetab 测试
 just ut     # undotree 测试
 just cg     # cellgrid 测试
 just tf     # termfeed 测试
 just cov    # 覆盖率报告
-just lua-pt # Lua 绑定测试（另有 lua-cg、lua-tf、lua-ed）
+
+# Lua 绑定测试 — just lua/<recipe> 执行 lua/justfile
+just lua/pt  # piecetab 绑定（另有 lua/cg、lua/tf、lua/ed）
+just lua/ts  # treesitter 绑定测试
+just lua/ts-cov  # treesitter 绑定覆盖率
+just lua/ts-lines  # treesitter 未覆盖行
 ```
 
 编码规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。

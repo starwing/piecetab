@@ -14,10 +14,14 @@ just pt          # piecetab tests
 just ut          # undotree tests
 just cg          # cellgrid tests
 just tf          # termfeed tests
-just lua-pt      # piecetab Lua binding tests (also lua-cg, lua-tf, lua-ed)
 just cov         # coverage build + report for all C headers
 just lc-cov      # coverage build + report for linecache.h only
 just clean       # remove generated files
+
+# Lua binding tests — just lua/<recipe> runs lua/justfile
+just lua/pt  # piecetab binding tests (also lua/cg, lua/tf, lua/ed)
+just lua/ts  # treesitter binding tests
+just lua/ts-cov  # treesitter binding coverage
 ```
 
 Run a subset by prefix: `just pt insert` runs all tests starting with

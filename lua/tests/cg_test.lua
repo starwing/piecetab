@@ -1,4 +1,4 @@
--- cellgrid Lua binding tests. run: just lua-cg (cwd = repo root)
+-- cellgrid Lua binding tests. run: just lua/cg
 -- Coverage: 98.9% of cellgrid.c (259/262 lines).
 -- Uncovered: L423-425 (winsize ioctl success) -- requires TTY fd,
 --   not guaranteed in CI/non-interactive environments.
