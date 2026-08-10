@@ -21,7 +21,7 @@ set "TESTS=tests\linecache_test_fanout4 tests\linecache_test_fanout8 tests\piece
 
 for %%t in (%TESTS%) do (
     echo === %%t ===
-    lua tests\gen_entries.lua %%t.c %%t.gen.inc win32
+    lua misc\gen_entries.lua %%t.c %%t.gen.inc win32
     if errorlevel 1 exit /b 1
     cl /nologo /W4 /WX /std:c11 /D_CRT_SECURE_NO_WARNINGS /utf-8 /I. /Itests /Fe%%t.exe /Fo%%t.obj %%t.c
     if errorlevel 1 exit /b 1
