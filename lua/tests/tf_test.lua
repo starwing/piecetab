@@ -18,9 +18,9 @@ local function feedone(s)
 end
 
 -- ======== Lifecycle ========
-TestLifecycle = {}
+TestTfLifecycle = {}
 
-function TestLifecycle:testNew()
+function TestTfLifecycle:testNew()
     local t = tf.new()
     lu.assertEquals(t:key(), "NONE")
     lu.assertEquals(select("#", t:data()), 0)
@@ -29,13 +29,13 @@ function TestLifecycle:testNew()
     lu.assertEquals(t:mod(), "")
 end
 
-function TestLifecycle:testDeleteIdempotent()
+function TestTfLifecycle:testDeleteIdempotent()
     local t = tf.new()
     t:delete()
     t:delete()
 end
 
-function TestLifecycle:testGC()
+function TestTfLifecycle:testGC()
     do
         local t = tf.new()
         t:feed("a")
@@ -44,7 +44,7 @@ function TestLifecycle:testGC()
     collectgarbage()
 end
 
-function TestLifecycle:testSetflagOld()
+function TestTfLifecycle:testSetflagOld()
     local t = tf.new()
     lu.assertEquals(t:setflag(tf.FLAG_DELBS), 0)
     lu.assertEquals(t:setflag(0), tf.FLAG_DELBS)
@@ -544,7 +544,7 @@ function TestWaitkey:testReadFile()
         lu.assertEquals(t:waitkey(fd, 0), "KEY")
         lu.assertEquals(t:format(), "<Down>")
         lu.assertEquals(t:waitkey(fd, 0), "NONE")
-        f:close()
+        assert(f):close()
     end
     os.remove(path)
 end
@@ -554,7 +554,7 @@ function TestWaitkey:testEof()
     if fd then
         local t = tf.new()
         lu.assertEquals(t:waitkey(fd, 0), "NONE")
-        f:close()
+        assert(f):close()
     end
 end
 

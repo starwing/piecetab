@@ -12,16 +12,16 @@ local lu = require "luaunit"
 local cg = require "cellgrid"
 
 -- ======== Lifecycle tests ========
-TestLifecycle = {}
+TestCgLifecycle = {}
 
-function TestLifecycle:testNew()
+function TestCgLifecycle:testNew()
     local g = cg.new()
     lu.assertEquals(g:rows(), 0)
     lu.assertEquals(g:cols(), 0)
     lu.assertEquals(g:top(), 0)
 end
 
-function TestLifecycle:testBegin()
+function TestCgLifecycle:testBegin()
     local g = cg.new()
     g:begin(0, 5, 10)
     lu.assertEquals(g:rows(), 5)
@@ -29,19 +29,19 @@ function TestLifecycle:testBegin()
     lu.assertEquals(g:top(), 0)
 end
 
-function TestLifecycle:testBeginZeroRows()
+function TestCgLifecycle:testBeginZeroRows()
     local g = cg.new()
     lu.assertErrorMsgContains("invalid parameter",
         function() g:begin(0, 0, 10) end)
 end
 
-function TestLifecycle:testBeginZeroCols()
+function TestCgLifecycle:testBeginZeroCols()
     local g = cg.new()
     lu.assertErrorMsgContains("invalid parameter",
         function() g:begin(0, 5, 0) end)
 end
 
-function TestLifecycle:testBeginResize()
+function TestCgLifecycle:testBeginResize()
     local g = cg.new()
     g:begin(0, 3, 10)
     g:begin(0, 5, 20)
@@ -49,14 +49,14 @@ function TestLifecycle:testBeginResize()
     lu.assertEquals(g:cols(), 20)
 end
 
-function TestLifecycle:testDelete()
+function TestCgLifecycle:testDelete()
     local g = cg.new()
     g:begin(0, 5, 10)
     g:delete()
     lu.assertEquals(g:rows(), 0)
 end
 
-function TestLifecycle:testGC()
+function TestCgLifecycle:testGC()
     do
         local g = cg.new()
         g:begin(0, 3, 10)
@@ -65,7 +65,7 @@ function TestLifecycle:testGC()
     collectgarbage()
 end
 
-function TestLifecycle:testClear()
+function TestCgLifecycle:testClear()
     local g = cg.new()
     -- clear before begin is no-op
     g:clear()
@@ -78,7 +78,7 @@ function TestLifecycle:testClear()
     lu.assertEquals(st, 0)
 end
 
-function TestLifecycle:testFreeze()
+function TestCgLifecycle:testFreeze()
     local g = cg.new()
     g:begin(0, 3, 10)
     g:put(0, 0, 65, 1)

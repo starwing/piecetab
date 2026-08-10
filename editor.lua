@@ -760,6 +760,9 @@ end
 ---@field grid cellgrid.Grid
 ---@field keymaps table<string, table<string, fun(self: editor.Ed, key: string)>>
 ---@field commands table<string, fun(self: editor.Ed, arg?: string, bang?: boolean)>
+---@field sc editor.Sc  style compositor (attr -> handle intern)
+---@field styles table<string, integer>  pre-interned style handles
+---@field show_pieces boolean  piece-boundary visualization layer
 local Ed = {}
 
 -- forward declaration: filled in Section 5 (dispatch reads it via upvalue)
