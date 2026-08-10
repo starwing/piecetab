@@ -422,6 +422,21 @@ function TestDiff:testStyle()
     lu.assertStrContains(s, "S2")
 end
 
+function TestDiff:testStyleProxy()
+    -- style table may be a metatable proxy: lua_geti must fire __index
+    -- (rawgeti on an empty table returns nil and nothing is emitted)
+    local g = cg.new()
+    g:begin(0, 3, 10)
+    g:put(0, 0, 65, 1)
+    g:freeze()
+    g:put(0, 0, 66, 7) -- change style to an unlisted id
+    local proxy = setmetatable({}, { __index = function(_, id)
+        return "P" .. id
+    end })
+    local s = g:diff(proxy)
+    lu.assertStrContains(s, "P7")
+end
+
 function TestDiff:testCustomFormats()
     local g = cg.new()
     g:begin(0, 1, 10)

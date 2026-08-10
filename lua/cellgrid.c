@@ -42,6 +42,18 @@
 # define lua_isnoneornil(L, idx) (lua_type((L), (idx)) <= 0)
 #endif
 
+/* lua_geti is 5.3+; 5.1/5.2 (and LuaJIT) emulate via gettable so
+ * metatable __index fires — style tables may be dynamic proxies */
+#if LUA_VERSION_NUM >= 503
+# define lua53_geti lua_geti
+#else
+static int lua53_geti(lua_State *L, int idx, lua_Integer i) {
+    lua_pushinteger(L, i);
+    lua_gettable(L, idx);
+    return lua_type(L, -1);
+}
+#endif
+
 /* ---- grid userdata ---- */
 
 static cg_Grid *lcg_check(lua_State *L, int idx) {
@@ -272,7 +284,7 @@ static const char *lcg_opt(lua_State *L, int i, const char *k, const char *d) {
 
 static const char *lcg_styleof(lua_State *L, int idx, unsigned st) {
     const char *s;
-    lua_rawgeti(L, idx, (int)st);
+    lua53_geti(L, idx, (lua_Integer)st);
     s = lua_tostring(L, -1);
     lua_pop(L, 1);
     return s;
