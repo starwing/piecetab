@@ -240,8 +240,11 @@ CG_API int cg_begin(cg_Grid *G, int top, int rows, int cols) {
     else if (rows != G->rows || cols != G->cols)
         r = cgF_resize(G, rows, cols);
     if (r != CG_OK) return r;
+    if (G->all_dirty) G->off = 0;
+    /* delta==0 keeps the ring offset rotated by the last scroll frame:
+     * resetting it misaligns cur vs back -> spurious full redraw */
     if (G->all_dirty || (delta = G->top - top) == 0)
-        return G->top = top, G->scroll = G->off = 0, CG_OK;
+        return G->top = top, G->scroll = 0, CG_OK;
     G->top = top, G->scroll = delta;
     if (delta < 0 ? -delta >= G->rows : delta >= G->rows)
         return G->off = 0, G->all_dirty = 1, G->scroll = 0, CG_OK;

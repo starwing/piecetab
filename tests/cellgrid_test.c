@@ -705,6 +705,31 @@ TEST(scroll_up_expose) {
     cg_free(&g);
 }
 
+TEST(begin_scroll_then_same_top) {
+    /* delta=0 right after a scroll frame must keep the ring offset:
+     * the unchanged frame's diff must be empty, not a full redraw */
+    cg_Grid g;
+    cg_init(&g, test_alloc, NULL);
+    cg_begin(&g, 0, 3, 4);
+    cg_setwcwidth(&g, cw_double, NULL);
+    cg_putline(&g, 0, 0, "L1", 0);
+    cg_putline(&g, 1, 0, "L2", 0);
+    cg_putline(&g, 2, 0, "L3", 0);
+    cg_freeze(&g);
+    cg_begin(&g, 1, 3, 4); /* scroll down 1 */
+    cg_putline(&g, 0, 0, "L2", 0);
+    cg_putline(&g, 1, 0, "L3", 0);
+    cg_putline(&g, 2, 0, "L4", 0);
+    assert_diff(&g, "[S 1 3 -1][M 2 0][P 'L'][M 2 1][P '4'][F]");
+    cg_freeze(&g);
+    cg_begin(&g, 1, 3, 4); /* same top: nothing may change */
+    cg_putline(&g, 0, 0, "L2", 0);
+    cg_putline(&g, 1, 0, "L3", 0);
+    cg_putline(&g, 2, 0, "L4", 0);
+    assert_diff(&g, "[F]");
+    cg_free(&g);
+}
+
 /* ================================================================== */
 /*  diff tests                                                         */
 /* ================================================================== */

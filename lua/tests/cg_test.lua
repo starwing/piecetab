@@ -638,6 +638,28 @@ function TestScroll:testDeltaZero()
     lu.assertEquals(s, "")
 end
 
+function TestScroll:testDeltaZeroAfterScroll()
+    -- delta=0 right after a scroll frame: ring offset must persist, the
+    -- unchanged frame's diff must be empty, not a full redraw
+    local g = cg.new()
+    g:begin(0, 3, 4)
+    g:putline(0, 0, "L1")
+    g:putline(1, 0, "L2")
+    g:putline(2, 0, "L3")
+    g:freeze()
+    g:begin(1, 3, 4) -- scroll down 1
+    g:putline(0, 0, "L2")
+    g:putline(1, 0, "L3")
+    g:putline(2, 0, "L4")
+    g:diff({})
+    g:freeze()
+    g:begin(1, 3, 4) -- same top: nothing changed
+    g:putline(0, 0, "L2")
+    g:putline(1, 0, "L3")
+    g:putline(2, 0, "L4")
+    lu.assertEquals(g:diff({}), "")
+end
+
 function TestScroll:testDeltaLarge()
     -- |delta| >= rows → all_dirty
     local g = cg.new()

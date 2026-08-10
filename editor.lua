@@ -134,15 +134,16 @@ local STYLE_STRING   = 11
 local STYLE_COMMENT  = 12
 local STYLE_FUNCTION = 13
 
--- diff style table: cell style ID -> CSI
+-- style ID -> CSI; SGR is cumulative: the diff emits a style CSI only on
+-- ID changes, so each entry must be a full state (reset included)
 local DIFF_STYLE     = {
-  [0]  = "\27[0m",        -- RESET
-  [1]  = "\27[2m",        -- DIM
-  [3]  = "\27[48;5;237m", -- gray bg
-  [10] = "\27[38;5;207m", -- keyword (pink)
-  [11] = "\27[38;5;114m", -- string (green)
-  [12] = "\27[38;5;245m", -- comment (gray fg)
-  [13] = "\27[38;5;81m",  -- function (blue)
+  [0]  = "\27[0m",                 -- RESET
+  [1]  = "\27[0m\27[2m",           -- DIM
+  [3]  = "\27[0m\27[48;5;237m",    -- gray bg
+  [10] = "\27[0m\27[38;5;207m",    -- keyword (pink)
+  [11] = "\27[0m\27[38;5;114m",    -- string (green)
+  [12] = "\27[0m\27[38;5;245m",    -- comment (gray fg)
+  [13] = "\27[0m\27[38;5;81m",     -- function (blue)
 }
 
 -- ================================================================
@@ -1124,5 +1125,6 @@ Ed.STYLE_KEYWORD  = STYLE_KEYWORD
 Ed.STYLE_STRING   = STYLE_STRING
 Ed.STYLE_COMMENT  = STYLE_COMMENT
 Ed.STYLE_FUNCTION = STYLE_FUNCTION
+Ed.DIFF_STYLE     = DIFF_STYLE
 
 return Ed

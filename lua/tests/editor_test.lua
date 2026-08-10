@@ -603,6 +603,17 @@ function TestScroll:testUpScrollRedrawsLineNumbers()
   lu.assertStrContains(s, "\27[1;3H0") -- col 2: digit '0'
 end
 
+function TestScroll:testScrollThenIdleFrame()
+  -- after a scroll frame, an unchanged frame must not redraw grid
+  -- content: the ring offset must persist across delta=0 frames
+  for _ = 1, 6 do keystroke(self.e, "j") end -- cursor 5 -> scroll_line 1
+  self.e.term.s = ""
+  frame(self.e)
+  -- grid diff must be empty: only the ?25l marker, the diff finish
+  -- reset, and the status bar (row 6) may be written
+  lu.assertStrContains(self.e.term.s, "\27[?25l\27[0m\27[6;1H", false)
+end
+
 -- ======== Status bar ========
 
 TestOps = {}
@@ -651,6 +662,21 @@ function TestOps:testCursorClampedToScreen()
   e.doc:seek("set", 100)
   local s = frame(e)
   lu.assertStrContains(s, "\27[1;40H")
+end
+
+-- ======== Diff style table ========
+
+TestStyleTable = {}
+
+function TestStyleTable:testFullStateReset()
+  -- SGR codes are cumulative: each style CSI must fully reset prior
+  -- state, or a DIM->color transition (line number -> keyword) leaks
+  -- the DIM attribute onto the colored cell
+  for st, csi in pairs(Ed.DIFF_STYLE) do
+    if st ~= 0 then
+      lu.assertStrContains(csi, "\27[0m", false, "style " .. tostring(st))
+    end
+  end
 end
 
 -- ======== Syntax highlighting ========
