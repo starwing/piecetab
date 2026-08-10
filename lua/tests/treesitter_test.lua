@@ -127,7 +127,7 @@ function TestNodeFields:testChildAccess()
     lu.assertTrue(fd.child_count >= fd.named_child_count)
     lu.assertNil(t.root[99])
     lu.assertNil(t.root[0])
-    lu.assertEquals(fd:child(1).type, "primitive_type")  -- full child incl. type
+    lu.assertEquals(fd:child(1).type, "primitive_type") -- full child incl. type
     lu.assertEquals(fd:named_child(1).type, "primitive_type")
     lu.assertError(function() fd:child(99) end)
     lu.assertError(function() fd:named_child(99) end)
@@ -146,7 +146,7 @@ function TestNodeFields:testNavigation()
     local _, t = croot()
     local fd = assert(t.root[1])
     lu.assertEquals(fd.parent, t.root)
-    lu.assertNil(t.root.parent)      -- root of tree: null node
+    lu.assertNil(t.root.parent) -- root of tree: null node
     lu.assertNil(fd.next_sibling)
     lu.assertNil(fd.prev_sibling)
     lu.assertNil(fd.next_named_sibling)
@@ -238,8 +238,8 @@ end
 
 function TestTree:testDotGraph()
     local _, t = croot()
-    if jit then
-        local path = os.tmpname()      -- LuaJIT: path-based
+    if _G["jit"] then
+        local path = os.tmpname() -- LuaJIT: path-based
         lu.assertEquals(t:print_dot_graph(path), t)
         os.remove(path)
     else
@@ -253,15 +253,15 @@ function TestTree:testIncludedRanges()
     local p = ts.parser.new()
     p.language = C
     local i = 0
+    ---@diagnostic disable-next-line -- write side is a plain iterator fn
     p.included_ranges = function()
         i = i + 1
         if i == 1 then return 1, 39, 1, 1, 1, 39 end
     end
     local t = assert(p:parse(nil, CSRC))
     lu.assertEquals(t.root.type, "translation_unit")
-    lu.assertNotNil(t.included_ranges)  -- tree reports the parse ranges
-    local r = p.included_ranges
-    lu.assertNotNil(r)
+    lu.assertNotNil(t.included_ranges) -- tree reports the parse ranges
+    local r = assert(p.included_ranges) -- narrow Slice? -> Slice
     lu.assertTrue(#r >= 1)
     r:delete()
 end
@@ -286,8 +286,7 @@ function TestParser:testLogger()
     end
     p:parse(nil, "int main(void) { return 0; }\n")
     lu.assertTrue(#msgs > 0)
-    local f = p.logger          -- getter returns callable closure
-    lu.assertNotNil(f)
+    local f = assert(p.logger) -- getter returns callable closure
     f("parse", "hello")
     f("lex", "world")
     lu.assertError(function() f("bad", "x") end)
@@ -299,7 +298,7 @@ end
 function TestParser:testLoggerError()
     local p = ts.parser.new()
     p.language = C
-    p.logger = function() error("logger boom") end  -- errors are swallowed
+    p.logger = function() error("logger boom") end -- errors are swallowed
     lu.assertNotNil(p:parse(nil, CSRC))
     p.logger = nil
     p:delete()
@@ -309,7 +308,7 @@ function TestParser:testLanguageGetter()
     local p = ts.parser.new()
     p.language = C
     lu.assertNotNil(p.language)
-    p.language = nil            -- clear: null-language userdata, parses fail
+    p.language = nil -- clear: null-language userdata, parses fail
     lu.assertNotNil(p.language)
     lu.assertError(function() return p:parse(nil, CSRC).root end)
     lu.assertError(function() p.language:query("(identifier)") end)
@@ -319,8 +318,8 @@ end
 function TestParser:testDotGraphs()
     local p = ts.parser.new()
     p.language = C
-    if jit then
-        local path = os.tmpname()      -- LuaJIT: path-based
+    if _G["jit"] then
+        local path = os.tmpname() -- LuaJIT: path-based
         lu.assertEquals(p:print_dot_graphs(path), p)
         os.remove(path)
         lu.assertError(function() p:print_dot_graphs("/no/such/dir/x") end)
@@ -337,7 +336,7 @@ function TestParser:testUtf16()
     p.language = C
     local src = "int main(void) { return 0; }\n"
     local u16 = src:gsub(".", function(c) return string.char(c:byte(), 0) end)
-    local t = assert(p:parse(nil, u16, nil, "utf16"))
+    local t = assert(p:parse(nil, u16, "utf16"))
     lu.assertEquals(t.root.type, "translation_unit")
 end
 
@@ -351,15 +350,15 @@ function TestTreeCursor:testWalk()
     lu.assertEquals(c.node, fd)
     lu.assertTrue(c.depth >= 0)
     lu.assertTrue(c.descendant_index >= 0)
-    lu.assertNotNil(c.field)         -- field id of current position
-    lu.assertNil(c.field_name)       -- root position has no field
+    lu.assertNotNil(c.field)   -- field id of current position
+    lu.assertNil(c.field_name) -- root position has no field
     lu.assertEquals(c:goto_first_child(), c)
     lu.assertEquals(c.field_name, "type")
     lu.assertEquals(c:goto_next_sibling(), c)
     lu.assertEquals(c.field_name, "declarator")
     lu.assertEquals(c:goto_prev_sibling(), c)
     lu.assertEquals(c.field_name, "type")
-    lu.assertEquals(c:goto_parent(), c)      -- back to the function_definition
+    lu.assertEquals(c:goto_parent(), c) -- back to the function_definition
     lu.assertEquals(c:goto_last_child(), c)
     lu.assertEquals(c.field_name, "body")
     lu.assertEquals(c:goto_first_child_for_byte(10), c)
@@ -409,7 +408,7 @@ function TestQueryMeta:testPredicates()
     lu.assertTrue(#steps >= 1)
     lu.assertNotNil(steps[1][1])
     lu.assertNotNil(steps[1][2])
-    lu.assertEquals(q.string_count, 2)   -- "eq?" operator + "main"
+    lu.assertEquals(q.string_count, 2) -- "eq?" operator + "main"
     lu.assertEquals(q:string_value_for_id(1), "eq?")
     lu.assertEquals(q:string_value_for_id(2), "main")
     q:delete()
@@ -465,7 +464,7 @@ function TestQueryCursor:testMatch()
     local n, idx = c:captures(1)
     lu.assertNotNil(n)
     lu.assertTrue(idx >= 0)
-    lu.assertNil(c:next_capture())  -- exhausted
+    lu.assertNil(c:next_capture()) -- exhausted
     while c:next_match() do end
     lu.assertNil(c:next_match())
     c:delete()
@@ -495,7 +494,7 @@ function TestQueryCursor:testLimits()
     lu.assertTrue(c.match_limit >= 0)
     c.match_limit = 1
     lu.assertEquals(c.match_limit, 1)
-    c.max_start_depth = 100   -- deep enough to not restrict anything
+    c.max_start_depth = 100 -- deep enough to not restrict anything
     lu.assertError(function() return c.max_start_depth end)
     lu.assertNotNil(c:next_match())
     c:remove_match(c.match_id)
@@ -513,23 +512,27 @@ function TestLanguage:testField()
     local fid = C:field("declarator")
     lu.assertTrue(fid > 0)
     lu.assertEquals(C:field(fid), "declarator")
-    lu.assertEquals(C:field("no_such_field"), 1)  -- absent field encoded as 1
+    lu.assertEquals(C:field("no_such_field"), 1) -- absent field encoded as 1
     lu.assertError(function() C:field(999) end)
+    ---@diagnostic disable-next-line: param-type-mismatch
     lu.assertError(function() C:field(true) end)
     lu.assertEquals(C:symbol_type(C:symbol("function_definition", true)), "regular")
     lu.assertEquals(C:symbol_type("function_definition", true), "regular")
     lu.assertError(function() C:symbol_type(999999) end)
     lu.assertError(function() C:symbol_type(0) end)
+    ---@diagnostic disable-next-line: param-type-mismatch
     lu.assertError(function() C:symbol_type(true) end)
     lu.assertTrue(C:next_state(1, 1) >= 0)
     lu.assertError(function() C:next_state(999999, 1) end)
     lu.assertError(function() C:next_state(0, 1) end)
+    ---@diagnostic disable-next-line: param-type-mismatch
     lu.assertError(function() C:next_state(1, true) end)
     lu.assertError(function() C:symbol(0) end)
     lu.assertError(function() C:symbol(999999) end)
+    ---@diagnostic disable-next-line: param-type-mismatch
     lu.assertError(function() C:symbol(true) end)
     lu.assertEquals(C:symbol(C:symbol("function_definition", true)),
-            "function_definition")
+        "function_definition")
 end
 
 -- ======== LookaheadIterator ========
@@ -549,6 +552,7 @@ function TestLookahead:testWalk()
     lu.assertTrue(seen > 0)
     lu.assertTrue(it:reset(1))
     lu.assertTrue(it:reset(C, 1))
+    ---@diagnostic disable-next-line: redundant-parameter
     lu.assertError(function() it:reset(1, 2, 3, 4) end)
     it:delete()
 end
@@ -566,19 +570,20 @@ function TestSlice:testChangedRanges()
     lu.assertTrue(#r >= 1)
     lu.assertTrue(r[1] > 0)          -- single-value index: start_byte
     local fields
-    for _, a, b, c1, d, e, f in r do  -- full 6 fields via iteration
+    for _, a, b, c1, d, e, f in r do -- full 6 fields via iteration
         fields = { a, b, c1, d, e, f }
     end
     lu.assertNotNil(fields)
     lu.assertTrue(fields[2] >= fields[1])
     lu.assertNil(r[99])
+    ---@diagnostic disable-next-line: undefined-field -- no metatable auto-call
     lu.assertNil(r.no_such_field)
     lu.assertNotNil(tostring(r))
     local n = 0
     for _ in r do n = n + 1 end
     lu.assertEquals(n, #r)
     r:delete()
-    r:delete()  -- idempotent
+    r:delete() -- idempotent
     t:delete()
     t2:delete()
 end
@@ -589,20 +594,18 @@ TestErrors = {}
 function TestErrors:testParseErrors()
     local p = ts.parser.new()
     p.language = C
+    ---@diagnostic disable-next-line: param-type-mismatch
     lu.assertError(function() p:parse(nil, 42) end)
     -- failing read callback: error is swallowed, parse yields an empty tree
-    local r1 = p:parse(nil, function() error("boom") end)
-    lu.assertNotNil(r1)
+    local r1 = assert(p:parse(nil, function() error("boom") end))
     lu.assertNotNil(r1.root)
-    local r2 = p:parse(nil, function() return 42 end)
-    lu.assertNotNil(r2)
+    local r2 = assert(p:parse(nil, function() return 42 end))
     lu.assertNotNil(r2.root)
     p:delete()
-    lu.assertError(function() p:parse(nil, "int x;") end)  -- null parser
+    lu.assertError(function() p:parse(nil, "int x;") end) -- null parser
     -- no language bound: parse returns a null tree (non-nil userdata)
     local p2 = ts.parser.new()
-    local r3 = p2:parse(nil, "int x;")
-    lu.assertNotNil(r3)
+    local r3 = assert(p2:parse(nil, "int x;"))
     lu.assertError(function() return r3.root end)
     p2:delete()
 end
@@ -615,17 +618,17 @@ function TestErrors:testNullObjects()
     q:delete()
     local c = ts.query_cursor.new()
     local p1, t1 = croot()
-    lu.assertError(function() c:exec(q, t1.root) end)  -- null query
+    lu.assertError(function() c:exec(q, t1.root) end) -- null query
     c:delete()
     lu.assertError(function() c:next_match() end)     -- null cursor
     local p2, t2 = croot()
     local tc = t2.root:cursor()
     tc:delete()
-    lu.assertError(function() return tc.node end)     -- null tree cursor
+    lu.assertError(function() return tc.node end) -- null tree cursor
     local it = C:lookahead_iterator(1)
     it:delete()
-    it:delete()                   -- idempotent: *pi == NULL path
-    lu.assertError(function() it:next() end)          -- null lookahead
+    it:delete()                              -- idempotent: *pi == NULL path
+    lu.assertError(function() it:next() end) -- null lookahead
 end
 
 function TestErrors:testIndexErrors()
@@ -642,8 +645,8 @@ function TestErrors:testIndexErrors()
 end
 
 function TestErrors:testRequireVariants()
-    lu.assertError(function() ts.require("c.so") end)      -- path without symbol
-    lu.assertNotNil(ts.require("c", "tree_sitter_c"))       -- explicit symbol
+    lu.assertError(function() ts.require("c.so") end) -- path without symbol
+    lu.assertNotNil(ts.require("c", "tree_sitter_c")) -- explicit symbol
     -- dlopen succeeds, symbol lookup fails
     lu.assertError(function() ts.require("grammar/c.so", "no_such_symbol") end)
 end

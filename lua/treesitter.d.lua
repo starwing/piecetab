@@ -18,15 +18,19 @@ ts.LANGUAGE_VERSION = 0
 ts.MIN_COMPATIBLE_LANGUAGE_VERSION = 0
 
 ---Factory for parser objects (see treesitter.Parser).
+---@type { new: fun(): treesitter.Parser }
 ts.parser = nil
 
 ---Factory for tree cursors (see treesitter.TreeCursor).
+---@type { new: fun(node: treesitter.Node): treesitter.TreeCursor }
 ts.tree_cursor = nil
 
 ---Factory for query cursors (see treesitter.QueryCursor).
+---@type { new: fun(): treesitter.QueryCursor }
 ts.query_cursor = nil
 
 ---Factory for lookahead iterators (see treesitter.LookaheadIterator).
+---@type { new: fun(lang: treesitter.Language, state: integer): treesitter.LookaheadIterator }
 ts.lookahead_iterator = nil
 
 --------------------------------------------------------------------------------
@@ -56,13 +60,15 @@ function Language:cursor() end
 ---Symbol id for name, or name for id.
 ---Name lookup honors an optional `is_named` flag; `id` is 1-based and must
 ---be in `[1, symbol_count]` (out of range raises an argument error).
+---Absent names encode as 1 (never nil), same as treesitter.Language:field.
 ---@overload fun(self: treesitter.Language, id: integer): string?
 ---@param name string
 ---@param is_named? boolean  only match named symbols (string form)
----@return integer? symbol id
+---@return integer symbol id
 function Language:symbol(name, is_named) end
 
 ---Symbol type as a string: "regular", "anonymous" or "auxiliary".
+---@overload fun(self: treesitter.Language, name: string, is_named?: boolean): string
 ---@param id integer 1-based symbol id (or symbol name)
 ---@return string
 function Language:symbol_type(id) end
@@ -70,7 +76,7 @@ function Language:symbol_type(id) end
 ---Field id for name, or name for id.
 ---@overload fun(self: treesitter.Language, id: integer): string
 ---@param name string
----@return integer? field id (0/nil when the field does not exist)
+---@return integer field id (absent field encodes as 1)
 function Language:field(name) end
 
 ---Next state from a state/symbol pair (LR table access).
@@ -91,9 +97,10 @@ function Language:lookahead_iterator(state) end
 ---@field language treesitter.Language?  grammar bound for parsing (read/write)
 ---@field logger fun(message: string, type: string)?  parse logger callback
 ---  (read/write; getter returns a callable closure `f(type, message)`)
----@field included_ranges function?  read: range slice; write: iterator
----  `fn() -> start_byte, end_byte, start_row, start_col, end_row, end_col`
----  yielding 6 values per range, then `nil` to finish
+---@field included_ranges treesitter.Slice?  read: range slice; write:
+---  iterator `fn() -> start_byte, end_byte, start_row, start_col,
+---  end_row, end_col` yielding 6 values per range, then `nil` to finish
+---  (write side is a plain function; not modeled)
 local Parser = {}
 
 ---Create a parser.
@@ -120,7 +127,9 @@ function Parser:reset() end
 ---@return treesitter.Tree?  nil when parsing fails
 function Parser:parse(old_tree, content, encoding) end
 
----Debug: dump parse states as a dot graph.
+---Debug: dump parse states as a dot graph. Accepts an open file handle or
+---a path string (LuaJIT path-based variant).
+---@overload fun(self: treesitter.Parser, path: string): treesitter.Parser
 ---@param file file*  open file handle
 ---@return treesitter.Parser self
 function Parser:print_dot_graphs(file) end
@@ -158,6 +167,7 @@ function Tree:__gc() end
 function Tree:edit(start_byte, old_end_byte, new_end_byte,
                    start_row, start_col, old_end_row, old_end_col,
                    new_end_row, new_end_col)
+    return self
 end
 
 ---Ranges changed between this tree and `old` (for incremental re-parse).
@@ -173,7 +183,9 @@ function Tree:changed_ranges(old) end
 ---@return treesitter.Node
 function Tree:root_with_offset(offset_byte, start_row, start_col) end
 
----Debug: dump the tree as a dot graph.
+---Debug: dump the tree as a dot graph. Accepts an open file handle or a
+---path string (LuaJIT path-based variant).
+---@overload fun(self: treesitter.Tree, path: string): treesitter.Tree
 ---@param file file*  open file handle
 ---@return treesitter.Tree self
 function Tree:print_dot_graph(file) end
@@ -529,9 +541,10 @@ function LookaheadIterator:delete() end
 ---@return treesitter.LookaheadIterator? self
 function LookaheadIterator:next() end
 
----Restart iteration at a state. With 2 args the state is in the
----iterator's own language; with 3 args a language is supplied.
----@param lang? treesitter.Language  optional language (3-arg form)
+---Restart iteration at a state. 1-arg form: state in the iterator's own
+---language; 2-arg form: a language is supplied.
+---@overload fun(self: treesitter.LookaheadIterator, state: integer): boolean
+---@param lang treesitter.Language
 ---@param state integer 1-based state id
 ---@return boolean  false when the state is invalid
 function LookaheadIterator:reset(lang, state) end
