@@ -9,6 +9,7 @@ local cg = require("cellgrid")
 
 local utf8 = require("lua-utf8")
 local tf = require("termfeed")
+local ts = require("treesitter")
 
 -- ================================================================
 -- Section 0: Logging (writes to editor.log for debugging)
@@ -112,15 +113,23 @@ Term.DIM     = "\27[2m"
 Term.RESET   = "\27[0m"
 
 -- grid cell style IDs (see DIFF_STYLE for CSI mapping)
-local STYLE_NORMAL = 0
-local STYLE_DIM    = 1
-local STYLE_GRAY   = 3
+local STYLE_NORMAL   = 0
+local STYLE_DIM      = 1
+local STYLE_GRAY     = 3
+local STYLE_KEYWORD  = 10
+local STYLE_STRING   = 11
+local STYLE_COMMENT  = 12
+local STYLE_FUNCTION = 13
 
 -- diff style table: cell style ID -> CSI
 local DIFF_STYLE = {
-  [0] = "\27[0m",        -- RESET
-  [1] = "\27[2m",        -- DIM
-  [3] = "\27[48;5;237m", -- gray bg
+  [0]  = "\27[0m",         -- RESET
+  [1]  = "\27[2m",         -- DIM
+  [3]  = "\27[48;5;237m",  -- gray bg
+  [10] = "\27[38;5;207m",  -- keyword (pink)
+  [11] = "\27[38;5;114m",  -- string (green)
+  [12] = "\27[38;5;245m",  -- comment (gray fg)
+  [13] = "\27[38;5;81m",   -- function (blue)
 }
 
 -- ================================================================
@@ -294,51 +303,179 @@ local function open_line(self, dir)
   if dir > 0 then
     self.doc:seek("cur", line_endcol(self, self.doc:line()))
   end
-  self.doc:edit(0, "\n")
+  self:docedit(0, "\n")
   if dir < 0 then self.doc:seek("cur", -1) end
   self.mode = "INSERT"
 end
 
 -- ================================================================
--- Section 3: Highlight module (piece-based span coloring)
+-- Section 3: Highlight module (tree-sitter syntax highlighting)
 -- ================================================================
 
 local hl = {}
 
---- Build array of {offset, length, kind} from piece boundaries.
---- Uses doc cursor (includes uncommitted edits), restores position.
-function hl.build_regions(doc)
-  local saved = doc:offset()
-  local regions = {}
-  local off = 0
-  local i = 0
-  local doclen = #doc
-  while off < doclen do
-    doc:seek("set", off)
-    local len = doc:piece("len")
-    if len <= 0 then break end
-    regions[#regions + 1] = { offset = off, length = len, kind = i % 2 }
-    off = off + len
-    i = i + 1
+-- file extension -> language name (nil = no highlighting)
+local function ext_lang(filename)
+  local ext = filename:match("%.([%w_]+)$")
+  if ext == "c" or ext == "h" then return "c" end
+  if ext == "lua" then return "lua" end
+  return nil
+end
+
+-- Minimal highlights subsets (keyword/string/comment/function).
+-- NB: primitive types (int/char/void) are internal tokens of primitive_type,
+-- not matchable as string literals; match the node type instead.
+local HL_QUERIES = {
+  c = [[
+    (comment) @comment
+    (string_literal) @string
+    (primitive_type) @keyword
+    "break" @keyword
+    "case" @keyword
+    "const" @keyword
+    "continue" @keyword
+    "default" @keyword
+    "do" @keyword
+    "else" @keyword
+    "enum" @keyword
+    "extern" @keyword
+    "for" @keyword
+    "goto" @keyword
+    "if" @keyword
+    "inline" @keyword
+    "register" @keyword
+    "restrict" @keyword
+    "return" @keyword
+    "sizeof" @keyword
+    "static" @keyword
+    "struct" @keyword
+    "switch" @keyword
+    "typedef" @keyword
+    "union" @keyword
+    "volatile" @keyword
+    "while" @keyword
+    (function_definition
+      declarator: (function_declarator
+        declarator: (identifier) @function))
+  ]],
+  lua = [[
+    (comment) @comment
+    (string) @string
+    "and" @keyword
+    "break" @keyword
+    "do" @keyword
+    "else" @keyword
+    "elseif" @keyword
+    "end" @keyword
+    "false" @keyword
+    "for" @keyword
+    "function" @keyword
+    "goto" @keyword
+    "if" @keyword
+    "in" @keyword
+    "local" @keyword
+    "nil" @keyword
+    "not" @keyword
+    "or" @keyword
+    "repeat" @keyword
+    "return" @keyword
+    "then" @keyword
+    "true" @keyword
+    "until" @keyword
+    "while" @keyword
+    (function_call
+      name: (identifier) @function)
+  ]],
+}
+
+local HL_STYLES = {
+  comment  = STYLE_COMMENT,
+  string   = STYLE_STRING,
+  keyword  = STYLE_KEYWORD,
+  ["function"] = STYLE_FUNCTION,
+}
+
+--- Create a highlighter for a language ("c"/"lua"), nil if unsupported.
+function hl.new(ed, lang)
+  local qsrc = HL_QUERIES[lang]
+  if not qsrc then return nil end
+  local langobj = ts.require(lang)
+  if not langobj then return nil end
+  local parser = ts.parser.new()
+  parser.language = langobj
+  local self = { ed = ed, parser = parser,
+                 query = langobj:query(qsrc),
+                 tree = nil, dirty = true }
+  return setmetatable(self, { __index = hl })
+end
+
+--- Reset tree (whole-reparse on next request). Used after undo/redo/:e.
+function hl:reset()
+  self.tree = nil
+  self.dirty = true
+end
+
+--- Notify an edit: translate the tree, defer parse to next request.
+function hl:notify_edit(start, old_len, new_len)
+  if self.tree then
+    local doc = self.ed.doc
+    local function pos(off)
+      doc:seek("set", off)
+      return doc:line() + 1, doc:column() + 1 -- 1-based
+    end
+    local srow, scol = pos(start)
+    local orow, ocol = pos(start + old_len)
+    local nrow, ncol = pos(start + new_len)
+    self.tree:edit(start + 1, start + old_len + 1, start + new_len + 1,
+                   srow, scol, orow, ocol, nrow, ncol)
   end
-  doc:seek("set", saved)
-  return regions
+  self.dirty = true
+end
+
+--- Parse if dirty. Content via doc:dump() (includes uncommitted edits;
+-- doc:buffer() is committed-version only).
+function hl:ensure()
+  if not self.dirty then return end
+  self.tree = self.parser:parse(self.tree, self.ed.doc:dump())
+  self.dirty = false
+end
+
+--- Query spans for a byte range: {offset, length, style} (0-based offsets).
+function hl:query_region(start, endoff)
+  self:ensure()
+  if not self.tree then return {} end
+  local c = self.query:exec(self.tree.root)
+  c:set_byte_range(start + 1, endoff)
+  local stylemap, spans = HL_STYLES, {}
+  while true do
+    local ci = c:next_capture()
+    if not ci then break end
+    local node = c[ci]
+    local _, cid = c:captures(ci)
+    local style = stylemap[self.query:capture_name_for_id(cid)]
+    if style then
+      spans[#spans + 1] = { offset = node.start_byte - 1,
+                            length = node.end_byte - node.start_byte,
+                            style = style }
+    end
+  end
+  return spans
 end
 
 --- Compute colored segments for one line.
---- @param regions table array of {offset, length, kind}
+--- @param spans table array of {offset, length, style}
 --- @param line_start integer byte offset of line start
 --- @param line_end   integer byte offset of line end (exclusive)
---- @return table array of {start=1-based byte, len, kind}
-function hl.line_segments(regions, line_start, line_end)
+--- @return table array of {start=1-based byte, len, style}
+function hl.line_segments(spans, line_start, line_end)
   local segs = {}
-  for _, r in ipairs(regions) do
-    local r_end = r.offset + r.length
-    if r.offset < line_end and r_end > line_start then
-      local s = math.max(r.offset, line_start) - line_start + 1
+  for _, sp in ipairs(spans) do
+    local r_end = sp.offset + sp.length
+    if sp.offset < line_end and r_end > line_start then
+      local s = math.max(sp.offset, line_start) - line_start + 1
       local e = math.min(r_end, line_end) - line_start
       if e >= s then
-        segs[#segs + 1] = { start = s, len = e - s + 1, kind = r.kind }
+        segs[#segs + 1] = { start = s, len = e - s + 1, style = sp.style }
       end
     end
   end
@@ -361,7 +498,7 @@ local function render_line(g, row, col, text, segs, tabstop)
     while seg_idx <= #segs do
       local s = segs[seg_idx]
       if b >= s.start and b < s.start + s.len then
-        return s.kind == 1 and STYLE_GRAY or STYLE_NORMAL
+        return s.style or STYLE_NORMAL
       end
       if b < s.start then break end
       seg_idx = seg_idx + 1
@@ -445,20 +582,26 @@ local function install_normal_keys(self)
   end
   n.gg = function(self) self.doc:seek("line", 0) end
   n.G = function(self) self.doc:seek("line", self.doc:breaks() - 1) end
-  n.x = function(self) self.doc:edit(1, ""); self.doc:commit() end
+  n.x = function(self) self:docedit(1, ""); self.doc:commit() end
   n.dd = function(self)
     local lnum = self.doc:line()
     local llen = self.doc:linelen(lnum)
     self.doc:seek("line", lnum)
-    self.doc:remove(llen)
+    self:docedit(llen, "")
     self.doc:commit()
   end
   n.i = function(self) self.mode = "INSERT" end
   n.a = function(self) cursor_move_char(self.doc, 1); self.mode = "INSERT" end
   n.o = function(self) open_line(self, 1) end
   n.O = function(self) open_line(self, -1) end
-  n.u = function(self) self.doc:undo() end
-  n["<C-r>"] = function(self) self.doc:redo() end
+  n.u = function(self)
+    self.doc:undo()
+    if self.hl then self.hl:reset() end
+  end
+  n["<C-r>"] = function(self)
+    self.doc:redo()
+    if self.hl then self.hl:reset() end
+  end
   n["<C-l>"] = function(self) self.grid:clear() end
   n[":"] = function(self) self.mode = "COMMAND"; self.cmdline = "" end
   n["<Up>"] = n.k
@@ -487,7 +630,7 @@ local function ins_backspace(self)
     local p = utf8.offset(buf:read(s0, off - s0 + 1), -1, off - s0 + 1)
     local prev = p - 1 + s0
     self.doc:seek("set", prev)
-    self.doc:edit(off - prev, "")
+    self:docedit(off - prev, "")
   end
 end
 
@@ -497,7 +640,7 @@ local function ins_delete(self)
   if off < #buf then
     -- 5 bytes cover a 4-byte char plus its successor's lead byte
     local nxt = utf8.next(buf:read(off, 5), 1)
-    self.doc:edit(nxt and nxt - 1 or #buf - off, "")
+    self:docedit(nxt and nxt - 1 or #buf - off, "")
   end
 end
 
@@ -507,8 +650,8 @@ local function install_insert_keys(self)
   i["<Escape>"] = ins_escape
   i["<Backspace>"] = ins_backspace
   i["<Delete>"] = ins_delete
-  i["<Enter>"] = function(self) self.doc:edit(0, "\n") end
-  i["<Tab>"] = function(self) self.doc:edit(0, "\t") end
+  i["<Enter>"] = function(self) self:docedit(0, "\n") end
+  i["<Tab>"] = function(self) self:docedit(0, "\t") end
   i["<C-c>"] = function(self)
     self.mode = "NORMAL"
     self.msg = ""
@@ -563,6 +706,7 @@ local function install_builtin_commands(self)
     if f then content = f:read("*a"); f:close() end
     self.doc = content ~= "" and pt.doc(content) or pt.doc(nil)
     self.filename = arg
+    self:open_language(ext_lang(arg))
     self.saved_vid = self.doc:version()
     self.scroll_line = 0
     self.msg = '"' .. arg .. '" loaded, ' .. self.doc:breaks() .. " lines"
@@ -585,6 +729,7 @@ do
     local self = setmetatable({}, Ed)
     self.doc = content and content ~= "" and pt.doc(content) or pt.doc(nil)
     self.filename = nil
+    self.hl = nil
     self.mode = "NORMAL"
     self.cmdline = ""
     self.msg = ""
@@ -615,6 +760,7 @@ do
     if f then content = f:read("*a"); f:close() end
     local self = Ed.new(content, term, grid)
     self.filename = filename
+    self:open_language(ext_lang(filename))
     return self
   end
 
@@ -625,6 +771,18 @@ do
   function Ed:keymap(mode, key, fn)
     self.keymaps[mode][key] = fn
     return self
+  end
+
+  --- Enable syntax highlighting for a language ("c"/"lua"/nil to disable).
+  function Ed:open_language(lang)
+    self.hl = lang and hl.new(self, lang) or nil
+  end
+
+  --- Edit at cursor with highlight notification (single edit funnel).
+  function Ed:docedit(del, s)
+    local off = self.doc:offset()
+    self.doc:edit(del, s)
+    if self.hl then self.hl:notify_edit(off, del, #s) end
   end
 
   --- @param name string
@@ -667,7 +825,15 @@ do
     self.log("render: size=%dx%d scroll=%d cur=%d,%d total=%d",
       rows, cols, self.scroll_line, cur_line, cur_col, total_lines)
 
-    local regions = hl.build_regions(self.doc)
+    local spans
+    if self.hl then
+      self.doc:seek("line", self.scroll_line)
+      local s_off = self.doc:offset()
+      self.doc:seek("line", math.min(self.scroll_line + visrows, total_lines))
+      local e_off = self.doc:offset()
+      self.doc:seek("set", saved_off)
+      spans = self.hl:query_region(s_off, e_off)
+    end
     local saved_off = self.doc:offset()
     local g = self.grid
     g:begin(self.scroll_line, visrows, cols)
@@ -710,7 +876,7 @@ do
     -- content + highlights (single pass, highlight-driven)
     for _, ld in ipairs(lines_data) do
       local r0 = ld.row - 1
-      local segs = hl.line_segments(regions, ld.start, ld.start + #ld.text)
+      local segs = hl.line_segments(spans or {}, ld.start, ld.start + #ld.text)
       local endcol = render_line(g, r0, col_start - 1, ld.text, segs, self.tabstop)
       if endcol < col_pad - 1 then
         g:clearrow(r0, endcol, col_pad - 1)
@@ -807,7 +973,7 @@ local function insert_key(self, key)
     if key:sub(1, 1) == "<" and key:sub(-1) == ">" then return end
     local b = key:byte(1)
     if b >= 32 and b < 127 or b >= 0xc0 then
-      self.doc:edit(0, key)
+      self:docedit(0, key)
     end
   end
 end
@@ -856,5 +1022,13 @@ end
 if arg and arg[0] and arg[0]:match("editor%.lua$") then
   main(arg)
 end
+
+Ed.STYLE_NORMAL   = STYLE_NORMAL
+Ed.STYLE_DIM      = STYLE_DIM
+Ed.STYLE_GRAY     = STYLE_GRAY
+Ed.STYLE_KEYWORD  = STYLE_KEYWORD
+Ed.STYLE_STRING   = STYLE_STRING
+Ed.STYLE_COMMENT  = STYLE_COMMENT
+Ed.STYLE_FUNCTION = STYLE_FUNCTION
 
 return Ed

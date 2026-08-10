@@ -653,4 +653,52 @@ function TestOps:testCursorClampedToScreen()
   lu.assertStrContains(s, "\27[1;40H")
 end
 
+-- ======== Syntax highlighting ========
+TestSyntax = {}
+
+function TestSyntax:testKeywordC()
+  -- "int main(void) { return 0; }": i@0, main@4, return@15
+  local e = make_ed("int main(void) { return 0; }\n")
+  e:open_language("c")
+  frame(e)
+  local _, st = e.grid:cell(0, 4) -- content col 0 ('i' of int)
+  local cp2, st2 = e.grid:cell(0, 4)
+  lu.assertEquals(st, Ed.STYLE_KEYWORD)
+  local _, st2 = e.grid:cell(0, 8) -- content col 4 ('m' of main)
+  assert(st2 ~= Ed.STYLE_KEYWORD, "main should not be keyword: " .. tostring(st2))
+  assert(st2 == Ed.STYLE_FUNCTION, "main should be function: " .. tostring(st2))
+  local _, st3 = e.grid:cell(0, 21) -- content col 17 ('r' of return)
+  lu.assertEquals(st3, Ed.STYLE_KEYWORD)
+end
+
+function TestSyntax:testCommentStringC()
+  -- "int x; /* note */ char *s = \"hi\";": /@7, quote@29
+  local e = make_ed("int x; /* note */ char *s = \"hi\";\n")
+  e:open_language("c")
+  frame(e)
+  local _, st = e.grid:cell(0, 11) -- content col 7 ('/' of comment)
+  lu.assertEquals(st, Ed.STYLE_COMMENT)
+  local _, st2 = e.grid:cell(0, 32) -- content col 28 ('"' of string)
+  lu.assertEquals(st2, Ed.STYLE_STRING)
+end
+
+function TestSyntax:testEditUpdatesHighlight()
+  local e = make_ed("int main(void) { return 0; }\n")
+  e:open_language("c")
+  frame(e)
+  e.doc:seek("set", 17) -- 'r' of "return"
+  e:docedit(1, "")
+
+  frame(e)
+  local _, st = e.grid:cell(0, 21) -- content col 17 ("eturn" start)
+  lu.assertNotEquals(st, Ed.STYLE_KEYWORD) -- "eturn" is not a keyword
+end
+
+function TestSyntax:testNoLanguageNoHighlight()
+  local e = make_ed("int main(void) { return 0; }\n")
+  frame(e)
+  local _, st = e.grid:cell(0, 4) -- content col 0
+  lu.assertEquals(st, 0) -- STYLE_NORMAL
+end
+
 os.exit(lu.LuaUnit.run(), true)
