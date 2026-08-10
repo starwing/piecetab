@@ -16,6 +16,7 @@ local ts = require("treesitter")
 -- ================================================================
 
 local logfile = nil
+---@param fmt string
 local function edlog(fmt, ...)
   if not logfile then
     local f = io.open("editor.log", "w")
@@ -48,8 +49,10 @@ local Term = {}
 
 -- method-style wrapper so Term:write/self.out.write(self.out, s) works
 -- for both this and duck-typed outs (fake term in tests)
-local IO = { write = function(_, s) io.write(s) end,
-             flush = function() io.flush() end }
+local IO = {
+  write = function(_, s) io.write(s) end,
+  flush = function() io.flush() end
+}
 
 do
   Term.__index = Term
@@ -118,9 +121,9 @@ do
 end
 
 -- style codes
-Term.REVERSE = "\27[7m"
-Term.DIM     = "\27[2m"
-Term.RESET   = "\27[0m"
+Term.REVERSE         = "\27[7m"
+Term.DIM             = "\27[2m"
+Term.RESET           = "\27[0m"
 
 -- grid cell style IDs (see DIFF_STYLE for CSI mapping)
 local STYLE_NORMAL   = 0
@@ -132,14 +135,14 @@ local STYLE_COMMENT  = 12
 local STYLE_FUNCTION = 13
 
 -- diff style table: cell style ID -> CSI
-local DIFF_STYLE = {
-  [0]  = "\27[0m",         -- RESET
-  [1]  = "\27[2m",         -- DIM
-  [3]  = "\27[48;5;237m",  -- gray bg
-  [10] = "\27[38;5;207m",  -- keyword (pink)
-  [11] = "\27[38;5;114m",  -- string (green)
-  [12] = "\27[38;5;245m",  -- comment (gray fg)
-  [13] = "\27[38;5;81m",   -- function (blue)
+local DIFF_STYLE     = {
+  [0]  = "\27[0m",        -- RESET
+  [1]  = "\27[2m",        -- DIM
+  [3]  = "\27[48;5;237m", -- gray bg
+  [10] = "\27[38;5;207m", -- keyword (pink)
+  [11] = "\27[38;5;114m", -- string (green)
+  [12] = "\27[38;5;245m", -- comment (gray fg)
+  [13] = "\27[38;5;81m",  -- function (blue)
 }
 
 -- ================================================================
@@ -148,6 +151,7 @@ local DIFF_STYLE = {
 -- candidates (see notes/design_editor.md); keep them marked.
 -- ================================================================
 
+---@param byte integer
 local function word_class(byte)
   if byte >= 48 and byte <= 57 then return 1 end  -- digit
   if byte >= 65 and byte <= 90 then return 1 end  -- upper
@@ -157,6 +161,8 @@ local function word_class(byte)
 end
 
 -- Move cursor by n characters (-1 = left, +1 = right)
+---@param doc piecetab.Doc
+---@param n integer
 local function cursor_move_char(doc, n)
   -- TODO(C): promote char motion to C (pt or new module)
   local off = doc:offset()
@@ -180,6 +186,7 @@ local function cursor_move_char(doc, n)
   end
 end
 
+---@param doc piecetab.Doc
 local function move_word_forward(doc)
   local saved = doc:offset()
   local lnum = doc:line()
@@ -202,6 +209,7 @@ local function move_word_forward(doc)
   edlog("w result: seek cur %d", i - col)
 end
 
+---@param doc piecetab.Doc
 local function move_word_backward(doc)
   local saved = doc:offset()
   local lnum = doc:line()
@@ -222,6 +230,9 @@ end
 -- Rendering helpers
 
 -- 0-based display column within text (before byte offset 'byte').
+---@param text string
+---@param byte integer
+---@param tabstop integer
 local function text_byte_to_dcol(text, byte, tabstop)
   -- TODO(C): promote column math to C (cellgrid family)
   if byte <= 0 then return 0 end
@@ -248,6 +259,9 @@ local function text_byte_to_dcol(text, byte, tabstop)
 end
 
 -- 0-based byte offset for display column 'dcol' within text.
+---@param text string
+---@param dcol integer
+---@param tabstop integer
 local function text_dcol_to_byte(text, dcol, tabstop)
   if dcol <= 0 then return 0 end
   local col = 0
@@ -272,6 +286,8 @@ local function text_dcol_to_byte(text, dcol, tabstop)
 end
 
 -- helper: end-of-text column for line (excludes trailing \n)
+---@param ed editor.Ed
+---@param lnum integer
 local function line_endcol(ed, lnum)
   local llen = ed.doc:linelen(lnum)
   if llen > 0 and lnum < ed.doc:breaks() - 1 then llen = llen - 1 end
@@ -279,6 +295,7 @@ local function line_endcol(ed, lnum)
 end
 
 -- byte offset -> display column within current line
+---@param doc piecetab.Doc
 local function byte_to_dcol(doc)
   local saved = doc:offset()
   local lnum = doc:line()
@@ -289,6 +306,9 @@ local function byte_to_dcol(doc)
 end
 
 -- display column -> byte offset within given line (clamp to char boundary)
+---@param doc piecetab.Doc
+---@param lnum integer
+---@param dcol integer
 local function dcol_to_byte(doc, lnum, dcol)
   local saved = doc:offset()
   doc:seek("line", lnum)
@@ -298,6 +318,8 @@ local function dcol_to_byte(doc, lnum, dcol)
 end
 
 -- Move cursor vertically by dl lines, preserving display column
+---@param doc piecetab.Doc
+---@param dl integer
 local function move_vert(doc, dl)
   local lnum = doc:line()
   local nlnum = lnum + dl
@@ -308,6 +330,8 @@ local function move_vert(doc, dl)
 end
 
 -- Open a new line: dir > 0 below (o), dir < 0 above (O); enter INSERT
+---@param self editor.Ed
+---@param dir integer
 local function open_line(self, dir)
   self.doc:seek("line", self.doc:line())
   if dir > 0 then
@@ -325,6 +349,8 @@ end
 local hl = {}
 
 -- file extension -> language name (nil = no highlighting)
+---@param filename string
+---@return string?
 local function ext_lang(filename)
   local ext = filename:match("%.([%w_]+)$")
   if ext == "c" or ext == "h" then return "c" end
@@ -399,9 +425,9 @@ local HL_QUERIES = {
 }
 
 local HL_STYLES = {
-  comment  = STYLE_COMMENT,
-  string   = STYLE_STRING,
-  keyword  = STYLE_KEYWORD,
+  comment      = STYLE_COMMENT,
+  string       = STYLE_STRING,
+  keyword      = STYLE_KEYWORD,
   ["function"] = STYLE_FUNCTION,
 }
 
@@ -413,9 +439,13 @@ function hl.new(ed, lang)
   if not langobj then return nil end
   local parser = ts.parser.new()
   parser.language = langobj
-  local self = { ed = ed, parser = parser,
-                 query = langobj:query(qsrc),
-                 tree = nil, dirty = true }
+  local self = {
+    ed = ed,
+    parser = parser,
+    query = langobj:query(qsrc),
+    tree = nil,
+    dirty = true
+  }
   return setmetatable(self, { __index = hl })
 end
 
@@ -437,7 +467,7 @@ function hl:notify_edit(start, old_len, new_len)
     local orow, ocol = pos(start + old_len)
     local nrow, ncol = pos(start + new_len)
     self.tree:edit(start + 1, start + old_len + 1, start + new_len + 1,
-                   srow, scol, orow, ocol, nrow, ncol)
+      srow, scol, orow, ocol, nrow, ncol)
   end
   self.dirty = true
 end
@@ -464,9 +494,11 @@ function hl:query_region(start, endoff)
     local _, cid = c:captures(ci)
     local style = stylemap[self.query:capture_name_for_id(cid)]
     if style then
-      spans[#spans + 1] = { offset = node.start_byte - 1,
-                            length = node.end_byte - node.start_byte,
-                            style = style }
+      spans[#spans + 1] = {
+        offset = node.start_byte - 1,
+        length = node.end_byte - node.start_byte,
+        style = style
+      }
     end
   end
   return spans
@@ -497,6 +529,12 @@ end
 -- Returns absolute column (0-based) after rendered text.
 -- TODO(C): tab expand + display-col math to C (cellgrid family);
 -- see notes/design_editor.md 六b
+---@param g cellgrid.Grid
+---@param row integer
+---@param col integer
+---@param text string
+---@param segs table
+---@param tabstop integer
 local function render_line(g, row, col, text, segs, tabstop)
   local byte = 1
   local batch_start = 1
@@ -608,7 +646,9 @@ local function install_normal_keys(self)
   end
   n.gg = function(self) self.doc:seek("line", 0) end
   n.G = function(self) self.doc:seek("line", self.doc:breaks() - 1) end
-  n.x = function(self) self:docedit(1, ""); self.doc:commit() end
+  n.x = function(self)
+    self:docedit(1, ""); self.doc:commit()
+  end
   n.dd = function(self)
     local lnum = self.doc:line()
     local llen = self.doc:linelen(lnum)
@@ -617,7 +657,9 @@ local function install_normal_keys(self)
     self.doc:commit()
   end
   n.i = function(self) self.mode = "INSERT" end
-  n.a = function(self) cursor_move_char(self.doc, 1); self.mode = "INSERT" end
+  n.a = function(self)
+    cursor_move_char(self.doc, 1); self.mode = "INSERT"
+  end
   n.o = function(self) open_line(self, 1) end
   n.O = function(self) open_line(self, -1) end
   n.u = function(self)
@@ -629,7 +671,9 @@ local function install_normal_keys(self)
     if self.hl then self.hl:reset() end
   end
   n["<C-l>"] = function(self) self.grid:clear() end
-  n[":"] = function(self) self.mode = "COMMAND"; self.cmdline = "" end
+  n[":"] = function(self)
+    self.mode = "COMMAND"; self.cmdline = ""
+  end
   n["<Up>"] = n.k
   n["<Down>"] = n.j
   n["<Left>"] = n.h
@@ -705,8 +749,12 @@ end
 -- built-in command keymaps (per-instance, called from Ed.new)
 local function install_command_keys(self)
   local c = self.keymaps.command
-  c["<Escape>"] = function(self) self.mode = "NORMAL"; self.cmdline = "" end
-  c["<C-c>"] = function(self) self.mode = "NORMAL"; self.cmdline = "" end
+  c["<Escape>"] = function(self)
+    self.mode = "NORMAL"; self.cmdline = ""
+  end
+  c["<C-c>"] = function(self)
+    self.mode = "NORMAL"; self.cmdline = ""
+  end
   c["<Enter>"] = exec_command
   c["<Backspace>"] = function(self) self.cmdline = self.cmdline:sub(1, -2) end
 end
@@ -715,21 +763,31 @@ end
 local function install_builtin_commands(self)
   local c = self.commands
   c.w = function(self, arg, bang)
-    if not self.filename then self.msg = "No filename"; return end
+    if not self.filename then
+      self.msg = "No filename"; return
+    end
     local f = io.open(self.filename, "w")
-    if not f then self.msg = "Cannot write: " .. self.filename; return end
+    if not f then
+      self.msg = "Cannot write: " .. self.filename; return
+    end
     local data = self.doc:dump()
     f:write(data); f:close()
     self.saved_vid = self.doc:version()
     self.msg = '"' .. self.filename .. '" written'
   end
   c.q = function(self, arg, bang) self:quit() end
-  c.wq = function(self, arg, bang) c.w(self); c.q(self) end
+  c.wq = function(self, arg, bang)
+    c.w(self); c.q(self)
+  end
   c.e = function(self, arg, bang)
-    if not arg or arg == "" then self.msg = "No filename"; return end
+    if not arg or arg == "" then
+      self.msg = "No filename"; return
+    end
     local f = io.open(arg, "r")
     local content = ""
-    if f then content = f:read("*a"); f:close() end
+    if f then
+      content = f:read("*a"); f:close()
+    end
     self.doc = content ~= "" and pt.doc(content) or pt.doc(nil)
     self.filename = arg
     self:open_language(ext_lang(arg))
@@ -783,7 +841,9 @@ do
   function Ed.open(filename, term, grid)
     local content = ""
     local f = io.open(filename, "r")
-    if f then content = f:read("*a"); f:close() end
+    if f then
+      content = f:read("*a"); f:close()
+    end
     local self = Ed.new(content, term, grid)
     self.filename = filename
     self:open_language(ext_lang(filename))
@@ -976,10 +1036,14 @@ mode_dispatch.normal = function(self, key)
     local combo = self.pending_key .. key
     local fn = self.keymaps.normal[combo]
     self.pending_key = nil
-    if fn then fn(self, combo); self.msg = ""; return end
+    if fn then
+      fn(self, combo); self.msg = ""; return
+    end
   end
   local fn = self.keymaps.normal[key]
-  if fn then fn(self, key); self.msg = ""; return end
+  if fn then
+    fn(self, key); self.msg = ""; return
+  end
   if key == "<Escape>" or key == "<C-c>" then
     self.msg = ""
     return
@@ -994,7 +1058,9 @@ end
 -- insert dispatch: keymap hit -> fn, else printable char fallback
 local function insert_key(self, key)
   local fn = self.keymaps.insert[key]
-  if fn then fn(self, key); return end
+  if fn then
+    fn(self, key); return
+  end
   if type(key) == "string" and #key > 0 then
     if key:sub(1, 1) == "<" and key:sub(-1) == ">" then return end
     local b = key:byte(1)
@@ -1007,7 +1073,9 @@ mode_dispatch.insert = insert_key
 -- command dispatch: keymap hit -> fn, else printable chars append cmdline
 local function command_key(self, key)
   local fn = self.keymaps.command[key]
-  if fn then fn(self, key); return end
+  if fn then
+    fn(self, key); return
+  end
   if type(key) == "string" and #key > 0 then
     if key:sub(1, 1) == "<" and key:sub(-1) == ">" then return end
     local i = 1

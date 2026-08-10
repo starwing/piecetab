@@ -14,5 +14,11 @@
         "luaunit.lua",
         "misc",
         "serpent.lua"
-    ]
+    ],
+    "diagnostics": {
+        "disable": [
+            "redefined-local",
+            "unused-local"
+        ]
+    }
 }
