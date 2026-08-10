@@ -879,4 +879,137 @@ function TestLayers:testMergeLayersUnsetPassesThrough()
   lu.assertEquals(st3, e.sc:intern(Ed.ATTR_STRING))
 end
 
+TestVisual = {}
+
+function TestVisual:testEnterAndExtend()
+  local e = make_ed("abcdef\n")
+  e:dispatch("v")
+  lu.assertEquals(e.mode, "VISUAL")
+  lu.assertEquals(e.sel_start, 0)
+  local s = frame(e)
+  lu.assertStrContains(s, "VISUAL") -- status bar mode
+  local rev = e.sc:intern(Ed.ATTR_REVERSE)
+  -- cursor char is inside the selection immediately (vim charwise)
+  local _, st = e.grid:cell(0, 4) -- 'a'
+  lu.assertEquals(st, rev)
+  e:dispatch("l") -- cursor 1, selection [0,2) = "ab"
+  frame(e)
+  local _, st2 = e.grid:cell(0, 5) -- 'b'
+  lu.assertEquals(st2, rev)
+  local _, st3 = e.grid:cell(0, 6) -- 'c' (outside selection)
+  lu.assertEquals(st3, 0)
+end
+
+function TestVisual:testReverseSelectionExtendsBackward()
+  -- l past sel_start then h back: selection is [min,max), anchor lost
+  local e = make_ed("abcdef\n")
+  e:dispatch("v")
+  e:dispatch("l")
+  e:dispatch("l") -- cursor 2, selection [0,3) = "abc"
+  e:dispatch("h") -- cursor 1, selection [0,2) = "ab"
+  frame(e)
+  local rev = e.sc:intern(Ed.ATTR_REVERSE)
+  local _, st = e.grid:cell(0, 5) -- 'b' (cursor char)
+  lu.assertEquals(st, rev)
+  local _, st2 = e.grid:cell(0, 6) -- 'c' (outside selection)
+  lu.assertEquals(st2, 0)
+end
+
+-- '"XY' at bytes 10..16: 'X' (byte 12) carries string fg (syntax) +
+-- gray bg (piece 2) + reverse (selection) in one cell — 3-layer merge
+function TestVisual:testThreeLayerCompose()
+  local e = make_ed('char *s = "aaaa";\n')
+  e:open_language("c")
+  e.doc:seek("set", 12)
+  e:docedit(0, "XY")
+  e.doc:seek("set", 12) -- on 'X' (piece 2, inside string literal)
+  e:dispatch("v")
+  e:dispatch("l")
+  frame(e)
+  local _, st = e.grid:cell(0, 16) -- content col 12
+  lu.assertEquals(st, e.sc:intern({ fg = 114, reverse = true, bg = 237 }))
+end
+
+function TestVisual:testEscapeClears()
+  local e = make_ed("ab\n")
+  e:dispatch("v")
+  e:dispatch("l")
+  e:dispatch("<Escape>")
+  lu.assertEquals(e.mode, "NORMAL")
+  lu.assertNil(e.sel_start)
+end
+
+function TestVisual:testYankPaste()
+  local e = make_ed("ab\n")
+  e:dispatch("v")
+  e:dispatch("y") -- selection = "a" (cursor char)
+  lu.assertEquals(e.mode, "NORMAL")
+  lu.assertEquals(e.clip, "a")
+  lu.assertEquals(e.doc:offset(), 0) -- cursor back to selection start
+  e:dispatch("p")
+  e.doc:seek("set", 0)
+  lu.assertEquals(e.doc:read("l"), "aab")
+  local e2 = make_ed("ab\n")
+  e2:dispatch("v")
+  e2:dispatch("l") -- cursor 1, selection "ab"
+  e2:dispatch("y")
+  lu.assertEquals(e2.clip, "ab")
+end
+
+function TestVisual:testYankUtf8Char()
+  -- cursor char selection covers the whole multibyte char, not 1 byte
+  local e = make_ed("你好\n")
+  e.doc:seek("set", 0)
+  e:dispatch("v")
+  e:dispatch("y")
+  lu.assertEquals(e.clip, "你")
+  e:dispatch("p")
+  e.doc:seek("set", 0)
+  lu.assertEquals(e.doc:read("l"), "你你好")
+end
+
+function TestVisual:testDeleteUndo()
+  local e = make_ed("ab\n")
+  e:dispatch("v")
+  e:dispatch("l") -- selection "ab"
+  e:dispatch("d")
+  lu.assertEquals(e.mode, "NORMAL")
+  lu.assertEquals(e.doc:offset(), 0)
+  lu.assertEquals(e.doc:buffer():read(0, 1), "\n")
+  e:dispatch("u")
+  lu.assertEquals(e.doc:buffer():read(0, 3), "ab\n")
+end
+
+function TestVisual:testMultilineSelection()
+  local e = make_ed("ab\ncd\n")
+  e:dispatch("v") -- sel_start 0
+  e:dispatch("j") -- cursor line 1 col 0, selection "ab\nc"
+  frame(e)
+  local rev = e.sc:intern(Ed.ATTR_REVERSE)
+  local _, st = e.grid:cell(0, 4) -- 'a'
+  lu.assertEquals(st, rev)
+  local _, st2 = e.grid:cell(0, 5) -- 'b'
+  lu.assertEquals(st2, rev)
+  local _, st3 = e.grid:cell(1, 4) -- 'c' (cursor char, selected)
+  lu.assertEquals(st3, rev)
+  local _, st4 = e.grid:cell(1, 5) -- 'd' (outside selection)
+  lu.assertEquals(st4, 0)
+  e:dispatch("d") -- deletes "ab\nc"
+  lu.assertEquals(e.doc:buffer():read(0, 2), "d\n")
+end
+
+function TestVisual:testWordMotionExtend()
+  local e = make_ed("foo bar\n")
+  e:dispatch("v")
+  e:dispatch("w") -- cursor 4, selection "foo b"
+  e:dispatch("y")
+  lu.assertEquals(e.clip, "foo b")
+  local e2 = make_ed("foo bar\n")
+  e2:dispatch("v")
+  e2:dispatch("w")
+  e2:dispatch("b") -- cursor 0 = anchor, selection "f"
+  e2:dispatch("y")
+  lu.assertEquals(e2.clip, "f")
+end
+
 os.exit(lu.LuaUnit.run(), true)

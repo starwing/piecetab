@@ -34,7 +34,7 @@ end
 -- Section 1: Term class (terminal I/O via termfeed, not exported)
 -- ================================================================
 
----@alias editor.Mode "normal"|"insert"|"command"
+---@alias editor.Mode "normal"|"insert"|"command"|"visual"
 ---@alias editor.Key string
 ---@alias editor.KeymapFn fun(self: editor.Ed, key: editor.Key)
 ---@alias editor.CommandFn fun(self: editor.Ed, arg: string, bang: boolean)
@@ -132,6 +132,7 @@ local ATTR_KEYWORD  = { fg = 207 }
 local ATTR_STRING   = { fg = 114 }
 local ATTR_COMMENT  = { fg = 245 }
 local ATTR_FUNCTION = { fg = 81 }
+local ATTR_REVERSE  = { reverse = true }
 
 -- ================================================================
 -- Section 2: Text/cursor pure functions
@@ -660,7 +661,39 @@ local function piece_spans(doc, start, endoff)
   return spans
 end
 
---- Compute colored segments for one line.
+-- Charwise visual selection [s, e): inclusive of both anchor and cursor
+-- characters (vim semantics) — e = cursor char end, s = min char start.
+-- Cursor always sits on a char start, so s is a plain min of the two.
+--- @param doc piecetab.Doc
+--- @param sel integer?  selection anchor (byte offset)
+--- @param cur integer  cursor byte offset
+--- @return integer, integer
+local function sel_range(doc, sel, cur)
+  if not sel then return cur, cur end
+  local s, e = sel, cur
+  if sel > cur then s, e = cur, sel end
+  local tail = doc:buffer():read(e, 4)
+  local nxt = #tail > 0 and utf8.next(tail, 1)
+  return s, nxt and e + nxt - 1 or e
+end
+
+-- Visual-selection writer (pull mode, no cache): charwise selection
+-- [s, e) reverse-highlighted where it intersects the visible region.
+-- Top layer in render. Cursor passed in: render moves the doc cursor
+-- around (piece scan), so doc:offset() is unreliable here.
+--- @param doc piecetab.Doc
+--- @param sel integer?  selection anchor (byte offset)
+--- @param cur integer  cursor byte offset
+--- @param start integer
+--- @param endoff integer (exclusive)
+--- @return table
+local function visual_spans(doc, sel, cur, start, endoff)
+  local s, e = sel_range(doc, sel, cur)
+  local lo = math.max(s, start)
+  local hi = math.min(e, endoff)
+  if hi <= lo then return {} end
+  return { { offset = lo, length = hi - lo, attr = ATTR_REVERSE } }
+end
 --- @param spans table array of {offset, length, style}
 --- @param line_start integer byte offset of line start
 --- @param line_end   integer byte offset of line end (exclusive)
@@ -747,7 +780,7 @@ end
 ---@field doc piecetab.Doc  document buffer (undo history + linecache)
 ---@field hl table?  syntax highlighter (tree-sitter), nil = no highlight
 ---@field filename string?
----@field mode string  "NORMAL"|"INSERT"|"COMMAND"
+---@field mode string  "NORMAL"|"INSERT"|"COMMAND"|"VISUAL"
 ---@field cmdline string
 ---@field msg string
 ---@field saved_vid integer
@@ -763,6 +796,8 @@ end
 ---@field sc editor.Sc  style compositor (attr -> handle intern)
 ---@field styles table<string, integer>  pre-interned style handles
 ---@field show_pieces boolean  piece-boundary visualization layer
+---@field sel_start integer?  visual-mode selection anchor (byte offset)
+---@field clip string?  unnamed register (yank buffer)
 local Ed = {}
 
 -- forward declaration: filled in Section 5 (dispatch reads it via upvalue)
@@ -824,6 +859,15 @@ local function install_normal_keys(self)
   n.u = function(ed)
     ed.doc:undo()
     if ed.hl then ed.hl:reset() end
+  end
+  n.p = function(ed)
+    if not ed.clip then return end
+    ed:docedit(0, ed.clip)
+    ed.doc:commit()
+  end
+  n.v = function(ed)
+    ed.sel_start = ed.doc:offset()
+    ed.mode = "VISUAL"
   end
   n["<C-r>"] = function(ed)
     ed.doc:redo()
@@ -903,6 +947,35 @@ local function install_insert_keys(self)
     local rows = ed.term:size()
     for _ = 1, rows - 2 do move_vert(ed.doc, 1) end
   end
+end
+
+-- built-in visual keymaps (per-instance, called from Ed.new)
+local function install_visual_keys(self)
+  local n, v = self.keymaps.normal, self.keymaps.visual
+  -- motions reuse normal handlers; cursor moves extend the selection
+  for _, k in ipairs({ "h", "l", "j", "k", "w", "b", "0", "$",
+                       "<Up>", "<Down>", "<Left>", "<Right>" }) do
+    v[k] = n[k]
+  end
+  v.y = function(ed)
+    local s, e = sel_range(ed.doc, ed.sel_start, ed.doc:offset())
+    ed.doc:seek("set", s)
+    ed.clip = ed.doc:buffer():read(s, e - s)
+    ed.mode = "NORMAL"
+    ed.sel_start = nil
+  end
+  v.d = function(ed)
+    local s, e = sel_range(ed.doc, ed.sel_start, ed.doc:offset())
+    ed.doc:seek("set", s)
+    ed:docedit(e - s, "")
+    ed.doc:commit()
+    ed.mode = "NORMAL"
+    ed.sel_start = nil
+  end
+  v["<Escape>"] = function(ed)
+    ed.mode = "NORMAL"; ed.sel_start = nil
+  end
+  v["<C-c>"] = v["<Escape>"]
 end
 
 -- built-in command keymaps (per-instance, called from Ed.new)
@@ -995,10 +1068,11 @@ do
     self.sc = sc.new()
     self.styles = { dim = self.sc:intern(ATTR_DIM) }
     self.show_pieces = true -- piece-boundary visualization (debug aid)
-    self.keymaps = { normal = {}, insert = {}, command = {} }
+    self.keymaps = { normal = {}, insert = {}, command = {}, visual = {} }
     self.commands = {}
     install_normal_keys(self)
     install_insert_keys(self)
+    install_visual_keys(self)
     install_command_keys(self)
     install_builtin_commands(self)
     return self
@@ -1083,7 +1157,7 @@ do
 
     local saved_off = self.doc:offset()
     local spans
-    if self.hl or self.show_pieces then
+    if self.hl or self.show_pieces or self.sel_start then
       self.doc:seek("line", self.scroll_line)
       local s_off = self.doc:offset()
       self.doc:seek("line", math.min(self.scroll_line + visrows, total_lines))
@@ -1095,6 +1169,10 @@ do
       end
       if self.show_pieces then
         layers[#layers + 1] = piece_spans(self.doc, s_off, e_off)
+      end
+      if self.sel_start then
+        layers[#layers + 1] = visual_spans(self.doc, self.sel_start,
+                                           saved_off, s_off, e_off)
       end
       spans = merge_layers(layers, s_off, e_off)
       for _, sp in ipairs(spans) do
@@ -1269,6 +1347,14 @@ local function command_key(self, key)
     end
   end
 end
+-- visual dispatch: keymap hit -> fn, else ignore (motions live in keymap)
+local function visual_key(self, key)
+  local fn = self.keymaps.visual[key]
+  if fn then
+    fn(self, key); self.msg = ""
+  end
+end
+mode_dispatch.visual = visual_key
 mode_dispatch.command = command_key
 
 -- ================================================================
@@ -1307,5 +1393,6 @@ Ed.ATTR_KEYWORD  = ATTR_KEYWORD
 Ed.ATTR_STRING   = ATTR_STRING
 Ed.ATTR_COMMENT  = ATTR_COMMENT
 Ed.ATTR_FUNCTION = ATTR_FUNCTION
+Ed.ATTR_REVERSE  = ATTR_REVERSE
 
 return Ed
