@@ -16,30 +16,30 @@
 
 ### 本期清单
 
-- [ ] **sc（style_compositor）**：editor.lua 内嵌类（Term 式）——
+- [x] **sc（style_compositor）**：editor.lua 内嵌类（Term 式）——
       attr 字段化 table（fg/bg + attr 键）→ 32bit handle
       （规范化 + hash 复用，递增分配）+ 逆查 + 动态 CSI 生成
       （替代静态 DIFF_STYLE；色值形态决定 256/真彩色 CSI）
-- [ ] **cellgrid.c 绑定**：`lcg_styleof` 的 `lua_rawgeti` → `lua_geti`
+- [x] **cellgrid.c 绑定**：`lcg_styleof` 的 `lua_rawgeti` → `lua_geti`
       （`lua53_geti` shim，5.1/5.2/LuaJIT 兼容，`lua53_` 前缀惯例）；
       diff 接受带元表代理表（`__index` 动态查 sc）——帧内表免构建；
       style 0 恒为默认样式（`lcg_finish` 依赖）
-- [ ] **合成器**（editor 内）：键级 partial——高层设的键覆盖、低层
+- [x] **合成器**（editor 内）：键级 partial——高层设的键覆盖、低层
       透传（CSS 覆盖式）；任意计算混合（如背景色混合）走自定义
       fold，API 先不定（演进点）
-- [ ] **ts 写者改造**：hl 模块 query_region 产 attr 字段化 spans
+- [x] **ts 写者改造**：hl 模块 query_region 产 attr 字段化 spans
       （capture 名 → attr，不再产 STYLE ID）
-- [ ] **piece 写者**：pt piece 序列扫描 → 交替 gray bg attr spans
+- [x] **piece 写者**：pt piece 序列扫描 → 交替 gray bg attr spans
       （拉模式，无缓存，每帧现场扫描）
-- [ ] **渲染接入**：query_region → 各写者 → 合成 → sc:intern →
+- [x] **渲染接入**：query_region → 各写者 → 合成 → sc:intern →
       handle spans → line_segments/render_line（style 变 handle，
       逻辑不动）；`STYLE_*` 常量 → attr 表常量；status bar 直写
       CSI 不经 grid，不动
-- [ ] **测试**（editor_test）：intern 复用/逆查一致/CSI 生成、
+- [x] **测试**（editor_test）：intern 复用/逆查一致/CSI 生成、
       双写者共存（piece 背景 + 语法前景同格）、键级 partial 合成、
       piece 边界与行边界交错
-- [ ] **边界记录**入 notes：sc 接口固化后的 C 化评估点（通用 →
-      stb，Lua 特有 → C 模块）、hint text 解耦记录
+- [x] **边界记录**入 notes：`notes/design_sc.md`——sc 接口形态、
+      C 化评估点（通用 → stb，Lua 特有 → C 模块）、hint text 解耦
 
 ## 后续候选（多层高亮落地后评估）
 
