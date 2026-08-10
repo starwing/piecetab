@@ -21,6 +21,19 @@ tf *args='': (lua-build "termfeed") (lua-run "tf_test" args)
 ed *args='': (lua-build "piecetab") (lua-build "cellgrid") (lua-build "termfeed")
     lua tests/editor_test.lua {{ args }}
 
+TS_INC := "-I/opt/homebrew/include"
+TS_LIB := "-L/opt/homebrew/lib -ltree-sitter"
+
+lua-ts-grammars *langs='c lua':
+    ../misc/fetch_grammars.sh {{langs}}
+
+lua-ts-build: lua-ts-grammars
+    mkdir -p luajit
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} {{ TS_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o treesitter.so treesitter.c {{ TS_LIB }}
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} {{ TS_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o luajit/treesitter.so treesitter.c {{ TS_LIB }}
+
+lua-ts-test: (lua-run "treesitter_test" "")
+
 cov mod t:
     rm -f *.gcda luajit/*.gcda
     mkdir -p luajit
