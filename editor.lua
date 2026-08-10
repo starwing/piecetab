@@ -33,7 +33,17 @@ end
 -- Section 1: Term class (terminal I/O via termfeed, not exported)
 -- ================================================================
 
+---@alias editor.Mode "normal"|"insert"|"command"
+---@alias editor.Key string
+---@alias editor.KeymapFn fun(self: editor.Ed, key: editor.Key)
+---@alias editor.CommandFn fun(self: editor.Ed, arg: string, bang: boolean)
+
 --- @class editor.Term
+---@field out {write: fun(o: table, s: string), flush: fun(o: table)}
+---@field size_fn fun(): integer, integer
+---@field tf termfeed.State
+---@field esc_timeout integer
+---@field s? string  captured output (fake term in tests)
 local Term = {}
 
 -- method-style wrapper so Term:write/self.out.write(self.out, s) works
@@ -362,25 +372,25 @@ local HL_QUERIES = {
     (comment) @comment
     (string) @string
     "and" @keyword
-    "break" @keyword
+    (break_statement) @keyword
     "do" @keyword
     "else" @keyword
     "elseif" @keyword
     "end" @keyword
-    "false" @keyword
+    (false) @keyword
     "for" @keyword
     "function" @keyword
     "goto" @keyword
     "if" @keyword
     "in" @keyword
     "local" @keyword
-    "nil" @keyword
+    (nil) @keyword
     "not" @keyword
     "or" @keyword
     "repeat" @keyword
     "return" @keyword
     "then" @keyword
-    "true" @keyword
+    (true) @keyword
     "until" @keyword
     "while" @keyword
     (function_call
@@ -540,6 +550,22 @@ end
 -- ================================================================
 
 --- @class editor.Ed
+---@field doc piecetab.Doc  document buffer (undo history + linecache)
+---@field hl table?  syntax highlighter (tree-sitter), nil = no highlight
+---@field filename string?
+---@field mode string  "NORMAL"|"INSERT"|"COMMAND"
+---@field cmdline string
+---@field msg string
+---@field saved_vid integer
+---@field pending_key string?
+---@field scroll_line integer
+---@field tabstop integer
+---@field log fun(fmt: string, ...: any)
+---@field done boolean
+---@field term editor.Term
+---@field grid cellgrid.Grid
+---@field keymaps table<string, table<string, function>>
+---@field commands table<string, function>
 local Ed = {}
 
 -- forward declaration: filled in Section 5 (dispatch reads it via upvalue)
@@ -825,6 +851,7 @@ do
     self.log("render: size=%dx%d scroll=%d cur=%d,%d total=%d",
       rows, cols, self.scroll_line, cur_line, cur_col, total_lines)
 
+    local saved_off = self.doc:offset()
     local spans
     if self.hl then
       self.doc:seek("line", self.scroll_line)
@@ -834,7 +861,6 @@ do
       self.doc:seek("set", saved_off)
       spans = self.hl:query_region(s_off, e_off)
     end
-    local saved_off = self.doc:offset()
     local g = self.grid
     g:begin(self.scroll_line, visrows, cols)
 

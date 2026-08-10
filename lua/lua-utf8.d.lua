@@ -137,8 +137,9 @@ function utf8.charpos(s, n, i) end
 --- Iterates through s: returns the byte position of the next character after
 --- i (or the n-th character), plus its code point. With only s given, usable
 --- directly as an iterator.
---- @overload fun(s: string): fun(): integer?, integer?
---- @overload fun(s: string, i: integer, n?: integer): integer?, integer?
+--- @param s string
+--- @param i? integer
+--- @param n? integer
 --- @return integer? position
 --- @return integer? codepoint
 function utf8.next(s, i, n) end

@@ -21,6 +21,10 @@ ts.MIN_COMPATIBLE_LANGUAGE_VERSION = 0
 ---@class treesitter.Language
 ---tree-sitter language (from a grammar .so). Immutable, never freed.
 ---Indexes are 1-based (Lua convention).
+---@field version integer  ABI version of the grammar
+---@field symbol_count integer
+---@field field_count integer
+---@field state_count integer
 local Language = {}
 
 ---Compile a query from query-source text.
@@ -30,37 +34,26 @@ local Language = {}
 function Language:query(src) end
 
 ---Symbol id for name (or name for id, id is 1-based).
+---@overload fun(self: treesitter.Language, id: integer): string?
 ---@param name string
 ---@return integer? symbol id
 function Language:symbol(name) end
 
----@return string? symbol name
-function Language:symbol(id) end
-
----@param id integer 1-based symbol id
 ---@return string? symbol type ("anonymous"/"named"/"auxiliary")
+---@param id integer 1-based symbol id
 function Language:symbol_type(id) end
 
 ---Next state from a state/symbol pair (LR table access).
 ---@return integer 1-based state id
 function Language:next_state(state, symbol) end
 
----ABI version of the grammar.
----@return integer
-function Language:version() end
-
----@return integer
-function Language:symbol_count() end
-
----@return integer
-function Language:field_count() end
-
----@return integer
-function Language:state_count() end
 
 --------------------------------------------------------------------------------
 ---@class treesitter.Parser
 ---Parse text into a syntax tree. Mutable: language, logger settable.
+---@field language treesitter.Language?  grammar bound for parsing
+---@field logger fun(message: string, type: integer)?  parse logger callback
+---@field included_ranges function?  get/set parse ranges (iterable)
 local Parser
 
 ---Create a parser.
@@ -73,17 +66,6 @@ function Parser:delete() end
 ---Release the parser (GC finalizer).
 function Parser:__gc() end
 
----Bind a language. Must be set before parse.
----@param lang treesitter.Language
-function Parser:language(lang) end
-
----Set a logger callback: `fn(message: string, type: integer)`.
----@param fn? function
-function Parser:logger(fn) end
-
----Get/set included ranges: iterable of {start_byte,end_byte,row,col...}.
----@return function  iterator (getter)
-function Parser:included_ranges() end
 
 ---Reset parser state.
 function Parser:reset() end
@@ -99,12 +81,11 @@ function Parser:parse(old_tree, content, encoding) end
 ---Debug: dump parse states as a dot graph.
 function Parser:print_dot_graphs(file) end
 
----@return treesitter.Language?
-function Parser.language() end
-
 --------------------------------------------------------------------------------
 ---@class treesitter.Tree
 ---Syntax tree. Owns nodes; edit() translates positions for incremental parse.
+---@field root treesitter.Node
+---@field language treesitter.Language
 local Tree
 
 ---@return treesitter.Tree
@@ -143,38 +124,20 @@ function Tree:root_with_offset(offset, point) end
 ---Debug: dump the tree as a dot graph.
 function Tree:print_dot_graph(file) end
 
----@return treesitter.Node
-function Tree.root() end
-
----@return treesitter.Language
-function Tree.language() end
 
 --------------------------------------------------------------------------------
 ---@class treesitter.Node
 ---A syntax node. Lifetime is tied to its tree (held as uservalue).
 ---Byte offsets are 1-based. Index access: `n[i]` = child, `#n` = named count.
+---@field type string  node type ("translation_unit", "int", ...)
+---@field start_byte integer  1-based start byte
+---@field end_byte integer  1-based end byte (exclusive)
+---@field start_row integer  1-based row
+---@field start_col integer  1-based column
+---@field end_row integer  1-based row
+---@field end_col integer  1-based column
 local Node
 
----@return string? node type ("translation_unit", "int", ...)
-function Node.type() end
-
----@return integer 1-based start byte
-function Node.start_byte() end
-
----@return integer 1-based end byte (exclusive)
-function Node.end_byte() end
-
----@return integer 1-based row
-function Node.start_row() end
-
----@return integer 1-based column
-function Node.start_col() end
-
----@return integer 1-based row
-function Node.end_row() end
-
----@return integer 1-based column
-function Node.end_col() end
 
 ---Node identity: `n == other` compares tree position.
 ---@param other treesitter.Node
@@ -284,6 +247,9 @@ function TreeCursor.depth() end
 --------------------------------------------------------------------------------
 ---@class treesitter.Query
 ---Compiled query patterns with captures.
+---@field pattern_count integer
+---@field capture_count integer
+---@field string_count integer
 local Query
 
 ---Release. Idempotent.
@@ -294,14 +260,6 @@ function Query:delete() end
 ---@return treesitter.QueryCursor
 function Query:exec(node) end
 
----@return integer
-function Query.pattern_count() end
-
----@return integer
-function Query.capture_count() end
-
----@return integer
-function Query.string_count() end
 
 ---Capture name by 1-based capture id.
 ---@param id integer 1-based
@@ -324,6 +282,9 @@ function Query:disable_pattern(pattern) end
 ---@class treesitter.QueryCursor
 ---Iterate query matches/captures over a node.
 ---After `next_match`, `c[i]` yields the i-th capture node of the match.
+---@field did_exceed_match_limit boolean
+---@field match_limit integer
+---@field max_start_depth integer
 local QueryCursor
 
 ---Create a cursor.
@@ -354,18 +315,12 @@ function QueryCursor:next_capture() end
 ---Remove the current match (used for dedup).
 function QueryCursor:remove_match(id) end
 
----@return boolean
-function QueryCursor.did_exceed_match_limit() end
-
----@param limit integer
-function QueryCursor.match_limit(limit) end
-
----Maximum start depth for matches.
-function QueryCursor.max_start_depth(depth) end
 
 --------------------------------------------------------------------------------
 ---@class treesitter.LookaheadIterator
 ---Iterate terminal symbols valid at a parser state.
+---@field symbol integer  1-based symbol id
+---@field symbol_name string
 local LookaheadIterator
 
 ---@param lang treesitter.Language
@@ -378,11 +333,6 @@ function LookaheadIterator:delete() end
 ---@return boolean advanced; symbol via `it.symbol`
 function LookaheadIterator:next() end
 
----@return integer 1-based symbol id
-function LookaheadIterator.symbol() end
-
----@return string
-function LookaheadIterator.symbol_name() end
 
 --------------------------------------------------------------------------------
 ---@class treesitter.Slice

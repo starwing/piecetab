@@ -99,7 +99,7 @@ local termfeed = {}
 function termfeed.new() end
 
 ---Key symbol name for a tf_Sym number (nil when invalid).
----@param sym integer
+---@param sym integer?
 ---@return string?
 function termfeed.name(sym) end
 

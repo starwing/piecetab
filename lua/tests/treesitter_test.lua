@@ -27,8 +27,7 @@ end
 
 function TestLang:testSymbolRoundtrip()
     local lang = ts.require("c")
-    local id = lang:symbol("int")
-    lu.assertNotNil(id)
+    local id = assert(lang:symbol("int"))
     lu.assertNotNil(lang:symbol(id))
 end
 
@@ -38,8 +37,7 @@ TestParse = {}
 function TestParse:testParseString()
     local p = ts.parser.new()
     p.language = ts.require("c")
-    local t = p:parse(nil, "int main(void) { return 0; }\n")
-    lu.assertNotNil(t)
+    local t = assert(p:parse(nil, "int main(void) { return 0; }\n"))
     lu.assertEquals(t.root.type, "translation_unit")
     lu.assertEquals(t.root.start_byte, 1)
     lu.assertTrue(t.root.end_byte > 0)
@@ -48,11 +46,10 @@ end
 function TestParse:testIncrementalEdit()
     local p = ts.parser.new()
     p.language = ts.require("lua")
-    local t = p:parse(nil, "local x = 1\n")
+    local t = assert(p:parse(nil, "local x = 1\n"))
     -- insert "2" at byte 10 (after "local x = ")
     t:edit(10, 10, 11, 1, 11, 1, 11, 1, 12)
-    local t2 = p:parse(t, "local x = 21\n")
-    lu.assertNotNil(t2)
+    local t2 = assert(p:parse(t, "local x = 21\n"))
     local r = t2:changed_ranges(t)
     lu.assertNotNil(r[1])
 end
@@ -63,12 +60,12 @@ function TestParse:testReadFunctionInput()
     local p = ts.parser.new()
     p.language = ts.require("c")
     local src = "int main(void) { return 0; }\n"
-    local t = p:parse(nil, function(byte, row, col)
+    local t = assert(p:parse(nil, function(byte, row, col)
         lu.assertTrue(byte >= 0)
         lu.assertTrue(row >= 0)
         lu.assertTrue(col >= 0)
         return src:sub(byte)
-    end)
+    end))
     lu.assertNotNil(t)
     lu.assertEquals(t.root.type, "translation_unit")
 end
