@@ -23,6 +23,10 @@ lspclient *args='': (build "yyjson") (run "lspclient_test" args)
 # editor demo needs lua-utf8 rock (PUC Lua only)
 ed *args='': (build "piecetab") (build "cellgrid") (build "termfeed")
     lua tests/editor_test.lua {{ args }}
+# display integration tests via a real terminal (needs tmux in PATH);
+# yyjson.so is required at runtime by lsp.lua in the tmux session
+tmux *args='': (build "piecetab") (build "cellgrid") (build "termfeed") (build "yyjson")
+    lua tests/tmux_test.lua {{ args }}
 
 TS_INC := "-I/opt/homebrew/include"
 TS_LIB := "-L/opt/homebrew/lib -ltree-sitter"
