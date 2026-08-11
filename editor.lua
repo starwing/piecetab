@@ -10,9 +10,8 @@ local cg = require("cellgrid")
 
 local utf8 = require("lua-utf8")
 local tf = require("termfeed")
-local ts = require("treesitter")
+local ts = select(2, pcall(require, "treesitter")) -- optional: hl off when absent
 local lsp = require("lsp")
-local lsp_span = require("lsp_span")
 local luv = require("luv")
 
 -- ================================================================
@@ -304,34 +303,6 @@ local function dcol_to_byte(doc, lnum, dcol)
   return text_dcol_to_byte(text, dcol, 4)
 end
 
--- UTF-16 unit column -> byte offset within a UTF-8 line. BMP chars are
--- 1 unit; only 4-byte supplementary chars (emoji) are 2 (clamp to char
--- boundary, LSP positions never split chars).
----@param text string
----@param units integer
-local function text_utf16_to_byte(text, units)
-  local i = 1
-  while i <= #text and units > 0 do
-    local nxt = utf8.next(text, i) or #text + 1
-    units = units - (nxt - i == 4 and 2 or 1)
-    i = nxt
-  end
-  return i - 1
-end
-
--- LSP position {line, character=UTF-16 units} -> byte offset.
----@param doc piecetab.Doc
----@param line integer
----@param unitcol integer
-local function doc_utf16_to_byte(doc, line, unitcol)
-  local saved = doc:offset()
-  doc:seek("line", line)
-  local base = doc:offset()
-  local text = doc:read("l") or ""
-  doc:seek("set", saved)
-  return base + text_utf16_to_byte(text, unitcol)
-end
-
 -- Truncate text to fit a display width budget (UTF-8 aware, whole chars).
 ---@param text string
 ---@param maxw integer
@@ -488,10 +459,17 @@ local function ext_lang(filename)
   return nil
 end
 
--- LSP server command for a file (nil = no server available).
+-- LSP server command for a file (nil = no server available). PT_LSP_CMD
+-- overrides the built-in mapping (space-split argv).
 ---@param filename string?
 ---@return string[]?
 local function lsp_cmd(filename)
+  local over = os.getenv("PT_LSP_CMD")
+  if over and #over > 0 then
+    local argv = {}
+    for w in over:gmatch("%S+") do argv[#argv + 1] = w end
+    return argv
+  end
   if ext_lang(filename) == "c" then return { "clangd" } end
   if ext_lang(filename) == "lua" then return { "lua-language-server" } end
   return nil
@@ -571,7 +549,8 @@ local HL_ATTRS = {
 }
 
 -- LSP semantic tokenType names -> attrs (unknown names ignored; clangd
--- duplicate legend names map by name, same name -> same attr).
+-- duplicate legend names map by name, same name -> same attr). diag is
+-- the fallback underline attr (Client uses attrmap.diag when set).
 local LSP_ATTRS = {
   comment      = ATTR_COMMENT,
   string       = ATTR_STRING,
@@ -579,10 +558,12 @@ local LSP_ATTRS = {
   number       = ATTR_NUMBER,
   ["function"] = ATTR_FUNCTION,
   method       = ATTR_FUNCTION,
+  diag         = ATTR_DIAG,
 }
 
 --- Create a highlighter for a language ("c"/"lua"), nil if unsupported.
 function hl.new(ed, lang)
+  if not ts then return nil end
   local qsrc = HL_QUERIES[lang]
   if not qsrc then return nil end
   local langobj = ts.require(lang)
@@ -697,82 +678,6 @@ local function merge_layers(layers, start, endoff)
     end
   end
   if lo < endoff then fold(endoff) end
-  return out
-end
-
--- Diag span containing byte offset `off`; highest severity wins
--- (LSP: 1 = error, higher numbers are weaker).
---- @param spans table array of {offset, length, msg, severity}
---- @param off integer
---- @return table?
-local function lsp_diag_at(spans, off)
-  local best
-  for _, sp in ipairs(spans) do
-    if sp.offset <= off and off < sp.offset + sp.length then
-      if not best or sp.severity < best.severity then best = sp end
-    end
-  end
-  return best
-end
-
--- Display-column shift from inlay hints relative to the cursor column.
--- Normal motion (h/l) never rests on a hint: bytes at or past a hint's
--- start shift past it. In insert mode the cursor sits at the byte gap
--- (append semantics): the hint-start byte maps onto the hint's first
--- char — i/append input lands before the hint, no cursor/text tearing.
---- @param hints table?
---- @param dcol integer
---- @param at_start boolean  insert-mode (cursor at the byte gap)
---- @return integer
-local function hint_offset(hints, dcol, at_start)
-  if not hints then return 0 end
-  local w = 0
-  for _, h in ipairs(hints) do
-    if at_start then
-      if h.dcol >= dcol then break end
-    elseif h.dcol > dcol then
-      break
-    end
-    w = w + utf8.width(h.text)
-  end
-  return w
-end
-
--- Decode inlayHint response items into per-line hint lists
--- {[line] = {{dcol, text}, ...}} sorted by display column. Position is
--- the insertion point (UTF-16), converted to the display column the
--- text is injected at; label is a string or an array of parts.
---- @param ed editor.Ed
---- @param hints table  inlayHint response (array or null)
---- @return table
-local function lsp_hint_decode(ed, hints)
-  local out = {}
-  for _, h in ipairs(hints or {}) do
-    local pos = h.position
-    if pos then
-      local saved = ed.doc:offset()
-      ed.doc:seek("line", pos.line)
-      local base = ed.doc:offset()
-      local t = ed.doc:read("l") or ""
-      ed.doc:seek("set", saved)
-      local label = h.label
-      if type(label) == "table" then
-        local parts = {}
-        for _, p in ipairs(label) do parts[#parts + 1] = p.value end
-        label = table.concat(parts)
-      end
-      if type(label) == "string" and #label > 0 then
-        local bcol = text_utf16_to_byte(t, pos.character)
-        local lst = out[pos.line]
-        if not lst then lst = {}; out[pos.line] = lst end
-        lst[#lst + 1] = { dcol = text_byte_to_dcol(t, bcol, ed.tabstop),
-          text = label }
-      end
-    end
-  end
-  for _, lst in pairs(out) do
-    table.sort(lst, function(a, b) return a.dcol < b.dcol end)
-  end
   return out
 end
 
@@ -964,7 +869,7 @@ end
 ---@field tabstop integer
 ---@field log fun(fmt: string, ...: any)
 ---@field done boolean
----@field lsp lsp.Protocol?  LSP client (nil = off)
+---@field lsp lsp.Client?  LSP client (nil = off)
 ---@field term editor.Term
 ---@field grid cellgrid.Grid
 ---@field keymaps table<string, table<string, fun(self: editor.Ed, key: string)>>
@@ -996,16 +901,6 @@ local function exec_command(self)
 end
 
 -- built-in normal keymaps (per-instance, called from Ed.new)
--- Full resync after undo/redo: the doc jump can't be localized, so the
--- server gets a whole-document didChange and caches refresh.
-local function resync_lsp(ed)
-  if ed.lsp then
-    ed.lsp:sync_full()
-    if ed.lsp_sem then ed.lsp_sem.dirty = true end
-    ed.lsp_hint_dirty = true
-  end
-end
-
 local function install_normal_keys(self)
   local n = self.keymaps.normal
   n.h = function(ed) cursor_move_char(ed.doc, -1) end
@@ -1046,7 +941,7 @@ local function install_normal_keys(self)
   n.u = function(ed)
     ed.doc:undo()
     if ed.hl then ed.hl:reset() end
-    resync_lsp(ed)
+    if ed.lsp then ed.lsp:resync() end
   end
   n.p = function(ed)
     if not ed.clip then return end
@@ -1060,7 +955,7 @@ local function install_normal_keys(self)
   n["<C-r>"] = function(ed)
     ed.doc:redo()
     if ed.hl then ed.hl:reset() end
-    resync_lsp(ed)
+    if ed.lsp then ed.lsp:resync() end
   end
   n["<C-l>"] = function(ed) ed.grid:clear() end
   n[":"] = function(ed)
@@ -1216,12 +1111,11 @@ local function install_builtin_commands(self)
     elseif arg == "off" then
       if ed.lsp then
         ed.lsp:stop()
-        ed.lsp, ed.lsp_sem, ed.lsp_diag = nil, nil, nil
-        ed.lsp_hints, ed.lsp_hint_view = nil, nil
+        ed.lsp = nil
       end
       ed.msg = "lsp off"
     elseif arg == "status" then
-      ed.msg = ed.lsp and ("lsp: " .. ed.lsp.state) or "lsp: off"
+      ed.msg = ed.lsp and ("lsp: " .. ed.lsp:status()) or "lsp: off"
     else
       ed.msg = "usage: :lsp on|off|status"
     end
@@ -1322,7 +1216,7 @@ do
   end
 
   --- Start an LSP server process for the current buffer (document access
-  -- wired to the live doc; edits funnel via docedit -> notify_edit).
+  -- wired to the live doc; edits funnel via docedit -> on_edit).
   -- silent: fail quietly (automatic start); loud: report via on_status.
   --- @param argv string[]
   --- @param silent? boolean
@@ -1336,15 +1230,16 @@ do
     if #fname > 0 and fname:sub(1, 1) ~= "/" then
       fname = luv.cwd() .. "/" .. fname
     end
-    self.lsp = lsp.Protocol.new({
+    local function line_text(lnum)
+      local saved = ed.doc:offset()
+      ed.doc:seek("line", lnum)
+      local t = ed.doc:read("l") or ""
+      ed.doc:seek("set", saved)
+      return t
+    end
+    self.lsp = lsp.Client.new({
       get_text = function() return ed.doc:dump() end,
-      get_line = function(lnum)
-        local saved = ed.doc:offset()
-        ed.doc:seek("line", lnum)
-        local t = ed.doc:read("l") or ""
-        ed.doc:seek("set", saved)
-        return t
-      end,
+      get_line = line_text,
       offset_pos = function(off)
         local saved = ed.doc:offset()
         ed.doc:seek("set", off)
@@ -1359,56 +1254,22 @@ do
           ed.msg = "lsp: " .. state .. (why and " (" .. why .. ")" or "")
         end
       end,
+      dcol_fn = function(line, bytecol)
+        return text_byte_to_dcol(line_text(line), bytecol, ed.tabstop)
+      end,
+      viewport_fn = function()
+        local rows = ed.term:size()
+        return { top = ed.scroll_line, rows = rows - 1 }
+      end,
+      attrmap = LSP_ATTRS,
+      vtext = {
+        set = function(line, list) ed:set_vtext(line, list) end,
+        clear = function() ed:clear_vtexts() end,
+      },
     })
-    -- semantic tokens: full-snapshot cache, replaced atomically per
-    -- response; dirty marks edits, kept rendering until the next snapshot
-    self.lsp_sem = { spans = {}, dirty = true, pending = false }
-    self.lsp_diag = nil
-    -- inlay hints: per-viewport cache, refreshed on scroll or idle
-    self.lsp_hints = nil
-    self.lsp_hint_view = nil
-    self.lsp_hint_pending = false
-    self.lsp_hint_dirty = true
-    -- startup counts as idle: first refresh fires immediately, not
-    -- after the debounce window
-    self.last_edit_t = -1e6
-    self.hint_idle = 1.0 -- seconds of no typing before a hint refresh
-    -- null answers (workspace still indexing) get bounded delayed retries
-    self.lsp_hint_retry = 0
-    self.lsp_hint_null = 0
-    self.lsp:on("textDocument/publishDiagnostics", function(p)
-      if p.uri ~= self.lsp.uri then return end
-      -- drop stale snapshots (out-of-order pushes)
-      local cur = self.lsp_diag and self.lsp_diag.version or -1
-      local v = p.version
-      if v and v < cur then return end
-      local spans = {}
-      for _, d in ipairs(p.diagnostics or {}) do
-        local r = d.range
-        local s = doc_utf16_to_byte(ed.doc, r.start.line, r.start.character)
-        local e = doc_utf16_to_byte(ed.doc, r["end"].line, r["end"].character)
-        if e > s then
-          spans[#spans + 1] = {
-            offset = s, length = e - s, attr = ATTR_DIAG,
-            msg = d.message, severity = d.severity or 2,
-          }
-        end
-      end
-      ed.lsp_diag = { version = v or cur, spans = spans }
-      for _, d in ipairs(p.diagnostics or {}) do
-        if d.severity == 1 then
-          ed.msg = "diag: " .. d.message
-          break
-        end
-      end
-    end)
     local ok = self.lsp:start(argv, "file://" .. fname,
-      ext_lang(fname) or "plaintext",
-      "file://" .. (fname:match("^(.*)/") or "."))
-    if not ok then
-      self.lsp, self.lsp_sem, self.lsp_diag = nil, nil, nil
-      self.lsp_hints, self.lsp_hint_view = nil, nil
-    end
+      ext_lang(fname) or "plaintext", "file://" .. (fname:match("^(.*)/") or "."))
+    if not ok then self.lsp = nil end
     return ok
   end
 
@@ -1508,105 +1369,19 @@ do
     self.vtexts[line] = #out > 0 and out or nil
   end
 
-  --- Shift cached hints after an edit (they are injected text: stale
-  -- positions would squeeze/relocate new chars). Same-line hints past
-  -- the edit point shift by the byte delta (approx: tab/wide-char
-  -- columns self-heal on the next response); hints inside the deleted
-  -- range are dropped; multi-line edits clear the cache.
-  --- @param off integer
-  --- @param del integer
-  --- @param s string
-  function Ed:edit_hints(off, del, s)
-    local hints = self.lsp_hints
-    if not hints then return end
-    local saved = self.doc:offset()
-    self.doc:seek("set", off)
-    local line = self.doc:line()
-    self.doc:seek("set", off + del)
-    local eline = self.doc:line()
-    self.doc:seek("set", saved)
-    if line ~= eline or s:find("\n", 1, true) then
-      self.lsp_hints = nil
-      return
-    end
-    local lst = hints[line]
-    if not lst then return end
-    self.doc:seek("line", line)
-    local base = self.doc:offset()
-    local text = self.doc:read("l") or ""
-    self.doc:seek("set", saved)
-    local edcol = text_byte_to_dcol(text, off - base, self.tabstop)
-    local delta = #s - del
-    local out = {}
-    for _, h in ipairs(lst) do
-      if h.dcol < edcol then
-        out[#out + 1] = h
-      elseif h.dcol >= edcol + del then
-        h.dcol = h.dcol + delta
-        out[#out + 1] = h
-      end
-    end
-    hints[line] = out
-  end
-
   --- Edit at cursor with highlight notification (single edit funnel).
   function Ed:docedit(del, s)
     local off = self.doc:offset()
     self:shift_vtexts(off, del, s)
-    if self.lsp then
-      self.lsp:notify_edit(off, del, s)
-      if self.lsp_sem then self.lsp_sem.dirty = true end
-      self:edit_hints(off, del, s)
-      self.lsp_hint_dirty = true
-      self.last_edit_t = luv.hrtime() / 1e9 -- wall clock, not CPU time
-      self.lsp_hint_retry, self.lsp_hint_null = 0, 0
-    end
+    if self.lsp then self.lsp:on_edit(off, del, s) end
     self.doc:edit(del, s)
     if self.hl then self.hl:notify_edit(off, del, #s) end
   end
 
-  --- Idle work (called on main-loop timeouts, ~100ms): refresh inlay
-  -- hints once typing has stopped (debounce) or the viewport moved.
-  -- Continuous typing never requests; the stale-response guard (doc
-  -- version) stays as a belt-and-braces against races.
+  --- Idle work (called on main-loop timeouts): delegate to the LSP
+  -- client (hint refresh scheduling lives there).
   function Ed:tick()
-    if not (self.lsp and self.lsp.state == "running") then return end
-    if not (self.lsp.capabilities.inlayHintProvider
-        and not self.lsp_hint_pending) then return end
-    -- wall-clock idle: os.clock() is CPU time and freezes while the
-    -- main loop blocks in getkey — idle would never elapse
-    local now = luv.hrtime() / 1e9
-    local idle = now - (self.last_edit_t or 0) >= self.hint_idle
-    local retry = self.lsp_hint_retry > 0 and now >= self.lsp_hint_retry
-    if not (self.lsp_hint_dirty and idle
-        or self.lsp_hint_view ~= self.scroll_line
-        or retry) then return end
-    local rows = self.term:size()
-    local visend = math.min(self.scroll_line + rows - 1, self.doc:breaks())
-    self.lsp_hint_pending = true
-    self.lsp_hint_reqver = self.lsp.version
-    self.lsp:request("textDocument/inlayHint", {
-      textDocument = { uri = self.lsp.uri },
-      range = { start = { line = self.scroll_line, character = 0 },
-        ["end"] = { line = visend, character = 0x7fffffff } },
-    }, function(result, err)
-        self.lsp_hint_pending = false
-        if err or not result then
-          -- null/err: server not ready yet (workspace indexing) —
-          -- bounded delayed retries; edits/scroll reset the budget
-          self.lsp_hint_view = self.scroll_line
-          self.lsp_hint_null = self.lsp_hint_null + 1
-          self.lsp_hint_retry = self.lsp_hint_null <= 8
-              and now + 2 or 0
-        elseif self.lsp.version ~= self.lsp_hint_reqver then
-          -- edited while in flight: keep the shifted cache, refetch
-        else
-          self.lsp_hints = lsp_hint_decode(self, result)
-          self.lsp_hint_view = self.scroll_line
-          self.lsp_hint_dirty = false
-          self.lsp_hint_retry, self.lsp_hint_null = 0, 0
-        end
-      end)
+    if self.lsp then self.lsp:tick() end
   end
 
   --- @param name string
@@ -1651,9 +1426,7 @@ do
 
     local saved_off = self.doc:offset()
     local spans
-    if self.hl or self.show_pieces or self.sel_start
-        or (self.lsp_sem and #self.lsp_sem.spans > 0)
-        or (self.lsp_diag and #self.lsp_diag.spans > 0) then
+    if self.hl or self.show_pieces or self.sel_start or self.lsp then
       self.doc:seek("line", self.scroll_line)
       local s_off = self.doc:offset()
       self.doc:seek("line", math.min(self.scroll_line + visrows, total_lines))
@@ -1670,11 +1443,10 @@ do
         layers[#layers + 1] = visual_spans(self.doc, self.sel_start,
                                            saved_off, s_off, e_off)
       end
-      if self.lsp_sem then
-        layers[#layers + 1] = lsp_span.clip(self.lsp_sem.spans, s_off, e_off)
-      end
-      if self.lsp_diag then
-        layers[#layers + 1] = lsp_span.clip(self.lsp_diag.spans, s_off, e_off)
+      if self.lsp then
+        local q = self.lsp:query_spans(s_off, e_off)
+        if #q.sem > 0 then layers[#layers + 1] = q.sem end
+        if #q.diag > 0 then layers[#layers + 1] = q.diag end
       end
       spans = merge_layers(layers, s_off, e_off)
       for _, sp in ipairs(spans) do
@@ -1724,7 +1496,6 @@ do
       local r0 = ld.row - 1
       local segs = hl.line_segments(spans or {}, ld.start, ld.start + #ld.text)
       local hints = self.vtexts[ld.line]
-          or (self.lsp_hints and self.lsp_hints[ld.line])
       if hints then
         for _, h in ipairs(hints) do h.style = self.styles.dim end
       end
@@ -1748,32 +1519,8 @@ do
     self.term:flush()
     g:freeze()
 
-    -- after render: refresh semantic tokens when dirty (edit once ->
-    -- one request; skip while a request is already in flight)
-    if self.lsp and self.lsp.state == "running" and self.lsp_sem
-        and self.lsp_sem.dirty and not self.lsp_sem.pending then
-      local cap = self.lsp.capabilities.semanticTokensProvider
-      if not (cap and cap.full) then
-        self.lsp_sem.dirty = false
-      else
-        local sem = self.lsp_sem
-        sem.pending = true
-        self.lsp:request("textDocument/semanticTokens/full", {
-          textDocument = { uri = self.lsp.uri },
-        }, function(result, err)
-            sem.pending = false
-            if err then
-              sem.dirty = false
-            elseif result and result.data then
-              sem.spans = lsp_span.decode(result.data, cap.legend,
-                LSP_ATTRS, function(line, unit)
-                  return doc_utf16_to_byte(self.doc, line, unit)
-                end)
-              sem.dirty = false
-            end
-          end)
-      end
-    end
+    -- after render: delegate refresh work (semantic tokens) to the client
+    if self.lsp then self.lsp:post_render() end
   end
 
   function Ed:render_status(rows, cols, cur_line, cur_col, cur_off)
@@ -1792,7 +1539,7 @@ do
       -- center: transient messages — the diag message under the cursor
       -- wins (recomputed every frame, gone once the cursor leaves);
       -- otherwise the event message (command feedback, lsp events)
-      local at = self.lsp_diag and lsp_diag_at(self.lsp_diag.spans, cur_off)
+      local at = self.lsp and self.lsp:diag_at(cur_off)
       local msg_part = ""
       if at then
         msg_part = " diag: " .. at.msg
@@ -1800,9 +1547,8 @@ do
         msg_part = " " .. self.msg
       end
       -- right: persistent server state, short form
-      local right = self.lsp
-          and (self.lsp.state == "running" and " lsp:on"
-            or (" lsp:" .. self.lsp.state)) or ""
+      local right = self.lsp and (self.lsp:status() == "running"
+          and " lsp:on" or (" lsp:" .. self.lsp:status())) or ""
       local avail = cols - utf8.width(left) - utf8.width(right) - 1
       msg_part = text_trunc(msg_part, math.max(0, avail))
       local pad = math.max(0, avail - utf8.width(msg_part))
@@ -1826,12 +1572,10 @@ do
     local byte_col = self.doc:column()
     self.log("cursor: saved_off=%d cur_line=%d line_text=[%s](%d) byte_col=%d",
       saved_off, cur_line, cur_line_text:gsub("\n", "\\n"), #cur_line_text, byte_col)
-    local display_col = text_byte_to_dcol(cur_line_text, byte_col, self.tabstop)
     -- cursor skips hints on motion; at the byte gap (insert) it may sit
     -- on the hint's first char (append semantics, input lands before it)
-    display_col = display_col
-      + hint_offset(self.lsp_hints and self.lsp_hints[cur_line], display_col,
-        self.mode == "INSERT")
+    local display_col = self:vtext_dcol(cur_line, byte_col,
+      self.mode == "INSERT")
 
     local cur_screen_col = display_col + lnum_width + 2
     if cur_screen_col > cols then cur_screen_col = cols end
