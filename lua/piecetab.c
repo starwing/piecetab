@@ -60,7 +60,7 @@ static int lua53_rawgetp(lua_State *L, int idx, const void *p) {
 #define LPT_STATE_KEY  ((void *)0x91ECE7AB)
 #define LPT_STATE_TYPE "piecetab.State"
 
-#define lpt_checkmem(L, p) ((p) || luaL_error(L, "piecetab: out of memory"))
+#define lpt_checkmem(L, p) ((void)((p) || luaL_error(L, "piecetab: out of memory")))
 
 /* forward: pt_Buffer payload cleaner for undotree */
 static void lpt_ut_cleaner(void *ud, ut_Payload *p);
@@ -869,7 +869,7 @@ static int lpt_switch(lua_State *L, lpt_Doc *d, ut_Vid dst) {
     d->lcvid = dst, d->lck = 0, ut_switch(d->ut, dst);
     pt_seek(&d->C, b, pos);
     if (lua_isfunction(L, 2)) {
-        size_t hn;
+        size_t hn = 0;
         lpt_callhunks(L, pt_buffer(&d->C), ut_hunks(d->ut, &hn), hn);
     }
     return lpt_pushvid(L, dst);

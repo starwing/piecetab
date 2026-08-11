@@ -334,7 +334,8 @@ static int Ltf_data(lua_State *L) {
         int args[16];
         int nargs, cmd, i;
         nargs = tf_csi(&st->S, args, 16, &cmd);
-        assert(nargs >= 0);
+        if (nargs < 0)
+            return luaL_error(L, "termfeed: bad CSI sequence");
         lua_createtable(L, nargs, 3);
         if ((cmd >> 16))
             lua_pushinteger(L, cmd >> 16), lua_setfield(L, -2, "intermediate");

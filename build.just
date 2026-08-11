@@ -3,9 +3,22 @@
 
 CC := "gcc"
 CFLAGS := "-Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic -std=c89 -Wno-variadic-macros"
-LUAFLAGS := "-Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -std=c89 -Wno-variadic-macros"
-LUA55_INC := "-I/opt/homebrew/include/lua5.5"
-LUAJIT_INC := "-I/opt/homebrew/include/luajit-2.1"
+LUAFLAGS := "-Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -std=gnu99 -Wno-variadic-macros -Wno-array-bounds"
+LDF := `if [ "$(uname)" = "Darwin" ]; then echo "-bundle -undefined dynamic_lookup"; else echo "-shared -fPIC"; fi`
+LUA_INC := `
+    for d in ../.lua/include .lua/include /opt/homebrew/include/lua5.5 \
+        /opt/homebrew/include/lua5.4 /usr/include/lua5.4; do
+        [ -d "$d" ] && { echo "-I$d"; exit 0; }
+    done
+    exit 0
+`
+LUAJIT_INC := `
+    for d in ../.lua/include/luajit-2.1 .lua/include/luajit-2.1 \
+        /opt/homebrew/include/luajit-2.1 /usr/include/luajit-2.1; do
+        [ -d "$d" ] && { echo "-I$d"; exit 0; }
+    done
+    exit 0
+`
 
 # t = test source without .c suffix (may include dir), inc = include flags
 dbg-run t inc *tests='':
