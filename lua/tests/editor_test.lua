@@ -1718,6 +1718,16 @@ function TestVtext:testScreenToTextDcol()
   lu.assertEquals(self.e:screen_to_text_dcol(1, 7), 7) -- no vtext: identity
 end
 
+function TestVtext:testJKKeepsScreenCol()
+  -- line 0 injected, line 1 not: j keeps screen col 4 (Neovim semantics)
+  self.e:set_vtext(0, { { dcol = 0, text = "int:" } })
+  self.e.doc:seek("set", 0)
+  self.e:dispatch("j")
+  lu.assertEquals(self.e.doc:column(), 4) -- line 1 text col 4 = screen col 4
+  self.e:dispatch("k")
+  lu.assertEquals(self.e.doc:column(), 0) -- back to line 0 byte 0 (screen col 4)
+end
+
 function TestVtext:testShiftVtextsSameLine()
   -- edit before the hint: hint shifts right by the byte delta
   self.e.doc:seek("set", 0)

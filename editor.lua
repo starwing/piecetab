@@ -292,17 +292,6 @@ local function line_endcol(ed, lnum)
   return llen
 end
 
--- byte offset -> display column within current line
----@param doc piecetab.Doc
-local function byte_to_dcol(doc)
-  local saved = doc:offset()
-  local lnum = doc:line()
-  doc:seek("line", lnum)
-  local text = doc:read("l") or ""
-  doc:seek("set", saved)
-  return text_byte_to_dcol(text, doc:column(), 4)
-end
-
 -- display column -> byte offset within given line (clamp to char boundary)
 ---@param doc piecetab.Doc
 ---@param lnum integer
@@ -359,16 +348,18 @@ local function text_trunc(text, maxw)
   return text:sub(1, i - 1)
 end
 
--- Move cursor vertically by dl lines, preserving display column
----@param doc piecetab.Doc
+-- Move cursor vertically by dl lines, preserving the screen column
+-- (injected text counts; Neovim semantics)
+---@param ed editor.Ed
 ---@param dl integer
-local function move_vert(doc, dl)
+local function move_vert(ed, dl)
+  local doc = ed.doc
   local lnum = doc:line()
   local nlnum = lnum + dl
   if nlnum < 0 or nlnum >= doc:breaks() then return end
-  local dcol = byte_to_dcol(doc)
+  local scol = ed:vtext_dcol(lnum, doc:column(), false)
   doc:seek("line", nlnum)
-  doc:seek("cur", dcol_to_byte(doc, nlnum, dcol))
+  doc:seek("cur", dcol_to_byte(doc, nlnum, ed:screen_to_text_dcol(nlnum, scol)))
 end
 
 -- Open a new line: dir > 0 below (o), dir < 0 above (O); enter INSERT
@@ -1019,8 +1010,8 @@ local function install_normal_keys(self)
   local n = self.keymaps.normal
   n.h = function(ed) cursor_move_char(ed.doc, -1) end
   n.l = function(ed) cursor_move_char(ed.doc, 1) end
-  n.j = function(ed) move_vert(ed.doc, 1) end
-  n.k = function(ed) move_vert(ed.doc, -1) end
+  n.j = function(ed) move_vert(ed, 1) end
+  n.k = function(ed) move_vert(ed, -1) end
   n.w = function(ed) move_word_forward(ed.doc) end
   n.b = function(ed) move_word_backward(ed.doc) end
   n["0"] = function(ed) ed.doc:seek("line", ed.doc:line()) end
@@ -1127,8 +1118,8 @@ local function install_insert_keys(self)
     ed.mode = "NORMAL"
     ed.msg = ""
   end
-  i["<Up>"] = function(ed) move_vert(ed.doc, -1) end
-  i["<Down>"] = function(ed) move_vert(ed.doc, 1) end
+  i["<Up>"] = function(ed) move_vert(ed, -1) end
+  i["<Down>"] = function(ed) move_vert(ed, 1) end
   i["<Left>"] = function(ed) cursor_move_char(ed.doc, -1) end
   i["<Right>"] = function(ed) cursor_move_char(ed.doc, 1) end
   i["<Home>"] = function(ed) ed.doc:seek("line", ed.doc:line()) end
@@ -1139,11 +1130,11 @@ local function install_insert_keys(self)
   end
   i["<PageUp>"] = function(ed)
     local rows = ed.term:size()
-    for _ = 1, rows - 2 do move_vert(ed.doc, -1) end
+    for _ = 1, rows - 2 do move_vert(ed, -1) end
   end
   i["<PageDown>"] = function(ed)
     local rows = ed.term:size()
-    for _ = 1, rows - 2 do move_vert(ed.doc, 1) end
+    for _ = 1, rows - 2 do move_vert(ed, 1) end
   end
 end
 
