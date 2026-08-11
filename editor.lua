@@ -849,6 +849,25 @@ local function render_line(g, row, col, text, segs, tabstop, hints)
   local hint_idx = 1
   local dc = 0
 
+  -- display column before each character start (batch-flush independent,
+  -- so hint injection can target the exact char position)
+  local dcols = {}
+  do
+    local d, i = 0, 1
+    while i <= #text do
+      dcols[i] = d
+      local b = text:byte(i)
+      if b == 9 then
+        d = d + tabstop - (d % tabstop)
+        i = i + 1
+      else
+        local nxt = utf8.next(text, i) or #text + 1
+        d = d + (utf8.width(text, i, nxt - 1) or 1)
+        i = nxt
+      end
+    end
+  end
+
   local function style_at(b)
     while seg_idx <= #segs do
       local s = segs[seg_idx]
@@ -870,7 +889,8 @@ local function render_line(g, row, col, text, segs, tabstop, hints)
   end
 
   local function flush_hints()
-    while hints and hint_idx <= #hints and hints[hint_idx].dcol <= dc do
+    while hints and hint_idx <= #hints and hints[hint_idx].dcol <= dcols[byte] do
+      flush() -- write the text before the hint position first
       local h = hints[hint_idx]
       dc = g:putline(row, col + dc, h.text, h.style) - col
       hint_idx = hint_idx + 1
