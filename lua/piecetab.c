@@ -475,6 +475,40 @@ static int lpt_hunkapply(lc_Cache *lc, const ut_Hunk *hs, int n, pt_Buffer b) {
     return r;
 }
 
+static void lpt_hunktext(lua_State *L, pt_Buffer b, size_t pos, size_t len) {
+    luaL_Buffer B;
+    luaL_buffinit(L, &B);
+    while (len > 0) {
+        pt_Cursor   C;
+        size_t      plen;
+        const char *data;
+        pt_seek(&C, b, pos);
+        data = pt_piece(&C, &plen);
+        if (data == NULL) break;
+        if (plen > len) plen = len;
+        luaL_addlstring(&B, data, plen);
+        pos += plen, len -= plen;
+    }
+    luaL_pushresult(&B);
+}
+
+static void lpt_callhunks(lua_State *L, pt_Buffer b, ut_HunkCV hs, size_t n) {
+    ptrdiff_t shift = 0;
+    size_t    i;
+    /* b must sit on the hunks' child side: the committed buffer for
+       fresh hunks, the switched-to buffer for version hunks. */
+    for (i = 0; i < n; ++i) {
+        /* sequential coordinate: never ca — inverted hunks break it */
+        size_t off = hs[i].pa + (size_t)shift;
+        shift += (ptrdiff_t)hs[i].cins - (ptrdiff_t)hs[i].pdel;
+        lua_pushvalue(L, 2);
+        lua_pushinteger(L, (lua_Integer)off);
+        lua_pushinteger(L, (lua_Integer)hs[i].pdel);
+        lpt_hunktext(L, b, hs[i].ca, hs[i].cins);
+        lua_call(L, 3, 0);
+    }
+}
+
 static int lpt_docsync(lpt_Doc *d, size_t tol, size_t tob) {
     pt_Buffer   b = pt_buffer(&d->C);
     ut_Vid      cur = ut_current(d->ut);
@@ -822,16 +856,23 @@ static int Ldoc_commit(lua_State *L) {
     return lua_pushinteger(L, (lua_Integer)pt_version(b)), 1;
 }
 
-static int lpt_switch(lua_State *L, lpt_Doc *d, ut_Vid src, ut_Vid dst) {
+static int lpt_switch(lua_State *L, lpt_Doc *d, ut_Vid dst) {
+    ut_Vid    src = ut_current(d->ut);
     pt_Buffer b = (pt_Buffer)ut_payload(dst);
     size_t    pos = pt_offset(&d->C);
     int       r;
+    if (!dst) return lpt_pushvid(L, src);
     if ((r = ut_diff(d->ut, src, dst)) < 0) lpt_checkerror(L, r);
     pos = ut_mapoffset(d->ut, pos);
     r = lpt_hunkapply(d->lc, ut_hunks(d->ut, NULL), r, b);
     if (r != LC_OK) lpt_checkerror(L, r);
     d->lcvid = dst, d->lck = 0, ut_switch(d->ut, dst);
-    return pt_seek(&d->C, b, pos), lpt_pushvid(L, dst);
+    pt_seek(&d->C, b, pos);
+    if (lua_isfunction(L, 2)) {
+        size_t hn;
+        lpt_callhunks(L, pt_buffer(&d->C), ut_hunks(d->ut, &hn), hn);
+    }
+    return lpt_pushvid(L, dst);
 }
 
 static int Ldoc_version(lua_State *L) {
@@ -840,55 +881,56 @@ static int Ldoc_version(lua_State *L) {
     return lua_pushinteger(L, (lua_Integer)pt_version(b)), 1;
 }
 
-static int Ldoc_undo(lua_State *L) {
-    lpt_Doc  *d = lpt_checkdoc(L, 1);
-    ut_Vid    dst, src = ut_current(d->ut);
-    pt_Buffer b;
+static void lpt_dropfresh(lua_State *L, lpt_Doc *d, int cb) {
+    ut_Vid    src = ut_current(d->ut);
+    pt_Buffer b = (pt_Buffer)ut_payload(src);
     size_t    pos = pt_offset(&d->C);
     int       r, fc = ut_freshcount(d->ut);
-    if (fc) {
-        if ((r = ut_freshdiff(d->ut, fc, 0)) < 0) lpt_checkerror(L, r);
-        pos = ut_mapoffset(d->ut, pos);
-        b = (pt_Buffer)ut_payload(src);
-        if (d->lck) {
-            if (d->lck != fc && (r = ut_freshdiff(d->ut, d->lck, 0)) < 0)
-                lpt_checkerror(L, r);
-            r = lpt_hunkapply(d->lc, ut_hunks(d->ut, NULL), r, b);
-            lpt_checkerror(L, r), d->lck = 0;
-        }
-        pt_release(pt_rollback(&d->C)), ut_discard(d->ut);
-        pt_seek(&d->C, b, pos);
+    if ((r = ut_freshdiff(d->ut, fc, 0)) < 0) lpt_checkerror(L, r);
+    if (cb) {
+        ut_HunkCV hs = ut_hunks(d->ut, NULL);
+        lpt_callhunks(L, b, hs, (size_t)r);
     }
-    dst = lpt_checkvid(L, 2, 1, ut_parent(src));
+    pos = ut_mapoffset(d->ut, pos);
+    if (d->lck) {
+        if (d->lck != fc && (r = ut_freshdiff(d->ut, d->lck, 0)) < 0)
+            lpt_checkerror(L, r);
+        r = lpt_hunkapply(d->lc, ut_hunks(d->ut, NULL), r, b);
+        lpt_checkerror(L, r), d->lck = 0;
+    }
+    pt_release(pt_rollback(&d->C)), ut_discard(d->ut);
+    pt_seek(&d->C, b, pos);
+}
+
+static int Ldoc_undo(lua_State *L) {
+    lpt_Doc *d = lpt_checkdoc(L, 1);
+    ut_Vid   dst, src = ut_current(d->ut);
+    int      cb = lua_isfunction(L, 2);
+    if (ut_freshcount(d->ut)) lpt_dropfresh(L, d, cb);
+    dst = cb ? ut_parent(src) : lpt_checkvid(L, 2, 1, ut_parent(src));
     if (!dst || dst == src) return lpt_pushvid(L, src);
-    return lpt_switch(L, d, src, dst);
+    return lpt_switch(L, d, dst);
 }
 
 static int Ldoc_redo(lua_State *L) {
     lpt_Doc *d = lpt_checkdoc(L, 1);
-    ut_Vid   dst, cur = ut_current(d->ut);
     if (ut_freshcount(d->ut))
         luaL_error(L, "piecetab: cannot time-travel with uncommitted changes");
-    dst = ut_firstchild(cur);
-    return dst ? lpt_switch(L, d, cur, dst) : lpt_pushvid(L, cur);
+    return lpt_switch(L, d, ut_firstchild(ut_current(d->ut)));
 }
 
 static int Ldoc_earlier(lua_State *L) {
     lpt_Doc *d = lpt_checkdoc(L, 1);
-    ut_Vid   dst, cur = ut_current(d->ut);
     if (ut_freshcount(d->ut))
         luaL_error(L, "piecetab: cannot time-travel with uncommitted changes");
-    dst = ut_older(cur);
-    return dst ? lpt_switch(L, d, cur, dst) : lpt_pushvid(L, cur);
+    return lpt_switch(L, d, ut_older(ut_current(d->ut)));
 }
 
 static int Ldoc_later(lua_State *L) {
     lpt_Doc *d = lpt_checkdoc(L, 1);
-    ut_Vid   dst, cur = ut_current(d->ut);
     if (ut_freshcount(d->ut))
         luaL_error(L, "piecetab: cannot time-travel with uncommitted changes");
-    dst = ut_younger(cur);
-    return dst ? lpt_switch(L, d, cur, dst) : lpt_pushvid(L, cur);
+    return lpt_switch(L, d, ut_younger(ut_current(d->ut)));
 }
 
 static int Ldoc_buffer(lua_State *L) {

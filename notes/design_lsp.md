@@ -91,11 +91,12 @@ diag 回调；未知（`$/hello`、`$/progress` 等）**一律忽略**（sumneko
   server 侧诊断回推 version 即源自此
 - **start 参数**：`lspclient:start(argv, uri, langid, root)`——root 为
   workspace 根 uri（editor 传文件所在目录，测试默认 = uri）
-- **undo/redo 同步**（接口摩擦，专题见 TODO.md）：doc 跳跃无法定位
-  增量 → `sync_full()` 整篇 didChange（无 range = 全文替换，version
-  递增）。正解候选：`doc:switchdiff()` 增量（undotree hunks
-  {pa, pdel, cins} 坐标系与 notify_edit 天然一致）；fresh undo 边缘
-  场景（未 commit 编辑被 u 丢弃）另行定案
+- **undo/redo 同步**（已落地 2026-08，定案见 design_luabind.md
+  §十二）：undo/redo 经 `doc:undo(f)` 回调拿 hunk 顺序链（f 逐
+  hunk 收 off/del/text）→ `notify_edits` 单条 didChange 多 edit
+  （顺序应用语义）；fresh 逆段与 switch 段天然衔接（fresh 应用完
+  恰 = committed = switch 的 pa 基准），f 无段感知。废弃
+  `sync_full` 全量重传。
 
 ### 4.5 initialize 必须带 workspaceFolders（smoke 实测教训）
 

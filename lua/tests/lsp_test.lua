@@ -431,17 +431,26 @@ function TestProto:testDiagPush()
   os.remove(path)
 end
 
-function TestProto:testSyncFull()
-  -- undo/redo path: one full didChange (no range) replaces the doc
+function TestProto:testNotifyEdits()
+  -- undo/redo path: sequential edits in one didChange, ranges in order
+  -- (each relative to the previous edit's result)
   local changes = {}
   local c, path = new_client(CODE, { "hello", "world" })
   c:on("test/didChange", function(p) changes[#changes + 1] = p end)
   lu.assertTrue(drive(c, function() return c.state == "running" end))
-  c:sync_full()
+  c:notify_edits({
+    { off = 5, del = 0, text = "X" },
+    { off = 6, del = 5, text = "!" },
+  })
   lu.assertTrue(drive(c, function() return #changes == 1 end), "sync")
   lu.assertEquals(changes[1].textDocument.version, 2)
-  lu.assertEquals(changes[1].contentChanges[1].text, "hello\nworld")
-  lu.assertNil(changes[1].contentChanges[1].range, "full replace, no range")
+  lu.assertEquals(#changes[1].contentChanges, 2)
+  lu.assertEquals(changes[1].contentChanges[1].range.start,
+    { line = 0, character = 5 })
+  lu.assertEquals(changes[1].contentChanges[1].text, "X")
+  lu.assertEquals(changes[1].contentChanges[2].range.start,
+    { line = 1, character = 0 })
+  lu.assertEquals(changes[1].contentChanges[2].text, "!")
   lsp.IO.close(c.io)
   os.remove(path)
 end
@@ -515,7 +524,7 @@ local function fake_proto()
     self.cbs[#self.cbs + 1] = cb
   end
   p.notify_edit = function(self, off, del, s) self.edits = { off, del, s } end
-  p.sync_full = function(self) self.synced = true end
+  p.notify_edits = function(self, changes) self.switch_edits = changes end
   p.poll = function(self) end
   p.stop = function(self) end
   p.on = function(self, method, fn) self.handlers[method] = fn end
@@ -678,10 +687,11 @@ function TestClient:testOnEditMarksDirty()
   lu.assertTrue(c.hint_dirty)
 end
 
-function TestClient:testResyncClears()
+function TestClient:testOnSwitchClears()
   local c, proto, got = mk_client()
-  c:resync()
-  lu.assertTrue(proto.synced)
+  local changes = { { off = 1, del = 0, text = "x" } }
+  c:on_switch(changes)
+  lu.assertEquals(proto.switch_edits, changes)
   lu.assertEquals(#got, 1)
   lu.assertEquals(got[1][1], "clear")
   lu.assertTrue(c.sem.dirty)

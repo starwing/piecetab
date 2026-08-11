@@ -162,7 +162,9 @@ Ed:shift_vtexts(off, del, s)    -- 编辑位移：同线位移/删区丢弃/跨�
 -- 光标/渲染查询（唯一权威，替代现分散补偿）：
 Ed:vtext_dcol(line, bytecol, at_start)  -- 显示列（含注入偏移；at_start=true
                                          --   插入间隙语义，同现 hint_offset）
-Ed:screen_to_text_dcol(line, scol)      -- 文本列（减该行注入偏移，clamp）
+Ed:screen_to_text_dcol(line, scol)      -- 文本列（减该行注入偏移；scol 落在
+                                         --   hint 内 → hint 后第一文本列，
+                                         --   Neovim coladvance）
 ```
 
 **（实现回更）行为细节**：
@@ -193,18 +195,22 @@ Ed:screen_to_text_dcol(line, scol)      -- 文本列（减该行注入偏移，c
 
 ```
 垂直移动（jk，Neovim 语义）：
-  dcol = ed:vtext_dcol(cur_line, byte_col, at_start)  -- 屏幕列（含注入）
+  scol = ed.goal or ed:vtext_dcol(cur_line, byte_col, at_start)
+  ed.goal = scol                        -- 目标屏幕列（Neovim curswant）
   doc:seek("line", nlnum)
-  text_dcol = ed:screen_to_text_dcol(nlnum, dcol)      -- 减目标行注入
+  text_dcol = ed:screen_to_text_dcol(nlnum, scol)  -- 减目标行注入
   doc:seek("cur", dcol_to_byte(doc, nlnum, text_dcol))
   -- at_start = (mode == "INSERT")：插入间隙语义（现 hint_offset 第三参）
+  -- goal 语义：短/空行 clamp 后仍保留，行长足够即恢复原列；水平移动
+  -- （成功移动的 h/l/w/b/0/$/gg/G/Home/End）重置 goal = nil 重新采样
 
 水平移动（h/l，字节级）不动：注入不占字节，光标字节即文本位置，
 显示列由 render_cursor 调 vtext_dcol 统一算出。
 ```
 
 - `screen_to_text_dcol`：目标屏幕列 → 按该行注入列表（升序 dcol，逐个减
-  宽度）反查文本列；越过行尾 clamp。
+  宽度）反查文本列；**scol 落在 hint 区间 [hs, hs+hw) → 返回 h.dcol（hint
+  后第一文本列，Neovim coladvance 跳过注入）**；越过行尾 clamp。
 - **消灭 13 个 lsp_\* 字段**：editor 只留 `self.lsp`（Client 对象）+
   `self.vtexts`（Ed vtext 槽，编辑器核心数据）。
 

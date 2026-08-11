@@ -676,3 +676,99 @@ hunk 数 = 编辑位置分散度（打字场景恒 1；全文替换收敛为 1 �
 - 是否升格独立 C 库 undotree.h（§八 保底阶梯最终态，仅当
   pt COW 被判不可用时才走到）。
 - UNode 内存池化（后续优化）。
+
+## 十二、undo/redo 增量暴露（LSP 免全同步，2026-08 定案）
+
+### 12.1 背景与现状
+
+LSP 的 undo/redo 原走 `resync()`（全量 didChange + vtext 全清 +
+缓存全 dirty）——design_lsp.md §4.4 已定案为临时方案，正解 =
+undotree hunks 增量。C 侧能力**全部就位**，缺口纯在绑定暴露：
+
+- `ut_diff(from, to)` / `ut_freshdiff(i, j)`（undotree.h:596/614）
+  已产出 `ut_Hunk` 数组（`T->S->scratch` + `diffhn` 取用）；
+- `lpt_switch`（piecetab.c:825）内部已消费同一 hunks 走增量
+  lc 迁移（ut_diff → ut_mapoffset → lpt_hunkapply）；
+- `ut_switch` 不清 scratch（只动 current 指针）——回调在
+  lpt_switch 之后、下一次 diff 之前读取，生命周期天然安全。
+
+### 12.2 API 形态定案（回调式，2026-08 修订）
+
+**`doc:undo()` / `doc:redo()` / `doc:earlier()` / `doc:later()` 接受
+可选 f 回调**，逐 hunk 调用一次，不返回表：
+
+```
+vid = doc:undo(f)      -- f(off, del, text)；f nil = 现状零开销
+vid = doc:undo(vid)    -- 旧用法不变（f 与 vid 参数互斥，f 优先）
+```
+
+- **f 纯消费、无副作用语义**：diff 在急切同步路径恒有（§六 惰性
+  边界），f 不是"触发 diff/强制同步"开关——存在即用 diff 内容调用。
+- **回调签名 `f(off, del, text)`**：
+  - `off` = **顺序链坐标**（pa + Σ_{j<i}(cins−pdel)）——第 i 个
+    hunk 应用时文档的位置。**正向 hunk 数组恒等于 ca 字段**
+    （§11.4 几何一致性：ca ≡ pa + Σ前缀Δ；后续 hunk 作用在
+    pa_i 之后不影响其位置）——但取逆数组（fresh 逆变换）不满足
+    （字段互换后 ca 是原 pa），实现统一按 pa + shift 计算，
+    **不依赖 ca**；
+  - `del` = pdel；`text` = dst 侧 [ca, ca+cins) 字节文本，C 内
+    按 hunk 现场读取（fresh 段读 committed buffer、switch 段读
+    切换后 buffer——回调时机即文本源，见 12.4），随回调交付。
+- 不做独立 `doc:switchdiff()` 查询方法（YAGNI）。
+
+### 12.3 顺序链与 LSP 发送
+
+LSP `contentChanges` 是**顺序应用**语义（c1 变 S→S'，c2 的 range
+相对 S'）。hunk 数组（升序不相交）按此语义直接发送：
+
+- **段内**：off = pa + 前缀位移（12.2），升序 hunk 逐一衔接；
+- **跨段天然衔接**：fresh 段（current→committed）应用完文档恰 =
+  committed = switch 段（committed→parent）的 pa 基准——两段
+  顺序拼接进**同一条 didChange**，无需合成（compose）也无需
+  段标识——f 对段无感知。
+
+**零新 C 算法**：不做 `ut_seqmap`/前缀和 API（绑定层回调循环内
+一行 shift 累计）；不暴露 `utH_compose`（跨段拼接已正确，合成
+反而引入两遍换算）。
+
+### 12.4 回调时机（两阶段）与文本源
+
+f 按 hunk 数组序分两阶段调用（实现最简，零临时存储）：
+
+| 阶段 | 时机 | text 源 |
+|---|---|---|
+| fresh 段 | ut_freshdiff 后、ut_discard/pt_rollback 前 | committed buffer（`ut_payload(src)`，fresh 编辑未污染） |
+| switch 段 | lpt_switch 完成后 | 切换后 buffer（`pt_buffer(&d->C)` = dst） |
+
+契约：**f 不得读取文档**（回调时 doc 可能处于中间态），只消费
+参数。错误安全：fresh 段回调失败 → 未 discard（doc 一致）；switch
+段回调失败 → 已切换（doc 一致）。
+
+### 12.5 LSP 接线（已落地）
+
+- `Protocol:notify_edits(changes)`：一条 didChange，contentChanges
+  = 逐 edit 换算（offset_pos(off) → offset_pos(off+del)，UTF-16 同
+  notify_edit 路径）；空表跳过（version 不递增）。
+- `Client:on_switch(changes)`：notify_edits + `sem.dirty`/
+  `hint_dirty` + `vtext.clear()`（原 resync 行为）。
+- **已删** `Protocol:sync_full` / `Client:resync`。
+- editor.lua：`n.u`/`n["<C-r>"]` → `switch_sync`（f 攒 changes →
+  `lsp:on_switch(changes)`）；无 lsp 时 f 不提供（零回调开销）。
+
+### 12.6 摩擦记录
+
+| # | 摩擦 | 处置 |
+|---|---|---|
+| 14 | hunk 文本须随回调交付（否则 Lua 侧 buffer:sub 1-based 摩擦 + 切换时序） | C 按回调时机现场读 buffer 提取 |
+| 15 | 取逆数组的 ca 字段不满足前缀一致性（字段互换不重算） | off 统一 pa + shift 计算，不依赖 ca |
+| 16 | 回调式暴露 vs 返回表：表"不用则浪费、用则一次扔" | 回调零分配、消费形态消费者决定（§〇 铁律） |
+
+### 12.7 测试（已落地）
+
+- piecetab_test：回调重放对拍（apply_edits(before, edits) ==
+  dump）——单 hunk/多 hunk（分散编辑）/fresh 两段/redo 前向
+  （text 非空）/undo(vid) 旧用法共存。
+- lsp_test：notify_edits 消息形状（单条 didChange、多 edit 顺序、
+  version 递增、空表不发）；on_switch 清 vtext + dirty。
+- editor_test：u/<C-r> → on_switch 收到正确 edits。
+- 全量 `just lua/test` 绿 + luals 零诊断。

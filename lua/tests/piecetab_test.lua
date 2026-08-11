@@ -618,6 +618,88 @@ function TestDoc:testUndoTree()
     lu.assertEquals(d:offset(), 6)
 end
 
+-- Sequential-application replay: apply edits (off = byte offset in the
+-- current text, del = bytes deleted, text = bytes inserted).
+local function apply_edits(src, edits)
+  for _, e in ipairs(edits) do
+    src = src:sub(1, e.off) .. e.text .. src:sub(e.off + e.del + 1)
+  end
+  return src
+end
+
+-- undo/redo(f): f receives (off, del, text) per hunk in application
+-- order; replaying them on the pre-jump text reproduces the post-jump
+-- text (off is sequential: each relative to the previous edit's result)
+function TestDoc:testUndoCallbackReplays()
+  local d = pt.doc("abcdef")
+  d:commit()
+  d:seek("set", 1); d:write("XY"); d:commit() -- "aXYbcdef"
+  d:seek("set", 4); d:write("Z"); d:commit()  -- "aXYbZcdef"
+  local before = d:dump()
+  local edits = {}
+  d:undo(function(off, del, text)
+    edits[#edits + 1] = { off = off, del = del, text = text }
+  end)
+  lu.assertEquals(d:dump(), "aXYbcdef")
+  lu.assertEquals(apply_edits(before, edits), "aXYbcdef")
+end
+
+function TestDoc:testUndoCallbackMultiHunk()
+  -- two scattered edits in one commit: hunks keep sequential offsets
+  local d = pt.doc("abcdef")
+  d:commit()
+  d:seek("set", 1); d:write("X") -- journal (1,0,1)
+  d:seek("set", 5); d:write("Y") -- journal (5,0,1)
+  d:commit()                     -- "aXbcdeYf"
+  local before = d:dump()
+  local edits = {}
+  d:undo(function(off, del, text)
+    edits[#edits + 1] = { off = off, del = del, text = text }
+  end)
+  lu.assertEquals(d:dump(), "abcdef")
+  lu.assertEquals(apply_edits(before, edits), "abcdef")
+end
+
+function TestDoc:testUndoCallbackFresh()
+  -- uncommitted edits: the fresh hunks are fed before version hunks
+  -- (here the parent is root, so only fresh hunks arrive)
+  local d = pt.doc("abcdef")
+  d:commit()
+  d:seek("set", 1); d:write("X")
+  d:seek("set", 5); d:write("Y")
+  local before = d:dump() -- "aXbcdeYf"
+  local edits = {}
+  d:undo(function(off, del, text)
+    edits[#edits + 1] = { off = off, del = del, text = text }
+  end)
+  lu.assertEquals(d:dump(), "abcdef")
+  lu.assertEquals(apply_edits(before, edits), "abcdef")
+end
+
+function TestDoc:testRedoCallback()
+  -- redo(f): forward hunks, inserted text read from the child buffer
+  local d = pt.doc("abcdef")
+  d:commit()
+  d:seek("set", 1); d:write("XY"); d:commit() -- "aXYbcdef"
+  d:undo()
+  local edits = {}
+  d:redo(function(off, del, text)
+    edits[#edits + 1] = { off = off, del = del, text = text }
+  end)
+  lu.assertEquals(d:dump(), "aXYbcdef")
+  lu.assertEquals(apply_edits("abcdef", edits), "aXYbcdef")
+end
+
+function TestDoc:testUndoCallbackVidStillWorks()
+  -- undo(vid) without f keeps the old semantics
+  local d = pt.doc("")
+  d:commit()
+  d:seek("end"); d:write("hello"); local v1 = d:commit()
+  d:seek("end"); d:write(" world"); d:commit()
+  lu.assertEquals(d:undo(v1), v1)
+  lu.assertEquals(d:dump(), "hello")
+end
+
 function TestDoc:testBufferExport()
     local d = pt.doc("hello")
     d:seek("end")

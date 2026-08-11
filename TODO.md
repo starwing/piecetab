@@ -52,13 +52,9 @@
   "渲染注入不承诺"决议是否推翻待 hint text 设计时裁定
 - **LSP 集成**（大目标）：semantic tokens → 层写者、
   inlay hints → hint text、diagnostics → 身份层
-- **LSP undo 增量同步**（接口摩擦专题，2026-08 标记）：undo/redo
-  现走全量 `sync_full()`（无 range didChange）——与"一切走增量
-  即时同步"定案摩擦。undotree 增量在手边：`lpt_switch` 的
-  `ut_diff` hunks `{pa, pdel, cins}` 坐标系与 `notify_edit(off,
-  del, s)` 天然一致，只差 C 侧暴露 `doc:switchdiff()` API；
-  边缘场景 fresh undo（未 commit 编辑被 u 丢弃）需另行定案
-  （编辑栈逆序 vs 全量兜底）。开工前读 design_lsp.md §4.4
+- **LSP undo 增量同步**（✅ 已落地 2026-08）：`doc:undo(f)` 回调式
+  hunk 暴露（off/del/text 顺序链，fresh+switch 单条 didChange），
+  废弃 `sync_full`/`resync`。定案见 design_luabind.md §十二
 
 ## 低优先级
 

@@ -514,14 +514,30 @@ function Protocol:notify_edit(off, del, s)
   })
 end
 
--- Resync the whole document after jumps the client cannot localize
--- (undo/redo): one full didChange (no range = whole-document replace).
-function Protocol:sync_full()
-  if self.state ~= "running" then return end
+--- @alias lsp.edit {off: integer, del: integer, text: string}
+
+-- Send sequential edits as one didChange: the server applies the array
+-- in order, every range relative to the previous edit's result. Edits
+-- come from undo/redo hunks (off = hunk start in that coordinate).
+--- @param changes lsp.edit[]
+function Protocol:notify_edits(changes)
+  if self.state ~= "running" or #changes == 0 then return end
+  local cc = {}
+  for _, e in ipairs(changes) do
+    local sl, sc = self.opts.offset_pos(e.off)
+    local el, ec = self.opts.offset_pos(e.off + e.del)
+    cc[#cc + 1] = {
+      range = {
+        start = { line = sl, character = _utf16(self, sl, sc) },
+        ["end"] = { line = el, character = _utf16(self, el, ec) },
+      },
+      text = e.text,
+    }
+  end
   self.version = self.version + 1
   self:notify("textDocument/didChange", {
     textDocument = { uri = self.uri, version = self.version },
-    contentChanges = { { text = self.opts.get_text() } },
+    contentChanges = cc,
   })
 end
 
@@ -878,10 +894,11 @@ function Client:on_edit(off, del, s)
   self.hint_retry, self.hint_null = 0, 0
 end
 
--- Resync after jumps the client cannot localize (undo/redo): one full
--- didChange plus a full cache and vtext-slot reset.
-function Client:resync()
-  if self.proto then self.proto:sync_full() end
+-- Incremental sync after undo/redo: sequential edits in one didChange,
+-- then mark caches dirty and clear the vtext slots (hints refetch).
+--- @param changes lsp.edit[]
+function Client:on_switch(changes)
+  if self.proto then self.proto:notify_edits(changes) end
   if self.sem then self.sem.dirty = true end
   self.hint_dirty = true
   self.opts.vtext.clear()

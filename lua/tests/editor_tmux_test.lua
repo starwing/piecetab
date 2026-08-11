@@ -173,6 +173,33 @@ function TestDisplay:testInsertGapCursor()
   s:wait(function() return s:cursor().x == 4 end)
 end
 
+function TestDisplay:testMoveVertSkipsHint()
+  -- j onto a hint: the cursor skips past the injected text (Neovim
+  -- coladvance), never lands inside it or short of it. Screen x = 4
+  -- (gutter "%3d ") + display col.
+  local s = spawn_ed("package.path\nlocal pt = require\n",
+    { { line = 1, character = 8, label = ": table" } })
+  wait_screen(s, ": table")
+  for _ = 1, 11 do s:feed("l") end -- col 11: the 'h' of package.path
+  lu.assertEquals(s:cursor().x, 15) -- 4 + 11, no hint on line 0
+  s:feed("j")
+  s:wait(function() return s:cursor().y == 1 end)
+  lu.assertEquals(s:cursor().x, 19) -- 4 + 15: first text cell past the hint
+end
+
+function TestDisplay:testMoveVertKeepsGoalAcrossEmpty()
+  -- j over an empty line keeps the theoretical column (Neovim curswant):
+  -- the cursor re-lands on the long line below instead of staying at 0
+  local s = spawn_ed("abcdefghijklmnop\n\nabcdefghijklmnop\n", nil)
+  for _ = 1, 12 do s:feed("l") end
+  s:feed("j")
+  s:wait(function() return s:cursor().y == 1 end)
+  lu.assertEquals(s:cursor().x, 4) -- empty line: clamped to line start
+  s:feed("j")
+  s:wait(function() return s:cursor().y == 2 end)
+  lu.assertEquals(s:cursor().x, 16) -- 4 + 12: goal restored
+end
+
 function TestDisplay:testEditNoTear()
   -- typing before the hint shifts it with the text (no tear/overwrite)
   local s = spawn_ed("hello\n",

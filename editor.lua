@@ -158,11 +158,13 @@ local function word_class(byte)
   return 0
 end
 
--- Move cursor by n characters (-1 = left, +1 = right)
----@param doc piecetab.Doc
+-- Move cursor by n characters (-1 = left, +1 = right). A successful
+-- horizontal motion re-samples the vertical goal column (Neovim curswant).
+---@param ed editor.Ed
 ---@param n integer
-local function cursor_move_char(doc, n)
+local function cursor_move_char(ed, n)
   -- TODO(C): promote char motion to C (pt or new module)
+  local doc = ed.doc
   local off = doc:offset()
   if n < 0 and off <= 0 then return end
   local buf = doc:buffer()
@@ -182,10 +184,12 @@ local function cursor_move_char(doc, n)
   if doc:offset() == saved and n > 0 and off < #buf then
     doc:seek("set", off + 1)
   end
+  if doc:offset() ~= saved then ed.goal = nil end
 end
 
----@param doc piecetab.Doc
-local function move_word_forward(doc)
+---@param ed editor.Ed
+local function move_word_forward(ed)
+  local doc = ed.doc
   local saved = doc:offset()
   local lnum = doc:line()
   doc:seek("line", lnum)
@@ -205,10 +209,12 @@ local function move_word_forward(doc)
   end
   doc:seek("cur", i - col)
   edlog("w result: seek cur %d", i - col)
+  if doc:offset() ~= saved then ed.goal = nil end
 end
 
----@param doc piecetab.Doc
-local function move_word_backward(doc)
+---@param ed editor.Ed
+local function move_word_backward(ed)
+  local doc = ed.doc
   local saved = doc:offset()
   local lnum = doc:line()
   doc:seek("line", lnum)
@@ -223,6 +229,7 @@ local function move_word_backward(doc)
     while i >= 0 and word_class(line:byte(i + 1)) == cls do i = i - 1 end
   end
   doc:seek("cur", (i + 1) - col)
+  if doc:offset() ~= saved then ed.goal = nil end
 end
 
 -- Rendering helpers
@@ -321,7 +328,9 @@ local function text_trunc(text, maxw)
 end
 
 -- Move cursor vertically by dl lines, preserving the screen column
--- (injected text counts; Neovim semantics)
+-- (injected text counts; Neovim semantics). The goal column (Neovim
+-- curswant) survives the EOL clamp: once a long enough line is reached,
+-- the cursor re-lands on it. Horizontal motions re-sample it.
 ---@param ed editor.Ed
 ---@param dl integer
 local function move_vert(ed, dl)
@@ -329,9 +338,12 @@ local function move_vert(ed, dl)
   local lnum = doc:line()
   local nlnum = lnum + dl
   if nlnum < 0 or nlnum >= doc:breaks() then return end
-  local scol = ed:vtext_dcol(lnum, doc:column(), ed.mode == "INSERT")
+  local scol = ed.goal or ed:vtext_dcol(lnum, doc:column(),
+    ed.mode == "INSERT")
+  ed.goal = scol
   doc:seek("line", nlnum)
-  doc:seek("cur", dcol_to_byte(doc, nlnum, ed:screen_to_text_dcol(nlnum, scol)))
+  doc:seek("cur", dcol_to_byte(doc, nlnum,
+    ed:screen_to_text_dcol(nlnum, scol)))
 end
 
 -- Open a new line: dir > 0 below (o), dir < 0 above (O); enter INSERT
@@ -866,6 +878,7 @@ end
 ---@field msg string
 ---@field saved_vid integer
 ---@field pending_key string?
+---@field goal integer?  vertical goal column (Neovim curswant), nil = sample
 ---@field scroll_line integer
 ---@field tabstop integer
 ---@field log fun(fmt: string, ...: any)
@@ -904,14 +917,15 @@ end
 -- built-in normal keymaps (per-instance, called from Ed.new)
 local function install_normal_keys(self)
   local n = self.keymaps.normal
-  n.h = function(ed) cursor_move_char(ed.doc, -1) end
-  n.l = function(ed) cursor_move_char(ed.doc, 1) end
+  n.h = function(ed) cursor_move_char(ed, -1) end
+  n.l = function(ed) cursor_move_char(ed, 1) end
   n.j = function(ed) move_vert(ed, 1) end
   n.k = function(ed) move_vert(ed, -1) end
-  n.w = function(ed) move_word_forward(ed.doc) end
-  n.b = function(ed) move_word_backward(ed.doc) end
-  n["0"] = function(ed) ed.doc:seek("line", ed.doc:line()) end
+  n.w = function(ed) move_word_forward(ed) end
+  n.b = function(ed) move_word_backward(ed) end
+  n["0"] = function(ed) ed.goal = nil; ed.doc:seek("line", ed.doc:line()) end
   n["$"] = function(ed)
+    ed.goal = nil
     local lnum = ed.doc:line()
     ed.doc:seek("line", lnum)
     local text = ed.doc:read("l") or ""
@@ -921,8 +935,10 @@ local function install_normal_keys(self)
       ed.doc:seek("cur", utf8.offset(text, 0, #text) - 1) -- last char start
     end
   end
-  n.gg = function(ed) ed.doc:seek("line", 0) end
-  n.G = function(ed) ed.doc:seek("line", ed.doc:breaks() - 1) end
+  n.gg = function(ed) ed.goal = nil; ed.doc:seek("line", 0) end
+  n.G = function(ed) ed.goal = nil
+    ed.doc:seek("line", ed.doc:breaks() - 1)
+  end
   n.x = function(ed)
     ed:docedit(1, ""); ed.doc:commit()
   end
@@ -935,15 +951,26 @@ local function install_normal_keys(self)
   end
   n.i = function(ed) ed.mode = "INSERT" end
   n.a = function(ed)
-    cursor_move_char(ed.doc, 1); ed.mode = "INSERT"
+    cursor_move_char(ed, 1); ed.mode = "INSERT"
   end
   n.o = function(ed) open_line(ed, 1) end
   n.O = function(ed) open_line(ed, -1) end
-  n.u = function(ed)
-    ed.doc:undo()
+  -- jump doc versions (undo/redo), feed the change hunks to the LSP
+  -- as sequential edits (incremental sync instead of a full didChange)
+  local function switch_sync(ed, name)
+    local changes
+    if ed.lsp then
+      changes = {}
+      ed.doc[name](ed.doc, function(off, del, text)
+        changes[#changes + 1] = { off = off, del = del, text = text }
+      end)
+    else
+      ed.doc[name](ed.doc)
+    end
     if ed.hl then ed.hl:reset() end
-    if ed.lsp then ed.lsp:resync() end
+    if ed.lsp then ed.lsp:on_switch(changes) end
   end
+  n.u = function(ed) switch_sync(ed, "undo") end
   n.p = function(ed)
     if not ed.clip then return end
     ed:docedit(0, ed.clip)
@@ -953,11 +980,7 @@ local function install_normal_keys(self)
     ed.sel_start = ed.doc:offset()
     ed.mode = "VISUAL"
   end
-  n["<C-r>"] = function(ed)
-    ed.doc:redo()
-    if ed.hl then ed.hl:reset() end
-    if ed.lsp then ed.lsp:resync() end
-  end
+  n["<C-r>"] = function(ed) switch_sync(ed, "redo") end
   n["<C-l>"] = function(ed) ed.grid:clear() end
   n[":"] = function(ed)
     ed.mode = "COMMAND"; ed.cmdline = ""
@@ -974,7 +997,7 @@ local function ins_escape(self)
   self.doc:commit()
   local off = self.doc:offset()
   if off > 0 and self.doc:buffer():read(off - 1, 1) ~= "\n" then
-    cursor_move_char(self.doc, -1)
+    cursor_move_char(self, -1)
   end
   self.msg = ""
 end
@@ -1016,10 +1039,12 @@ local function install_insert_keys(self)
   end
   i["<Up>"] = function(ed) move_vert(ed, -1) end
   i["<Down>"] = function(ed) move_vert(ed, 1) end
-  i["<Left>"] = function(ed) cursor_move_char(ed.doc, -1) end
-  i["<Right>"] = function(ed) cursor_move_char(ed.doc, 1) end
-  i["<Home>"] = function(ed) ed.doc:seek("line", ed.doc:line()) end
+  i["<Left>"] = function(ed) cursor_move_char(ed, -1) end
+  i["<Right>"] = function(ed) cursor_move_char(ed, 1) end
+  i["<Home>"] = function(ed) ed.goal = nil
+    ed.doc:seek("line", ed.doc:line()) end
   i["<End>"] = function(ed)
+    ed.goal = nil
     local lnum = ed.doc:line()
     ed.doc:seek("line", lnum)
     ed.doc:seek("cur", line_endcol(ed, lnum))
@@ -1166,6 +1191,7 @@ do
     self.msg = ""
     self.saved_vid = self.doc:version()
     self.pending_key = nil
+    self.goal = nil -- vertical goal column (Neovim curswant), screen cols
     self.scroll_line = 0
     self.tabstop = 4
     self.log = edlog
@@ -1318,7 +1344,8 @@ do
   end
 
   -- Text column for a screen column: subtract the width of every vtext
-  -- block wholly before it (past the line end: identity).
+  -- block wholly before it. A screen col inside a hint maps to the hint's
+  -- first text col after it (Neovim coladvance: cursor skips the hint).
   --- @param line integer
   --- @param scol integer  display column
   --- @return integer
@@ -1326,8 +1353,11 @@ do
     local lst = self.vtexts[line]
     local w = 0
     for _, h in ipairs(lst or {}) do
-      if scol < h.dcol + w then break end
-      w = w + utf8.width(h.text)
+      local hs = h.dcol + w
+      if scol < hs then break end
+      local hw = utf8.width(h.text)
+      if scol < hs + hw then return h.dcol end
+      w = w + hw
     end
     return scol - w
   end

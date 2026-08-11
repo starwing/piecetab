@@ -246,23 +246,35 @@ function Doc:commit() end
 function Doc:version() end
 
 ---Undo to a previous version. Discards any uncommitted edits.
----@param vid? integer  target version id (default: parent version)
+---With `f`, calls `f(off, del, text)` once per change hunk, in
+---application order: `off` is the byte offset in the document before
+---that hunk applies (sequential coordinates), `text` the inserted
+---bytes; replaying the calls on the pre-undo text reproduces the
+---post-undo text. Fresh (uncommitted) hunks are fed before version
+---hunks. `f` must not read the document.
+---@param vid? integer|fun(off: integer, del: integer, text: string)
+---  target version id (default: parent version), or the hunk callback
+---@param f? fun(off: integer, del: integer, text: string)
 ---@return integer      vid of the version after undo
-function Doc:undo(vid) end
+function Doc:undo(vid, f) end
 
 ---Redo to the first child version. Errors if there are uncommitted edits.
+---With `f`, feeds each change hunk as in `undo`.
+---@param f? fun(off: integer, del: integer, text: string)
 ---@return integer  vid of the version after redo
-function Doc:redo() end
+function Doc:redo(f) end
 
 ---Navigate to an older (chronologically previous) version.
----Errors if there are uncommitted edits.
+---Errors if there are uncommitted edits. With `f`, feeds hunks as in `undo`.
+---@param f? fun(off: integer, del: integer, text: string)
 ---@return integer  vid of the version after navigation
-function Doc:earlier() end
+function Doc:earlier(f) end
 
 ---Navigate to a younger (chronologically next) version.
----Errors if there are uncommitted edits.
+---Errors if there are uncommitted edits. With `f`, feeds hunks as in `undo`.
+---@param f? fun(off: integer, del: integer, text: string)
 ---@return integer  vid of the version after navigation
-function Doc:later() end
+function Doc:later(f) end
 
 ---Export a snapshot of a specific version as a new buffer.
 ---@param vid? integer  version id (default: current version)

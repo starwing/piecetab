@@ -71,6 +71,26 @@ function TestSkeleton:testNewEmptyDoc()
   lu.assertEquals(e.doc:breaks(), 0) -- empty doc: 0 lines (see piecetab_test testLineCountEmpty)
 end
 
+function TestSkeleton:testUndoSwitchSyncsLsp()
+  -- u gathers the change hunks and pushes them to the LSP as sequential
+  -- edits (incremental sync); <C-r> does the same for redo
+  local e = make_ed("hello\n")
+  local switch_edits
+  --- @type any
+  e.lsp = {
+    on_edit = function() end,
+    on_switch = function(_, changes) switch_edits = changes end,
+  }
+  e.doc:commit()
+  e.doc:seek("set", 0)
+  e:docedit(0, "X")
+  e.doc:commit()
+  e:dispatch("u")
+  lu.assertEquals(switch_edits[1], { off = 0, del = 1, text = "" })
+  e:dispatch("<C-r>")
+  lu.assertEquals(switch_edits[1], { off = 0, del = 0, text = "X" })
+end
+
 function TestSkeleton:testOpenReadsFile()
   local path = os.tmpname()
   local f = assert(io.open(path, "w"))
@@ -998,6 +1018,18 @@ function TestVtext:testScreenToTextDcol()
   lu.assertEquals(self.e:screen_to_text_dcol(1, 7), 7) -- no vtext: identity
 end
 
+function TestVtext:testScreenToTextDcolSkipsHint()
+  -- a screen col inside a hint maps to the first text col after it
+  -- (Neovim coladvance: the cursor skips over injected text), so j never
+  -- lands on a cell the hint covers
+  self.e:set_vtext(0, { { dcol = 2, text = "ZZ" } })
+  lu.assertEquals(self.e:screen_to_text_dcol(0, 1), 1) -- before hint
+  lu.assertEquals(self.e:screen_to_text_dcol(0, 2), 2) -- hint start: past it
+  lu.assertEquals(self.e:screen_to_text_dcol(0, 3), 2) -- inside the hint
+  lu.assertEquals(self.e:screen_to_text_dcol(0, 4), 2) -- first text cell after
+  lu.assertEquals(self.e:screen_to_text_dcol(0, 5), 3) -- past it: off by width
+end
+
 function TestVtext:testJKKeepsScreenCol()
   -- line 0 injected, line 1 not: j keeps screen col 4 (Neovim semantics)
   self.e:set_vtext(0, { { dcol = 0, text = "int:" } })
@@ -1034,6 +1066,47 @@ end
 function TestVtext:testShiftVtextsCrossLineClears()
   self.e:shift_vtexts(0, 0, "a\nb")
   lu.assertEquals(next(self.e.vtexts), nil)
+end
+
+-- goal column (Neovim curswant): j/k keep the theoretical screen column;
+-- a short/empty line clamps the cursor, the goal survives and re-lands
+-- once a long enough line is reached again
+TestGoal = {}
+
+local function goal_ed()
+  return make_ed("long line here\nworld\nlong line here\n")
+end
+
+function TestGoal:testJKKeepsGoalAcrossShortLine()
+  local e = goal_ed()
+  e.doc:seek("set", 0)
+  e.doc:seek("cur", 10)
+  e:dispatch("j")
+  lu.assertEquals(e.doc:column(), 5) -- "world" is short: clamp to its end
+  e:dispatch("j")
+  lu.assertEquals(e.doc:column(), 10) -- goal restored on the long line
+end
+
+function TestGoal:testJKKeepsGoalAcrossEmptyLine()
+  local e = make_ed("long line here\n\nlong line here\n")
+  e.doc:seek("set", 0)
+  e.doc:seek("cur", 10)
+  e:dispatch("j")
+  lu.assertEquals(e.doc:column(), 0) -- empty line: clamp to line start
+  e:dispatch("j")
+  lu.assertEquals(e.doc:column(), 10) -- goal restored
+end
+
+function TestGoal:testHorizontalMotionResetsGoal()
+  -- h re-samples the goal from the current column (Neovim updates
+  -- curswant on horizontal motion): j after h goes from the h column
+  local e = goal_ed()
+  e.doc:seek("set", 0)
+  e.doc:seek("cur", 10)
+  e:dispatch("j")
+  e:dispatch("h")
+  e:dispatch("j")
+  lu.assertEquals(e.doc:column(), 4) -- from col 4, not the stale goal 10
 end
 
 os.exit(lu.LuaUnit.run(), true)
