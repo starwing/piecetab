@@ -1537,6 +1537,36 @@ function TestHint:testCursorMotionSkipsHint()
   os.remove(path)
 end
 
+function TestHint:testEditShiftsHints()
+  -- stale hint positions would squeeze new chars: same-line edits
+  -- shift hints past the edit point; deleted-range hints drop;
+  -- multi-line edits clear the cache
+  local e, path = hint_ed([[
+    { { position = { line = 0, character = 0 }, label = "int:" } }]],
+    "hello\n")
+  frame(e)
+  lu.assertTrue(lsp_drive(e, function() return e.lsp_hints ~= nil end),
+    "hint response")
+  -- insert before the hint: hint shifts right by 1
+  e.doc:seek("set", 0)
+  e:docedit(0, "x")
+  lu.assertEquals(e.lsp_hints[0][1].dcol, 1, "insert shifts hint")
+  -- delete the char before it: hint shifts back
+  e.doc:seek("set", 0)
+  e:docedit(1, "")
+  lu.assertEquals(e.lsp_hints[0][1].dcol, 0, "delete shifts hint back")
+  -- delete over the hint position: hint inside the range is dropped
+  e:docedit(1, "") -- delete 'h' again -> hint at 0 is in range 0..1
+  lu.assertNil(e.lsp_hints[0][1], "hint in deleted range dropped")
+  lu.assertEquals(#e.lsp_hints[0], 0)
+  -- multi-line edit: cache cleared (refetch on next frame)
+  e:docedit(0, "a\nb")
+  lu.assertNil(e.lsp_hints, "multi-line edit clears cache")
+  e.lsp:stop()
+  lspio.close(e.lsp.io)
+  os.remove(path)
+end
+
 function TestHint:testConfigAnswer()
   -- server asks workspace/configuration (LuaLS style): editor answers
   -- with hint.enable=true, unknown sections as null

@@ -1421,12 +1421,54 @@ do
     return ok
   end
 
+  --- Shift cached hints after an edit (they are injected text: stale
+  -- positions would squeeze/relocate new chars). Same-line hints past
+  -- the edit point shift by the byte delta (approx: tab/wide-char
+  -- columns self-heal on the next response); hints inside the deleted
+  -- range are dropped; multi-line edits clear the cache.
+  --- @param off integer
+  --- @param del integer
+  --- @param s string
+  function Ed:edit_hints(off, del, s)
+    local hints = self.lsp_hints
+    if not hints then return end
+    local saved = self.doc:offset()
+    self.doc:seek("set", off)
+    local line = self.doc:line()
+    self.doc:seek("set", off + del)
+    local eline = self.doc:line()
+    self.doc:seek("set", saved)
+    if line ~= eline or s:find("\n", 1, true) then
+      self.lsp_hints = nil
+      return
+    end
+    local lst = hints[line]
+    if not lst then return end
+    self.doc:seek("line", line)
+    local base = self.doc:offset()
+    local text = self.doc:read("l") or ""
+    self.doc:seek("set", saved)
+    local edcol = text_byte_to_dcol(text, off - base, self.tabstop)
+    local delta = #s - del
+    local out = {}
+    for _, h in ipairs(lst) do
+      if h.dcol < edcol then
+        out[#out + 1] = h
+      elseif h.dcol >= edcol + del then
+        h.dcol = h.dcol + delta
+        out[#out + 1] = h
+      end
+    end
+    hints[line] = out
+  end
+
   --- Edit at cursor with highlight notification (single edit funnel).
   function Ed:docedit(del, s)
     local off = self.doc:offset()
     if self.lsp then
       self.lsp:notify_edit(off, del, s)
       if self.lsp_sem then self.lsp_sem.dirty = true end
+      self:edit_hints(off, del, s)
       self.lsp_hint_dirty = true
     end
     self.doc:edit(del, s)
