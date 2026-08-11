@@ -102,10 +102,13 @@ do
     self:write(string.format("\27[%d;%dH", row, col))
   end
 
-  --- Read one key (blocking). Returns termfeed-formatted key string.
+  --- Read one key, waiting up to `timeout` ms (nil = timed out, the
+  --- caller can run idle work). Defaults to the ESC prefix window.
   --- @return string?
-  function Term:getkey()
-    if self.tf:waitkey(0, self.esc_timeout) ~= "KEY" then return nil end
+  function Term:getkey(timeout)
+    if self.tf:waitkey(0, timeout or self.esc_timeout) ~= "KEY" then
+      return nil
+    end
     return self.tf:format()
   end
 
@@ -1367,11 +1370,13 @@ do
     -- response; dirty marks edits, kept rendering until the next snapshot
     self.lsp_sem = { spans = {}, dirty = true, pending = false }
     self.lsp_diag = nil
-    -- inlay hints: per-viewport cache, refreshed on scroll or edit
+    -- inlay hints: per-viewport cache, refreshed on scroll or idle
     self.lsp_hints = nil
     self.lsp_hint_view = nil
     self.lsp_hint_pending = false
     self.lsp_hint_dirty = true
+    self.last_edit_t = 0
+    self.hint_idle = 1.0 -- seconds of no typing before a hint refresh
     -- answer LuaLS config requests: hints on (VSCode-default behavior),
     -- rest of the Lua section left unset so defaults apply
     self.lsp:on_server("workspace/configuration", function(params)
@@ -1470,9 +1475,46 @@ do
       if self.lsp_sem then self.lsp_sem.dirty = true end
       self:edit_hints(off, del, s)
       self.lsp_hint_dirty = true
+      self.last_edit_t = os.clock()
     end
     self.doc:edit(del, s)
     if self.hl then self.hl:notify_edit(off, del, #s) end
+  end
+
+  --- Idle work (called on main-loop timeouts, ~100ms): refresh inlay
+  -- hints once typing has stopped (debounce) or the viewport moved.
+  -- Continuous typing never requests; the stale-response guard (doc
+  -- version) stays as a belt-and-braces against races.
+  function Ed:tick()
+    if not (self.lsp and self.lsp.state == "running") then return end
+    if not (self.lsp.capabilities.inlayHintProvider
+        and not self.lsp_hint_pending) then return end
+    local idle = os.clock() - (self.last_edit_t or 0) >= self.hint_idle
+    if not (self.lsp_hint_dirty and idle
+        or self.lsp_hint_view ~= self.scroll_line) then return end
+    local rows = self.term:size()
+    local visend = math.min(self.scroll_line + rows - 1, self.doc:breaks())
+    self.lsp_hint_pending = true
+    self.lsp_hint_reqver = self.lsp.version
+    self.lsp:request("textDocument/inlayHint", {
+      textDocument = { uri = self.lsp.uri },
+      range = { start = { line = self.scroll_line, character = 0 },
+        ["end"] = { line = visend, character = 0x7fffffff } },
+    }, function(result, err)
+        self.lsp_hint_pending = false
+        if err or not result then
+          -- answered (null = no hints / unsupported): settle, don't
+          -- refetch until the viewport moves or the doc is edited
+          self.lsp_hint_dirty = false
+          self.lsp_hint_view = self.scroll_line
+        elseif self.lsp.version ~= self.lsp_hint_reqver then
+          -- edited while in flight: keep the shifted cache, refetch
+        else
+          self.lsp_hints = lsp_hint_decode(self, result)
+          self.lsp_hint_view = self.scroll_line
+          self.lsp_hint_dirty = false
+        end
+      end)
   end
 
   --- @param name string
@@ -1639,36 +1681,6 @@ do
           end)
       end
     end
-
-    -- after render: refresh inlay hints when the viewport moved or the
-    -- doc was edited (request carries the visible line range)
-    if self.lsp and self.lsp.state == "running"
-        and self.lsp.capabilities.inlayHintProvider
-        and not self.lsp_hint_pending
-        and (self.lsp_hint_dirty or self.lsp_hint_view ~= self.scroll_line) then
-      local visend = math.min(self.scroll_line + visrows, total_lines)
-      self.lsp_hint_pending = true
-      -- hints follow their trailing char: a response computed against
-      -- an older doc would overwrite the locally shifted cache, so
-      -- responses are only applied when the doc version still matches
-      self.lsp_hint_reqver = self.lsp.version
-      self.lsp:request("textDocument/inlayHint", {
-        textDocument = { uri = self.lsp.uri },
-        range = { start = { line = self.scroll_line, character = 0 },
-          ["end"] = { line = visend, character = 0x7fffffff } },
-      }, function(result, err)
-          self.lsp_hint_pending = false
-          if err or not result then
-            self.lsp_hint_dirty = false
-          elseif self.lsp.version ~= self.lsp_hint_reqver then
-            -- edited while in flight: keep the shifted cache, refetch
-          else
-            self.lsp_hints = lsp_hint_decode(self, result)
-            self.lsp_hint_view = self.scroll_line
-            self.lsp_hint_dirty = false
-          end
-        end)
-    end
   end
 
   function Ed:render_status(rows, cols, cur_line, cur_col, cur_off)
@@ -1822,7 +1834,9 @@ local function main(argv)
     while not e.done do
       if e.lsp then e.lsp:poll() end
       e:render()
-      e:dispatch(e.term:getkey())
+      local key = e.term:getkey(100) -- 100ms idle slice for tick()
+      if key then e:dispatch(key) end
+      e:tick()
     end
   end)
 

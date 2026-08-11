@@ -1051,6 +1051,7 @@ local function lsp_drive(e, pred, frames)
   frames = frames or 200
   for _ = 1, frames do
     if e.lsp then e.lsp:poll() end
+    e:tick() -- idle work (hint requests) runs in the main-loop tick
     if pred() then return true end
     os.execute("sleep 0.01")
   end
@@ -1390,6 +1391,7 @@ local function hint_ed(code, content)
   local path = fake_server(hint_code(code))
   local e = make_ed(content)
   e:lsp_start({ "lua", path })
+  e.hint_idle = 0 -- tests drive tick() directly: request immediately
   lu.assertTrue(lsp_drive(e, function() return e.lsp.state == "running" end))
   return e, path
 end
@@ -1569,8 +1571,11 @@ end
 
 function TestHint:testStaleResponseDropped()
   -- hints follow their trailing char: a response computed against an
-  -- older doc must not overwrite the locally shifted cache
+  -- older doc must not be applied. The server bumps the hint position
+  -- per request, so a stale (request 1) vs fresh (request 2) response
+  -- is distinguishable.
   local path = fake_server([[
+local n = 0
 while true do
   local m = readmsg()
   if not m then break end
@@ -1579,9 +1584,10 @@ while true do
       sendmsg({ jsonrpc = "2.0", id = m.id, result = { capabilities = {
         inlayHintProvider = true } } })
     elseif m.method == "textDocument/inlayHint" then
+      n = n + 1
       os.execute("sleep 0.05") -- delay: let the client edit meanwhile
       sendmsg({ jsonrpc = "2.0", id = m.id, result = {
-        { position = { line = 0, character = 0 }, label = "int:" } } })
+        { position = { line = 0, character = n }, label = "int:" } } })
     elseif m.method == "shutdown" then
       sendmsg({ jsonrpc = "2.0", id = m.id, result = y.null })
     end
@@ -1592,21 +1598,17 @@ end
 ]])
   local e = make_ed("hello\n")
   e:lsp_start({ "lua", path })
+  e.hint_idle = 0
   lu.assertTrue(lsp_drive(e, function() return e.lsp.state == "running" end))
-  frame(e) -- render issues the request
+  frame(e)
   lu.assertTrue(lsp_drive(e, function() return e.lsp_hint_pending end),
     "request in flight")
   e.doc:seek("set", 0)
-  e:docedit(0, "x") -- edit while the request is in flight
-  lu.assertTrue(lsp_drive(e, function() return e.lsp_hint_pending == false end),
-    "stale response arrived")
-  lu.assertNil(e.lsp_hints, "stale response not applied")
-  lu.assertTrue(e.lsp_hint_dirty, "dirty kept: will refetch")
-  -- next refetch (no edit) applies cleanly: hint back at the server
-  -- position for the current doc
-  frame(e)
+  e:docedit(0, "x") -- edit while request 1 (position 1) is in flight
+  -- only the fresh response (position 2) may land
   lu.assertTrue(lsp_drive(e, function()
-    return e.lsp_hints and e.lsp_hints[0][1].dcol == 0 end), "resynced")
+    return e.lsp_hints and e.lsp_hints[0] and e.lsp_hints[0][1].dcol == 2 end),
+    "fresh response applied, stale dropped")
   e.lsp:stop()
   lspio.close(e.lsp.io)
   os.remove(path)
