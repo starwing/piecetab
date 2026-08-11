@@ -12,6 +12,7 @@ local utf8 = require("lua-utf8")
 local tf = require("termfeed")
 local ts = require("treesitter")
 local lspclient = require("lspclient")
+local lsp_span = require("lsp_span")
 
 -- ================================================================
 -- Section 0: Logging (writes to editor.log for debugging)
@@ -134,6 +135,8 @@ local ATTR_KEYWORD  = { fg = 207 }
 local ATTR_STRING   = { fg = 114 }
 local ATTR_COMMENT  = { fg = 245 }
 local ATTR_FUNCTION = { fg = 81 }
+local ATTR_NUMBER   = { fg = 215 }
+local ATTR_DIAG     = { underline = true }
 local ATTR_REVERSE  = { reverse = true }
 
 -- ================================================================
@@ -308,6 +311,34 @@ local function dcol_to_byte(doc, lnum, dcol)
   return text_dcol_to_byte(text, dcol, 4)
 end
 
+-- UTF-16 unit column -> byte offset within a UTF-8 line. BMP chars are
+-- 1 unit; only 4-byte supplementary chars (emoji) are 2 (clamp to char
+-- boundary, LSP positions never split chars).
+---@param text string
+---@param units integer
+local function text_utf16_to_byte(text, units)
+  local i = 1
+  while i <= #text and units > 0 do
+    local nxt = utf8.next(text, i) or #text + 1
+    units = units - (nxt - i == 4 and 2 or 1)
+    i = nxt
+  end
+  return i - 1
+end
+
+-- LSP position {line, character=UTF-16 units} -> byte offset.
+---@param doc piecetab.Doc
+---@param line integer
+---@param unitcol integer
+local function doc_utf16_to_byte(doc, line, unitcol)
+  local saved = doc:offset()
+  doc:seek("line", line)
+  local base = doc:offset()
+  local text = doc:read("l") or ""
+  doc:seek("set", saved)
+  return base + text_utf16_to_byte(text, unitcol)
+end
+
 -- Move cursor vertically by dl lines, preserving display column
 ---@param doc piecetab.Doc
 ---@param dl integer
@@ -436,9 +467,10 @@ end
 local hl = {}
 
 -- file extension -> language name (nil = no highlighting)
----@param filename string
+---@param filename string?
 ---@return string?
 local function ext_lang(filename)
+  if not filename then return nil end
   local ext = filename:match("%.([%w_]+)$")
   if ext == "c" or ext == "h" then return "c" end
   if ext == "lua" then return "lua" end
@@ -516,6 +548,17 @@ local HL_ATTRS = {
   string       = ATTR_STRING,
   keyword      = ATTR_KEYWORD,
   ["function"] = ATTR_FUNCTION,
+}
+
+-- LSP semantic tokenType names -> attrs (unknown names ignored; clangd
+-- duplicate legend names map by name, same name -> same attr).
+local LSP_ATTRS = {
+  comment      = ATTR_COMMENT,
+  string       = ATTR_STRING,
+  keyword      = ATTR_KEYWORD,
+  number       = ATTR_NUMBER,
+  ["function"] = ATTR_FUNCTION,
+  method       = ATTR_FUNCTION,
 }
 
 --- Create a highlighter for a language ("c"/"lua"), nil if unsupported.
@@ -1027,7 +1070,7 @@ local function install_builtin_commands(self)
     elseif arg == "off" then
       if ed.lsp then
         ed.lsp:stop()
-        ed.lsp = nil
+        ed.lsp, ed.lsp_sem, ed.lsp_diag = nil, nil, nil
       end
       ed.msg = "lsp off"
     elseif arg == "status" then
@@ -1156,6 +1199,33 @@ do
         ed.msg = "lsp: " .. state .. (why and " (" .. why .. ")" or "")
       end,
     })
+    -- semantic tokens: full-snapshot cache, replaced atomically per
+    -- response; dirty marks edits, kept rendering until the next snapshot
+    self.lsp_sem = { spans = {}, dirty = true, pending = false }
+    self.lsp_diag = nil
+    self.lsp:on("textDocument/publishDiagnostics", function(p)
+      if p.uri ~= self.lsp.uri then return end
+      -- drop stale snapshots (out-of-order pushes)
+      local cur = self.lsp_diag and self.lsp_diag.version or -1
+      local v = p.version
+      if v and v < cur then return end
+      local spans = {}
+      for _, d in ipairs(p.diagnostics or {}) do
+        local r = d.range
+        local s = doc_utf16_to_byte(ed.doc, r.start.line, r.start.character)
+        local e = doc_utf16_to_byte(ed.doc, r["end"].line, r["end"].character)
+        if e > s then
+          spans[#spans + 1] = { offset = s, length = e - s, attr = ATTR_DIAG }
+        end
+      end
+      ed.lsp_diag = { version = v or cur, spans = spans }
+      for _, d in ipairs(p.diagnostics or {}) do
+        if d.severity == 1 then
+          ed.msg = "diag: " .. d.message
+          break
+        end
+      end
+    end)
     self.lsp:start(argv, "file://" .. (self.filename or ""),
       ext_lang(self.filename) or "plaintext",
       "file://" .. ((self.filename or ""):match("^(.*)/") or "."))
@@ -1164,7 +1234,10 @@ do
   --- Edit at cursor with highlight notification (single edit funnel).
   function Ed:docedit(del, s)
     local off = self.doc:offset()
-    if self.lsp then self.lsp:notify_edit(off, del, s) end
+    if self.lsp then
+      self.lsp:notify_edit(off, del, s)
+      if self.lsp_sem then self.lsp_sem.dirty = true end
+    end
     self.doc:edit(del, s)
     if self.hl then self.hl:notify_edit(off, del, #s) end
   end
@@ -1211,7 +1284,9 @@ do
 
     local saved_off = self.doc:offset()
     local spans
-    if self.hl or self.show_pieces or self.sel_start then
+    if self.hl or self.show_pieces or self.sel_start
+        or (self.lsp_sem and #self.lsp_sem.spans > 0)
+        or (self.lsp_diag and #self.lsp_diag.spans > 0) then
       self.doc:seek("line", self.scroll_line)
       local s_off = self.doc:offset()
       self.doc:seek("line", math.min(self.scroll_line + visrows, total_lines))
@@ -1227,6 +1302,12 @@ do
       if self.sel_start then
         layers[#layers + 1] = visual_spans(self.doc, self.sel_start,
                                            saved_off, s_off, e_off)
+      end
+      if self.lsp_sem then
+        layers[#layers + 1] = lsp_span.clip(self.lsp_sem.spans, s_off, e_off)
+      end
+      if self.lsp_diag then
+        layers[#layers + 1] = lsp_span.clip(self.lsp_diag.spans, s_off, e_off)
       end
       spans = merge_layers(layers, s_off, e_off)
       for _, sp in ipairs(spans) do
@@ -1293,6 +1374,33 @@ do
     self:render_cursor(saved_off, lnum_width, rows, cols)
     self.term:flush()
     g:freeze()
+
+    -- after render: refresh semantic tokens when dirty (edit once ->
+    -- one request; skip while a request is already in flight)
+    if self.lsp and self.lsp.state == "running" and self.lsp_sem
+        and self.lsp_sem.dirty and not self.lsp_sem.pending then
+      local cap = self.lsp.capabilities.semanticTokensProvider
+      if not (cap and cap.full) then
+        self.lsp_sem.dirty = false
+      else
+        local sem = self.lsp_sem
+        sem.pending = true
+        self.lsp:request("textDocument/semanticTokens/full", {
+          textDocument = { uri = self.lsp.uri },
+        }, function(result, err)
+            sem.pending = false
+            if err then
+              sem.dirty = false
+            elseif result and result.data then
+              sem.spans = lsp_span.decode(result.data, cap.legend,
+                LSP_ATTRS, function(line, unit)
+                  return doc_utf16_to_byte(self.doc, line, unit)
+                end)
+              sem.dirty = false
+            end
+          end)
+      end
+    end
   end
 
   function Ed:render_status(rows, cols, cur_line, cur_col)
@@ -1307,8 +1415,11 @@ do
       local dirty_mark = (self.doc:version() ~= self.saved_vid) and "[+] " or ""
       local linestr = string.format("L%d,%d", cur_line + 1, cur_col + 1)
       local lsp_part = self.lsp and (" lsp:" .. self.lsp.state) or ""
+      local diag_part = self.lsp_diag
+          and #self.lsp_diag.spans > 0 and (" d:" .. #self.lsp_diag.spans) or ""
       local left = string.format(" %s%s %s  %s ", dirty_mark,
-        self.filename or "[No Name]", self.mode, linestr) .. lsp_part
+        self.filename or "[No Name]", self.mode, linestr)
+        .. lsp_part .. diag_part
       local msg_part = ""
       if #self.msg > 0 then msg_part = " " .. self.msg end
       local pad = cols - utf8.width(left) - utf8.width(msg_part) - 1
@@ -1449,6 +1560,8 @@ Ed.ATTR_KEYWORD  = ATTR_KEYWORD
 Ed.ATTR_STRING   = ATTR_STRING
 Ed.ATTR_COMMENT  = ATTR_COMMENT
 Ed.ATTR_FUNCTION = ATTR_FUNCTION
+Ed.ATTR_NUMBER   = ATTR_NUMBER
+Ed.ATTR_DIAG     = ATTR_DIAG
 Ed.ATTR_REVERSE  = ATTR_REVERSE
 
 return Ed

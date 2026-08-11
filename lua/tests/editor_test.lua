@@ -11,6 +11,7 @@ package.cpath = (_G["jit"] and root .. "/lua/luajit/?.so;"
 
 local lu = require "luaunit"
 local Ed = require "editor"
+local lspio = require "lspio"
 
 local ROWS, COLS = 6, 40
 
@@ -1010,6 +1011,204 @@ function TestVisual:testWordMotionExtend()
   e2:dispatch("b") -- cursor 0 = anchor, selection "f"
   e2:dispatch("y")
   lu.assertEquals(e2.clip, "f")
+end
+
+-- ======== LSP layers (Task 5/6) ========
+
+-- shared preamble: frame helpers over stdio (fake server child process)
+local function fake_preamble()
+  return [[
+local function readmsg()
+  local head = io.read("*l")
+  if not head then return nil end
+  local len = tonumber(head:match("(%d+)"))
+  io.read("*l") -- blank line
+  local body = io.read(len)
+  local y = require("yyjson")
+  return y.decode(body)
+end
+local function sendmsg(t)
+  local s = require("yyjson").encode(t)
+  io.write("Content-Length: ", #s, "\r\n\r\n", s)
+  io.flush()
+end
+local y = require("yyjson")
+]]
+end
+
+local function fake_server(code)
+  local path = os.tmpname()
+  local f = assert(io.open(path, "w"))
+  f:write(fake_preamble())
+  f:write(code)
+  f:close()
+  return path
+end
+
+-- poll the lsp transport until pred() or the frame budget runs out
+local function lsp_drive(e, pred, frames)
+  frames = frames or 200
+  for _ = 1, frames do
+    if e.lsp then e.lsp:poll() end
+    if pred() then return true end
+    os.execute("sleep 0.01")
+  end
+  return false
+end
+
+TestLspSemantic = {}
+
+-- server: handshake with a semantic legend, answer full requests
+local function sem_code(data)
+  return string.format([[
+local legend = { tokenTypes = { "keyword", "string", "number",
+  "comment", "function" }, tokenModifiers = {} }
+while true do
+  local m = readmsg()
+  if not m then break end
+  if m.id then
+    if m.method == "initialize" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = { capabilities = {
+        semanticTokensProvider = { legend = legend, full = true } } } })
+    elseif m.method == "textDocument/semanticTokens/full" then
+      sendmsg({ jsonrpc = "2.0", id = m.id,
+        result = { data = { %s } } })
+    elseif m.method == "shutdown" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = y.null })
+    end
+  elseif m.method == "exit" then
+    os.exit(0)
+  end
+end
+]], data)
+end
+
+function TestLspSemantic:testOverrideAndCoexist()
+  -- semantic: int=keyword, main=function, return=number (overrides the
+  -- syntax keyword); void stays syntax-only
+  local path = fake_server(sem_code(
+    "0,0,3,0,0, 0,4,4,4,0, 0,13,6,2,0"))
+  local e = make_ed("int main(void) { return 0; }\n")
+  e:open_language("c")
+  e:lsp_start({ "lua", path })
+  lu.assertTrue(lsp_drive(e, function() return e.lsp.state == "running" end))
+  frame(e) -- render end issues the semanticTokens/full request
+  lu.assertTrue(lsp_drive(e, function() return #e.lsp_sem.spans > 0 end),
+    "spans decoded")
+  frame(e)
+  local kw = e.sc:intern(Ed.ATTR_KEYWORD)
+  local fn = e.sc:intern(Ed.ATTR_FUNCTION)
+  local nu = e.sc:intern(Ed.ATTR_NUMBER)
+  local _, st = e.grid:cell(0, 4)  -- 'i' of int (semantic keyword)
+  lu.assertEquals(st, kw)
+  local _, st2 = e.grid:cell(0, 8) -- 'm' of main (semantic function)
+  lu.assertEquals(st2, fn)
+  local _, st3 = e.grid:cell(0, 13) -- 'v' of void (syntax only)
+  lu.assertEquals(st3, kw)
+  local _, st4 = e.grid:cell(0, 21) -- 'r' of return (semantic number wins)
+  lu.assertEquals(st4, nu)
+  e.lsp:stop()
+  lspio.close(e.lsp.io)
+  os.remove(path)
+end
+
+function TestLspSemantic:testUtf16Decode()
+  -- "你好" = 2 UTF-16 units / 6 bytes; "😀" = 2 units / 4 bytes
+  local path = fake_server(sem_code("0,0,2,1,0"))
+  local e = make_ed("你好世界\n")
+  e:lsp_start({ "lua", path })
+  lu.assertTrue(lsp_drive(e, function() return e.lsp.state == "running" end))
+  frame(e)
+  lu.assertTrue(lsp_drive(e, function() return #e.lsp_sem.spans > 0 end),
+    "spans decoded")
+  lu.assertEquals(e.lsp_sem.spans[1].offset, 0)
+  lu.assertEquals(e.lsp_sem.spans[1].length, 6)
+  frame(e)
+  local st = e.sc:intern(Ed.ATTR_STRING)
+  local _, c0 = e.grid:cell(0, 4) -- '你'
+  local _, c1 = e.grid:cell(0, 5) -- '你' (width 2)
+  local _, c2 = e.grid:cell(0, 6) -- '好'
+  lu.assertEquals(c0, st)
+  lu.assertEquals(c1, st)
+  lu.assertEquals(c2, st)
+  e.lsp:stop()
+  lspio.close(e.lsp.io)
+  os.remove(path)
+  -- emoji: 4 UTF-8 bytes = 2 UTF-16 units -> span length 4
+  local path2 = fake_server(sem_code("0,1,2,1,0"))
+  local e2 = make_ed("a😀b\n")
+  e2:lsp_start({ "lua", path2 })
+  lu.assertTrue(lsp_drive(e2, function() return e2.lsp.state == "running" end))
+  frame(e2)
+  lu.assertTrue(lsp_drive(e2, function() return #e2.lsp_sem.spans > 0 end),
+    "spans decoded")
+  lu.assertEquals(e2.lsp_sem.spans[1].offset, 1)
+  lu.assertEquals(e2.lsp_sem.spans[1].length, 4)
+  e2.lsp:stop()
+  lspio.close(e2.lsp.io)
+  os.remove(path2)
+end
+
+TestLspDiag = {}
+
+function TestLspDiag:testPushRenderAndVersionDrop()
+  local path = fake_server([[
+local function push(v, msg, s0, s1)
+  sendmsg({ jsonrpc = "2.0", method = "textDocument/publishDiagnostics",
+    params = { uri = "file://", version = v, diagnostics = {
+      { range = { start = { line = 0, character = s0 },
+        ["end"] = { line = 0, character = s1 } },
+        message = msg, severity = 1 } } } })
+end
+while true do
+  local m = readmsg()
+  if not m then break end
+  if m.id then
+    if m.method == "initialize" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = { capabilities = {} } })
+    elseif m.method == "shutdown" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = y.null })
+    end
+  elseif m.method == "textDocument/didOpen" then
+    push(1, "oops", 0, 5)
+  elseif m.method == "textDocument/didChange" then
+    local v = m.params.textDocument.version
+    push(v, "later", 6, 11)
+    push(1, "stale", 0, 5) -- out-of-order: must be dropped
+    sendmsg({ jsonrpc = "2.0", method = "test/done" })
+  elseif m.method == "exit" then
+    os.exit(0)
+  end
+end
+]])
+  local e = make_ed("hello world\n")
+  e:lsp_start({ "lua", path })
+  local done = false
+  e.lsp:on("test/done", function() done = true end)
+  lu.assertTrue(lsp_drive(e, function() return e.lsp_diag ~= nil end),
+    "first push")
+  frame(e)
+  local und = e.sc:intern(Ed.ATTR_DIAG)
+  local _, st = e.grid:cell(0, 4) -- 'h' of hello (v1 range 0-5)
+  lu.assertEquals(st, und)
+  e.doc:seek("set", 5)
+  e:docedit(0, "!")
+  lu.assertTrue(lsp_drive(e, function() return done end), "edit pushes")
+  lu.assertEquals(e.lsp_diag.version, 2)
+  lu.assertEquals(#e.lsp_diag.spans, 1) -- stale v1 dropped
+  lu.assertStrContains(e.msg, "later")
+  frame(e)
+  local _, st2 = e.grid:cell(0, 10) -- ' ' (v2 range 6-11)
+  lu.assertEquals(st2, und)
+  local _, st3 = e.grid:cell(0, 14) -- 'l' of world
+  lu.assertEquals(st3, und)
+  local _, st4 = e.grid:cell(0, 15) -- 'd' outside range: not underlined
+  lu.assertNotEquals(st4, und)
+  local _, st5 = e.grid:cell(0, 4) -- 'h' no longer underlined
+  lu.assertNotEquals(st5, und)
+  e.lsp:stop()
+  lspio.close(e.lsp.io)
+  os.remove(path)
 end
 
 os.exit(lu.LuaUnit.run(), true)
