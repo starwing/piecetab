@@ -158,6 +158,8 @@ static int Ldecode(lua_State *L) {
 static int lyy_isarray(lua_State *L, int idx, size_t len) {
     int         isint;
     lua_Integer k;
+    /* lua_next writes key+value without growing the stack */
+    luaL_checkstack(L, 3, "json: stack overflow");
     lua_pushnil(L);
     while (lua_next(L, idx) != 0) {
         k = lyy_tointegerx(L, -2, &isint);
@@ -189,6 +191,7 @@ static lyy_Val *lyy_pushobj(lua_State *L, int idx, lyy_Doc *d, int depth) {
     size_t      klen;
     const char *kstr;
     lyy_Val    *obj = yyjson_mut_obj(d);
+    luaL_checkstack(L, 3, "json: stack overflow");
     lua_pushnil(L);
     while (lua_next(L, idx) != 0) {
         if (lua_type(L, -2) != LUA_TSTRING)
