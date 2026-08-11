@@ -32,6 +32,27 @@ jobs:
       - name: termfeed tests
         run: just tf
 
+  lua-tmux:
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip ci]')"
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@main
+      - uses: extractions/setup-just@v4
+      - uses: leafo/gh-actions-lua@v10
+        with:
+          lua-version: "5.4"
+      - uses: leafo/gh-actions-luarocks@v4
+      - name: install tmux
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then brew install tmux; else sudo apt-get update && sudo apt-get install -y tmux; fi
+      - name: install rocks
+        run: luarocks install luautf8 && luarocks install luv
+      - name: tmux display tests
+        run: just lua/tmux
+
   test-windows:
     if: "! contains(toJSON(github.event.commits.*.message), '[skip ci]')"
     runs-on: windows-latest
