@@ -51,7 +51,7 @@ jobs:
       - name: install rocks
         run: luarocks install luautf8 && luarocks install luv
       - name: tmux display tests
-        run: just lua/tmux
+        run: just lua/ed-tmux
 
   test-windows:
     if: "! contains(toJSON(github.event.commits.*.message), '[skip ci]')"

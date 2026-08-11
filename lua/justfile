@@ -7,8 +7,9 @@ INCS := "-I. -I.."
 
 build mod:
     mkdir -p luajit
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o {{ mod }}.so {{ mod }}.c
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o luajit/{{ mod }}.so {{ mod }}.c
+    if [ "$(uname)" = "Darwin" ]; then LDF="-bundle -undefined dynamic_lookup"; else LDF="-shared -fPIC"; fi; \
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA55_INC }} -DNDEBUG -O2 $LDF -o {{ mod }}.so {{ mod }}.c; \
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} -DNDEBUG -O2 $LDF -o luajit/{{ mod }}.so {{ mod }}.c
 
 run t *args='':
     lua tests/{{ t }}.lua {{ args }}
