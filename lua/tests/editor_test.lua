@@ -1276,4 +1276,85 @@ end
   os.remove(path)
 end
 
+function TestLspDiag:testCursorStatusMessage()
+  -- cursor inside an underlined span -> status center shows the message;
+  -- overlapping spans resolve by severity (1 = error wins)
+  local path = fake_server([[
+local function pushd(v, msg, sev, s0, s1)
+  sendmsg({ jsonrpc = "2.0", method = "textDocument/publishDiagnostics",
+    params = { uri = "file://", version = v, diagnostics = {
+      { range = { start = { line = 0, character = s0 },
+        ["end"] = { line = 0, character = s1 } },
+        message = msg, severity = sev } } } })
+end
+while true do
+  local m = readmsg()
+  if not m then break end
+  if m.id then
+    if m.method == "initialize" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = { capabilities = {} } })
+    elseif m.method == "shutdown" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = y.null })
+    end
+  elseif m.method == "textDocument/didOpen" then
+    pushd(1, "oops", 1, 0, 5)
+    pushd(1, "dup", 2, 0, 5)  -- same range, weaker severity
+    pushd(1, "warn", 2, 6, 11)
+  elseif m.method == "exit" then
+    os.exit(0)
+  end
+end
+]])
+  local e = make_ed("hello world\n")
+  e.term.size = function() return ROWS, 80 end -- wide terminal: full msg
+  e:lsp_start({ "lua", path })
+  lu.assertTrue(lsp_drive(e, function() return e.lsp_diag ~= nil end), "push")
+  e.doc:seek("set", 0)
+  e.term.s = ""
+  local s = frame(e)
+  lu.assertStrContains(s, "diag: oops") -- severity 1 wins over "dup"
+  lu.assertNotStrContains(s, "diag: dup")
+  e.doc:seek("set", 10)
+  e.term.s = ""
+  s = frame(e)
+  lu.assertStrContains(s, "diag: warn")
+  e.doc:seek("set", 12) -- past all spans: center goes blank
+  e.term.s = ""
+  s = frame(e)
+  lu.assertNotStrContains(s, "diag: warn")
+  e.lsp:stop()
+  lspio.close(e.lsp.io)
+  os.remove(path)
+end
+
+function TestLspDiag:testRunningNoMsgDup()
+  -- :lsp on once running: right segment shows lsp:running persistently,
+  -- on_status must not also write it into the transient msg
+  local path = fake_server([[
+while true do
+  local m = readmsg()
+  if not m then break end
+  if m.id then
+    if m.method == "initialize" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = { capabilities = {} } })
+    elseif m.method == "shutdown" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = y.null })
+    end
+  elseif m.method == "exit" then
+    os.exit(0)
+  end
+end
+]])
+  local e = make_ed("x\n")
+  e:lsp_start({ "lua", path })
+  lu.assertTrue(lsp_drive(e, function() return e.lsp.state == "running" end))
+  lu.assertNotStrContains(e.msg, "running", "steady state silent in msg")
+  e.term.s = ""
+  local s = frame(e)
+  lu.assertStrContains(s, "lsp:on", "right segment persistent, short form")
+  e.lsp:stop()
+  lspio.close(e.lsp.io)
+  os.remove(path)
+end
+
 os.exit(lu.LuaUnit.run(), true)

@@ -339,6 +339,22 @@ local function doc_utf16_to_byte(doc, line, unitcol)
   return base + text_utf16_to_byte(text, unitcol)
 end
 
+-- Truncate text to fit a display width budget (UTF-8 aware, whole chars).
+---@param text string
+---@param maxw integer
+---@return string
+local function text_trunc(text, maxw)
+  if utf8.width(text) <= maxw then return text end
+  local w, i = 0, 1
+  while i <= #text do
+    local nxt = utf8.next(text, i) or #text + 1
+    local cw = utf8.width(text, i, nxt - 1) or 1
+    if w + cw > maxw then break end
+    w, i = w + cw, nxt
+  end
+  return text:sub(1, i - 1)
+end
+
 -- Move cursor vertically by dl lines, preserving display column
 ---@param doc piecetab.Doc
 ---@param dl integer
@@ -678,6 +694,21 @@ local function merge_layers(layers, start, endoff)
   end
   if lo < endoff then fold(endoff) end
   return out
+end
+
+-- Diag span containing byte offset `off`; highest severity wins
+-- (LSP: 1 = error, higher numbers are weaker).
+--- @param spans table array of {offset, length, msg, severity}
+--- @param off integer
+--- @return table?
+local function lsp_diag_at(spans, off)
+  local best
+  for _, sp in ipairs(spans) do
+    if sp.offset <= off and off < sp.offset + sp.length then
+      if not best or sp.severity < best.severity then best = sp end
+    end
+  end
+  return best
 end
 
 -- Piece-boundary writer (pull mode, no cache): scan all pieces, alternate
@@ -1207,7 +1238,11 @@ do
         return line, col
       end,
       on_status = function(state, why)
-        ed.msg = "lsp: " .. state .. (why and " (" .. why .. ")" or "")
+        -- steady states render in the status bar segments; only report
+        -- abnormal exits as a transient message
+        if state == "exited" then
+          ed.msg = "lsp: " .. state .. (why and " (" .. why .. ")" or "")
+        end
       end,
     })
     -- semantic tokens: full-snapshot cache, replaced atomically per
@@ -1226,7 +1261,10 @@ do
         local s = doc_utf16_to_byte(ed.doc, r.start.line, r.start.character)
         local e = doc_utf16_to_byte(ed.doc, r["end"].line, r["end"].character)
         if e > s then
-          spans[#spans + 1] = { offset = s, length = e - s, attr = ATTR_DIAG }
+          spans[#spans + 1] = {
+            offset = s, length = e - s, attr = ATTR_DIAG,
+            msg = d.message, severity = d.severity or 2,
+          }
         end
       end
       ed.lsp_diag = { version = v or cur, spans = spans }
@@ -1381,7 +1419,7 @@ do
     self.log("  diff: csi_len=%d", #csi)
     self.term:write(csi)
 
-    self:render_status(rows, cols, cur_line, cur_col)
+    self:render_status(rows, cols, cur_line, cur_col, saved_off)
     self:render_cursor(saved_off, lnum_width, rows, cols)
     self.term:flush()
     g:freeze()
@@ -1414,7 +1452,7 @@ do
     end
   end
 
-  function Ed:render_status(rows, cols, cur_line, cur_col)
+  function Ed:render_status(rows, cols, cur_line, cur_col, cur_off)
     self.term:move(rows, 1)
     if self.mode == "COMMAND" then
       self.term:write(Term.REVERSE)
@@ -1425,18 +1463,27 @@ do
     else
       local dirty_mark = (self.doc:version() ~= self.saved_vid) and "[+] " or ""
       local linestr = string.format("L%d,%d", cur_line + 1, cur_col + 1)
-      local lsp_part = self.lsp and (" lsp:" .. self.lsp.state) or ""
-      local diag_part = self.lsp_diag
-          and #self.lsp_diag.spans > 0 and (" d:" .. #self.lsp_diag.spans) or ""
       local left = string.format(" %s%s %s  %s ", dirty_mark,
         self.filename or "[No Name]", self.mode, linestr)
-        .. lsp_part .. diag_part
+      -- center: transient messages — the diag message under the cursor
+      -- wins (recomputed every frame, gone once the cursor leaves);
+      -- otherwise the event message (command feedback, lsp events)
+      local at = self.lsp_diag and lsp_diag_at(self.lsp_diag.spans, cur_off)
       local msg_part = ""
-      if #self.msg > 0 then msg_part = " " .. self.msg end
-      local pad = cols - utf8.width(left) - utf8.width(msg_part) - 1
-      if pad < 0 then pad = 0 end
+      if at then
+        msg_part = " diag: " .. at.msg
+      elseif #self.msg > 0 then
+        msg_part = " " .. self.msg
+      end
+      -- right: persistent server state, short form
+      local right = self.lsp
+          and (self.lsp.state == "running" and " lsp:on"
+            or (" lsp:" .. self.lsp.state)) or ""
+      local avail = cols - utf8.width(left) - utf8.width(right) - 1
+      msg_part = text_trunc(msg_part, math.max(0, avail))
+      local pad = math.max(0, avail - utf8.width(msg_part))
       self.term:write(Term.REVERSE)
-      self.term:write(left .. string.rep(" ", pad) .. msg_part .. " ")
+      self.term:write(left .. msg_part .. string.rep(" ", pad) .. right .. " ")
       self.term:write(Term.RESET)
     end
   end
