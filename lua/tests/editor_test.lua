@@ -1512,6 +1512,30 @@ function TestHint:testNoServerMsg()
   lu.assertNil(e.lsp)
 end
 
+function TestHint:testCursorSkipsHint()
+  -- cursor must not sit on injected hint text: shifted past it
+  local e, path = hint_ed([[
+    { { position = { line = 0, character = 0 }, label = "int:" } }]],
+    "hello\n")
+  frame(e)
+  lu.assertTrue(lsp_drive(e, function() return e.lsp_hints ~= nil end),
+    "hint response")
+  -- cursor at doc byte 0: display col 0 -> shifted to 0+4 (#"int:")
+  e.doc:seek("set", 0)
+  e.term.s = ""
+  frame(e)
+  -- cursor CSI is the last move, always followed by ?25h
+  lu.assertStrContains(e.term.s, "\27[1;9H\27[?25h", false, "cursor after hint") -- 4+3+2
+  -- cursor at doc byte 1: display col 1 -> 1+4
+  e.doc:seek("set", 1)
+  e.term.s = ""
+  frame(e)
+  lu.assertStrContains(e.term.s, "\27[1;10H\27[?25h", false)
+  e.lsp:stop()
+  lspio.close(e.lsp.io)
+  os.remove(path)
+end
+
 function TestHint:testConfigAnswer()
   -- server asks workspace/configuration (LuaLS style): editor answers
   -- with hint.enable=true, unknown sections as null

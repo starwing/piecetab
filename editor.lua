@@ -722,6 +722,24 @@ local function lsp_diag_at(spans, off)
   return best
 end
 
+-- Display-column shift from inlay hints at or before `dcol` (hints are
+-- sorted by dcol; injected text pushes the body right).
+--- @param hints table?
+--- @param dcol integer
+--- @return integer
+local function hint_offset(hints, dcol)
+  if not hints then return 0 end
+  local w = 0
+  for _, h in ipairs(hints) do
+    if h.dcol <= dcol then
+      w = w + utf8.width(h.text)
+    else
+      break
+    end
+  end
+  return w
+end
+
 -- Decode inlayHint response items into per-line hint lists
 -- {[line] = {{dcol, text}, ...}} sorted by display column. Position is
 -- the insertion point (UTF-16), converted to the display column the
@@ -1651,6 +1669,9 @@ do
     self.log("cursor: saved_off=%d cur_line=%d line_text=[%s](%d) byte_col=%d",
       saved_off, cur_line, cur_line_text:gsub("\n", "\\n"), #cur_line_text, byte_col)
     local display_col = text_byte_to_dcol(cur_line_text, byte_col, self.tabstop)
+    -- cursor skips inlay hints: shifted right past any hint at/before it
+    display_col = display_col
+      + hint_offset(self.lsp_hints and self.lsp_hints[cur_line], display_col)
 
     local cur_screen_col = display_col + lnum_width + 2
     if cur_screen_col > cols then cur_screen_col = cols end
