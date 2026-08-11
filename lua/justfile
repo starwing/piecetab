@@ -22,10 +22,10 @@ lsp *args='': (build "json") (run "lsp_test" args)
 # editor demo needs lua-utf8 rock (PUC Lua only)
 ed *args='': (build "piecetab") (build "cellgrid") (build "termfeed")
     lua tests/editor_test.lua {{ args }}
-# display integration tests via a real terminal (needs tmux in PATH);
-# json.so is required at runtime by lsp.lua in the tmux session
-tmux *args='': (build "piecetab") (build "cellgrid") (build "termfeed") (build "json")
-    lua tests/tmux_test.lua {{ args }}
+# display integration tests: real terminal via tmux helper
+# (needs tmux in PATH; json.so is required by lsp.lua in the session)
+ed-tmux *args='': (build "piecetab") (build "cellgrid") (build "termfeed") (build "json")
+    lua tests/editor_tmux_test.lua {{ args }}
 
 TS_INC := "-I/opt/homebrew/include"
 TS_LIB := "-L/opt/homebrew/lib -ltree-sitter"
@@ -41,7 +41,7 @@ build-ts: ts-grammars
 ts *args='': (build-ts) (run "treesitter_test" args)
 
 # run every test suite (needs lua-utf8 rock, tmux, tree-sitter grammars)
-test: pt cg tf json lsp ed tmux ts
+test: pt cg tf json lsp ed ed-tmux ts
 
 cov mod t:
     rm -f *.gcda luajit/*.gcda

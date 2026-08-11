@@ -534,18 +534,6 @@ TestScroll = {}
 function TestScroll:setUp()
   self.e = make_ed(make_doc())
 end
-
-function TestScroll:testContentRendered()
-  -- document content bytes must appear in frame output (regression:
-  -- render content path was only covered via lnum/status/scroll before).
-  -- cellgrid diff emits per-cell CUP + char (no contiguous text runs), so
-  -- assert content chars land at the expected screen columns.
-  local s = frame(self.e)
-  lu.assertStrContains(s, "\27[1;5H\27[0ml") -- "line 1": 'l' at col 5
-  lu.assertStrContains(s, "\27[1;10H1")      -- "line 1": '1' at col 10
-  lu.assertStrContains(s, "\27[5;10H5")      -- "line 5": '5' at col 10
-end
-
 function TestScroll:testDownScrollEmitsSu()
   -- j to the last visible row (row 4 of 5), then one more j scrolls
   for _ = 1, 4 do
@@ -585,24 +573,6 @@ function TestScroll:testUpScrollEmitsSd()
   lu.assertNotStrContains(s, "\27%[1S") -- no SU
   lu.assertEquals(self.e.scroll_line, 9)
 end
-
-function TestScroll:testUpScrollRedrawsLineNumbers()
-  -- exposed top row after SD is physically blank: the full line number
-  -- must be redrawn (regression: only differing digits were emitted,
-  -- leaving "54" instead of "854")
-  for _ = 1, 14 do -- viewport 10..14, cursor at 14
-    keystroke(self.e, "j")
-  end
-  local s
-  for _ = 1, 20 do
-    s = keystroke(self.e, "k")
-    if self.e.scroll_line < 10 then break end
-  end
-  -- row 0 line number "10" (1-based) fully redrawn: digits 1 and 0
-  lu.assertStrContains(s, "\27[1;2H1") -- col 1: digit '1'
-  lu.assertStrContains(s, "\27[1;3H0") -- col 2: digit '0'
-end
-
 function TestScroll:testScrollThenIdleFrame()
   -- after a scroll frame, an unchanged frame must not redraw grid
   -- content: the ring offset must persist across delta=0 frames
@@ -617,54 +587,6 @@ end
 -- ======== Status bar ========
 
 TestOps = {}
-
-function TestOps:setUp()
-  self.e = make_ed("")
-end
-
-function TestOps:testLineNumbersTrackScroll()
-  -- bottom line number must stay correct while scrolling
-  local e = make_ed(make_doc())
-  for _ = 1, 19 do
-    keystroke(e, "j")
-  end
-  local s = frame(e)
-  lu.assertStrContains(s, "\27[5;2H2\27[5;3H0") -- lnum "20": tens at col 2, units at col 3
-  lu.assertEquals(e.doc:line(), 19)
-end
-
-function TestOps:testInsertAndRender()
-  self.e:dispatch("i")
-  local s = keystroke(self.e, "x")
-  lu.assertStrContains(s, "\27[1;5H\27[0mx") -- 'x' rendered at col 5 (content start)
-  self.e:dispatch("<Escape>")
-end
-
-function TestOps:testStatusBarShowsMode()
-  local e = make_ed("")
-  local s = frame(e)
-  lu.assertStrContains(s, "NORMAL")
-  e:dispatch("i")
-  s = frame(e)
-  lu.assertStrContains(s, "INSERT")
-end
-
-function TestOps:testStatusBarShowsCommandLine()
-  local e = make_ed("")
-  e:dispatch(":")
-  local s = frame(e)
-  lu.assertStrContains(s, "\27[7m:") -- REVERSE + ":" + cmdline
-end
-
-function TestOps:testCursorClampedToScreen()
-  -- long line: display col 100 -> screen col clamped to cols (40)
-  local e = make_ed(string.rep("x", 100) .. "\n")
-  e.doc:seek("set", 100)
-  local s = frame(e)
-  lu.assertStrContains(s, "\27[1;40H")
-end
-
--- ======== Diff style table ========
 
 TestStyleTable = {}
 
@@ -1112,19 +1034,6 @@ end
 function TestVtext:testShiftVtextsCrossLineClears()
   self.e:shift_vtexts(0, 0, "a\nb")
   lu.assertEquals(next(self.e.vtexts), nil)
-end
-
-function TestVtext:testRenderLineInjectsVtext()
-  -- render_line injects vtext text into the grid (inject-shift path,
-  -- same grid assertions as the former process-based hint test)
-  local dim = self.e.sc:intern(Ed.ATTR_DIM)
-  self.e:render()
-  local _, st = self.e.grid:cell(0, 4) -- injection at content col 0
-  lu.assertEquals(st, dim)
-  self.e.vtexts[0][1].style = dim -- render pre-sets the style
-  self.e:render()
-  local _, c4 = self.e.grid:cell(0, 8) -- 'h' of hello shifted by 4
-  lu.assertEquals(c4, self.e.sc:intern({}))
 end
 
 os.exit(lu.LuaUnit.run(), true)

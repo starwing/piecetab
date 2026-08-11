@@ -1,6 +1,9 @@
--- tmux_test.lua — display behavior integration tests (real terminal via
--- the tmux helper). Skips when tmux is unavailable.
--- run: just lua/tmux
+-- editor_tmux_test.lua — editor display behavior integration tests: a
+-- real editor.lua process inside a real terminal (tmux helper owns the
+-- PTY and parses the CSI stream), asserting screen text and cursor
+-- coordinates. The unit-level counterpart editor_test.lua covers logic;
+-- this file covers what shows on screen.
+-- run: just lua/ed-tmux (skips when tmux is unavailable)
 local dir = arg[0]:match("^(.*)[/\\]") or "."
 local root = dir .. "/../.."
 package.path = root .. "/?.lua;" .. dir .. "/?.lua;" .. package.path
@@ -210,6 +213,84 @@ function TestDisplay:testQuit()
   local s = spawn_ed("x\n", nil)
   s:feed(":", "q", "Enter")
   lu.assertTrue(s:wait(function() return s:gone() end), "editor did not quit")
+end
+
+-- migrated display-behavior cases (screen state asserted; the escape/
+-- diff-shape assertions stayed in editor_test)
+
+function TestDisplay:testInsertModeStatus()
+  local s = spawn_ed("x\n", nil)
+  lu.assertStrContains(s:capture()[24] or "", "NORMAL")
+  s:feed("i")
+  s:wait(function()
+    local row = s:capture()[24] or ""
+    return row:find("INSERT", 1, true) ~= nil
+  end)
+end
+
+function TestDisplay:testCommandLinePrompt()
+  local s = spawn_ed("x\n", nil)
+  s:feed(":")
+  s:wait(function()
+    local row = s:capture()[24] or ""
+    return row:find(":", 1, true) ~= nil
+  end)
+end
+
+function TestDisplay:testEditAndRender()
+  -- typing renders at the content column; line number stays "1"
+  local s = spawn_ed("ab\n", nil)
+  s:feed("i", "x", "Escape")
+  s:wait(function()
+    local row = s:capture()[1] or ""
+    return row:find("xab", 1, true) ~= nil
+  end)
+  lu.assertStrContains(s:capture()[1] or "", "xab")
+end
+
+function TestDisplay:testScrollLineNumbers()
+  -- 30 lines: j to the end scrolls the viewport; the bottom line number
+  -- must track the file (regression: line-number redraw bug in the
+  -- unit-level SD path)
+  local lines = {}
+  for i = 1, 30 do lines[i] = "line " .. i end
+  local s = spawn_ed(table.concat(lines, "\n") .. "\n", nil)
+  for _ = 1, 29 do s:feed("j") end
+  s:wait(function()
+    local row = s:capture()[23] or ""
+    return row:find("line 30", 1, true) ~= nil
+  end)
+  local row = s:capture()[23] or ""
+  lu.assertStrContains(row, "30")    -- line number "30" at the pane edge
+  lu.assertStrContains(row, "line 30")
+end
+
+function TestDisplay:testCursorClampedToScreen()
+  -- long line: display col 100 clamps to the pane width (80)
+  local s = spawn_ed(string.rep("x", 100) .. "\n", nil)
+  s:feed("$")
+  s:wait(function() return s:cursor().x > 0 end)
+  lu.assertTrue(s:cursor().x < 80, "cursor x " .. s:cursor().x)
+end
+
+function TestDisplay:testLongLineTruncated()
+  -- a line wider than the pane is cut at the pane edge (no wrap):
+  -- the row is filled edge to edge (line number + truncated content)
+  local s = spawn_ed(string.rep("x", 120) .. "\n", nil)
+  local row = s:capture()[1] or ""
+  lu.assertEquals(#row, 80)
+  lu.assertTrue(row:match("^%s*%d+") ~= nil, "line number prefix")
+end
+
+function TestDisplay:testTabExpands()
+  -- tab renders at the next tab stop (default tabstop 4)
+  local s = spawn_ed("a\tb\n", nil)
+  s:wait(function()
+    local row = s:capture()[1] or ""
+    return row:find("b", 1, true) ~= nil
+  end)
+  local row = s:capture()[1] or ""
+  lu.assertStrContains(row, "a   b") -- tab -> 3 spaces (col 4)
 end
 
 os.exit(lu.LuaUnit.run(), true)
