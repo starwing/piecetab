@@ -10,7 +10,7 @@ local yyjson = require("yyjson")
 
 --- @class lspclient.Client
 --- @field state string  starting|running|shutting|exited
---- @field io table
+--- @field io table?
 --- @field dec table
 --- @field pending table
 --- @field handlers table
@@ -160,7 +160,12 @@ end
 --- @param root string?  workspace root uri, defaults to uri
 function lspclient:start(argv, uri, langid, root)
   self.uri, self.langid = uri, langid
-  self.io = lspio.spawn(argv)
+  self.io, self.spawn_err = lspio.spawn(argv)
+  if not self.io then
+    self.state = "exited"
+    self.opts.on_status("exited", self.spawn_err)
+    return false
+  end
   self.dec = jsonrpc.decoder(self.io.reader)
   self.state = "starting"
   self.opts.on_status("starting")
@@ -185,6 +190,7 @@ function lspclient:start(argv, uri, langid, root)
       self:notify("initialized", {})
       _send_did_open(self)
     end)
+  return true
 end
 
 -- Queue a request; cb(result, error) fires on the matching response.

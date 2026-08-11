@@ -14,6 +14,7 @@ local ts = require("treesitter")
 local lspclient = require("lspclient")
 local lsp_span = require("lsp_span")
 local yyjson = require("yyjson")
+local luv = require("luv")
 
 -- ================================================================
 -- Section 0: Logging (writes to editor.log for debugging)
@@ -491,6 +492,15 @@ local function ext_lang(filename)
   local ext = filename:match("%.([%w_]+)$")
   if ext == "c" or ext == "h" then return "c" end
   if ext == "lua" then return "lua" end
+  return nil
+end
+
+-- LSP server command for a file (nil = no server available).
+---@param filename string?
+---@return string[]?
+local function lsp_cmd(filename)
+  if ext_lang(filename) == "c" then return { "clangd" } end
+  if ext_lang(filename) == "lua" then return { "lua-language-server" } end
   return nil
 end
 
@@ -1179,8 +1189,10 @@ local function install_builtin_commands(self)
       if ed.lsp then
         ed.msg = "lsp already on"; return
       end
-      local cmd = ext_lang(ed.filename) == "c"
-          and { "clangd" } or { "lua-language-server" }
+      local cmd = lsp_cmd(ed.filename)
+      if not cmd then
+        ed.msg = "lsp: no server for this file"; return
+      end
       ed:lsp_start(cmd)
     elseif arg == "off" then
       if ed.lsp then
@@ -1291,10 +1303,19 @@ do
 
   --- Start an LSP server process for the current buffer (document access
   -- wired to the live doc; edits funnel via docedit -> notify_edit).
+  -- silent: fail quietly (automatic start); loud: report via on_status.
   --- @param argv string[]
-  function Ed:lsp_start(argv)
-    if self.lsp then return end
+  --- @param silent? boolean
+  --- @return boolean  false when the server could not be started
+  function Ed:lsp_start(argv, silent)
+    if self.lsp then return true end
     local ed = self
+    -- LSP needs absolute file URIs: relative paths (lua editor.lua foo)
+    -- break workspace indexing, so require() types never resolve
+    local fname = self.filename or ""
+    if #fname > 0 and fname:sub(1, 1) ~= "/" then
+      fname = luv.cwd() .. "/" .. fname
+    end
     self.lsp = lspclient.new({
       get_text = function() return ed.doc:dump() end,
       get_line = function(lnum)
@@ -1313,8 +1334,8 @@ do
       end,
       on_status = function(state, why)
         -- steady states render in the status bar segments; only report
-        -- abnormal exits as a transient message
-        if state == "exited" then
+        -- abnormal exits as a transient message (silent start: no)
+        if state == "exited" and not silent then
           ed.msg = "lsp: " .. state .. (why and " (" .. why .. ")" or "")
         end
       end,
@@ -1367,9 +1388,14 @@ do
         end
       end
     end)
-    self.lsp:start(argv, "file://" .. (self.filename or ""),
-      ext_lang(self.filename) or "plaintext",
-      "file://" .. ((self.filename or ""):match("^(.*)/") or "."))
+    local ok = self.lsp:start(argv, "file://" .. fname,
+      ext_lang(fname) or "plaintext",
+      "file://" .. (fname:match("^(.*)/") or "."))
+    if not ok then
+      self.lsp, self.lsp_sem, self.lsp_diag = nil, nil, nil
+      self.lsp_hints, self.lsp_hint_view = nil, nil
+    end
+    return ok
   end
 
   --- Edit at cursor with highlight notification (single edit funnel).
@@ -1710,6 +1736,10 @@ mode_dispatch.command = command_key
 local function main(argv)
   local e = argv[1] and Ed.open(argv[1]) or Ed.new()
   e.term:enter()
+
+  -- automatic LSP: silently enable when a server exists for the file
+  local cmd = lsp_cmd(e.filename)
+  if cmd then e:lsp_start(cmd, true) end
 
   -- Catch exit signals (raw mode: no signals, but just in case)
   local ok, err = pcall(function()

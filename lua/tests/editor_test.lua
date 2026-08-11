@@ -1460,6 +1460,58 @@ function TestHint:testInjectMultiLine()
   os.remove(path)
 end
 
+function TestHint:testRelativePathAbsoluteUri()
+  -- relative filenames (lua editor.lua foo) must yield absolute LSP
+  -- uris: relative file:// URIs break workspace indexing/type resolution
+  local e = make_ed("x\n")
+  e.filename = "foo.lua"
+  local sp = fake_server([[
+while true do
+  local m = readmsg()
+  if not m then break end
+  if m.id then
+    if m.method == "initialize" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = { capabilities = {} } })
+    elseif m.method == "shutdown" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = y.null })
+    end
+  elseif m.method == "exit" then
+    os.exit(0)
+  end
+end
+]])
+  e:lsp_start({ "lua", sp })
+  lu.assertTrue(lsp_drive(e, function() return e.lsp.state == "running" end))
+  lu.assertStrContains(e.lsp.uri, "file:///", "absolute uri")
+  e.lsp:stop()
+  lspio.close(e.lsp.io)
+  os.remove(sp)
+end
+
+function TestHint:testSpawnFailSilentAndLoud()
+  -- automatic start (silent): missing server quietly disables lsp;
+  -- manual :lsp on (loud): reports the failure in msg
+  local e = make_ed("x\n")
+  e.filename = "foo.lua"
+  lu.assertFalse(e:lsp_start({ "/nonexistent/lsp-server" }, true))
+  lu.assertNil(e.lsp)
+  lu.assertEquals(e.msg, "", "silent start: no message")
+  local e2 = make_ed("x\n")
+  e2.filename = "foo.lua"
+  lu.assertFalse(e2:lsp_start({ "/nonexistent/lsp-server" }))
+  lu.assertNil(e2.lsp)
+  lu.assertStrContains(e2.msg, "exited", "loud start: reports failure")
+end
+
+function TestHint:testNoServerMsg()
+  -- :lsp on for a file with no matching server
+  local e = make_ed("x\n")
+  e.filename = "foo.txt"
+  e.commands.lsp(e, "on")
+  lu.assertStrContains(e.msg, "no server")
+  lu.assertNil(e.lsp)
+end
+
 function TestHint:testConfigAnswer()
   -- server asks workspace/configuration (LuaLS style): editor answers
   -- with hint.enable=true, unknown sections as null

@@ -8,6 +8,7 @@ local luv = require("luv")
 --- @field exit boolean  process exited
 --- @field exit_code integer
 --- @field proc table
+--- @field err string?  spawn error
 --- @field stdin table
 --- @field stdout table
 --- @field buf table
@@ -28,8 +29,10 @@ end
 
 -- Spawn a server process; argv[1] = executable. Stderr inherited.
 --- @param argv string[]
---- @return lspio.Handle
+--- @return lspio.Handle?
+--- @return string?  err (executable not found, etc.)
 function lspio.spawn(argv)
+  --- @type lspio.Handle
   local h = setmetatable({
     stdin = luv.new_pipe(false),
     stdout = luv.new_pipe(false),
@@ -39,13 +42,14 @@ function lspio.spawn(argv)
     exit_code = 0,
     reader = nil,
   }, M)
-  h.proc = luv.spawn(argv[1], {
+  h.proc, h.err = luv.spawn(argv[1], {
     args = args_without_exec(argv),
     stdio = { h.stdin, h.stdout, nil },
   }, function(code)
     h.exit = true
     h.exit_code = code
   end)
+  if not h.proc then return nil, h.err end
   luv.read_start(h.stdout, function(err, data)
     if data then
       h.buf[#h.buf + 1] = data
