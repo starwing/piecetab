@@ -1512,26 +1512,26 @@ function TestHint:testNoServerMsg()
   lu.assertNil(e.lsp)
 end
 
-function TestHint:testCursorAtHintStart()
-  -- cursor sits on the hint's first char at its start byte (VSCode
-  -- semantics: i inserts before the hint, no cursor/text tearing);
-  -- bytes past the hint shift past it
+function TestHint:testCursorMotionSkipsHint()
+  -- normal motion (h/l) never rests on a hint: hint-start byte shows
+  -- past the hint; only at the insert gap (append) does the cursor sit
+  -- on the hint's first char, with input landing before it
   local e, path = hint_ed([[
     { { position = { line = 0, character = 0 }, label = "int:" } }]],
     "hello\n")
   frame(e)
   lu.assertTrue(lsp_drive(e, function() return e.lsp_hints ~= nil end),
     "hint response")
-  -- cursor at doc byte 0 (hint start byte): display col 0 -> hint start
+  -- normal mode at doc byte 0 (hint start byte): shifted past the hint
   e.doc:seek("set", 0)
   e.term.s = ""
   frame(e)
-  lu.assertStrContains(e.term.s, "\27[1;5H\27[?25h", false, "cursor on hint") -- 0+3+2
-  -- cursor at doc byte 1 (past the hint): shifted past it -> 1+4
-  e.doc:seek("set", 1)
+  lu.assertStrContains(e.term.s, "\27[1;9H\27[?25h", false, "motion skips hint") -- 0+4+3+2
+  -- insert mode at the same byte: cursor on the hint's first char
+  e.mode = "INSERT"
   e.term.s = ""
   frame(e)
-  lu.assertStrContains(e.term.s, "\27[1;10H\27[?25h", false)
+  lu.assertStrContains(e.term.s, "\27[1;5H\27[?25h", false, "gap sits on hint") -- 0+3+2
   e.lsp:stop()
   lspio.close(e.lsp.io)
   os.remove(path)

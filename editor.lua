@@ -722,22 +722,25 @@ local function lsp_diag_at(spans, off)
   return best
 end
 
--- Display-column shift from inlay hints strictly before `dcol`. The
--- hint-start byte (its dcol) maps onto the hint's first char — cursor
--- sits on the hint there, matching i-insert (before the hint) — while
--- bytes past it shift past the hint (VSCode/Neovim behavior).
+-- Display-column shift from inlay hints relative to the cursor column.
+-- Normal motion (h/l) never rests on a hint: bytes at or past a hint's
+-- start shift past it. In insert mode the cursor sits at the byte gap
+-- (append semantics): the hint-start byte maps onto the hint's first
+-- char — i/append input lands before the hint, no cursor/text tearing.
 --- @param hints table?
 --- @param dcol integer
+--- @param at_start boolean  insert-mode (cursor at the byte gap)
 --- @return integer
-local function hint_offset(hints, dcol)
+local function hint_offset(hints, dcol, at_start)
   if not hints then return 0 end
   local w = 0
   for _, h in ipairs(hints) do
-    if h.dcol < dcol then
-      w = w + utf8.width(h.text)
-    else
+    if at_start then
+      if h.dcol >= dcol then break end
+    elseif h.dcol > dcol then
       break
     end
+    w = w + utf8.width(h.text)
   end
   return w
 end
@@ -1671,9 +1674,11 @@ do
     self.log("cursor: saved_off=%d cur_line=%d line_text=[%s](%d) byte_col=%d",
       saved_off, cur_line, cur_line_text:gsub("\n", "\\n"), #cur_line_text, byte_col)
     local display_col = text_byte_to_dcol(cur_line_text, byte_col, self.tabstop)
-    -- cursor skips inlay hints: shifted right past any hint at/before it
+    -- cursor skips hints on motion; at the byte gap (insert) it may sit
+    -- on the hint's first char (append semantics, input lands before it)
     display_col = display_col
-      + hint_offset(self.lsp_hints and self.lsp_hints[cur_line], display_col)
+      + hint_offset(self.lsp_hints and self.lsp_hints[cur_line], display_col,
+        self.mode == "INSERT")
 
     local cur_screen_col = display_col + lnum_width + 2
     if cur_screen_col > cols then cur_screen_col = cols end
