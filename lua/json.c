@@ -6,7 +6,7 @@
 #include <stdlib.h>
 
 /* yyjson vendored single-file library, statically linked (lyyjson
- * convention). API: decode(s)/encode(v)/load(path)/dump(path, v). */
+ * convention). API: decode(s)/encode(v)/array(t?)/object(t?). */
 
 #define yyjson_api static
 #include "yyjson/yyjson.c"
@@ -39,14 +39,37 @@ static int lyy_absindex(lua_State *L, int idx) {
     return idx > 0 || idx <= LUA_REGISTRYINDEX ? idx : lua_gettop(L) + idx + 1;
 }
 
-/* null sentinel: fixed registry table (identity compare, encode-testable) */
-#define LY_NSENTINEL "yyjson.null"
+/* type markers: decoded values carry a metatable whose __jsontype field
+ * says what they were; any plain table can opt in via the exported
+ * json.array/json.object/json.null metatables. JSON null is the null
+ * marker table itself (identity compare works on decoded nulls). */
+#define LY_ARR_MT   "json.Array"
+#define LY_OBJ_MT   "json.Object"
+#define LY_NULL_MT  "json.null"
+#define LY_TYPEFLD  "__jsontype"
+#define LY_TYPE_ARR "array"
+#define LY_TYPE_OBJ "object"
+#define LY_TYPE_NUL "null"
 
 #define LY_MAXDEPTH 64
 
 /* short type aliases keep signatures within the 79-col limit */
 typedef yyjson_mut_doc lyy_Doc;
 typedef yyjson_mut_val lyy_Val;
+
+/* lookup a value's __jsontype (nil when it has no marker metatable) */
+static const char *lyy_marker(lua_State *L, int idx) {
+    if (!lua_getmetatable(L, idx)) return NULL;
+    lua_getfield(L, -1, LY_TYPEFLD);
+    const char *m = lua_tostring(L, -1);
+    lua_pop(L, 2);
+    return m;
+}
+
+/* push the registry marker metatable for a type name */
+static void lyy_pushmt(lua_State *L, const char *name) {
+    luaL_getmetatable(L, name);
+}
 
 /* decode: JSON value -> Lua value */
 
@@ -56,10 +79,10 @@ static int lyy_pushval(lua_State *L, yyjson_val *val, int depth) {
     yyjson_val     *key;
     size_t          i;
     yyjson_type     type = yyjson_get_type(val);
-    if (depth >= LY_MAXDEPTH) return luaL_error(L, "yyjson: nesting too deep");
+    if (depth >= LY_MAXDEPTH) return luaL_error(L, "json: nesting too deep");
     switch (type) {
     case YYJSON_TYPE_NULL:
-        lua_getfield(L, LUA_REGISTRYINDEX, LY_NSENTINEL);
+        lyy_pushmt(L, LY_NULL_MT);
         break;
     case YYJSON_TYPE_BOOL: lua_pushboolean(L, yyjson_get_bool(val)); break;
     case YYJSON_TYPE_NUM:
@@ -77,6 +100,7 @@ static int lyy_pushval(lua_State *L, yyjson_val *val, int depth) {
         aiter = yyjson_arr_iter_with(val);
         i = 0;
         lua_createtable(L, (int)yyjson_arr_size(val), 0);
+        luaL_setmetatable(L, LY_ARR_MT);
         while (yyjson_arr_iter_has_next(&aiter)) {
             lyy_pushval(L, yyjson_arr_iter_next(&aiter), depth + 1);
             lua_rawseti(L, -2, (int)(i + 1));
@@ -86,6 +110,7 @@ static int lyy_pushval(lua_State *L, yyjson_val *val, int depth) {
     case YYJSON_TYPE_OBJ:
         oiter = yyjson_obj_iter_with(val);
         lua_createtable(L, 0, (int)yyjson_obj_size(val));
+        luaL_setmetatable(L, LY_OBJ_MT);
         while (yyjson_obj_iter_has_next(&oiter)) {
             key = yyjson_obj_iter_next(&oiter);
             /* keys are always strings in parsed JSON (structural) */
@@ -110,9 +135,7 @@ static int lyy_pushval(lua_State *L, yyjson_val *val, int depth) {
     X(8, invalid_comment)      \
     X(9, invalid_number)       \
     X(10, invalid_string)      \
-    X(11, literal)             \
-    X(12, file_open)           \
-    X(13, file_read)
+    X(11, literal)
 
 static int lyy_loaderr(lua_State *L, yyjson_read_err *err) {
     const char *msg = NULL;
@@ -124,11 +147,6 @@ static int lyy_loaderr(lua_State *L, yyjson_read_err *err) {
     if (!msg) lua_pushliteral(L, "unknown");
     lua_pushinteger(L, (lua_Integer)err->pos);
     return 3;
-}
-
-/* push nil + error name; frees an optional output buffer */
-static int lyy_ioerr(lua_State *L, const char *name) {
-    return lua_pushnil(L), lua_pushstring(L, name), 2;
 }
 
 /* decode(s) -> v, or nil, err, err_pos on parse failure */
@@ -182,7 +200,7 @@ static lyy_Val *lyy_pushobj(lua_State *L, int idx, lyy_Doc *d, int depth) {
     lua_pushnil(L);
     while (lua_next(L, idx) != 0) {
         if (lua_type(L, -2) != LUA_TSTRING)
-            luaL_error(L, "yyjson: object key must be a string");
+            luaL_error(L, "json: object key must be a string");
         kstr = lua_tolstring(L, -2, &klen);
         yyjson_mut_obj_add(
                 obj, yyjson_mut_strn(d, kstr, klen),
@@ -198,8 +216,9 @@ static lyy_Val *lyy_mutpush(lua_State *L, int idx, lyy_Doc *d, int depth) {
     lua_Integer n;
     size_t      len;
     const char *s;
+    const char *m;
     int         type = lua_type(L, idx);
-    if (depth >= LY_MAXDEPTH) luaL_error(L, "yyjson: nesting too deep");
+    if (depth >= LY_MAXDEPTH) luaL_error(L, "json: nesting too deep");
     switch (type) {
     case LUA_TBOOLEAN: return yyjson_mut_bool(d, (bool)lua_toboolean(L, idx));
     case LUA_TNUMBER:
@@ -211,10 +230,14 @@ static lyy_Val *lyy_mutpush(lua_State *L, int idx, lyy_Doc *d, int depth) {
         return yyjson_mut_strn(d, s, len);
     case LUA_TTABLE:
         idx = lyy_absindex(L, idx);
-        /* null sentinel: identity check against the registry table */
-        lua_getfield(L, LUA_REGISTRYINDEX, LY_NSENTINEL);
-        if (lua_rawequal(L, idx, -1)) return lua_pop(L, 1), yyjson_mut_null(d);
-        lua_pop(L, 1);
+        /* type marker first: any table tagged null/array/object encodes
+         * as such (json.null itself is the null marker metatable) */
+        m = lyy_marker(L, idx);
+        if (m) {
+            if (m[0] == 'n') return yyjson_mut_null(d);
+            if (m[0] == 'a') return lyy_pusharr(L, idx, d, depth);
+            return lyy_pushobj(L, idx, d, depth);
+        }
         len = (size_t)lua_rawlen(L, idx);
         if (len > 0 && lyy_isarray(L, idx, len))
             return lyy_pusharr(L, idx, d, depth);
@@ -228,7 +251,7 @@ static lyy_Val *lyy_mutpush(lua_State *L, int idx, lyy_Doc *d, int depth) {
         return lyy_pushobj(L, idx, d, depth);
     default: break;
     }
-    luaL_error(L, "yyjson: cannot encode %s", lua_typename(L, type));
+    luaL_error(L, "json: cannot encode %s", lua_typename(L, type));
     return NULL;
 }
 
@@ -255,75 +278,100 @@ static int Lencode(lua_State *L) {
     lyy_Doc *d = yyjson_mut_doc_new(NULL);
     lyy_Val *root = lyy_mutpush(L, 1, d, 0);
     yyjson_mut_doc_set_root(d, root);
-    /* compact output: JSON-RPC wire format (dump keeps PRETTY) */
+    /* compact output: JSON-RPC wire format */
     char *out = yyjson_mut_write_opts(d, 0, NULL, &len, NULL);
     yyjson_mut_doc_free(d);
-    if (out == NULL) return luaL_error(L, "yyjson: write failed");
+    if (out == NULL) return luaL_error(L, "json: write failed");
     return lyy_pushstr(L, out, len);
 }
 
-/* load(path) -> v, or nil, err, err_pos on failure */
-static int Lload(lua_State *L) {
-    const char     *path = luaL_checkstring(L, 1);
-    yyjson_read_err err;
-    yyjson_doc     *doc;
-    FILE           *f = fopen(path, "rb");
-    if (f == NULL) return lyy_ioerr(L, "file_open");
-    char  *buf = NULL;
-    size_t cap = 0, len = 0;
-    for (;;) {
-        if (len == cap) {
-            cap = cap ? cap * 2 : 65536;
-            char *nb = (char *)realloc(buf, cap);
-            if (nb == NULL) return luaL_error(L, "yyjson: out of memory");
-            buf = nb;
-        }
-        size_t n = fread(buf + len, 1, cap - len, f);
-        len += n;
-        if (n < cap - len) break; /* short read: EOF or error */
+/* type constructors: tag t (or a fresh table) with the marker metatable */
+
+static int Larray(lua_State *L) {
+    if (lua_gettop(L) < 1) lua_createtable(L, 0, 0);
+    luaL_setmetatable(L, LY_ARR_MT);
+    return 1;
+}
+
+static int Lobject(lua_State *L) {
+    if (lua_gettop(L) < 1) lua_createtable(L, 0, 0);
+    luaL_setmetatable(L, LY_OBJ_MT);
+    return 1;
+}
+
+/* JSON kind of a Lua value: marker metatable first ("null"/"array"/
+ * "object"), then scalar types, then table shape (dense 1..#t array
+ * else object). Unsupported values (nil, function, userdata, ...)
+ * return nil. */
+static int Ltype(lua_State *L) {
+    const char *m;
+    int         t = lua_type(L, 1);
+    switch (t) {
+    case LUA_TBOOLEAN:
+        m = "boolean";
+        break;
+    case LUA_TNUMBER: {
+        int isint;
+        lyy_tointegerx(L, 1, &isint);
+        m = isint ? "integer" : "number";
+        break;
     }
-    fclose(f);
-    doc = yyjson_read_opts(buf, len, 0, NULL, &err);
-    if (doc == NULL) return free(buf), lyy_loaderr(L, &err);
-    lyy_pushval(L, yyjson_doc_get_root(doc), 0);
-    yyjson_doc_free(doc);
-    free(buf);
+    case LUA_TSTRING:
+        m = "string";
+        break;
+    case LUA_TTABLE:
+        /* marker metatable first; push immediately after (no Lua
+         * allocation between the lookup and the copy-out) */
+        m = lyy_marker(L, 1);
+        if (m) return lua_pushstring(L, m), 1;
+        {
+            size_t len = (size_t)lua_rawlen(L, 1);
+            m = len > 0 && lyy_isarray(L, 1, len) ? "array" : "object";
+        }
+        break;
+    default:
+        return lua_pushnil(L), 1;
+    }
+    lua_pushstring(L, m);
     return 1;
 }
 
-/* dump(path, v) -> true, or nil, err on failure */
-static int Ldump(lua_State *L) {
-    size_t      len;
-    const char *path = luaL_checkstring(L, 1);
-    lyy_Doc    *d = yyjson_mut_doc_new(NULL);
-    lyy_Val    *root = lyy_mutpush(L, 2, d, 0);
-    yyjson_mut_doc_set_root(d, root);
-    char *out = yyjson_mut_write_opts(d, YYJSON_WRITE_PRETTY, NULL, &len, NULL);
-    yyjson_mut_doc_free(d);
-    if (out == NULL) return luaL_error(L, "yyjson: write failed");
-    FILE *f = fopen(path, "wb");
-    if (f == NULL) return free(out), lyy_ioerr(L, "file_open");
-    int werr = fwrite(out, 1, len, f) != len || fclose(f) != 0;
-    if (werr) return free(out), lyy_ioerr(L, "write_failed");
-    free(out);
-    lua_pushboolean(L, 1);
-    return 1;
-}
-
-LUALIB_API int luaopen_yyjson(lua_State *L) {
+LUALIB_API int luaopen_json(lua_State *L) {
     luaL_Reg libs[] = {
 #define ENTRY(name) {#name, L##name}
             ENTRY(decode),
             ENTRY(encode),
-            ENTRY(load),
-            ENTRY(dump),
+            ENTRY(array),
+            ENTRY(object),
+            ENTRY(type),
 #undef ENTRY
+            {"version", NULL},
             {NULL, NULL}};
     luaL_newlib(L, libs);
-    /* null sentinel: fixed table in registry, exposed as yyjson.null */
-    lua_newtable(L);
-    lua_pushvalue(L, -1);
-    lua_setfield(L, LUA_REGISTRYINDEX, LY_NSENTINEL);
+    lua_pushliteral(L, YYJSON_VERSION_STRING);
+    lua_setfield(L, -2, "version");
+    /* marker metatables: null is exposed as json.null (a table), so
+     * setmetatable(t, json.null) tags t as a JSON null */
+    if (luaL_newmetatable(L, LY_ARR_MT)) {
+        lua_pushliteral(L, LY_TYPE_ARR);
+        lua_setfield(L, -2, LY_TYPEFLD);
+    }
+    lua_pop(L, 1); /* metatable */
+    if (luaL_newmetatable(L, LY_OBJ_MT)) {
+        lua_pushliteral(L, LY_TYPE_OBJ);
+        lua_setfield(L, -2, LY_TYPEFLD);
+    }
+    lua_pop(L, 1); /* metatable */
+    if (luaL_newmetatable(L, LY_NULL_MT)) {
+        lua_pushliteral(L, LY_TYPE_NUL);
+        lua_setfield(L, -2, LY_TYPEFLD);
+        /* self-referential: json.null (this metatable) is itself a
+         * tagged null — any table (or the marker itself) encodes null */
+        lua_pushvalue(L, -1);
+        lua_setmetatable(L, -2);
+    }
+    lua_pop(L, 1); /* metatable */
+    luaL_getmetatable(L, LY_NULL_MT);
     lua_setfield(L, -2, "null");
     return 1;
 }

@@ -12,7 +12,7 @@ package.cpath = package.cpath
     .. (_G["jit"] and ";/opt/homebrew/lib/lua/5.1/?.so" or ";/opt/homebrew/lib/lua/5.5/?.so")
 
 local lu = require "luaunit"
-local yyjson = require "yyjson"
+local json = require "json"
 local lsp = require "lsp"
 
 -- chunk reader from a string; chunk_size splits it (0 = whole)
@@ -32,7 +32,7 @@ TestRPC = {}
 function TestRPC:testRequest()
   local s = lsp.RPC.enc_request(3, "textDocument/didOpen", { uri = "u" })
   lu.assertStrContains(s, "Content-Length: ")
-  local msg = assert(yyjson.decode(s:match("\r\n\r\n(.*)$")))
+  local msg = assert(json.decode(s:match("\r\n\r\n(.*)$")))
   lu.assertEquals(msg.jsonrpc, "2.0")
   lu.assertEquals(msg.id, 3)
   lu.assertEquals(msg.method, "textDocument/didOpen")
@@ -41,17 +41,17 @@ end
 
 function TestRPC:testNotifyNoParams()
   local s = lsp.RPC.enc_notify("initialized")
-  local msg = assert(yyjson.decode(s:match("\r\n\r\n(.*)$")))
+  local msg = assert(json.decode(s:match("\r\n\r\n(.*)$")))
   lu.assertEquals(msg.method, "initialized")
   lu.assertNil(msg.params)
   lu.assertNil(msg.id)
 end
 
 function TestRPC:testResultAndError()
-  local msg = assert(yyjson.decode(lsp.RPC.enc_result(5, { ok = true }):match("\r\n\r\n(.*)$")))
+  local msg = assert(json.decode(lsp.RPC.enc_result(5, { ok = true }):match("\r\n\r\n(.*)$")))
   lu.assertEquals(msg.id, 5)
   lu.assertTrue(msg.result.ok)
-  local msg2 = assert(yyjson.decode(lsp.RPC.enc_error(6, -32601, "nope"):match("\r\n\r\n(.*)$")))
+  local msg2 = assert(json.decode(lsp.RPC.enc_error(6, -32601, "nope"):match("\r\n\r\n(.*)$")))
   lu.assertEquals(msg2.error.code, -32601)
   lu.assertEquals(msg2.error.message, "nope")
 end
@@ -136,15 +136,15 @@ local function readmsg()
   local len = tonumber(head:match("(%d+)"))
   io.read("*l") -- blank line
   local body = io.read(len)
-  local y = require("yyjson")
+  local y = require("json")
   return y.decode(body)
 end
 local function sendmsg(t)
-  local s = require("yyjson").encode(t)
+  local s = require("json").encode(t)
   io.write("Content-Length: ", #s, "\r\n\r\n", s)
   io.flush()
 end
-local y = require("yyjson")
+local y = require("json")
 ]])
   f:write(code)
   f:close()
@@ -209,7 +209,7 @@ function TestIO:testSlowSplitOutput()
   -- server writes the frame in 3 chunks with delays
   local path = fake_server([[
 local m = readmsg()
-local s = require("yyjson").encode({ jsonrpc = "2.0", id = m.id, result = 42 })
+local s = require("json").encode({ jsonrpc = "2.0", id = m.id, result = 42 })
 io.write("Content-Length: ", #s, "\r\n\r\n")
 io.flush()
 os.execute("sleep 0.05")
@@ -453,13 +453,13 @@ function TestProto:testServerRequest()
   local c, path = new_client(CODE_CFG, { "x" })
   c:on_server("workspace/configuration", function(p)
     got = p
-    return { { hint = { enable = true } }, yyjson.null }
+    return { { hint = { enable = true } }, json.null }
   end)
   c:on("test/resp", function(p) resp = p end)
   lu.assertTrue(drive(c, function() return resp ~= nil end), "answered")
   lu.assertEquals(got.items[1].section, "Lua")
   lu.assertEquals(resp.result[1].hint.enable, true)
-  lu.assertEquals(resp.result[2], yyjson.null, "null preserved")
+  lu.assertEquals(resp.result[2], json.null, "null preserved")
   lsp.IO.close(c.io)
   os.remove(path)
 end
@@ -473,7 +473,7 @@ function TestProto:testConfigAnswer()
   lu.assertTrue(drive(c, function() return resp ~= nil end), "answered")
   lu.assertEquals(resp.result[1].hint.enable, true)
   lu.assertEquals(resp.result[1].hint.setType, true)
-  lu.assertEquals(resp.result[2], yyjson.null, "unknown section null")
+  lu.assertEquals(resp.result[2], json.null, "unknown section null")
   lsp.IO.close(c.io)
   os.remove(path)
 end
@@ -484,8 +484,8 @@ function TestProto:testConfigOverrideEmpty()
   local c, path = new_client(CODE_CFG, { "x" }, {})
   c:on("test/resp", function(p) resp = p end)
   lu.assertTrue(drive(c, function() return resp ~= nil end), "answered")
-  lu.assertEquals(resp.result[1], yyjson.null, "Lua section null")
-  lu.assertEquals(resp.result[2], yyjson.null, "unknown section null")
+  lu.assertEquals(resp.result[1], json.null, "Lua section null")
+  lu.assertEquals(resp.result[2], json.null, "unknown section null")
   lsp.IO.close(c.io)
   os.remove(path)
 end

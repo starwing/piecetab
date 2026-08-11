@@ -44,7 +44,7 @@ lua/lsp.lua（一个文件，四个类；require 时返回 {RPC=, IO=, Protocol=
 │
 ├── LspProto 类 = Protocol —— 协议核心（现 lua/lspclient.lua 全量，零改动语义）
 │    状态机 / pending / 通知分发 / didOpen·didChange / UTF-16 换算 /
-│    默认 workspace/configuration 响应（内置，yyjson.null 使用点收拢到本类）
+│    默认 workspace/configuration 响应（内置，json.null 使用点收拢到本类）
 │
 └── LspClient 类 = Client —— 接入层（editor 唯一接触面，"lspclient 用来接入"）
      协议编排 + LSP 数据获取/调度 + 数据写入 Ed vtext 槽与查询层
@@ -66,8 +66,9 @@ Client 持缓存、editor 查询；唯 hint（注入文本）有布局+光标语
   作内部类）——并入为机械平移，语义零改动；其独立测试随迁（§7.1）
 - lsp_span 的 decode/clip 两个纯函数并入 lsp.lua 内部函数（模块私有，
   不建类；C 化时独立平移）
-- yyjson（C 绑定）保持外部 .so——RPC 的 encode/decode 依赖它；lspio 的
-  进程桥依赖 luv（外部）。C 化时 RPC/IO 相继替换这些依赖
+- json（C 绑定，原 yyjson 改名，2026-08-12 合并 starwing 版类型标记
+  机制）保持外部 .so——RPC 的 encode/decode 依赖它；lspio 的进程桥
+  依赖 luv（外部）。C 化时 RPC/IO 相继替换这些依赖
 
 ## 三、接口签名（C 化接口候选，逐条标记）
 
@@ -89,7 +90,7 @@ Protocol.new(opts)                 -- get_text/get_line/offset_pos/on_status
 state / uri / version / capabilities   -- 公开只读字段
 ```
 
-- **配置回答内移**：默认配置响应内置本类（`yyjson.null` 使用点收拢），
+- **配置回答内移**：默认配置响应内置本类（`json.null` 使用点收拢），
   editor 的 `require "yyjson"` 消失。`on_server` 仍可整体覆盖。
 - C 化候选：状态机 + pending 表（纯 C 结构）；UTF-16 换算（cellgrid 家族）。
 

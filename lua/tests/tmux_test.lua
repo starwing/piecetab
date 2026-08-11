@@ -47,7 +47,7 @@ package.path = package.path .. ";" .. %q .. "/lua/?.lua"
 package.cpath = package.cpath .. ";" .. %q .. "/lua/?.so;"
     .. "/opt/homebrew/lib/lua/5.5/?.so;/opt/homebrew/lib/lua/5.4/?.so"
 local lsp = require "lsp"
-local yy = require "yyjson"
+local yy = require "json"
 local HINTS = %s
 local DIAG = %s
 -- read one byte at a time: io.read(n) blocks until n bytes arrive on a

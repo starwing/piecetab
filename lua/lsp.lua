@@ -5,7 +5,7 @@
 -- callbacks on demand so the editor main loop never restructures.
 -- Protocol: editor-agnostic client core (state machine, sync, config).
 local lsp = {}
-local yyjson = require("yyjson")
+local json = require("json")
 local luv = require("luv")
 
 local RPC = {}
@@ -30,7 +30,7 @@ end
 function RPC.enc_request(id, method, params)
   local msg = { jsonrpc = "2.0", id = id, method = method }
   if params ~= nil then msg.params = params end
-  return frame(yyjson.encode(msg))
+  return frame(json.encode(msg))
 end
 
 --- Encode a notification frame.
@@ -40,7 +40,7 @@ end
 function RPC.enc_notify(method, params)
   local msg = { jsonrpc = "2.0", method = method }
   if params ~= nil then msg.params = params end
-  return frame(yyjson.encode(msg))
+  return frame(json.encode(msg))
 end
 
 --- Encode a success response frame.
@@ -48,7 +48,7 @@ end
 --- @param result any
 --- @return string
 function RPC.enc_result(id, result)
-  return frame(yyjson.encode({ jsonrpc = "2.0", id = id, result = result }))
+  return frame(json.encode({ jsonrpc = "2.0", id = id, result = result }))
 end
 
 --- Encode an error response frame.
@@ -57,7 +57,7 @@ end
 --- @param message string
 --- @return string
 function RPC.enc_error(id, code, message)
-  return frame(yyjson.encode({
+  return frame(json.encode({
     jsonrpc = "2.0", id = id,
     error = { code = code, message = message },
   }))
@@ -119,7 +119,7 @@ function RPC.decoder(readchunk)
         -- drop consumed bytes; keep any trailing (next frame) data
         state.data = state.data:sub(body_end + 1)
         state.body_start, state.body_len = nil, nil
-        local msg, err = yyjson.decode(body)
+        local msg, err = json.decode(body)
         if msg == nil then return nil, "bad JSON: " .. err end
         return msg
       end
@@ -333,7 +333,7 @@ function Protocol.new(opts)
     local out = {}
     for _, item in ipairs(params and params.items or {}) do
       local cfg = (self.opts.config or {})[item.section]
-      out[#out + 1] = cfg or yyjson.null
+      out[#out + 1] = cfg or json.null
     end
     return out
   end)
@@ -364,7 +364,7 @@ local function _on_msg(self, msg)
       if err then
         encoded = RPC.enc_error(msg.id, -32603, err)
       else
-        encoded = RPC.enc_result(msg.id, result == nil and yyjson.null
+        encoded = RPC.enc_result(msg.id, result == nil and json.null
           or result)
       end
       IO.send(self.io, encoded)
@@ -374,7 +374,7 @@ local function _on_msg(self, msg)
     if entry then
       self.pending[msg.id] = nil
       local result = msg.result
-      if result == yyjson.null then result = nil end
+      if result == json.null then result = nil end
       entry.cb(result, msg.error)
     end
   elseif msg.method then
