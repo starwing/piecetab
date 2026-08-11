@@ -542,4 +542,427 @@ end
 
 lsp.Protocol = Protocol
 
+-- lspclient: LSP integration layer — the editor's only contact surface.
+-- Owns protocol orchestration (hint scheduling, semantic/diag caching)
+-- and writes decoded data into injected Ed vtext slots; it never holds
+-- injected text itself (data lives on Ed, shifting is Ed's job) — only
+-- scheduling state. The protocol object is injected via opts (tests use
+-- fakes) or built from the same accessor quad.
+
+--- @class lsp.Client
+--- @field proto lsp.Protocol?
+--- @field opts table
+--- @field state string  proxy -> proto.state
+--- @field uri string  proxy -> proto.uri
+--- @field version integer  proxy -> proto.version
+--- @field sem table  semantic cache {spans, dirty, pending}
+--- @field diag table?  diagnostic cache {version, spans}
+--- @field hint_dirty boolean
+--- @field hint_pending boolean
+--- @field hint_view integer?
+--- @field hint_reqver integer
+--- @field hint_retry number
+--- @field hint_null integer
+--- @field hint_lines table?  lines currently written to vtext slots
+--- @field last_edit_t number
+--- @field hint_idle number
+local Client = {}
+
+-- Methods resolve on the Client table; lifecycle fields proxy the proto
+-- so the editor reads c.state/uri/version like a plain Protocol.
+local CM = { __index = function(self, key)
+  if key == "state" or key == "uri" or key == "version" then
+    local p = self.proto
+    return p and p[key] or nil
+  end
+  return Client[key]
+end }
+
+-- ---- internals (module-private; see Protocol section for charlen)
+
+-- UTF-16 unit column -> byte offset within a UTF-8 line. BMP chars are
+-- 1 unit; 4-byte supplementary chars (emoji) are 2; trailing units
+-- clamp to the line end (LSP positions never split chars).
+--- @param text string
+--- @param units integer
+--- @return integer
+local function utf16_to_byte(text, units)
+  local i = 1
+  local blen = #text
+  while i <= blen and units > 0 do
+    local n = charlen(text:byte(i))
+    units = units - (n == 4 and 2 or 1)
+    i = i + n
+  end
+  return i - 1
+end
+
+-- Byte offset of each line start (line 0 = 0) from the full doc text.
+--- @param text string
+--- @return integer[]
+local function line_offsets(text)
+  local out, pos = { 0 }, 1
+  while true do
+    local nl = text:find("\n", pos, true)
+    if not nl then break end
+    out[#out + 1] = nl + 1
+    pos = nl + 1
+  end
+  return out
+end
+
+-- LSP position {line, UTF-16 unit} -> byte offset (line base + line pos).
+--- @param self lsp.Client
+--- @param starts integer[]
+--- @param line integer
+--- @param unit integer
+--- @return integer
+local function lsp_pos(self, starts, line, unit)
+  local text = self.opts.get_line(line)
+  return (starts[line + 1] or 0) + utf16_to_byte(text, unit)
+end
+
+-- Decode a semanticTokens/full response into {offset, length, attr}
+-- spans in document order. Tokens are relative-encoded: deltaLine
+-- accumulates; deltaStartChar is absolute when deltaLine > 0, else
+-- relative to the previous token.
+--- @param tokens integer[]
+--- @param legend table  {tokenTypes = string[]}
+--- @param attrmap table  tokenType name -> attr table (unknown: skip)
+--- @param posfn fun(line: integer, unit: integer): integer
+--- @return table
+local function span_decode(tokens, legend, attrmap, posfn)
+  local types = legend and legend.tokenTypes or {}
+  local line, unit = 0, 0
+  local out = {}
+  local i = 1
+  while i + 4 <= #tokens do
+    local dline, dunit = tokens[i], tokens[i + 1]
+    local len, ttype = tokens[i + 2], tokens[i + 3]
+    i = i + 5
+    line = line + dline
+    if dline == 0 then unit = unit + dunit else unit = dunit end
+    local attr = attrmap[types[ttype + 1]]
+    if attr and len > 0 then
+      local s = posfn(line, unit)
+      local e = posfn(line, unit + len)
+      if e > s then
+        out[#out + 1] = { offset = s, length = e - s, attr = attr }
+      end
+    end
+  end
+  return out
+end
+
+-- Slice spans (sorted by offset) to those touching [start, endoff).
+--- @param spans table
+--- @param start integer
+--- @param endoff integer
+--- @return table
+local function span_clip(spans, start, endoff)
+  local n = #spans
+  if n == 0 or endoff <= start then return {} end
+  local lo, hi = 1, n
+  while lo <= hi do
+    local mid = math.floor((lo + hi) / 2)
+    if spans[mid].offset + spans[mid].length <= start then
+      lo = mid + 1
+    else
+      hi = mid - 1
+    end
+  end
+  local from = lo
+  hi = n
+  while lo <= hi do
+    local mid = math.floor((lo + hi) / 2)
+    if spans[mid].offset < endoff then
+      lo = mid + 1
+    else
+      hi = mid - 1
+    end
+  end
+  local out = {}
+  for i = from, hi do out[#out + 1] = spans[i] end
+  return out
+end
+
+-- Decode inlayHint items into per-line hint lists sorted by display
+-- column. Position is the insertion point (UTF-16); label is a string
+-- or an array of parts.
+--- @param self lsp.Client
+--- @param hints table?
+--- @return table
+local function hint_decode(self, hints)
+  local out = {}
+  for _, h in ipairs(hints or {}) do
+    local pos = h.position
+    if pos then
+      local label = h.label
+      if type(label) == "table" then
+        local parts = {}
+        for _, p in ipairs(label) do parts[#parts + 1] = p.value end
+        label = table.concat(parts)
+      end
+      if type(label) == "string" and #label > 0 then
+        local bcol = utf16_to_byte(self.opts.get_line(pos.line), pos.character)
+        local lst = out[pos.line]
+        if not lst then lst = {}; out[pos.line] = lst end
+        lst[#lst + 1] = { dcol = self.opts.dcol_fn(pos.line, bcol),
+          text = label }
+      end
+    end
+  end
+  for _, lst in pairs(out) do
+    table.sort(lst, function(a, b) return a.dcol < b.dcol end)
+  end
+  return out
+end
+
+-- Replace the hint vtext slots: write the new per-line lists, clear
+-- stale lines from the previous response (full replacement semantics).
+--- @param self lsp.Client
+--- @param out table
+local function h_write(self, out)
+  local seen = {}
+  for line, lst in pairs(out) do
+    seen[line] = true
+    self.opts.vtext.set(line, lst)
+  end
+  for line in pairs(self.hint_lines or {}) do
+    if not seen[line] then self.opts.vtext.set(line, nil) end
+  end
+  self.hint_lines = seen
+end
+
+-- inlayHint response: null/err -> bounded delayed retries (8, then
+-- silent until the next edit); stale (version moved) -> keep the
+-- shifted slots and refetch; success -> decode + write slots.
+--- @param self lsp.Client
+--- @param result any?
+--- @param err table?
+--- @param now number
+local function h_response(self, result, err, now)
+  self.hint_pending = false
+  local top = self.opts.viewport_fn().top
+  if err or not result then
+    self.hint_view = top
+    self.hint_null = self.hint_null + 1
+    if self.hint_null <= 8 then
+      self.hint_retry = now + 2
+    else
+      self.hint_retry, self.hint_dirty = 0, false
+    end
+  elseif self.proto.version ~= self.hint_reqver then
+    -- edited while in flight: refetch on the next tick
+  else
+    h_write(self, hint_decode(self, result))
+    self.hint_view = top
+    self.hint_dirty = false
+    self.hint_retry, self.hint_null = 0, 0
+  end
+end
+
+-- publishDiagnostics: drop stale snapshots (out-of-order pushes), decode
+-- UTF-16 ranges to byte spans via line starts + get_line.
+--- @param self lsp.Client
+--- @param p table
+local function diag_update(self, p)
+  if p.uri ~= self.proto.uri then return end
+  local cur = self.diag and self.diag.version or -1
+  local v = p.version
+  if v and v < cur then return end
+  local starts = line_offsets(self.opts.get_text())
+  local spans = {}
+  for _, d in ipairs(p.diagnostics or {}) do
+    local r = d.range
+    local s = lsp_pos(self, starts, r.start.line, r.start.character)
+    local e = lsp_pos(self, starts, r["end"].line, r["end"].character)
+    if e > s then
+      spans[#spans + 1] = {
+        offset = s, length = e - s,
+        attr = self.opts.attrmap.diag or { underline = true },
+        msg = d.message, severity = d.severity or 2,
+      }
+    end
+  end
+  self.diag = { version = v or cur, spans = spans }
+end
+
+-- Client factory. opts adds to the Protocol contract:
+--   dcol_fn(line, bytecol) -> display column (tabstop-aware)
+--   viewport_fn() -> {top, rows} of the visible text area
+--   now_fn() -> wall-clock seconds (default: luv.hrtime()/1e9)
+--   attrmap -> semantic tokenType name -> attr table (+ optional diag)
+--   vtext = { set(line, list), clear() }  injected Ed vtext slot access
+--   hint_idle? -> seconds of no typing before a hint refresh
+--   proto? -> pre-built Protocol (tests inject fakes)
+--- @param opts table
+--- @return lsp.Client
+function Client.new(opts)
+  local self = setmetatable({
+    proto = opts.proto or nil,
+    sem = { spans = {}, dirty = true, pending = false },
+    diag = nil,
+    hint_dirty = true,
+    hint_pending = false,
+    hint_view = nil,
+    hint_reqver = 0,
+    hint_retry = 0,
+    hint_null = 0,
+    hint_lines = nil,
+    last_edit_t = -1e6, -- startup counts as idle: refresh fires at once
+    hint_idle = opts.hint_idle ~= nil and opts.hint_idle
+        or tonumber(os.getenv("PT_HINT_IDLE")) or 1.0,
+    opts = opts,
+  }, CM)
+  return self
+end
+
+-- Spawn the server and register diag handling. proto comes from opts or
+-- is built from the accessor quad; on failure everything is cleared.
+--- @param argv string[]
+--- @param uri string
+--- @param langid string
+--- @param root string?
+--- @return boolean
+function Client:start(argv, uri, langid, root)
+  local p = self.opts.proto or Protocol.new({
+    get_text = self.opts.get_text,
+    get_line = self.opts.get_line,
+    offset_pos = self.opts.offset_pos,
+    on_status = self.opts.on_status,
+  })
+  self.proto = p
+  p:on("textDocument/publishDiagnostics", function(params)
+    diag_update(self, params)
+  end)
+  if not p:start(argv, uri, langid, root) then
+    self.proto, self.diag = nil, nil
+    self.opts.vtext.clear()
+    return false
+  end
+  return true
+end
+
+-- Shut the server down and clear all caches + vtext slots.
+function Client:stop()
+  if self.proto then self.proto:stop() end
+  self.sem, self.diag = nil, nil
+  self.opts.vtext.clear()
+end
+
+-- Record an edit: protocol sync + dirty flags (slot shift is Ed's job).
+--- @param off integer
+--- @param del integer
+--- @param s string
+function Client:on_edit(off, del, s)
+  if not self.proto then return end
+  self.proto:notify_edit(off, del, s)
+  if self.sem then self.sem.dirty = true end
+  self.hint_dirty = true
+  self.last_edit_t = self.opts.now_fn()
+  self.hint_retry, self.hint_null = 0, 0
+end
+
+-- Resync after jumps the client cannot localize (undo/redo): one full
+-- didChange plus a full cache and vtext-slot reset.
+function Client:resync()
+  if self.proto then self.proto:sync_full() end
+  if self.sem then self.sem.dirty = true end
+  self.hint_dirty = true
+  self.opts.vtext.clear()
+end
+
+-- Idle work (main-loop timeouts): refresh inlay hints once typing has
+-- stopped (debounce), the viewport moved, or a null retry is due.
+-- Continuous typing never requests; the stale-response guard (doc
+-- version) stays as belt-and-braces against races.
+function Client:tick()
+  local p = self.proto
+  if not (p and p.state == "running") then return end
+  if not (p.capabilities.inlayHintProvider and not self.hint_pending) then return end
+  local vp = self.opts.viewport_fn()
+  local now = self.opts.now_fn()
+  local idle = now - (self.last_edit_t or 0) >= self.hint_idle
+  local retry = self.hint_retry > 0 and now >= self.hint_retry
+  if not (self.hint_dirty and idle or self.hint_view ~= vp.top or retry) then return end
+  self.hint_pending = true
+  self.hint_reqver = p.version
+  p:request("textDocument/inlayHint", {
+    textDocument = { uri = p.uri },
+    range = { start = { line = vp.top, character = 0 },
+      ["end"] = { line = vp.top + vp.rows - 1, character = 0x7fffffff } },
+  }, function(result, err)
+      h_response(self, result, err, now)
+    end)
+end
+
+-- Render-tail work: refresh semantic tokens when dirty (edit once ->
+-- one request; skip while a request is already in flight).
+function Client:post_render()
+  local p = self.proto
+  if not (p and p.state == "running" and self.sem.dirty
+      and not self.sem.pending) then return end
+  local cap = p.capabilities.semanticTokensProvider
+  if not (cap and cap.full) then
+    self.sem.dirty = false
+    return
+  end
+  local sem = self.sem
+  sem.pending = true
+  p:request("textDocument/semanticTokens/full", {
+    textDocument = { uri = p.uri },
+  }, function(result, err)
+      sem.pending = false
+      if err then
+        sem.dirty = false
+      elseif result and result.data then
+        local starts = line_offsets(self.opts.get_text())
+        sem.spans = span_decode(result.data, cap.legend, self.opts.attrmap,
+          function(line, unit) return lsp_pos(self, starts, line, unit) end)
+        sem.dirty = false
+      end
+    end)
+end
+
+-- Slice the semantic/diag caches to [s, e) for the render merge.
+--- @param s integer
+--- @param e integer
+--- @return table
+function Client:query_spans(s, e)
+  local out = { sem = {}, diag = {} }
+  if self.sem then out.sem = span_clip(self.sem.spans, s, e) end
+  if self.diag then out.diag = span_clip(self.diag.spans, s, e) end
+  return out
+end
+
+-- Diag span containing byte offset `off`; lowest severity number wins
+-- (LSP: 1 = error, higher numbers are weaker).
+--- @param off integer
+--- @return table?
+function Client:diag_at(off)
+  if not self.diag then return nil end
+  local best
+  for _, sp in ipairs(self.diag.spans) do
+    if sp.offset <= off and off < sp.offset + sp.length then
+      if not best or sp.severity < best.severity then best = sp end
+    end
+  end
+  return best
+end
+
+-- Server lifecycle state for the status bar.
+--- @return string
+function Client:status()
+  local p = self.proto
+  return p and p.state or "exited"
+end
+
+-- Pump the transport (main loop).
+function Client:poll()
+  if self.proto then self.proto:poll() end
+end
+
+lsp.Client = Client
+
 return lsp

@@ -523,4 +523,191 @@ function TestProto:testShutdownExit()
   os.remove(path)
 end
 
+TestClient = {}
+
+-- fake protocol: records requests (+ callbacks for manual responses) and
+-- lifecycle calls; state/version simulate a running server
+local function fake_proto()
+  local p = {
+    state = "running", version = 3,
+    capabilities = { inlayHintProvider = true },
+    reqs = {}, cbs = {}, handlers = {},
+    edits = nil, synced = false,
+  }
+  p.request = function(self, method, params, cb)
+    self.reqs[#self.reqs + 1] = method
+    self.cbs[#self.cbs + 1] = cb
+  end
+  p.notify_edit = function(self, off, del, s) self.edits = { off, del, s } end
+  p.sync_full = function(self) self.synced = true end
+  p.poll = function(self) end
+  p.stop = function(self) end
+  p.on = function(self, method, fn) self.handlers[method] = fn end
+  p.start = function() return true end
+  return p
+end
+
+-- client with a fake proto/doc/clock/vtext; `over` overrides defaults,
+-- setclock(n) advances the injected wall clock
+local function mk_client(over)
+  over = over or {}
+  local proto = fake_proto()
+  local got = {}
+  local clock = over.clock or 10
+  local c = lsp.Client.new({
+    get_text = function() return "hello\nworld\n" end,
+    get_line = function(l) return l == 0 and "hello" or "world" end,
+    offset_pos = function(off)
+      if off < 6 then return 0, off end
+      return 1, off - 6
+    end,
+    on_status = function() end,
+    dcol_fn = function(line, bcol) return bcol end, -- ASCII: dcol == bytecol
+    viewport_fn = function() return { top = over.top or 0, rows = over.rows or 5 } end,
+    now_fn = function() return clock end,
+    attrmap = { comment = "c", diag = "d" },
+    vtext = {
+      set = function(line, list) got[#got + 1] = { line, list } end,
+      clear = function() got[#got + 1] = { "clear" } end,
+    },
+    proto = proto,
+  })
+  return c, proto, got, function(n) clock = n end
+end
+
+function TestClient:testTickIdleRequestsHints()
+  local c, proto = mk_client()
+  c:tick()
+  lu.assertEquals(#proto.reqs, 1)
+  lu.assertEquals(proto.reqs[1], "textDocument/inlayHint")
+end
+
+function TestClient:testTickSkipsWhenTyping()
+  local c, proto = mk_client()
+  c.last_edit_t = 9.5 -- 0.5s since edit < hint_idle (1.0)
+  c.hint_view = 0     -- viewport unchanged
+  c:tick()
+  lu.assertEquals(#proto.reqs, 0)
+end
+
+function TestClient:testTickViewportChange()
+  local c, proto = mk_client()
+  c.hint_dirty = false
+  c.hint_view = 3 -- stale viewport top (now 0)
+  c:tick()
+  lu.assertEquals(#proto.reqs, 1)
+end
+
+function TestClient:testTickNullRetryBudget()
+  local c, proto, _, setclock = mk_client()
+  c:tick()
+  proto.cbs[#proto.cbs](nil) -- server not ready -> null
+  for i = 1, 8 do
+    setclock(10 + 2 * i)
+    c:tick()
+    lu.assertEquals(#proto.reqs, 1 + i, "retry " .. i)
+    proto.cbs[#proto.cbs](nil)
+  end
+  setclock(30)
+  c:tick()
+  lu.assertEquals(#proto.reqs, 9, "silent after the retry budget")
+end
+
+function TestClient:testStaleResponseDropped()
+  local c, proto, got = mk_client()
+  c:tick()
+  proto.version = 4 -- edited while in flight
+  proto.cbs[1]({ { position = { line = 0, character = 3 }, label = "int" } })
+  lu.assertEquals(#got, 0, "stale response must not write vtext")
+end
+
+function TestClient:testResponseWritesVtext()
+  local c, proto, got = mk_client()
+  c:tick()
+  proto.cbs[1]({ { position = { line = 0, character = 3 }, label = "int" } })
+  lu.assertEquals(#got, 1)
+  lu.assertEquals(got[1][1], 0)
+  lu.assertEquals(got[1][2][1].dcol, 3)
+  lu.assertEquals(got[1][2][1].text, "int")
+  -- next response on another line clears the stale slot
+  c.hint_dirty = true
+  c:tick()
+  proto.cbs[2]({ { position = { line = 1, character = 2 }, label = "x" } })
+  lu.assertEquals(#got, 3)
+  lu.assertEquals(got[2][1], 1)
+  lu.assertEquals(got[3][1], 0)
+  lu.assertNil(got[3][2], "old line cleared")
+end
+
+function TestClient:testPostRenderSemanticPull()
+  local c, proto = mk_client()
+  proto.capabilities.semanticTokensProvider = { full = true }
+  c:post_render()
+  lu.assertEquals(#proto.reqs, 1)
+  lu.assertEquals(proto.reqs[1], "textDocument/semanticTokens/full")
+  c:post_render() -- already pending: no second request
+  lu.assertEquals(#proto.reqs, 1)
+end
+
+function TestClient:testOnEditMarksDirty()
+  local c, proto = mk_client()
+  c.sem.dirty, c.hint_dirty = false, false
+  c:on_edit(3, 2, "xy")
+  lu.assertEquals(proto.edits[1], 3)
+  lu.assertEquals(proto.edits[2], 2)
+  lu.assertEquals(proto.edits[3], "xy")
+  lu.assertTrue(c.sem.dirty)
+  lu.assertTrue(c.hint_dirty)
+end
+
+function TestClient:testResyncClears()
+  local c, proto, got = mk_client()
+  c:resync()
+  lu.assertTrue(proto.synced)
+  lu.assertEquals(#got, 1)
+  lu.assertEquals(got[1][1], "clear")
+  lu.assertTrue(c.sem.dirty)
+  lu.assertTrue(c.hint_dirty)
+end
+
+function TestClient:testQuerySpansClip()
+  local c = mk_client()
+  c.sem.spans = {
+    { offset = 0, length = 5, attr = "a" },
+    { offset = 10, length = 5, attr = "b" },
+  }
+  c.diag = { version = 1, spans = { { offset = 2, length = 3, attr = "d" } } }
+  local q = c:query_spans(1, 6)
+  lu.assertEquals(#q.sem, 1)
+  lu.assertEquals(q.sem[1].offset, 0)
+  lu.assertEquals(#q.diag, 1)
+  lu.assertEquals(q.diag[1].offset, 2)
+  local q2 = c:query_spans(7, 20)
+  lu.assertEquals(#q2.sem, 1)
+  lu.assertEquals(q2.sem[1].offset, 10)
+  lu.assertEquals(#q2.diag, 0)
+end
+
+function TestClient:testDiagAt()
+  local c = mk_client()
+  c.diag = { spans = {
+    { offset = 1, length = 5, severity = 2, msg = "warn" },
+    { offset = 2, length = 3, severity = 1, msg = "error" },
+  } }
+  lu.assertEquals(c:diag_at(3).msg, "error") -- lowest severity wins
+  lu.assertNil(c:diag_at(0))
+  c.diag = nil
+  lu.assertNil(c:diag_at(3))
+end
+
+function TestClient:testStartFailureClears()
+  local c, proto, got = mk_client()
+  proto.start = function() return false end
+  local ok = c:start({ "lua" }, "file:///t.lua", "lua")
+  lu.assertFalse(ok)
+  lu.assertNil(c.proto)
+  lu.assertEquals(#got, 1)
+  lu.assertEquals(got[1][1], "clear")
+end
+
 os.exit(lu.LuaUnit.run(), true)
