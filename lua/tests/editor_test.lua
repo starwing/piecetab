@@ -1433,11 +1433,24 @@ function TestHint:testScrollRefetch()
 end
 
 function TestHint:testNullSilent()
-  -- sumneko declares support but returns null: must stay silent
+  -- sumneko-style null (workspace still indexing): bounded delayed
+  -- retries, then quiet; hints stay unset throughout
   local e, path = hint_ed("y.null", "local x = 1\n")
+  -- start the budget fresh (hint_ed already ran some requests)
+  e.lsp_hint_null, e.lsp_hint_retry = 0, 0
   frame(e)
-  lu.assertTrue(lsp_drive(e, function() return e.lsp_hint_pending == false
-    and e.lsp_hint_dirty == false end), "null handled")
+  lu.assertTrue(lsp_drive(e, function() return e.lsp_hint_null >= 1 end),
+    "null seen")
+  lu.assertTrue(e.lsp_hint_retry > 0, "retry scheduled")
+  -- force immediate retries until the budget (8) is exhausted
+  local guard = 0
+  while guard < 20 and e.lsp_hint_retry ~= 0 do
+    e.lsp_hint_retry = 0
+    lsp_drive(e, function() return e.lsp_hint_pending == false end, 20)
+    guard = guard + 1
+  end
+  lu.assertTrue(e.lsp_hint_null >= 8, "budget exhausted")
+  lu.assertEquals(e.lsp_hint_retry, 0, "quiet after budget")
   lu.assertNil(e.lsp_hints)
   e.lsp:stop()
   lspio.close(e.lsp.io)

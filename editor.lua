@@ -1380,6 +1380,9 @@ do
     -- after the debounce window
     self.last_edit_t = -1e6
     self.hint_idle = 1.0 -- seconds of no typing before a hint refresh
+    -- null answers (workspace still indexing) get bounded delayed retries
+    self.lsp_hint_retry = 0
+    self.lsp_hint_null = 0
     -- answer LuaLS config requests: hints on (VSCode-default behavior),
     -- rest of the Lua section left unset so defaults apply
     self.lsp:on_server("workspace/configuration", function(params)
@@ -1479,6 +1482,7 @@ do
       self:edit_hints(off, del, s)
       self.lsp_hint_dirty = true
       self.last_edit_t = luv.hrtime() / 1e9 -- wall clock, not CPU time
+      self.lsp_hint_retry, self.lsp_hint_null = 0, 0
     end
     self.doc:edit(del, s)
     if self.hl then self.hl:notify_edit(off, del, #s) end
@@ -1494,9 +1498,12 @@ do
         and not self.lsp_hint_pending) then return end
     -- wall-clock idle: os.clock() is CPU time and freezes while the
     -- main loop blocks in getkey — idle would never elapse
-    local idle = luv.hrtime() / 1e9 - (self.last_edit_t or 0) >= self.hint_idle
+    local now = luv.hrtime() / 1e9
+    local idle = now - (self.last_edit_t or 0) >= self.hint_idle
+    local retry = self.lsp_hint_retry > 0 and now >= self.lsp_hint_retry
     if not (self.lsp_hint_dirty and idle
-        or self.lsp_hint_view ~= self.scroll_line) then return end
+        or self.lsp_hint_view ~= self.scroll_line
+        or retry) then return end
     local rows = self.term:size()
     local visend = math.min(self.scroll_line + rows - 1, self.doc:breaks())
     self.lsp_hint_pending = true
@@ -1508,16 +1515,19 @@ do
     }, function(result, err)
         self.lsp_hint_pending = false
         if err or not result then
-          -- answered (null = no hints / unsupported): settle, don't
-          -- refetch until the viewport moves or the doc is edited
-          self.lsp_hint_dirty = false
+          -- null/err: server not ready yet (workspace indexing) —
+          -- bounded delayed retries; edits/scroll reset the budget
           self.lsp_hint_view = self.scroll_line
+          self.lsp_hint_null = self.lsp_hint_null + 1
+          self.lsp_hint_retry = self.lsp_hint_null <= 8
+              and now + 2 or 0
         elseif self.lsp.version ~= self.lsp_hint_reqver then
           -- edited while in flight: keep the shifted cache, refetch
         else
           self.lsp_hints = lsp_hint_decode(self, result)
           self.lsp_hint_view = self.scroll_line
           self.lsp_hint_dirty = false
+          self.lsp_hint_retry, self.lsp_hint_null = 0, 0
         end
       end)
   end
