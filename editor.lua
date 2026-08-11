@@ -1648,6 +1648,10 @@ do
         and (self.lsp_hint_dirty or self.lsp_hint_view ~= self.scroll_line) then
       local visend = math.min(self.scroll_line + visrows, total_lines)
       self.lsp_hint_pending = true
+      -- hints follow their trailing char: a response computed against
+      -- an older doc would overwrite the locally shifted cache, so
+      -- responses are only applied when the doc version still matches
+      self.lsp_hint_reqver = self.lsp.version
       self.lsp:request("textDocument/inlayHint", {
         textDocument = { uri = self.lsp.uri },
         range = { start = { line = self.scroll_line, character = 0 },
@@ -1656,6 +1660,8 @@ do
           self.lsp_hint_pending = false
           if err or not result then
             self.lsp_hint_dirty = false
+          elseif self.lsp.version ~= self.lsp_hint_reqver then
+            -- edited while in flight: keep the shifted cache, refetch
           else
             self.lsp_hints = lsp_hint_decode(self, result)
             self.lsp_hint_view = self.scroll_line

@@ -1567,6 +1567,51 @@ function TestHint:testEditShiftsHints()
   os.remove(path)
 end
 
+function TestHint:testStaleResponseDropped()
+  -- hints follow their trailing char: a response computed against an
+  -- older doc must not overwrite the locally shifted cache
+  local path = fake_server([[
+while true do
+  local m = readmsg()
+  if not m then break end
+  if m.id then
+    if m.method == "initialize" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = { capabilities = {
+        inlayHintProvider = true } } })
+    elseif m.method == "textDocument/inlayHint" then
+      os.execute("sleep 0.05") -- delay: let the client edit meanwhile
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = {
+        { position = { line = 0, character = 0 }, label = "int:" } } })
+    elseif m.method == "shutdown" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = y.null })
+    end
+  elseif m.method == "exit" then
+    os.exit(0)
+  end
+end
+]])
+  local e = make_ed("hello\n")
+  e:lsp_start({ "lua", path })
+  lu.assertTrue(lsp_drive(e, function() return e.lsp.state == "running" end))
+  frame(e) -- render issues the request
+  lu.assertTrue(lsp_drive(e, function() return e.lsp_hint_pending end),
+    "request in flight")
+  e.doc:seek("set", 0)
+  e:docedit(0, "x") -- edit while the request is in flight
+  lu.assertTrue(lsp_drive(e, function() return e.lsp_hint_pending == false end),
+    "stale response arrived")
+  lu.assertNil(e.lsp_hints, "stale response not applied")
+  lu.assertTrue(e.lsp_hint_dirty, "dirty kept: will refetch")
+  -- next refetch (no edit) applies cleanly: hint back at the server
+  -- position for the current doc
+  frame(e)
+  lu.assertTrue(lsp_drive(e, function()
+    return e.lsp_hints and e.lsp_hints[0][1].dcol == 0 end), "resynced")
+  e.lsp:stop()
+  lspio.close(e.lsp.io)
+  os.remove(path)
+end
+
 function TestHint:testConfigAnswer()
   -- server asks workspace/configuration (LuaLS style): editor answers
   -- with hint.enable=true, unknown sections as null
