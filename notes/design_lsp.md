@@ -33,6 +33,12 @@ editor.lua 主循环（termfeed getkey 超时轮询）
 请求是异步的（pending 表 id→回调），写者数据全是**缓存+拉模式**——
 render 不发起任何 IO。
 
+**lspclient 依赖注入**（editor 无关，可测）：`get_text()`（didOpen 全
+文）、`get_line(lnum)`（UTF-16 换算行文本）、`offset_pos(off)`（字节
+offset → line, bytecol）、`on_status(state, why)`。editor 闭包接
+piecetab doc；测试接行表。**自足**：零 lua-utf8 依赖（UTF-8 遍历手写
+charlen，双运行时可测）。
+
 ## 三、传输层定案（Task 2/3 终态，勿翻案）
 
 | 层 | 形态 | 要点 |
@@ -75,11 +81,31 @@ diag 回调；未知（`$/hello`、`$/progress` 等）**一律忽略**（sumneko
 
 - **didOpen**：全量文本 + version=1（打开文件/启动 client 时）
 - **didChange**：version 递增 + edits 数组（升序、互不重叠）
-- **漏斗**：`docedit` 是唯一编辑入口 → 每次记录 `{off, len, text}`
-  （字节坐标，发生时状态）→ 每帧 flush：合并重叠/相邻 → 按 off 升序
-  → 逐条 `doc_byte_to_utf16` 换算 range → 单条 didChange 发出
+- **即时同步**（设计变更：弃"每帧 flush 合并"）：每条 docedit 在编辑
+  **前**换算 range（当时状态可定位）→ 立即可发。坐标相对 server 已
+  同步状态，**天然正确，无合并/重算**（合并需跨状态重算坐标，复杂度
+  不值）。server 增量处理轻量，同点连续插入 = 多条 didChange 无碍
+- **漏斗**：`docedit` 钩子在 `doc:edit` **之前**调用 `notify_edit(off,
+  del, s)`——换算用的是编辑前状态（offset_pos 注入）
 - **version 追踪**：client 持自增 version（从 1 起），didChange 带上；
   server 侧诊断回推 version 即源自此
+- **start 参数**：`lspclient:start(argv, uri, langid, root)`——root 为
+  workspace 根 uri（editor 传文件所在目录，测试默认 = uri）
+
+### 4.5 initialize 必须带 workspaceFolders（smoke 实测教训）
+
+lua-language-server 只传 `rootUri` 时落入 **fallback workspace**
+（server 日志 `<fallback>`），**打开文档不推诊断**。必须传
+`workspaceFolders: [{uri=root, name="lsp"}]`（research 原版 probe 一直
+传——复制调研脚本时丢失该字段，调试多轮才定位）。clangd 无此问题
+（不推诊断），但两 server 同走此路径，统一带上。
+
+### 4.6 method 全名约定
+
+LSP 通知/请求 method 一律**全名**（`textDocument/publishDiagnostics`、
+`textDocument/didOpen`）。`lsp:on(method, fn)` 注册用全名；测试 fake
+server 回推通知也用全名。调试教训：`publishDiagnostics` 短名注册
+handler 永不触发，且收到消息时 method 显示全名——**勿截断比较**。
 
 ## 五、UTF-16 换算（Section 2 纯函数，纠正 research §五）
 
@@ -179,10 +205,14 @@ docedit → 漏斗记 edits → 渲染前 flush didChange(version++)
 
 ## 九、测试
 
-- Task 4：lspclient_test.lua（fake server 脚本对答：initialize 握手、
-  $/hello 忽略、didChange 增量、publishDiagnostics 收到、shutdown/exit）
+- Task 4：lspclient_test.lua 6 测试（fake server 进程对答：initialize
+  握手、$/hello 忽略、didOpen/didChange 回执、UTF-16 换算断言
+  （CJK/emoji）、publishDiagnostics 收到、shutdown/exit 序列）
 - Task 5/6：editor_test.lua（TestLspSemantic/TestLspDiag：fake server 喂
   token 数组/diag 推送到 grid cell style 断言，含与 syntax 共存 +
   UTF-16 换算断言 + 版本丢弃断言）
 - UTF-16 换算：单测矩阵（ASCII/CJK/emoji/tab 混合行的双向一致性）
-- 验证：`just lua/lspclient`（待建）、`just lua/ed`、LuaLS 零诊断
+- 验证：`just lua/lspclient`、`just lua/ed`、LuaLS 零诊断
+- **真实 server smoke 教训**（Task 4 已跑通）：lua-language-server 握手
+  + 诊断推送实测（3 条 Undefined global）需 workspaceFolders（§4.5）；
+  smoke 脚本一次性不保留——回归靠 lspclient_test 的 fake server

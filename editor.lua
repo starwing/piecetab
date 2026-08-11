@@ -4,12 +4,14 @@
 
 package.cpath = package.cpath ..
     ";./lua/?.so;./lua/luajit/?.so;/opt/homebrew/lib/lua/5.5/?.so;/opt/homebrew/lib/lua/5.4/?.so"
+package.path = package.path .. ";./lua/?.lua"
 local pt = require("piecetab")
 local cg = require("cellgrid")
 
 local utf8 = require("lua-utf8")
 local tf = require("termfeed")
 local ts = require("treesitter")
+local lspclient = require("lspclient")
 
 -- ================================================================
 -- Section 0: Logging (writes to editor.log for debugging)
@@ -1014,6 +1016,26 @@ local function install_builtin_commands(self)
   c.pieces = function(ed, arg, bang)
     ed.show_pieces = not ed.show_pieces
   end
+  c.lsp = function(ed, arg, bang)
+    if arg == "on" then
+      if ed.lsp then
+        ed.msg = "lsp already on"; return
+      end
+      local cmd = ext_lang(ed.filename) == "c"
+          and { "clangd" } or { "lua-language-server" }
+      ed:lsp_start(cmd)
+    elseif arg == "off" then
+      if ed.lsp then
+        ed.lsp:stop()
+        ed.lsp = nil
+      end
+      ed.msg = "lsp off"
+    elseif arg == "status" then
+      ed.msg = ed.lsp and ("lsp: " .. ed.lsp.state) or "lsp: off"
+    else
+      ed.msg = "usage: :lsp on|off|status"
+    end
+  end
   c.e = function(ed, arg, bang)
     if not arg or arg == "" then
       ed.msg = "No filename"; return
@@ -1108,9 +1130,41 @@ do
     self.hl = lang and hl.new(self, lang) or nil
   end
 
+  --- Start an LSP server process for the current buffer (document access
+  -- wired to the live doc; edits funnel via docedit -> notify_edit).
+  --- @param argv string[]
+  function Ed:lsp_start(argv)
+    if self.lsp then return end
+    local ed = self
+    self.lsp = lspclient.new({
+      get_text = function() return ed.doc:dump() end,
+      get_line = function(lnum)
+        local saved = ed.doc:offset()
+        ed.doc:seek("line", lnum)
+        local t = ed.doc:read("l") or ""
+        ed.doc:seek("set", saved)
+        return t
+      end,
+      offset_pos = function(off)
+        local saved = ed.doc:offset()
+        ed.doc:seek("set", off)
+        local line, col = ed.doc:line(), ed.doc:column()
+        ed.doc:seek("set", saved)
+        return line, col
+      end,
+      on_status = function(state, why)
+        ed.msg = "lsp: " .. state .. (why and " (" .. why .. ")" or "")
+      end,
+    })
+    self.lsp:start(argv, "file://" .. (self.filename or ""),
+      ext_lang(self.filename) or "plaintext",
+      "file://" .. ((self.filename or ""):match("^(.*)/") or "."))
+  end
+
   --- Edit at cursor with highlight notification (single edit funnel).
   function Ed:docedit(del, s)
     local off = self.doc:offset()
+    if self.lsp then self.lsp:notify_edit(off, del, s) end
     self.doc:edit(del, s)
     if self.hl then self.hl:notify_edit(off, del, #s) end
   end
@@ -1252,8 +1306,9 @@ do
     else
       local dirty_mark = (self.doc:version() ~= self.saved_vid) and "[+] " or ""
       local linestr = string.format("L%d,%d", cur_line + 1, cur_col + 1)
+      local lsp_part = self.lsp and (" lsp:" .. self.lsp.state) or ""
       local left = string.format(" %s%s %s  %s ", dirty_mark,
-        self.filename or "[No Name]", self.mode, linestr)
+        self.filename or "[No Name]", self.mode, linestr) .. lsp_part
       local msg_part = ""
       if #self.msg > 0 then msg_part = " " .. self.msg end
       local pad = cols - utf8.width(left) - utf8.width(msg_part) - 1
@@ -1368,6 +1423,7 @@ local function main(argv)
   -- Catch exit signals (raw mode: no signals, but just in case)
   local ok, err = pcall(function()
     while not e.done do
+      if e.lsp then e.lsp:poll() end
       e:render()
       e:dispatch(e.term:getkey())
     end
