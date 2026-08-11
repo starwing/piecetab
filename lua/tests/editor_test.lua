@@ -1614,6 +1614,25 @@ end
   os.remove(path)
 end
 
+function TestHint:testTrailingHintSafe()
+  -- hint at/past end of line: the trailing flush compares against the
+  -- end-of-line column (regression: nil dcols[#text+1] crashed)
+  local e, path = hint_ed([[
+    { { position = { line = 0, character = 20 }, label = "tail:" } }]],
+    "hello\n") -- line is 5 chars; hint beyond it clamps to line end
+  frame(e)
+  lu.assertTrue(lsp_drive(e, function() return e.lsp_hints ~= nil end))
+  lu.assertTrue(lsp_drive(e, function() return e.lsp_hint_pending == false end))
+  lu.assertTrue(pcall(frame, e), "render with trailing hint")
+  -- shift it past the line end via an edit: still safe
+  e.doc:seek("set", 0)
+  e:docedit(0, "xxxxx")
+  lu.assertTrue(pcall(frame, e), "render with shifted trailing hint")
+  e.lsp:stop()
+  lspio.close(e.lsp.io)
+  os.remove(path)
+end
+
 function TestHint:testConfigAnswer()
   -- server asks workspace/configuration (LuaLS style): editor answers
   -- with hint.enable=true, unknown sections as null

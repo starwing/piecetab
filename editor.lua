@@ -902,6 +902,7 @@ local function render_line(g, row, col, text, segs, tabstop, hints)
         i = nxt
       end
     end
+    dcols[#text + 1] = d -- end-of-line column (trailing flush)
   end
 
   local function style_at(b)
@@ -1375,7 +1376,9 @@ do
     self.lsp_hint_view = nil
     self.lsp_hint_pending = false
     self.lsp_hint_dirty = true
-    self.last_edit_t = 0
+    -- startup counts as idle: first refresh fires immediately, not
+    -- after the debounce window
+    self.last_edit_t = -1e6
     self.hint_idle = 1.0 -- seconds of no typing before a hint refresh
     -- answer LuaLS config requests: hints on (VSCode-default behavior),
     -- rest of the Lua section left unset so defaults apply
