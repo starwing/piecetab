@@ -10,7 +10,8 @@ local cg = require("cellgrid")
 
 local utf8 = require("lua-utf8")
 local tf = require("termfeed")
-local ts = select(2, pcall(require, "treesitter")) -- optional: hl off when absent
+local ok_ts, ts = pcall(require, "treesitter")
+if not ok_ts then ts = nil end -- absent: hl off (pcall err msg is a string, not nil)
 local lsp = require("lsp")
 local luv = require("luv")
 
