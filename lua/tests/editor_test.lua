@@ -1357,4 +1357,88 @@ end
   os.remove(path)
 end
 
+-- ======== inlay hints (Task 7) ========
+
+TestHint = {}
+
+-- server: answers inlayHint with a fixed hint list, echoes each request
+local function hint_code(hints)
+  return string.format([[
+local hints = %s
+while true do
+  local m = readmsg()
+  if not m then break end
+  if m.id then
+    if m.method == "initialize" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = { capabilities = {
+        inlayHintProvider = true } } })
+    elseif m.method == "textDocument/inlayHint" then
+      sendmsg({ jsonrpc = "2.0", method = "test/req" })
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = hints })
+    elseif m.method == "shutdown" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = y.null })
+    end
+  elseif m.method == "exit" then
+    os.exit(0)
+  end
+end
+]], hints)
+end
+
+local function hint_ed(code, content)
+  local path = fake_server(hint_code(code))
+  local e = make_ed(content)
+  e:lsp_start({ "lua", path })
+  lu.assertTrue(lsp_drive(e, function() return e.lsp.state == "running" end))
+  return e, path
+end
+
+function TestHint:testInjectShift()
+  -- hint at (0,0): injected before the text, shifting it right
+  local e, path = hint_ed([[
+    { { position = { line = 0, character = 0 }, label = "int:" } }]], "local x = 1\n")
+  frame(e) -- render end issues the inlayHint request
+  lu.assertTrue(lsp_drive(e, function() return e.lsp_hints ~= nil end),
+    "hint response")
+  frame(e)
+  local dim = e.sc:intern(Ed.ATTR_DIM)
+  local _, st = e.grid:cell(0, 4) -- hint text starts at content col 0
+  lu.assertEquals(st, dim)
+  local _, c4 = e.grid:cell(0, 8) -- 'l' of local shifted by #"int:"=4
+  lu.assertEquals(c4, e.sc:intern({}))
+  e.lsp:stop()
+  lspio.close(e.lsp.io)
+  os.remove(path)
+end
+
+function TestHint:testScrollRefetch()
+  -- scroll moves the viewport -> new request (8 lines > 5 visible rows)
+  local reqs = 0
+  local e, path = hint_ed([[
+    { { position = { line = 1, character = 0 }, label = "b:" } }]],
+    "aaa\nbbb\nccc\nddd\neee\nfff\nggg\nhhh\n")
+  e.lsp:on("test/req", function(p) reqs = reqs + 1 end)
+  frame(e)
+  lu.assertTrue(lsp_drive(e, function() return e.lsp_hints ~= nil end), "first")
+  lu.assertEquals(reqs, 1)
+  e:dispatch("G") -- cursor to last line: viewport scrolls
+  frame(e)
+  lu.assertTrue(lsp_drive(e, function() return reqs >= 2 end), "scrolled refetch")
+  e.lsp:stop()
+  lspio.close(e.lsp.io)
+  os.remove(path)
+end
+
+function TestHint:testNullSilent()
+  -- sumneko declares support but returns null: must stay silent
+  local e, path = hint_ed("y.null", "local x = 1\n")
+  frame(e)
+  lu.assertTrue(lsp_drive(e, function() return e.lsp_hint_pending == false
+    and e.lsp_hint_dirty == false end), "null handled")
+  lu.assertNil(e.lsp_hints)
+  e.lsp:stop()
+  lspio.close(e.lsp.io)
+  os.remove(path)
+end
+
 os.exit(lu.LuaUnit.run(), true)

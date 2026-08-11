@@ -711,6 +711,44 @@ local function lsp_diag_at(spans, off)
   return best
 end
 
+-- Decode inlayHint response items into per-line hint lists
+-- {[line] = {{dcol, text}, ...}} sorted by display column. Position is
+-- the insertion point (UTF-16), converted to the display column the
+-- text is injected at; label is a string or an array of parts.
+--- @param ed editor.Ed
+--- @param hints table  inlayHint response (array or null)
+--- @return table
+local function lsp_hint_decode(ed, hints)
+  local out = {}
+  for _, h in ipairs(hints or {}) do
+    local pos = h.position
+    if pos then
+      local saved = ed.doc:offset()
+      ed.doc:seek("line", pos.line)
+      local base = ed.doc:offset()
+      local t = ed.doc:read("l") or ""
+      ed.doc:seek("set", saved)
+      local label = h.label
+      if type(label) == "table" then
+        local parts = {}
+        for _, p in ipairs(label) do parts[#parts + 1] = p.value end
+        label = table.concat(parts)
+      end
+      if type(label) == "string" and #label > 0 then
+        local bcol = text_utf16_to_byte(t, pos.character)
+        local lst = out[pos.line]
+        if not lst then lst = {}; out[pos.line] = lst end
+        lst[#lst + 1] = { dcol = text_byte_to_dcol(t, bcol, ed.tabstop),
+          text = label }
+      end
+    end
+  end
+  for _, lst in pairs(out) do
+    table.sort(lst, function(a, b) return a.dcol < b.dcol end)
+  end
+  return out
+end
+
 -- Piece-boundary writer (pull mode, no cache): scan all pieces, alternate
 -- gray background on even pieces (first piece plain) to visualize
 -- piecetab layout on screen.
@@ -792,7 +830,7 @@ end
 -- Single-pass line render: walk text byte-by-byte, switch style at segment
 -- boundaries, batch same-style text into g:putline. Tabs expanded inline.
 -- Returns absolute column (0-based) after rendered text.
--- TODO(C): tab expand + display-col math to C (cellgrid family);
+ -- TODO(C): tab expand + display-col math to C (cellgrid family);
 -- see notes/design_editor.md 六b
 ---@param g cellgrid.Grid
 ---@param row integer
@@ -800,11 +838,14 @@ end
 ---@param text string
 ---@param segs table
 ---@param tabstop integer
-local function render_line(g, row, col, text, segs, tabstop)
+---@param hints table?  sorted by dcol: {dcol, text, style} — injected
+---  into the render stream (virt_text, never interned)
+local function render_line(g, row, col, text, segs, tabstop, hints)
   local byte = 1
   local batch_start = 1
   local cur_style = 0
   local seg_idx = 1
+  local hint_idx = 1
   local dc = 0
 
   local function style_at(b)
@@ -827,7 +868,16 @@ local function render_line(g, row, col, text, segs, tabstop)
     end
   end
 
+  local function flush_hints()
+    while hints and hint_idx <= #hints and hints[hint_idx].dcol <= dc do
+      local h = hints[hint_idx]
+      dc = g:putline(row, col + dc, h.text, h.style) - col
+      hint_idx = hint_idx + 1
+    end
+  end
+
   while byte <= #text do
+    flush_hints()
     local b = text:byte(byte)
     if b == 9 then
       flush()
@@ -845,6 +895,7 @@ local function render_line(g, row, col, text, segs, tabstop)
     end
   end
   flush()
+  flush_hints()
   return col + dc
 end
 
@@ -901,6 +952,7 @@ local function resync_lsp(ed)
   if ed.lsp then
     ed.lsp:sync_full()
     if ed.lsp_sem then ed.lsp_sem.dirty = true end
+    ed.lsp_hint_dirty = true
   end
 end
 
@@ -1113,6 +1165,7 @@ local function install_builtin_commands(self)
       if ed.lsp then
         ed.lsp:stop()
         ed.lsp, ed.lsp_sem, ed.lsp_diag = nil, nil, nil
+        ed.lsp_hints, ed.lsp_hint_view = nil, nil
       end
       ed.msg = "lsp off"
     elseif arg == "status" then
@@ -1249,6 +1302,11 @@ do
     -- response; dirty marks edits, kept rendering until the next snapshot
     self.lsp_sem = { spans = {}, dirty = true, pending = false }
     self.lsp_diag = nil
+    -- inlay hints: per-viewport cache, refreshed on scroll or edit
+    self.lsp_hints = nil
+    self.lsp_hint_view = nil
+    self.lsp_hint_pending = false
+    self.lsp_hint_dirty = true
     self.lsp:on("textDocument/publishDiagnostics", function(p)
       if p.uri ~= self.lsp.uri then return end
       -- drop stale snapshots (out-of-order pushes)
@@ -1286,6 +1344,7 @@ do
     if self.lsp then
       self.lsp:notify_edit(off, del, s)
       if self.lsp_sem then self.lsp_sem.dirty = true end
+      self.lsp_hint_dirty = true
     end
     self.doc:edit(del, s)
     if self.hl then self.hl:notify_edit(off, del, #s) end
@@ -1405,7 +1464,12 @@ do
     for _, ld in ipairs(lines_data) do
       local r0 = ld.row - 1
       local segs = hl.line_segments(spans or {}, ld.start, ld.start + #ld.text)
-      local endcol = render_line(g, r0, col_start - 1, ld.text, segs, self.tabstop)
+      local hints = self.lsp_hints and self.lsp_hints[line_idx]
+      if hints then
+        for _, h in ipairs(hints) do h.style = self.styles.dim end
+      end
+      local endcol = render_line(g, r0, col_start - 1, ld.text, segs,
+        self.tabstop, hints)
       if endcol < col_pad - 1 then
         g:clearrow(r0, endcol, col_pad - 1)
       end
@@ -1449,6 +1513,30 @@ do
             end
           end)
       end
+    end
+
+    -- after render: refresh inlay hints when the viewport moved or the
+    -- doc was edited (request carries the visible line range)
+    if self.lsp and self.lsp.state == "running"
+        and self.lsp.capabilities.inlayHintProvider
+        and not self.lsp_hint_pending
+        and (self.lsp_hint_dirty or self.lsp_hint_view ~= self.scroll_line) then
+      local visend = math.min(self.scroll_line + visrows, total_lines)
+      self.lsp_hint_pending = true
+      self.lsp:request("textDocument/inlayHint", {
+        textDocument = { uri = self.lsp.uri },
+        range = { start = { line = self.scroll_line, character = 0 },
+          ["end"] = { line = visend, character = 0x7fffffff } },
+      }, function(result, err)
+          self.lsp_hint_pending = false
+          if err or not result then
+            self.lsp_hint_dirty = false
+          else
+            self.lsp_hints = lsp_hint_decode(self, result)
+            self.lsp_hint_view = self.scroll_line
+            self.lsp_hint_dirty = false
+          end
+        end)
     end
   end
 

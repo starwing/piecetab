@@ -6,6 +6,7 @@
 -- measured against the state the server already has — no merge/rebase.
 local jsonrpc = require("jsonrpc")
 local lspio = require("lspio")
+local yyjson = require("yyjson")
 
 --- @class lspclient.Client
 --- @field state string  starting|running|shutting|exited
@@ -87,13 +88,16 @@ local function _utf16(self, line, bytecol)
 end
 
 -- Route a message: response -> pending callback, notification -> handler.
+-- JSON null results (e.g. sumneko inlayHint) surface as nil.
 --- @param msg table
 local function _on_msg(self, msg)
   if msg.id ~= nil then
     local entry = self.pending[msg.id]
     if entry then
       self.pending[msg.id] = nil
-      entry.cb(msg.result, msg.error)
+      local result = msg.result
+      if result == yyjson.null then result = nil end
+      entry.cb(result, msg.error)
     end
   elseif msg.method then
     local fn = self.handlers[msg.method]
