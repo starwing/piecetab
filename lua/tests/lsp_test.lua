@@ -124,7 +124,8 @@ function TestRPC:testResponseShape()
   lu.assertEquals(msg.result.data[2], 2)
 end
 
--- write a fake LSP server script; reads frames, replies to requests
+-- write a fake LSP server script; reads frames, replies to requests.
+-- The preamble exposes readmsg()/sendmsg()/y (JSON null) to the code.
 local function fake_server(code)
   local path = os.tmpname()
   local f = assert(io.open(path, "w"))
@@ -143,32 +144,46 @@ local function sendmsg(t)
   io.write("Content-Length: ", #s, "\r\n\r\n", s)
   io.flush()
 end
+local y = require("yyjson")
 ]])
   f:write(code)
   f:close()
   return path
 end
 
--- drive: spawn, run pumps until pred(msg) or timeout. The decoder is
--- created once: partial frames survive across pumps.
-local function drive(h, pred, frames)
-  frames = frames or 100
-  local d = lsp.RPC.decoder(h.reader)
+-- drive: pump until pred() is true or the frame budget runs out.
+-- pump is a zero-arg function (or an object with a poll() method).
+local function drive(pump, pred, frames)
+  frames = frames or 200
   for _ = 1, frames do
-    lsp.IO.pump(h)
-    while true do
-      local msg, err = d:read()
-      if msg then
-        if pred(msg) then return msg end
-      elseif err ~= "again" then
-        return nil, err
-      else
-        break
-      end
-    end
+    if type(pump) == "function" then pump() else pump:poll() end
+    if pred() then return true end
     os.execute("sleep 0.01")
   end
-  return nil, "timeout"
+  return false
+end
+
+-- drive an IO handle: pump + drain decoded frames through a persistent
+-- decoder (split frames survive) until want(msg) matches
+--- @param h lsp.IO
+--- @param want fun(msg: table): boolean
+--- @param frames integer?
+--- @return table?
+local function io_drive(h, want, frames)
+  local d = lsp.RPC.decoder(h.reader)
+  local got
+  drive(function()
+    lsp.IO.pump(h)
+    while true do
+      local m = d:read()
+      if m then
+        if want(m) then got = m; return end
+      else
+        return
+      end
+    end
+  end, function() return got ~= nil end, frames)
+  return got
 end
 
 TestIO = {}
@@ -183,10 +198,9 @@ end
 ]])
   local h = assert(lsp.IO.spawn({ "lua", path }))
   lsp.IO.send(h, lsp.RPC.enc_request(1, "echo", "hi"))
-  local msg, err = drive(h, function(m) return m.id == 1 end)
-  lu.assertNil(err)
-  assert(msg ~= nil, err)
-  lu.assertEquals(msg.result, "hi!")
+  local got = assert(io_drive(h, function(m) return m.id == 1 end),
+    "echo response")
+  lu.assertEquals(got.result, "hi!")
   lsp.IO.close(h)
   os.remove(path)
 end
@@ -207,10 +221,9 @@ io.flush()
 ]])
   local h = assert(lsp.IO.spawn({ "lua", path }))
   lsp.IO.send(h, lsp.RPC.enc_request(1, "x", {}))
-  local msg, err = drive(h, function(m) return m.id == 1 end, 300)
-  lu.assertNil(err)
-  assert(msg ~= nil, err)
-  lu.assertEquals(msg.result, 42)
+  local got = assert(io_drive(h, function(m) return m.id == 1 end, 300),
+    "response")
+  lu.assertEquals(got.result, 42)
   lsp.IO.close(h)
   os.remove(path)
 end
@@ -223,8 +236,8 @@ sendmsg({ jsonrpc = "2.0", id = m.id, result = true })
 ]])
   local h = assert(lsp.IO.spawn({ "lua", path }))
   lsp.IO.send(h, lsp.RPC.enc_request(1, "x", {}))
-  local msg, err = drive(h, function(m) return m.id == 1 end)
-  lu.assertNil(err)
+  lu.assertNotNil(io_drive(h, function(m) return m.id == 1 end),
+    "response")
   -- after exit, reader must report EOF (nil, not pause)
   lsp.IO.pump(h)
   local m2, err2 = lsp.RPC.decoder(h.reader):read()
@@ -323,32 +336,6 @@ while true do
 end
 ]]
 
--- write a fake server script; TestProto scripts also use y (JSON null)
-local function fake_server(code)
-  local path = os.tmpname()
-  local f = assert(io.open(path, "w"))
-  f:write([[
-local function readmsg()
-  local head = io.read("*l")
-  if not head then return nil end
-  local len = tonumber(head:match("(%d+)"))
-  io.read("*l") -- blank line
-  local body = io.read(len)
-  local y = require("yyjson")
-  return y.decode(body)
-end
-local function sendmsg(t)
-  local s = require("yyjson").encode(t)
-  io.write("Content-Length: ", #s, "\r\n\r\n", s)
-  io.flush()
-end
-local y = require("yyjson")
-]])
-  f:write(code)
-  f:close()
-  return path
-end
-
 -- fake document: array of lines; byte offsets computed against
 -- table.concat(lines, "\n"); cfg overrides the default config table
 local function new_client(code, lines, cfg)
@@ -368,17 +355,6 @@ local function new_client(code, lines, cfg)
   })
   c:start({ "lua", path }, "file:///t.lua", "lua")
   return c, path
-end
-
--- pump until pred() is true or the frame budget runs out
-local function drive(c, pred, frames)
-  frames = frames or 200
-  for _ = 1, frames do
-    c:poll()
-    if pred() then return true end
-    os.execute("sleep 0.01")
-  end
-  return false
 end
 
 function TestProto:testHandshakeDidOpen()
@@ -543,23 +519,28 @@ local function fake_proto()
   p.poll = function(self) end
   p.stop = function(self) end
   p.on = function(self, method, fn) self.handlers[method] = fn end
-  p.start = function() return true end
+  p.start = function(self, argv, uri) self.uri = uri; return true end
   return p
 end
 
--- client with a fake proto/doc/clock/vtext; `over` overrides defaults,
+-- client with a fake proto/doc/clock/vtext; `over` overrides defaults
+-- (lines replaces the doc table, nonow drops the injected clock),
 -- setclock(n) advances the injected wall clock
 local function mk_client(over)
   over = over or {}
   local proto = fake_proto()
   local got = {}
   local clock = over.clock or 10
+  local lines = over.lines or { "hello", "world" }
   local c = lsp.Client.new({
-    get_text = function() return "hello\nworld\n" end,
-    get_line = function(l) return l == 0 and "hello" or "world" end,
+    get_text = function() return table.concat(lines, "\n") end,
+    get_line = function(l) return lines[l + 1] end,
     offset_pos = function(off)
-      if off < 6 then return 0, off end
-      return 1, off - 6
+      for l, t in ipairs(lines) do
+        if off <= #t then return l - 1, off end
+        off = off - #t - 1
+      end
+      return #lines - 1, 0
     end,
     on_status = function() end,
     dcol_fn = function(line, bcol) return bcol end, -- ASCII: dcol == bytecol
@@ -649,6 +630,43 @@ function TestClient:testPostRenderSemanticPull()
   lu.assertEquals(#proto.reqs, 1)
 end
 
+function TestClient:testSemanticDecodeAscii()
+  local c, proto = mk_client()
+  proto.capabilities.semanticTokensProvider = { full = true,
+    legend = { tokenTypes = { "comment" } } }
+  c:post_render()
+  -- tokens (5 ints each: dline/dunit/len/ttype/mod): line 0 unit 3
+  -- len 2; line 1 unit 0 len 1; unknown ttype idx 1 must be skipped
+  proto.cbs[1]({ data = { 0, 3, 2, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 1, 0 } })
+  lu.assertEquals(#c.sem.spans, 2)
+  lu.assertEquals(c.sem.spans[1].offset, 3)
+  lu.assertEquals(c.sem.spans[1].length, 2)
+  lu.assertEquals(c.sem.spans[1].attr, "c")
+  lu.assertEquals(c.sem.spans[2].offset, 6) -- line 1 starts at byte 6
+  lu.assertEquals(c.sem.spans[2].length, 1)
+  lu.assertFalse(c.sem.dirty, "decode clears dirty")
+  c:post_render() -- not dirty: no new request
+  lu.assertEquals(#proto.reqs, 1)
+end
+
+function TestClient:testSemanticDecodeCjkUtf16()
+  -- "你好a😀": CJK = 1 unit / 3 bytes, emoji = 2 units / 4 bytes
+  local c, proto = mk_client({ lines = { "你好a😀", "x" } })
+  proto.capabilities.semanticTokensProvider = { full = true,
+    legend = { tokenTypes = { "comment" } } }
+  c:post_render()
+  -- tokens (5 ints each): unit 2 len 1 ("a", bytes 6-7); unit 3 len 2
+  -- (emoji, bytes 7-11); line 1 unit 0 len 1
+  proto.cbs[1]({ data = { 0, 2, 1, 0, 0, 0, 1, 2, 0, 0, 1, 0, 1, 0, 0 } })
+  lu.assertEquals(#c.sem.spans, 3)
+  lu.assertEquals(c.sem.spans[1].offset, 6)
+  lu.assertEquals(c.sem.spans[1].length, 1)
+  lu.assertEquals(c.sem.spans[2].offset, 7)
+  lu.assertEquals(c.sem.spans[2].length, 4)
+  lu.assertEquals(c.sem.spans[3].offset, 12) -- line 1 starts at byte 12
+  lu.assertEquals(c.sem.spans[3].length, 1)
+end
+
 function TestClient:testOnEditMarksDirty()
   local c, proto = mk_client()
   c.sem.dirty, c.hint_dirty = false, false
@@ -698,6 +716,34 @@ function TestClient:testDiagAt()
   lu.assertNil(c:diag_at(0))
   c.diag = nil
   lu.assertNil(c:diag_at(3))
+end
+
+function TestClient:testDiagDecodeCjkAndVersionGuard()
+  local c, proto = mk_client({ lines = { "你好", "x" } })
+  lu.assertTrue(c:start({ "lua" }, "file:///t.lua", "lua"))
+  local handler = proto.handlers["textDocument/publishDiagnostics"]
+  lu.assertNotNil(handler)
+  -- CJK: chars 0-2 span 6 bytes; line 1 chars 0-1 span 1 byte (off 8)
+  handler({ uri = "file:///t.lua", version = 2,
+    diagnostics = {
+      { range = { start = { line = 0, character = 0 },
+        ["end"] = { line = 0, character = 2 } }, message = "boom",
+        severity = 1 },
+      { range = { start = { line = 1, character = 0 },
+        ["end"] = { line = 1, character = 1 } }, message = "x" },
+    } })
+  lu.assertEquals(c.diag.version, 2)
+  lu.assertEquals(#c.diag.spans, 2)
+  lu.assertEquals(c.diag.spans[1].offset, 0)
+  lu.assertEquals(c.diag.spans[1].length, 6)
+  lu.assertEquals(c.diag.spans[1].msg, "boom")
+  lu.assertEquals(c.diag.spans[2].offset, 7) -- line 1 starts at byte 7
+  -- stale snapshot (older version) dropped
+  handler({ uri = "file:///t.lua", version = 1,
+    diagnostics = { { range = { start = { line = 0, character = 0 },
+      ["end"] = { line = 0, character = 1 } }, message = "stale" } } })
+  lu.assertEquals(#c.diag.spans, 2)
+  lu.assertEquals(c.diag.spans[1].msg, "boom")
 end
 
 function TestClient:testStartFailureClears()

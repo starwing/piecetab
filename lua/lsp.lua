@@ -70,7 +70,7 @@ local function header_length(header)
   for line in header:gmatch("[^\r\n]+") do
     local name, value = line:match("^([^:]+):%s*(.*)$")
     if name and name:lower() == "content-length" then
-      return tonumber(value)
+      return math.floor(assert(tonumber(value)))
     end
   end
 end
@@ -598,6 +598,8 @@ local function utf16_to_byte(text, units)
 end
 
 -- Byte offset of each line start (line 0 = 0) from the full doc text.
+-- find() returns the 1-based newline index, which is exactly the
+-- 0-based offset of the following line.
 --- @param text string
 --- @return integer[]
 local function line_offsets(text)
@@ -605,7 +607,7 @@ local function line_offsets(text)
   while true do
     local nl = text:find("\n", pos, true)
     if not nl then break end
-    out[#out + 1] = nl + 1
+    out[#out + 1] = nl
     pos = nl + 1
   end
   return out
@@ -823,7 +825,7 @@ function Client.new(opts)
   self.sem = { spans = {}, dirty = true, pending = false }
   self.diag = nil
   self.opts = opts
-  return setmetatable(self, CM)
+  return setmetatable(self, CM) --[[@as lsp.Client]]
 end
 
 -- Spawn the server and register diag handling. proto comes from opts or

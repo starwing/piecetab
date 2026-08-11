@@ -1086,6 +1086,15 @@ function TestVtext:testJKKeepsScreenCol()
   lu.assertEquals(self.e.doc:column(), 0) -- back to line 0 byte 0 (screen col 4)
 end
 
+function TestVtext:testInsertDownKeepsGapColumn()
+  -- insert gap at the hint start: <Down> keeps screen col 0 (insert
+  -- semantics), not the text col past the hint
+  self.e.doc:seek("set", 0)
+  self.e:dispatch("i")
+  self.e:dispatch("<Down>")
+  lu.assertEquals(self.e.doc:column(), 0) -- line 1 byte 0 = screen col 0
+end
+
 function TestVtext:testShiftVtextsSameLine()
   -- edit before the hint: hint shifts right by the byte delta
   self.e.doc:seek("set", 0)

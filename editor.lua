@@ -329,7 +329,7 @@ local function move_vert(ed, dl)
   local lnum = doc:line()
   local nlnum = lnum + dl
   if nlnum < 0 or nlnum >= doc:breaks() then return end
-  local scol = ed:vtext_dcol(lnum, doc:column(), false)
+  local scol = ed:vtext_dcol(lnum, doc:column(), ed.mode == "INSERT")
   doc:seek("line", nlnum)
   doc:seek("cur", dcol_to_byte(doc, nlnum, ed:screen_to_text_dcol(nlnum, scol)))
 end
