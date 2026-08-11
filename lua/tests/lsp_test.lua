@@ -564,7 +564,7 @@ local function mk_client(over)
     on_status = function() end,
     dcol_fn = function(line, bcol) return bcol end, -- ASCII: dcol == bytecol
     viewport_fn = function() return { top = over.top or 0, rows = over.rows or 5 } end,
-    now_fn = function() return clock end,
+    now_fn = over.nonow and nil or function() return clock end,
     attrmap = { comment = "c", diag = "d" },
     vtext = {
       set = function(line, list) got[#got + 1] = { line, list } end,
@@ -708,6 +708,30 @@ function TestClient:testStartFailureClears()
   lu.assertNil(c.proto)
   lu.assertEquals(#got, 1)
   lu.assertEquals(got[1][1], "clear")
+end
+
+function TestClient:testTickWithoutNowFn()
+  -- no now_fn injected: Client falls back to luv.hrtime()/1e9
+  local c, proto = mk_client({ nonow = true })
+  c:tick()
+  lu.assertEquals(#proto.reqs, 1)
+end
+
+function TestClient:testRestartResetsHints()
+  local c, proto, got = mk_client()
+  c:tick()
+  proto.cbs[1]({ { position = { line = 0, character = 3 }, label = "int" } })
+  lu.assertEquals(#got, 1)
+  c:stop()
+  lu.assertEquals(#got, 2)
+  lu.assertEquals(got[2][1], "clear")
+  lu.assertTrue(c:start({ "lua" }, "file:///t.lua", "lua"))
+  c:tick()
+  -- response on a different line: no stale clear of line 0 from the old run
+  proto.cbs[#proto.cbs]({ { position = { line = 1, character = 2 }, label = "x" } })
+  lu.assertEquals(#got, 3, "restart resets hint scheduling")
+  lu.assertEquals(got[3][1], 1)
+  lu.assertEquals(got[3][2][1].text, "x")
 end
 
 os.exit(lu.LuaUnit.run(), true)

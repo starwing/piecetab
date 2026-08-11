@@ -718,6 +718,24 @@ local function hint_decode(self, hints)
   return out
 end
 
+-- Fresh hint scheduling state. Client.new and Client:start share this
+-- shape: a restarted client must not carry stale lines/retry budgets.
+--- @param opts table
+--- @return table
+local function h_state(opts)
+  return {
+    hint_dirty = true,
+    hint_pending = false,
+    hint_view = nil,
+    hint_reqver = 0,
+    hint_retry = 0,
+    hint_null = 0,
+    last_edit_t = -1e6, -- startup counts as idle: refresh fires at once
+    hint_idle = opts.hint_idle ~= nil and opts.hint_idle
+        or tonumber(os.getenv("PT_HINT_IDLE")) or 1.0,
+  }
+end
+
 -- Replace the hint vtext slots: write the new per-line lists, clear
 -- stale lines from the previous response (full replacement semantics).
 --- @param self lsp.Client
@@ -767,7 +785,7 @@ end
 --- @param self lsp.Client
 --- @param p table
 local function diag_update(self, p)
-  if p.uri ~= self.proto.uri then return end
+  if not self.proto or p.uri ~= self.proto.uri then return end
   local cur = self.diag and self.diag.version or -1
   local v = p.version
   if v and v < cur then return end
@@ -799,23 +817,13 @@ end
 --- @param opts table
 --- @return lsp.Client
 function Client.new(opts)
-  local self = setmetatable({
-    proto = opts.proto or nil,
-    sem = { spans = {}, dirty = true, pending = false },
-    diag = nil,
-    hint_dirty = true,
-    hint_pending = false,
-    hint_view = nil,
-    hint_reqver = 0,
-    hint_retry = 0,
-    hint_null = 0,
-    hint_lines = nil,
-    last_edit_t = -1e6, -- startup counts as idle: refresh fires at once
-    hint_idle = opts.hint_idle ~= nil and opts.hint_idle
-        or tonumber(os.getenv("PT_HINT_IDLE")) or 1.0,
-    opts = opts,
-  }, CM)
-  return self
+  opts.now_fn = opts.now_fn or function() return luv.hrtime() / 1e9 end
+  local self = h_state(opts)
+  self.proto = opts.proto or nil
+  self.sem = { spans = {}, dirty = true, pending = false }
+  self.diag = nil
+  self.opts = opts
+  return setmetatable(self, CM)
 end
 
 -- Spawn the server and register diag handling. proto comes from opts or
@@ -836,6 +844,10 @@ function Client:start(argv, uri, langid, root)
   p:on("textDocument/publishDiagnostics", function(params)
     diag_update(self, params)
   end)
+  -- restart: fresh caches and hint scheduling (no stale slots/retries)
+  for k, v in pairs(h_state(self.opts)) do self[k] = v end
+  self.sem = { spans = {}, dirty = true, pending = false }
+  self.diag, self.hint_lines = nil, nil
   if not p:start(argv, uri, langid, root) then
     self.proto, self.diag = nil, nil
     self.opts.vtext.clear()
@@ -901,7 +913,7 @@ end
 -- one request; skip while a request is already in flight).
 function Client:post_render()
   local p = self.proto
-  if not (p and p.state == "running" and self.sem.dirty
+  if not (p and p.state == "running" and self.sem and self.sem.dirty
       and not self.sem.pending) then return end
   local cap = p.capabilities.semanticTokensProvider
   if not (cap and cap.full) then
