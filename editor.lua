@@ -13,6 +13,7 @@ local tf = require("termfeed")
 local ts = require("treesitter")
 local lspclient = require("lspclient")
 local lsp_span = require("lsp_span")
+local yyjson = require("yyjson")
 
 -- ================================================================
 -- Section 0: Logging (writes to editor.log for debugging)
@@ -1307,6 +1308,19 @@ do
     self.lsp_hint_view = nil
     self.lsp_hint_pending = false
     self.lsp_hint_dirty = true
+    -- answer LuaLS config requests: hints on (VSCode-default behavior),
+    -- rest of the Lua section left unset so defaults apply
+    self.lsp:on_server("workspace/configuration", function(params)
+      local out = {}
+      for _, item in ipairs(params and params.items or {}) do
+        if item.section == "Lua" then
+          out[#out + 1] = { hint = { enable = true } }
+        else
+          out[#out + 1] = yyjson.null
+        end
+      end
+      return out
+    end)
     self.lsp:on("textDocument/publishDiagnostics", function(p)
       if p.uri ~= self.lsp.uri then return end
       -- drop stale snapshots (out-of-order pushes)

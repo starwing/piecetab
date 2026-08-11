@@ -14,6 +14,7 @@ local yyjson = require("yyjson")
 --- @field dec table
 --- @field pending table
 --- @field handlers table
+--- @field server_handlers table  server->client requests
 --- @field version integer
 --- @field uri string
 --- @field langid string
@@ -67,6 +68,7 @@ function lspclient.new(opts)
     dec = nil,
     pending = {},
     handlers = {},
+    server_handlers = {},
     version = 0,
     uri = nil,
     langid = nil,
@@ -87,11 +89,25 @@ local function _utf16(self, line, bytecol)
   return lspclient.text_byte_to_utf16(self.opts.get_line(line), bytecol)
 end
 
--- Route a message: response -> pending callback, notification -> handler.
+-- Route a message: response -> pending callback, server request ->
+-- server handler (answered with a result), notification -> handler.
 -- JSON null results (e.g. sumneko inlayHint) surface as nil.
 --- @param msg table
 local function _on_msg(self, msg)
-  if msg.id ~= nil then
+  if msg.id ~= nil and msg.method then
+    local fn = self.server_handlers[msg.method]
+    if fn then
+      local result, err = fn(msg.params)
+      local encoded
+      if err then
+        encoded = jsonrpc.enc_error(msg.id, -32603, err)
+      else
+        encoded = jsonrpc.enc_result(msg.id, result == nil and yyjson.null
+          or result)
+      end
+      lspio.send(self.io, encoded)
+    end
+  elseif msg.id ~= nil then
     local entry = self.pending[msg.id]
     if entry then
       self.pending[msg.id] = nil
@@ -129,6 +145,14 @@ function lspclient:on(method, fn)
   self.handlers[method] = fn
 end
 
+-- Register a server->client request handler (workspace/configuration);
+-- fn(params) returns result (or result, err-string for a protocol error).
+--- @param method string
+--- @param fn fun(params: table?): any?, string?
+function lspclient:on_server(method, fn)
+  self.server_handlers[method] = fn
+end
+
 -- Spawn the server process and start the initialize handshake.
 --- @param argv string[]
 --- @param uri string  document uri (didOpen)
@@ -146,7 +170,10 @@ function lspclient:start(argv, uri, langid, root)
   self:request("initialize", {
     rootUri = root_uri,
     workspaceFolders = { { uri = root_uri, name = "lsp" } },
-    capabilities = {},
+    capabilities = {
+      -- answer workspace/configuration (LuaLS reads Lua settings via it)
+      workspace = { configuration = true },
+    },
   }, function(result, err)
       if err then
         _fail(self, "initialize: " .. tostring(err.message))

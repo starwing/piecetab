@@ -12,6 +12,7 @@ package.cpath = (_G["jit"] and root .. "/lua/luajit/?.so;"
 local lu = require "luaunit"
 local Ed = require "editor"
 local lspio = require "lspio"
+local yyjson = require "yyjson"
 
 local ROWS, COLS = 6, 40
 
@@ -1436,6 +1437,42 @@ function TestHint:testNullSilent()
   lu.assertTrue(lsp_drive(e, function() return e.lsp_hint_pending == false
     and e.lsp_hint_dirty == false end), "null handled")
   lu.assertNil(e.lsp_hints)
+  e.lsp:stop()
+  lspio.close(e.lsp.io)
+  os.remove(path)
+end
+
+function TestHint:testConfigAnswer()
+  -- server asks workspace/configuration (LuaLS style): editor answers
+  -- with hint.enable=true, unknown sections as null
+  local path = fake_server([[
+while true do
+  local m = readmsg()
+  if not m then break end
+  if m.id then
+    if m.method == "initialize" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = { capabilities = {
+        inlayHintProvider = true } } })
+    elseif not m.method then
+      sendmsg({ jsonrpc = "2.0", method = "test/cfg", params = m })
+    elseif m.method == "shutdown" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = y.null })
+    end
+  elseif m.method == "initialized" then
+    sendmsg({ jsonrpc = "2.0", id = 100, method = "workspace/configuration",
+      params = { items = { { section = "Lua" }, { section = "other" } } } })
+  elseif m.method == "exit" then
+    os.exit(0)
+  end
+end
+]])
+  local e = make_ed("x\n")
+  e:lsp_start({ "lua", path })
+  local cfg
+  e.lsp:on("test/cfg", function(p) cfg = p end)
+  lu.assertTrue(lsp_drive(e, function() return cfg ~= nil end), "answered")
+  lu.assertEquals(cfg.result[1].hint.enable, true)
+  lu.assertEquals(cfg.result[2], yyjson.null)
   e.lsp:stop()
   lspio.close(e.lsp.io)
   os.remove(path)

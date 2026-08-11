@@ -112,6 +112,26 @@ LSP 通知/请求 method 一律**全名**（`textDocument/publishDiagnostics`、
 server 回推通知也用全名。调试教训：`publishDiagnostics` 短名注册
 handler 永不触发，且收到消息时 method 显示全名——**勿截断比较**。
 
+### 4.7 server 配置链路（workspace/configuration，Task 7 实测教训）
+
+LuaLS 的 inlay hint 等特性由配置开关控制（`Lua.hint.enable` 默认
+**false**）。配置传递 = **server 发 `workspace/configuration` 请求**
+（section "Lua"），前提 client 在 initialize 声明
+`capabilities.workspace.configuration = true`。裸连接（capabilities
+空表）→ server 永远不请求配置 → hint 恒 null——**不是"声明与行为
+不符"，是配置没开**（VSCode 扩展声明 capability 并响应配置，所以
+能看到 hint）。
+
+lspclient 侧：`on_server(method, fn)` 注册 server→client 请求
+（fn 返回 result / result+err；nil result 编码为 JSON null——
+**Lua 表尾放字面 nil 不构成元素**，须用 `yyjson.null` 哨兵）。
+editor 响应：`Lua` section → `{ hint = { enable = true } }`，其余
+section → null。
+
+排障教训：server 特性"声明支持却无响应"时，先查**配置开关 +
+client 是否参与配置协商**（workspace/configuration），再怀疑
+server 行为。
+
 ## 五、UTF-16 换算（Section 2 纯函数，纠正 research §五）
 
 **事实**（research §五 有误）：UTF-16 中 BMP 内字符（含 CJK U+4E00–

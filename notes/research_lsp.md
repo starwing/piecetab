@@ -20,7 +20,7 @@
 | diagnosticProvider（pull） | **无**（null） | **无**（null） |
 | 诊断推送 | push publishDiagnostics（didOpen 后 2+4 条） | push（didOpen 后 0 条，无编译错误时静默） |
 | inlayHintProvider | `{resolveProvider: true}` | `true` |
-| inlayHint 实测 | **返回 null**（带 @param 注解也 null，声明与行为不符） | 返回 hint 数组（kind=2 Type 形态 `"a:"`） |
+| inlayHint 实测 | **配好配置后返回 hint 数组**（kind=2 参数名形态 `"name:"`）。裸连接（不响应 workspace/configuration）返回 null——**非"声明与行为不符"**：`Lua.hint.enable` 默认 false，且 client 须声明 `workspace.configuration` capability 并响应 `Lua` section 配置（VSCode 扩展即如此） | 返回 hint 数组（kind=2 Type 形态 `"a:"`） |
 
 ## 二、协议边界行为（实测）
 

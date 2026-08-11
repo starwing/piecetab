@@ -14,6 +14,7 @@ package.cpath = package.cpath
 local lu = require "luaunit"
 local lspio = require "lspio"
 local lspclient = require "lspclient"
+local yyjson = require "yyjson"
 
 -- protocol loop: handshake + echo sync messages as test/* notifications
 local CODE = [[
@@ -56,6 +57,30 @@ while true do
       params = { uri = "file:///t.lua",
         diagnostics = { { range = { start = { line = 0, character = 0 },
           ["end"] = { line = 0, character = 5 } }, message = "oops" } } } })
+  end
+end
+]]
+
+-- protocol loop variant: ask workspace/configuration after initialized,
+-- echo the client's answer back as test/resp
+local CODE_CFG = [[
+while true do
+  local m = readmsg()
+  if not m then break end
+  if m.id then
+    if m.method == "initialize" then
+      sendmsg({ jsonrpc = "2.0", id = m.id,
+        result = { capabilities = { textDocumentSync = { change = 2 } } } })
+    elseif m.method == "shutdown" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = y.null })
+    elseif not m.method then
+      sendmsg({ jsonrpc = "2.0", method = "test/resp", params = m })
+    end
+  elseif m.method == "initialized" then
+    sendmsg({ jsonrpc = "2.0", id = 100, method = "workspace/configuration",
+      params = { items = { { section = "Lua" }, { section = "other" } } } })
+  elseif m.method == "exit" then
+    os.exit(0)
   end
 end
 ]]
@@ -204,6 +229,24 @@ function TestLspClient:testSyncFull()
   lu.assertEquals(changes[1].textDocument.version, 2)
   lu.assertEquals(changes[1].contentChanges[1].text, "hello\nworld")
   lu.assertNil(changes[1].contentChanges[1].range, "full replace, no range")
+  lspio.close(c.io)
+  os.remove(path)
+end
+
+function TestLspClient:testServerRequest()
+  -- server->client request (workspace/configuration): client answers
+  -- via on_server, nil results encode as JSON null
+  local got, resp
+  local c, path = new_client(CODE_CFG, { "x" })
+  c:on_server("workspace/configuration", function(p)
+    got = p
+    return { { hint = { enable = true } }, yyjson.null }
+  end)
+  c:on("test/resp", function(p) resp = p end)
+  lu.assertTrue(drive(c, function() return resp ~= nil end), "answered")
+  lu.assertEquals(got.items[1].section, "Lua")
+  lu.assertEquals(resp.result[1].hint.enable, true)
+  lu.assertEquals(resp.result[2], yyjson.null, "null preserved")
   lspio.close(c.io)
   os.remove(path)
 end
