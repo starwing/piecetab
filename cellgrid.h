@@ -52,12 +52,23 @@ typedef int   cg_WcWidthf(void *ud, int cp);
 typedef struct cg_Grid cg_Grid;
 typedef struct cg_Diff cg_Diff;
 
+/* clang-format off */
+typedef struct cg_Slice { const char *s, *e; } cg_Slice;
+/* clang-format on */
+
 /* lifecycle */
 CG_API int  cg_init(cg_Grid *G, cg_Allocf *f, void *ud);
 CG_API void cg_free(cg_Grid *G);
 CG_API void cg_setwcwidth(cg_Grid *G, cg_WcWidthf *f, void *ud);
+CG_API void cg_settabstop(cg_Grid *G, int ts);
 
 #define cg_valid(G) ((G) && (G)->rows)
+
+/* column calculation */
+CG_API cg_Slice cg_slice(const char *s, size_t len);
+CG_API int      cg_next(const cg_Grid *G, int c, cg_Slice *s);
+CG_API int      cg_cols(const cg_Grid *G, int c, cg_Slice s);
+CG_API size_t   cg_byte(const cg_Grid *G, int c, cg_Slice s, int col);
 
 /* frame */
 CG_API int  cg_begin(cg_Grid *G, int top, int rows, int cols);
@@ -68,7 +79,7 @@ CG_API void cg_put(cg_Grid *G, int r, int c, int cp, unsigned st);
 CG_API void cg_clearrow(cg_Grid *G, int r, int cs, int ce);
 CG_API void cg_fill(cg_Grid *G, int r, int cs, int ce, int cp);
 CG_API void cg_span(cg_Grid *G, int r, int cs, int ce, unsigned st);
-CG_API int  cg_putline(cg_Grid *G, int r, int c, const char *s, unsigned st);
+CG_API int  cg_putslice(cg_Grid *G, int r, int c, cg_Slice s, unsigned st);
 
 /* diff / freeze  */
 CG_API int  cg_diff(const cg_Grid *G, cg_Diff *diff);
@@ -76,9 +87,10 @@ CG_API void cg_freeze(cg_Grid *G);
 
 /* getters */
 
-#define cg_rows(G) ((G) ? (G)->rows : 0)
-#define cg_cols(G) ((G) ? (G)->cols : 0)
-#define cg_top(G)  ((G) ? (G)->top : 0)
+#define cg_rows(G)    ((G) ? (G)->rows : 0)
+#define cg_ncols(G)   ((G) ? (G)->cols : 0)
+#define cg_top(G)     ((G) ? (G)->top : 0)
+#define cg_tabstop(G) ((G) ? (G)->tabstop : 0)
 
 CG_API int cg_cell(const cg_Grid *G, int r, int c, unsigned *st);
 CG_API int cg_back(const cg_Grid *G, int r, int c, unsigned *st);
@@ -100,6 +112,7 @@ struct cg_Grid {
     int          top, rows, cols;
     int          all_dirty, scroll;
     int          off;
+    int          tabstop;
     cg_Allocf   *allocf;
     void        *ud;
     cg_WcWidthf *wcwidthf;
@@ -141,7 +154,27 @@ CG_NS_BEGIN
     ((G) && (G)->rows && (r) >= 0 && (r) < (G)->rows && (c) >= 0 \
      && (c) < (G)->cols)
 
-/* internal helpers */
+/* misc helpers */
+
+/* clang-format off */
+static int cgC_wc(const cg_Grid *G, int cp)
+{ return G->wcwidthf && G->wcwidthf(G->wud, cp) > 1 ? 2 : 1; }
+
+static int cgC_tab(const cg_Grid *G, int col)
+{ return G->tabstop > 1 ? G->tabstop - col % G->tabstop : 1; }
+
+CG_API cg_Slice cg_slice(const char *s, size_t len)
+{ cg_Slice sl; return sl.s = s, sl.e = s + len, sl; }
+
+CG_API int cg_cols(const cg_Grid *G, int c, cg_Slice s)
+{ while (s.s < s.e) c += cg_next(G, c, &s); return c; }
+
+CG_API void cg_setwcwidth(cg_Grid *G, cg_WcWidthf *f, void *ud)
+{ if (G) G->wcwidthf = f, G->wud = ud; }
+
+CG_API void cg_settabstop(cg_Grid *G, int ts)
+{ if (G) G->tabstop = ts; }
+/* clang-format on */
 
 static int cgK_utflen(const char *s) {
     int b = (unsigned char)*s;
@@ -162,6 +195,34 @@ static int cgK_tocp(const char *s, int len) {
              | ((unsigned char)s[2] & 0x3f);
     return ((b & 0x07) << 18) | (((unsigned char)s[1] & 0x3f) << 12)
          | (((unsigned char)s[2] & 0x3f) << 6) | ((unsigned char)s[3] & 0x3f);
+}
+
+CG_API int cg_next(const cg_Grid *G, int c, cg_Slice *s) {
+    int b;
+    if (s->s == s->e) return 0;
+    b = *s->s & 0xFF;
+    if (b == '\t') return s->s++, cgC_tab(G, c);
+    if (b >= 0xc0) {
+        int w, n = cgK_utflen(s->s);
+        if (s->s + n <= s->e)
+            return w = cgC_wc(G, cgK_tocp(s->s, n)), s->s += n, w;
+        return s->s++, 1; /* truncated tail: single byte, width 1 */
+    }
+    if (b >= 0x80) return s->s++, 0; /* stray continuation: skipped */
+    return s->s++, 1;
+}
+
+CG_API size_t cg_byte(const cg_Grid *G, int c, cg_Slice s, int col) {
+    size_t off = 0;
+    int    start = c;
+    if (col < 0) return 0;
+    while (s.s < s.e) {
+        cg_Slice t = s;
+        int      w = cg_next(G, c, &t);
+        if (c + w > start + col) break; /* clamp to char start */
+        off += (size_t)(t.s - s.s), c += w, s = t;
+    }
+    return off;
 }
 
 static int cgF_initgrid(cg_Grid *G, int rows, int cols) {
@@ -208,14 +269,9 @@ static void cgF_blankrow(cg_Grid *G, int row) {
 
 /* public API */
 
-/* clang-format off */
-CG_API void cg_setwcwidth(cg_Grid *G, cg_WcWidthf *f, void *ud)
-{ if (G) G->wcwidthf = f, G->wud = ud; }
-/* clang-format on */
-
 static void *cgS_defallocf(void *ud, void *p, size_t osize, size_t nsize) {
     void *np;
-    if ((void)ud, (void)osize, nsize == 0) return (void)free(p), NULL;
+    if ((void)ud, (void)osize, nsize == 0) return ((void)free(p), NULL);
     return (np = realloc(p, nsize)) ? np : ((void)abort(), NULL);
 }
 
@@ -310,16 +366,25 @@ CG_API void cg_span(cg_Grid *G, int r, int cs, int ce, unsigned st) {
     for (i = cs; i < ce; i++) G->cur_st[ro + i] = st;
 }
 
-CG_API int cg_putline(cg_Grid *G, int r, int c, const char *s, unsigned st) {
-    if (!cgP_checkrc(G, r, c) || !s) return c;
-    while (*s && c < G->cols) {
-        int cp, w, len = 0;
-        while (*s && (len = cgK_utflen(s)) == 0) s++;
-        if (!*s) break;
-        cp = cgK_tocp(s, len);
-        if ((w = G->wcwidthf ? G->wcwidthf(G->wud, cp) : 1) > 1) w = 2;
-        cgF_putcp(G, r, c, cp, w, st);
-        c += w, s += len;
+CG_API int cg_putslice(cg_Grid *G, int r, int c, cg_Slice s, unsigned st) {
+    if (!cgP_checkrc(G, r, c)) return c;
+    while (s.s < s.e && c < G->cols) {
+        int b = *s.s & 0xFF, cp, w = 1, n = 1;
+        if (b == '\t' && G->tabstop > 1) { /* tab expands */
+            int k = cgC_tab(G, c);
+            while (k-- && c < G->cols) cgF_putcp(G, r, c++, ' ', 1, st);
+            s.s++;
+        } else if (b >= 0x80 && b < 0xc0)
+            s.s++; /* stray continuation: skipped */
+        else {
+            if (b < 0xc0)
+                cp = b;
+            else if (s.s + (n = cgK_utflen(s.s)) <= s.e)
+                cp = cgK_tocp(s.s, n), w = cgC_wc(G, cp);
+            else
+                cp = b, n = 1; /* truncated tail: single byte, width 1 */
+            cgF_putcp(G, r, c, cp, w, st), c += w, s.s += n;
+        }
     }
     return c;
 }

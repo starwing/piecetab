@@ -320,4 +320,21 @@ function TestDisplay:testTabExpands()
   lu.assertStrContains(row, "a   b") -- tab -> 3 spaces (col 4)
 end
 
+function TestDisplay:testTabAfterHint()
+  -- tab width uses the text-column base (hint is an overlay): the char
+  -- after the tab lands on its coordinate column, not shifted by the
+  -- hint (a + hint(2) + tab(3) + b)
+  local s = spawn_ed("a\tb\n",
+    { { line = 0, character = 1, label = "hi" } })
+  wait_screen(s, "hi")
+  s:wait(function()
+    local row = s:capture()[1] or ""
+    return row:find("b", 1, true) ~= nil
+  end)
+  local row = s:capture()[1] or ""
+  -- b lands at screen col 4(text)+2(hint)+1 = 7: the tab width (3) is
+  -- text-column based, not shifted by the hint
+  lu.assertStrContains(row, "ahi   b")
+end
+
 os.exit(lu.LuaUnit.run(), true)

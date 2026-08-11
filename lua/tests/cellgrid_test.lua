@@ -6,7 +6,9 @@ local dir = arg[0]:match("^(.*)[/\\]") or "."
 local root = dir .. "/../.."
 package.path = dir .. "/?.lua;" .. package.path
 package.cpath = (_G["jit"] and root .. "/lua/luajit/?.so;"
-    or root .. "/lua/?.so;") .. package.cpath
+    or root .. "/lua/?.so;")
+    .. package.cpath
+    .. ";./lua/?.so;/opt/homebrew/lib/lua/5.5/?.so;/opt/homebrew/lib/lua/5.4/?.so"
 
 local lu = require "luaunit"
 local cg = require "cellgrid"
@@ -17,7 +19,7 @@ TestCgLifecycle = {}
 function TestCgLifecycle:testNew()
     local g = cg.new()
     lu.assertEquals(g:rows(), 0)
-    lu.assertEquals(g:cols(), 0)
+    lu.assertEquals(g:ncols(), 0)
     lu.assertEquals(g:top(), 0)
 end
 
@@ -25,7 +27,7 @@ function TestCgLifecycle:testBegin()
     local g = cg.new()
     g:begin(0, 5, 10)
     lu.assertEquals(g:rows(), 5)
-    lu.assertEquals(g:cols(), 10)
+    lu.assertEquals(g:ncols(), 10)
     lu.assertEquals(g:top(), 0)
 end
 
@@ -46,7 +48,7 @@ function TestCgLifecycle:testBeginResize()
     g:begin(0, 3, 10)
     g:begin(0, 5, 20)
     lu.assertEquals(g:rows(), 5)
-    lu.assertEquals(g:cols(), 20)
+    lu.assertEquals(g:ncols(), 20)
 end
 
 function TestCgLifecycle:testDelete()
@@ -204,6 +206,21 @@ function TestWrite:testFill()
     lu.assertEquals(cp, 32)
 end
 
+function TestWrite:testFillSt()
+    -- optional st combines with a span (fill + style in one call)
+    local g = cg.new()
+    g:begin(0, 3, 10)
+    g:fill(0, 0, 5, 65, 7)
+    local cp, st = g:cell(0, 2)
+    lu.assertEquals(cp, 65)
+    lu.assertEquals(st, 7)
+    -- without st: style untouched
+    g:fill(1, 0, 3, 66)
+    local cp2, st2 = g:cell(1, 1)
+    lu.assertEquals(cp2, 66)
+    lu.assertEquals(st2, 0)
+end
+
 function TestWrite:testFillOutOfBounds()
     local g = cg.new()
     g:begin(0, 3, 10)
@@ -232,7 +249,7 @@ end
 function TestWrite:testPutline()
     local g = cg.new()
     g:begin(0, 3, 10)
-    local c = g:putline(0, 0, "ABC", 0)
+    local c = g:putslice(0, 0, 0, "ABC")
     lu.assertEquals(c, 3)
     local cp, st = g:cell(0, 0)
     lu.assertEquals(cp, 65)
@@ -244,7 +261,7 @@ function TestWrite:testPutlineUtf8TwoByte()
     local g = cg.new()
     g:begin(0, 3, 10)
     -- é (0xE9) is ambiwidth → width=2. Use 0x80 (control, width=1).
-    g:putline(0, 0, "\xc2\x80", 0) -- U+0080, width=1
+    g:putslice(0, 0, 0, "\xc2\x80") -- U+0080, width=1
     local cp, st = g:cell(0, 0)
     lu.assertEquals(cp, 0x80)
 end
@@ -253,7 +270,7 @@ function TestWrite:testPutlineUtf8ThreeByte()
     local g = cg.new()
     g:begin(0, 3, 10)
     -- U+0800, width=1, 3-byte UTF-8: 0xE0 0xA0 0x80
-    g:putline(0, 0, "\xe0\xa0\x80", 0)
+    g:putslice(0, 0, 0, "\xe0\xa0\x80")
     local cp, st = g:cell(0, 0)
     lu.assertEquals(cp, 0x800)
 end
@@ -261,7 +278,7 @@ end
 function TestWrite:testPutlineUtf8FourByte()
     local g = cg.new()
     g:begin(0, 2, 10)
-    g:putline(0, 0, "\xf0\x90\x8d\x88", 0) -- U+10348, width=1
+    g:putslice(0, 0, 0, "\xf0\x90\x8d\x88") -- U+10348, width=1
     local cp, st = g:cell(0, 0)
     lu.assertEquals(cp, 0x10348)
 end
@@ -270,14 +287,14 @@ function TestWrite:testPutlineContinuation()
     -- \x80 is continuation byte, cgK_utflen returns 0, skipped
     local g = cg.new()
     g:begin(0, 3, 10)
-    local c = g:putline(0, 0, "\x80", 0) -- continuation only
+    local c = g:putslice(0, 0, 0, "\x80") -- continuation only
     lu.assertEquals(c, 0)                -- nothing written
 end
 
 function TestWrite:testPutlineWide()
     local g = cg.new()
     g:begin(0, 3, 10)
-    local c = g:putline(0, 0, "\xe4\xb8\xad", 0) -- 中(CJK)
+    local c = g:putslice(0, 0, 0, "\xe4\xb8\xad") -- 中(CJK)
     lu.assertEquals(c, 2)                        -- advances by 2
     local cp, st = g:cell(0, 0)
     lu.assertEquals(cp, 0x4E2D)
@@ -288,14 +305,14 @@ end
 function TestWrite:testPutlineEmpty()
     local g = cg.new()
     g:begin(0, 3, 10)
-    local c = g:putline(0, 0, "", 0)
+    local c = g:putslice(0, 0, 0, "")
     lu.assertEquals(c, 0)
 end
 
 function TestWrite:testPutlineStyle()
     local g = cg.new()
     g:begin(0, 3, 10)
-    g:putline(0, 0, "X", 5)
+    g:putslice(0, 0, 5, "X")
     local cp, st = g:cell(0, 0)
     lu.assertEquals(cp, 88)
     lu.assertEquals(st, 5)
@@ -304,9 +321,9 @@ end
 function TestWrite:testPutlineOutOfBounds()
     local g = cg.new()
     g:begin(0, 3, 10)
-    local c = g:putline(-1, 0, "ABC", 0)
+    local c = g:putslice(-1, 0, 0, "ABC")
     lu.assertEquals(c, 0)
-    c = g:putline(3, 0, "ABC", 0)
+    c = g:putslice(3, 0, 0, "ABC")
     lu.assertEquals(c, 0)
 end
 
@@ -381,7 +398,7 @@ function TestGetter:testDimensions()
     local g = cg.new()
     g:begin(5, 8, 40)
     lu.assertEquals(g:rows(), 8)
-    lu.assertEquals(g:cols(), 40)
+    lu.assertEquals(g:ncols(), 40)
     lu.assertEquals(g:top(), 5)
 end
 
@@ -566,8 +583,8 @@ function TestRender:testRender()
         end
     else
         wf:close()
-        -- render to stderr, verify no error
-        g:render(2, {})
+        -- no :fd(): render into a string, verify no error
+        lu.assertStrContains(g:render(-1, {}), "A")
     end
     os.remove(path)
 end
@@ -639,6 +656,242 @@ function TestSystem:testWinsizeTty()
     end
 end
 
+-- ======== Column conversion (Grid:cols / Grid:byte / Grid:next) ========
+TestCols = {}
+
+-- lua-utf8 rock is PUC-only; LuaJIT skips the utf8-dependent cases
+local ok_utf8, utf8 = pcall(require, "lua-utf8")
+
+-- Lua reference implementations (lua-utf8 width), mirroring the
+-- editor.lua column math that cg.* replaces.
+
+local function ref_dcol(text, byte, ts)
+    local col, i = 0, 1
+    local blen = math.min(byte, #text)
+    while i <= blen do
+        local b = text:byte(i)
+        if b == 9 then
+            col = col + ts - (col % ts)
+            i = i + 1
+        elseif b >= 0xc0 then
+            local nxt = utf8.next(text, i) or #text + 1
+            if nxt - 1 <= blen then
+                col = col + (utf8.width(text, i, nxt - 1) or 1)
+            end
+            i = nxt
+        else
+            col = col + 1
+            i = i + 1
+        end
+    end
+    return col
+end
+
+local function ref_byte(text, dcol, ts)
+    local col, i = 0, 1
+    if dcol <= 0 then return 0 end
+    while i <= #text do
+        local b = text:byte(i)
+        local nxt = i + 1
+        local nextcol
+        if b == 9 then
+            nextcol = col + ts - (col % ts)
+        elseif b >= 0xc0 then
+            nxt = utf8.next(text, i) or #text + 1
+            nextcol = col + (utf8.width(text, i, nxt - 1) or 1)
+        else
+            nextcol = col + 1
+        end
+        if nextcol > dcol then return i - 1 end
+        col = nextcol
+        i = nxt
+    end
+    return #text
+end
+
+local function ref_dcols(text, ts)
+    local d, i = 0, 1
+    local out = {}
+    while i <= #text do
+        out[i] = d
+        local b = text:byte(i)
+        if b == 9 then
+            d = d + ts - (d % ts)
+            i = i + 1
+        else
+            local nxt = utf8.next(text, i) or #text + 1
+            d = d + (utf8.width(text, i, nxt - 1) or 1)
+            i = nxt
+        end
+    end
+    out[#text + 1] = d
+    return out
+end
+
+-- deterministic, hand-computed cases
+-- grid with tabstop ts (width via lcgW_width, as in Lgrid_new)
+local function mg(ts)
+    local g = cg.new()
+    g:settabstop(ts)
+    return g
+end
+
+function TestCols:testDcolBasic()
+    local g = mg(4)
+    lu.assertEquals(g:cols("abc", 2), 2)
+    lu.assertEquals(g:cols("abc", 99), 3)
+    lu.assertEquals(g:cols(""), 0)
+end
+
+function TestCols:testDcolTab()
+    local g = mg(4)
+    lu.assertEquals(g:cols("\ta", 1), 4)
+    lu.assertEquals(g:cols("a\tb", 2), 4)
+    lu.assertEquals(g:cols("ab\tc", 3), 4)
+    lu.assertEquals(mg(2):cols("a\tb", 2), 2)
+end
+
+function TestCols:testDcolWide()
+    if not ok_utf8 then return end
+    -- 中 = U+4E2D (width 2 via lcgW_width)
+    local zh = utf8.char(0x4e2d)
+    local g = mg(4)
+    lu.assertEquals(g:cols(zh .. "a", 3), 2)
+    lu.assertEquals(g:cols(zh .. "a", 4), 3)
+end
+
+function TestCols:testByteBasic()
+    local g = mg(4)
+    lu.assertEquals(g:byte("abc", 0), 0)
+    lu.assertEquals(g:byte("abc", 2), 2)
+    lu.assertEquals(g:byte("abc", 9), 3)
+end
+
+function TestCols:testByteTab()
+    local g = mg(4)
+    lu.assertEquals(g:byte("a\tb", 3), 1) -- inside tab
+    lu.assertEquals(g:byte("a\tb", 4), 2)
+    lu.assertEquals(g:byte("\ta", 2), 0)
+end
+
+function TestCols:testByteWide()
+    if not ok_utf8 then return end
+    local zh = utf8.char(0x4e2d)
+    local g = mg(4)
+    lu.assertEquals(g:byte(zh .. "a", 1), 0) -- inside wide
+    lu.assertEquals(g:byte(zh .. "a", 2), 3)
+    lu.assertEquals(g:byte(zh .. "a", 3), 4)
+end
+
+function TestCols:testDcols()
+    if not ok_utf8 then return end
+    local zh = utf8.char(0x4e2d)
+    local out = {}
+    for byte, col in mg(4):next("a\t" .. zh .. "b") do
+        out[byte] = col
+    end
+    lu.assertEquals(out, { [1] = 0, [2] = 1, [3] = 4, [6] = 6 })
+    lu.assertEquals(mg(4):cols("a\t" .. zh .. "b"), 7)
+end
+
+function TestCols:testDcolsEmpty()
+    lu.assertEquals(mg(4):cols(""), 0)
+end
+
+function TestCols:testPutlineTab()
+    -- putslice expands tabs itself (editor no longer pre-expands)
+    local g = cg.new()
+    g:begin(0, 1, 10)
+    g:settabstop(4)
+    local c = g:putslice(0, 0, 0, "a\tb")
+    lu.assertEquals(c, 5)
+    lu.assertEquals(g:cell(0, 1), 32) -- spaces
+    lu.assertEquals(g:cell(0, 4), 98) -- b
+end
+
+function TestCols:testPutsliceSpan()
+    -- (r, c, st, s, i, j): 1-based inclusive span (string.sub semantics)
+    local g = cg.new()
+    g:begin(0, 1, 10)
+    local text = "hello world"
+    lu.assertEquals(g:putslice(0, 0, 3, text, 7, 11), 5) -- "world"
+    lu.assertEquals(g:cell(0, 0), 119) -- w
+    lu.assertEquals(g:putslice(0, 5, 4, text, 1, 5), 10) -- "hello" after
+    lu.assertEquals(g:cell(0, 5), 104) -- h
+    lu.assertEquals(g:cell(0, 9), 111) -- o
+    -- j < i: empty span is a no-op, returns c
+    lu.assertEquals(g:putslice(0, 5, 3, text, 5, 3), 5)
+    -- out-of-range clamps to the string bounds; grid edge truncates
+    lu.assertEquals(g:putslice(0, 5, 3, text, -2, 99), 10) -- whole string
+end
+
+function TestCols:testTabstopGetter()
+    local g = cg.new()
+    lu.assertEquals(g:tabstop(), 4) -- Lgrid_new default
+    g:settabstop(8)
+    lu.assertEquals(g:tabstop(), 8)
+end
+
+-- randomized cross-check against the Lua reference
+function TestCols:testRandomFuzz()
+    if not ok_utf8 then return end
+    math.randomseed(20260812)
+    -- char pool limited to the width table consensus zone: lcgW_width
+    -- and lua-utf8 (system wcwidth) agree here (ambiwidth chars are
+    -- checked separately in testAmbiwidth)
+    local cjk = { 0x4e2d, 0x6587, 0x4e00, 0x9fff, 0x3002, 0x4e8c }
+    local function rand_text(n)
+        local parts = {}
+        for _ = 1, n do
+            local r = math.random(10)
+            if r <= 4 then
+                parts[#parts + 1] = string.char(math.random(65, 90))
+            elseif r == 5 then
+                parts[#parts + 1] = "\t"
+            elseif r <= 8 then
+                parts[#parts + 1] = utf8.char(cjk[math.random(#cjk)])
+            else
+                parts[#parts + 1] = string.char(math.random(0x21, 0x7e))
+            end
+        end
+        return table.concat(parts)
+    end
+    local g = cg.new()
+    for _ = 1, 500 do
+        local text = rand_text(math.random(0, 24))
+        local ts = math.random(1, 8)
+        g:settabstop(ts)
+        -- char-boundary offsets only (len must sit on a char start)
+        local bounds = { 0 }
+        for byte, _ in g:next(text) do bounds[#bounds + 1] = byte - 1 end
+        bounds[#bounds + 1] = #text + 1 -- past end: clamped to line width
+        for _, byte in ipairs(bounds) do
+            lu.assertEquals(g:cols(text, byte), ref_dcol(text, byte, ts))
+        end
+        for dcol = 0, #text + 4 do
+            lu.assertEquals(g:byte(text, dcol), ref_byte(text, dcol, ts))
+        end
+        -- iterator (byte 1-based, start col) matches the sparse reference
+        for byte, col in g:next(text) do
+            lu.assertEquals(col, ref_dcols(text, ts)[byte] or 0)
+        end
+        lu.assertEquals(g:cols(text), ref_dcols(text, ts)[#text + 1])
+    end
+end
+
+-- ambiwidth: lcgW_width treats as 2 (matches rendering); lua-utf8 may
+-- say 1 (system wcwidth) -- editor semantics follow lcgW_width
+function TestCols:testAmbiwidth()
+    if not ok_utf8 then return end
+    local a1 = utf8.char(0x00a1)
+    local e9 = utf8.char(0x00e9)
+    local g = mg(4)
+    lu.assertEquals(g:cols(a1 .. "x", 2), 2)
+    lu.assertEquals(g:cols(a1 .. "x", 3), 3)
+    lu.assertEquals(g:cols(e9 .. "x", 2), 2)
+    lu.assertEquals(g:byte(a1 .. "x", 1), 0) -- inside: char start
+end
+
 -- ======== Scroll branches coverage ========
 TestScroll = {}
 
@@ -658,20 +911,20 @@ function TestScroll:testDeltaZeroAfterScroll()
     -- unchanged frame's diff must be empty, not a full redraw
     local g = cg.new()
     g:begin(0, 3, 4)
-    g:putline(0, 0, "L1")
-    g:putline(1, 0, "L2")
-    g:putline(2, 0, "L3")
+    g:putslice(0, 0, 0, "L1")
+    g:putslice(1, 0, 0, "L2")
+    g:putslice(2, 0, 0, "L3")
     g:freeze()
     g:begin(1, 3, 4) -- scroll down 1
-    g:putline(0, 0, "L2")
-    g:putline(1, 0, "L3")
-    g:putline(2, 0, "L4")
+    g:putslice(0, 0, 0, "L2")
+    g:putslice(1, 0, 0, "L3")
+    g:putslice(2, 0, 0, "L4")
     g:diff({})
     g:freeze()
     g:begin(1, 3, 4) -- same top: nothing changed
-    g:putline(0, 0, "L2")
-    g:putline(1, 0, "L3")
-    g:putline(2, 0, "L4")
+    g:putslice(0, 0, 0, "L2")
+    g:putslice(1, 0, 0, "L3")
+    g:putslice(2, 0, 0, "L4")
     lu.assertEquals(g:diff({}), "")
 end
 
@@ -719,14 +972,14 @@ function TestScroll:testScrollDownDirection()
     -- (SU = parm_index), exposing new lines at the bottom
     local g = cg.new()
     g:begin(0, 3, 4)
-    g:putline(0, 0, "L1")
-    g:putline(1, 0, "L2")
-    g:putline(2, 0, "L3")
+    g:putslice(0, 0, 0, "L1")
+    g:putslice(1, 0, 0, "L2")
+    g:putslice(2, 0, 0, "L3")
     g:freeze()
     g:begin(1, 3, 4)
-    g:putline(0, 0, "L2")
-    g:putline(1, 0, "L3")
-    g:putline(2, 0, "L4")
+    g:putslice(0, 0, 0, "L2")
+    g:putslice(1, 0, 0, "L3")
+    g:putslice(2, 0, 0, "L4")
     local s = g:diff({ parm_index = "SU%d", parm_rindex = "SD%d" })
     lu.assertStrContains(s, "SU1")
     lu.assertNotStrContains(s, "SD1")
@@ -738,14 +991,14 @@ function TestScroll:testScrollUpDirection()
     -- (SD = parm_rindex), exposing new lines at the top
     local g = cg.new()
     g:begin(1, 3, 4)
-    g:putline(0, 0, "L2")
-    g:putline(1, 0, "L3")
-    g:putline(2, 0, "L4")
+    g:putslice(0, 0, 0, "L2")
+    g:putslice(1, 0, 0, "L3")
+    g:putslice(2, 0, 0, "L4")
     g:freeze()
     g:begin(0, 3, 4)
-    g:putline(0, 0, "L1")
-    g:putline(1, 0, "L2")
-    g:putline(2, 0, "L3")
+    g:putslice(0, 0, 0, "L1")
+    g:putslice(1, 0, 0, "L2")
+    g:putslice(2, 0, 0, "L3")
     local s = g:diff({ parm_index = "SU%d", parm_rindex = "SD%d" })
     lu.assertStrContains(s, "SD1")
     lu.assertNotStrContains(s, "SU1")
@@ -758,7 +1011,7 @@ TestTocp = {}
 function TestTocp:testOneByte()
     local g = cg.new()
     g:begin(0, 1, 10)
-    g:putline(0, 0, "X", 0)
+    g:putslice(0, 0, 0, "X")
     lu.assertEquals(g:cell(0, 0), 88)
 end
 
@@ -766,7 +1019,7 @@ function TestTocp:testTwoByte()
     -- 0x80 is NOT in any width table → width=1
     local g = cg.new()
     g:begin(0, 1, 10)
-    g:putline(0, 0, "\xc2\x80", 0) -- U+0080
+    g:putslice(0, 0, 0, "\xc2\x80") -- U+0080
     lu.assertEquals(g:cell(0, 0), 0x80)
 end
 
@@ -774,7 +1027,7 @@ function TestTocp:testThreeByte()
     -- 0x800 is NOT in any width table → width=1
     local g = cg.new()
     g:begin(0, 1, 10)
-    g:putline(0, 0, "\xe0\xa0\x80", 0) -- U+0800
+    g:putslice(0, 0, 0, "\xe0\xa0\x80") -- U+0800
     lu.assertEquals(g:cell(0, 0), 0x800)
 end
 
@@ -782,7 +1035,7 @@ function TestTocp:testFourByte()
     -- 0x10348 is NOT in any width table → width=1
     local g = cg.new()
     g:begin(0, 1, 10)
-    g:putline(0, 0, "\xf0\x90\x8d\x88", 0) -- U+10348
+    g:putslice(0, 0, 0, "\xf0\x90\x8d\x88") -- U+10348
     lu.assertEquals(g:cell(0, 0), 0x10348)
 end
 
@@ -842,7 +1095,7 @@ function TestUtflen:testOneByte()
     -- ASCII: b < 0x80 → len=1
     local g = cg.new()
     g:begin(0, 1, 10)
-    local c = g:putline(0, 0, "A")
+    local c = g:putslice(0, 0, 0, "A")
     lu.assertEquals(c, 1) -- width 1
 end
 
@@ -850,7 +1103,7 @@ function TestUtflen:testTwoByte()
     -- 0xC2 >= 0xC0, < 0xE0 → len=2. U+0080 width=1.
     local g = cg.new()
     g:begin(0, 1, 10)
-    local c = g:putline(0, 0, "\xc2\x80") -- U+0080
+    local c = g:putslice(0, 0, 0, "\xc2\x80") -- U+0080
     lu.assertEquals(c, 1)                 -- width 1
 end
 
@@ -858,7 +1111,7 @@ function TestUtflen:testThreeByte()
     -- 0xE0 >= 0xE0, < 0xF0 → len=3. U+0800 width=1.
     local g = cg.new()
     g:begin(0, 1, 10)
-    local c = g:putline(0, 0, "\xe0\xa0\x80") -- U+0800
+    local c = g:putslice(0, 0, 0, "\xe0\xa0\x80") -- U+0800
     lu.assertEquals(c, 1)                     -- width 1
 end
 
@@ -866,7 +1119,7 @@ function TestUtflen:testFourByte()
     -- 0xF0 >= 0xF0 → len=4. U+10348 width=1.
     local g = cg.new()
     g:begin(0, 1, 10)
-    local c = g:putline(0, 0, "\xf0\x90\x8d\x88") -- U+10348
+    local c = g:putslice(0, 0, 0, "\xf0\x90\x8d\x88") -- U+10348
     lu.assertEquals(c, 1)                         -- width 1
 end
 
@@ -874,7 +1127,7 @@ function TestUtflen:testContinuation()
     -- 0x80 < 0xC0 → len=0
     local g = cg.new()
     g:begin(0, 1, 10)
-    local c = g:putline(0, 0, "\x80")
+    local c = g:putslice(0, 0, 0, "\x80")
     lu.assertEquals(c, 0) -- skipped
 end
 
@@ -932,7 +1185,9 @@ function TestRender:testNoOpts()
     local g = cg.new()
     g:begin(0, 1, 10)
     g:put(0, 0, 65)
-    g:render(2)
+    -- fd=-1 renders into the returned string (no terminal output)
+    local s = g:render(-1)
+    lu.assertStrContains(s, "A")
 end
 
 -- render on empty grid → cg_diff returns CG_ERRPARAM (lines 409-411)
@@ -956,7 +1211,7 @@ end
 function TestMisc:testPutlineAtEdge()
     local g = cg.new()
     g:begin(0, 1, 5)
-    local c = g:putline(0, 3, "ABCDE")
+    local c = g:putslice(0, 3, 0, "ABCDE")
     lu.assertEquals(c, 5) -- capped at cols
 end
 

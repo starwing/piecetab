@@ -61,7 +61,6 @@ end
 function TestSkeleton:testConstruct()
   local e = make_ed("a\nb")
   lu.assertEquals(e.mode, "NORMAL")
-  lu.assertEquals(e.tabstop, 4)
   lu.assertNotNil(e.doc)
   lu.assertEquals(e.doc:breaks(), 2)
 end

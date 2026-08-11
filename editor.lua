@@ -234,62 +234,6 @@ end
 
 -- Rendering helpers
 
--- 0-based display column within text (before byte offset 'byte').
----@param text string
----@param byte integer
----@param tabstop integer
-local function text_byte_to_dcol(text, byte, tabstop)
-  -- TODO(C): promote column math to C (cellgrid family)
-  if byte <= 0 then return 0 end
-  local col = 0
-  local i = 1
-  local blen = math.min(byte, #text)
-  while i <= blen do
-    local b = text:byte(i)
-    if b == 9 then
-      col = col + tabstop - (col % tabstop)
-      i = i + 1
-    elseif b >= 0xc0 then
-      local nxt = utf8.next(text, i) or #text + 1
-      if nxt - 1 <= blen then
-        col = col + (utf8.width(text, i, nxt - 1) or 1)
-      end
-      i = nxt
-    else
-      col = col + 1
-      i = i + 1
-    end
-  end
-  return col
-end
-
--- 0-based byte offset for display column 'dcol' within text.
----@param text string
----@param dcol integer
----@param tabstop integer
-local function text_dcol_to_byte(text, dcol, tabstop)
-  if dcol <= 0 then return 0 end
-  local col = 0
-  local i = 1
-  while i <= #text do
-    local b = text:byte(i)
-    local nxt = i + 1
-    local nextcol
-    if b == 9 then
-      nextcol = col + tabstop - (col % tabstop)
-    elseif b >= 0xc0 then
-      nxt = utf8.next(text, i) or #text + 1
-      nextcol = col + (utf8.width(text, i, nxt - 1) or 1)
-    else
-      nextcol = col + 1
-    end
-    if nextcol > dcol then return i - 1 end
-    col = nextcol
-    i = nxt
-  end
-  return #text
-end
-
 -- helper: end-of-text column for line (excludes trailing \n)
 ---@param ed editor.Ed
 ---@param lnum integer
@@ -303,12 +247,13 @@ end
 ---@param doc piecetab.Doc
 ---@param lnum integer
 ---@param dcol integer
-local function dcol_to_byte(doc, lnum, dcol)
+---@param grid cellgrid.Grid
+local function dcol_to_byte(doc, lnum, dcol, grid)
   local saved = doc:offset()
   doc:seek("line", lnum)
   local text = doc:read("l") or ""
   doc:seek("set", saved)
-  return text_dcol_to_byte(text, dcol, 4)
+  return grid:byte(text, dcol)
 end
 
 -- Truncate text to fit a display width budget (UTF-8 aware, whole chars).
@@ -343,7 +288,7 @@ local function move_vert(ed, dl)
   ed.goal = scol
   doc:seek("line", nlnum)
   doc:seek("cur", dcol_to_byte(doc, nlnum,
-    ed:screen_to_text_dcol(nlnum, scol)))
+    ed:screen_to_text_dcol(nlnum, scol), ed.grid))
 end
 
 -- Open a new line: dir > 0 below (o), dir < 0 above (O); enter INSERT
@@ -772,46 +717,26 @@ function hl.line_segments(spans, line_start, line_end)
   return segs
 end
 
--- Single-pass line render: walk text byte-by-byte, switch style at segment
--- boundaries, batch same-style text into g:putline. Tabs expanded inline.
--- Returns absolute column (0-based) after rendered text.
- -- TODO(C): tab expand + display-col math to C (cellgrid family);
--- see notes/design_editor.md 六b
+-- Single-pass line render: walk clusters via g:next, switch style at
+-- segment boundaries, batch same-style text into g:putslice (tabs are
+-- expanded inside the grid). Returns absolute column (0-based) after
+-- the rendered text.
 ---@param g cellgrid.Grid
 ---@param row integer
 ---@param col integer
 ---@param text string
 ---@param segs table
----@param tabstop integer
 ---@param hints table?  sorted by dcol: {dcol, text, style} — injected
 ---  into the render stream (virt_text, never interned)
-local function render_line(g, row, col, text, segs, tabstop, hints)
-  local byte = 1
+local function render_line(g, row, col, text, segs, hints)
   local batch_start = 1
+  local cur_byte = 1
   local cur_style = 0
   local seg_idx = 1
   local hint_idx = 1
   local dc = 0
-
-  -- display column before each character start (batch-flush independent,
-  -- so hint injection can target the exact char position)
-  local dcols = {}
-  do
-    local d, i = 0, 1
-    while i <= #text do
-      dcols[i] = d
-      local b = text:byte(i)
-      if b == 9 then
-        d = d + tabstop - (d % tabstop)
-        i = i + 1
-      else
-        local nxt = utf8.next(text, i) or #text + 1
-        d = d + (utf8.width(text, i, nxt - 1) or 1)
-        i = nxt
-      end
-    end
-    dcols[#text + 1] = d -- end-of-line column (trailing flush)
-  end
+  local hint_w = 0 -- injected hint width (overlay: not part of text col)
+  local ts = g:tabstop()
 
   local function style_at(b)
     while seg_idx <= #segs do
@@ -825,43 +750,56 @@ local function render_line(g, row, col, text, segs, tabstop, hints)
     return 0
   end
 
+  -- flush [batch_start, cur_byte) as same-style putslice spans. Tabs
+  -- are expanded separately on the TEXT column (cursor math is text
+  -- based): putslice would align tabs to the render column, which
+  -- includes injected hints.
   local function flush()
-    if batch_start < byte then
-      local s = text:sub(batch_start, byte - 1)
-      dc = g:putline(row, col + dc, s, cur_style) - col
-      batch_start = byte
+    if batch_start < cur_byte then
+      local pos = batch_start
+      while pos < cur_byte do
+        local t = text:find("\t", pos, true)
+        if not t or t >= cur_byte then
+          dc = g:putslice(row, col + dc, cur_style, text,
+            pos, cur_byte - 1) - col
+          break
+        end
+        if t > pos then
+          dc = g:putslice(row, col + dc, cur_style, text,
+            pos, t - 1) - col
+        end
+        local ts = g:tabstop()
+        local n = ts - (dc - hint_w) % ts
+        local sc = col + dc
+        g:fill(row, sc, sc + n, 32, cur_style)
+        dc = dc + n
+        pos = t + 1
+      end
+      batch_start = cur_byte
     end
   end
 
-  local function flush_hints()
-    while hints and hint_idx <= #hints and hints[hint_idx].dcol <= dcols[byte] do
+  local function flush_hints(dcol)
+    while hints and hint_idx <= #hints and hints[hint_idx].dcol <= dcol do
       flush() -- write the text before the hint position first
       local h = hints[hint_idx]
-      dc = g:putline(row, col + dc, h.text, h.style) - col
+      dc = g:putslice(row, col + dc, h.style, h.text) - col
+      hint_w = hint_w + g:cols(h.text)
       hint_idx = hint_idx + 1
     end
   end
 
-  while byte <= #text do
-    flush_hints()
-    local b = text:byte(byte)
-    if b == 9 then
-      flush()
-      local n = tabstop - (dc % tabstop)
-      dc = g:putline(row, col + dc, string.rep(" ", n), cur_style) - col
-      byte = byte + 1
-      batch_start = byte
-    else
-      local nxt = utf8.next(text, byte) or #text + 1
-      local st = style_at(byte)
-      if st ~= cur_style then
-        flush(); cur_style = st
-      end
-      byte = nxt
+  for byte, dcol in g:next(text) do
+    cur_byte = byte
+    flush_hints(dcol)
+    local st = style_at(byte)
+    if st ~= cur_style then
+      flush(); cur_style = st
     end
   end
+  cur_byte = #text + 1
   flush()
-  flush_hints()
+  flush_hints(g:cols(text)) -- end-of-line column
   return col + dc
 end
 
@@ -880,7 +818,6 @@ end
 ---@field pending_key string?
 ---@field goal integer?  vertical goal column (Neovim curswant), nil = sample
 ---@field scroll_line integer
----@field tabstop integer
 ---@field log fun(fmt: string, ...: any)
 ---@field done boolean
 ---@field lsp lsp.Client?  LSP client (nil = off)
@@ -1193,7 +1130,6 @@ do
     self.pending_key = nil
     self.goal = nil -- vertical goal column (Neovim curswant), screen cols
     self.scroll_line = 0
-    self.tabstop = 4
     self.log = edlog
     self.done = false
     self.term = term or Ed.newterm()
@@ -1282,7 +1218,7 @@ do
         end
       end,
       dcol_fn = function(line, bytecol)
-        return text_byte_to_dcol(line_text(line), bytecol, ed.tabstop)
+        return ed.grid:cols(line_text(line), bytecol)
       end,
       viewport_fn = function()
         local rows = ed.term:size()
@@ -1330,7 +1266,7 @@ do
     self.doc:seek("line", line)
     local text = self.doc:read("l") or ""
     self.doc:seek("set", saved)
-    local dcol = text_byte_to_dcol(text, bytecol, self.tabstop)
+    local dcol = self.grid:cols(text, bytecol)
     local w = 0
     for _, h in ipairs(lst or {}) do
       if at_start then
@@ -1386,7 +1322,7 @@ do
     local base = self.doc:offset()
     local text = self.doc:read("l") or ""
     self.doc:seek("set", saved)
-    local edcol = text_byte_to_dcol(text, off - base, self.tabstop)
+    local edcol = self.grid:cols(text, off - base)
     local delta = #s - del
     local out = {}
     for _, h in ipairs(lst) do
@@ -1494,7 +1430,7 @@ do
       local line_idx = self.scroll_line + row - 1
       if line_idx < total_lines then
         local s = string.format(lnum_fmt, line_idx + 1)
-        g:putline(r0, 0, s, self.styles.dim)
+        g:putslice(r0, 0, self.styles.dim, s)
         g:clearrow(r0, #s, cols)
       else
         g:clearrow(r0, 0, cols)
@@ -1530,8 +1466,7 @@ do
       if hints then
         for _, h in ipairs(hints) do h.style = self.styles.dim end
       end
-      local endcol = render_line(g, r0, col_start - 1, ld.text, segs,
-        self.tabstop, hints)
+      local endcol = render_line(g, r0, col_start - 1, ld.text, segs, hints)
       if endcol < col_pad - 1 then
         g:clearrow(r0, endcol, col_pad - 1)
       end

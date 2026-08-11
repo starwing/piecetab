@@ -6,6 +6,9 @@
 
 #include "tests.h"
 
+/* slice from a string literal or byte array (sizeof-1 excludes NUL) */
+#define SL(x) cg_slice((x), sizeof(x) - 1)
+
 /* ================================================================== */
 /*  DebugDiff                                                          */
 /* ================================================================== */
@@ -88,7 +91,7 @@ TEST(init_params) {
     asserteq(cg_init(NULL, test_alloc, NULL), CG_ERRPARAM);
     asserteq(cg_init(&g, test_alloc, NULL), CG_OK);
     asserteq(cg_rows(gp), 0);
-    asserteq(cg_cols(gp), 0);
+    asserteq(cg_ncols(gp), 0);
     asserteq(cg_top(gp), 0);
     cg_free(&g);
 }
@@ -119,7 +122,7 @@ TEST(begin_first) {
     cg_init(&g, test_alloc, NULL);
     asserteq(cg_begin(&g, 5, 2, 3), CG_OK);
     asserteq(cg_rows(gp), 2);
-    asserteq(cg_cols(gp), 3);
+    asserteq(cg_ncols(gp), 3);
     asserteq(cg_top(gp), 5);
     cg_free(&g);
 }
@@ -153,7 +156,7 @@ TEST(begin_oom_resize) {
     g.allocf = oom_alloc, g.ud = &cnt;
     asserteq(cg_begin(&g, 0, 4, 5), CG_ERRMEM);
     asserteq(cg_rows(gp), 2);
-    asserteq(cg_cols(gp), 3);
+    asserteq(cg_ncols(gp), 3);
     asserteq(cg_cell(&g, 0, 0, NULL), 'A');
     cg_free(&g);
 }
@@ -171,7 +174,7 @@ TEST(begin_resize_grow) {
     cg_put(&g, 0, 0, 'A', 1);
     cg_begin(&g, 1, 4, 5);
     asserteq(cg_rows(gp), 4);
-    asserteq(cg_cols(gp), 5);
+    asserteq(cg_ncols(gp), 5);
     asserteq(cg_top(gp), 1);
     asserteq(cg_cell(&g, 0, 0, NULL), 'A');
     cg_free(&g);
@@ -185,7 +188,7 @@ TEST(begin_resize_shrink) {
     cg_put(&g, 0, 2, 'B', 1);
     cg_begin(&g, 2, 2, 3);
     asserteq(cg_rows(gp), 2);
-    asserteq(cg_cols(gp), 3);
+    asserteq(cg_ncols(gp), 3);
     asserteq(cg_top(gp), 2);
     asserteq(cg_cell(&g, 0, 2, NULL), 'B');
     cg_free(&g);
@@ -442,7 +445,7 @@ TEST(span_backmatch) {
 }
 
 /* ================================================================== */
-/*  cg_putline                                                         */
+/*  cg_putslice                                                        */
 /* ================================================================== */
 
 TEST(putline_ascii) {
@@ -450,7 +453,7 @@ TEST(putline_ascii) {
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 1, 6);
     cg_setwcwidth(&g, cw_double, NULL);
-    asserteq(cg_putline(&g, 0, 0, "ab", 1), 2);
+    asserteq(cg_putslice(&g, 0, 0, SL("ab"), 1), 2);
     asserteq(cg_cell(&g, 0, 0, NULL), 'a');
     asserteq(cg_cell(&g, 0, 1, NULL), 'b');
     assert_diff(
@@ -463,7 +466,7 @@ TEST(putline_wide) {
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 1, 6);
     cg_setwcwidth(&g, cw_double, NULL);
-    asserteq(cg_putline(&g, 0, 0, "\xe4\xb8\xad", 1), 2);
+    asserteq(cg_putslice(&g, 0, 0, SL("\xe4\xb8\xad"), 1), 2);
     asserteq(cg_cell(&g, 0, 0, NULL), 0x4e2d);
     asserteq(cg_cell(&g, 0, 1, NULL), -1);
     assert_diff(&g, "[M 0 0][T 1][P 0x4e2d][M 0 2][T 0][F 4 0x20][F]");
@@ -471,20 +474,21 @@ TEST(putline_wide) {
 }
 
 TEST(putline_params) {
-    char    buf[4];
-    cg_Grid g, *gp = NULL;
+    char     buf[4];
+    cg_Slice es = { NULL, NULL };
+    cg_Grid  g, *gp = NULL;
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 2, 4);
     cg_setwcwidth(&g, cw_double, NULL);
-    asserteq(cg_putline(&g, 0, 0, NULL, 1), 0);
-    asserteq(cg_putline(&g, -1, 0, "a", 1), 0);
-    asserteq(cg_putline(&g, 0, 4, "a", 1), 4);
-    asserteq(cg_putline(gp, 0, 0, "a", 1), 0);
+    asserteq(cg_putslice(&g, 0, 0, es, 1), 0);
+    asserteq(cg_putslice(&g, -1, 0, SL("a"), 1), 0);
+    asserteq(cg_putslice(&g, 0, 4, SL("a"), 1), 4);
+    asserteq(cg_putslice(gp, 0, 0, SL("a"), 1), 0);
     buf[0] = test_byte(0x80);
     buf[1] = 'a';
     buf[2] = 'b';
     buf[3] = '\0';
-    asserteq(cg_putline(&g, 0, 0, buf, 1), 2);
+    asserteq(cg_putslice(&g, 0, 0, SL(buf), 1), 2);
     asserteq(cg_cell(&g, 0, 0, NULL), 'a');
     asserteq(cg_cell(&g, 0, 1, NULL), 'b');
     cg_free(&g);
@@ -499,7 +503,7 @@ TEST(putline_skip) {
     buf[0] = test_byte(0x80);
     buf[1] = 'X';
     buf[2] = '\0';
-    asserteq(cg_putline(&g, 0, 0, buf, 1), 1);
+    asserteq(cg_putslice(&g, 0, 0, SL(buf), 1), 1);
     asserteq(cg_cell(&g, 0, 0, NULL), 'X');
     asserteq(cg_cell(&g, 0, 1, NULL), 0x20);
     assert_diff(
@@ -512,7 +516,7 @@ TEST(putline_2byte) {
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 1, 4);
     cg_setwcwidth(&g, cw_double, NULL);
-    asserteq(cg_putline(&g, 0, 0, "\xc3\x80", 1), 2);
+    asserteq(cg_putslice(&g, 0, 0, SL("\xc3\x80"), 1), 2);
     asserteq(cg_cell(&g, 0, 0, NULL), 0xc0);
     asserteq(cg_cell(&g, 0, 1, NULL), -1);
     assert_diff(&g, "[M 0 0][T 1][P 0xc0][M 0 2][T 0][P 0x20][P 0x20][F]");
@@ -524,7 +528,7 @@ TEST(putline_4byte) {
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 1, 4);
     cg_setwcwidth(&g, cw_double, NULL);
-    asserteq(cg_putline(&g, 0, 0, "\xf0\x90\x80\x80", 1), 2);
+    asserteq(cg_putslice(&g, 0, 0, SL("\xf0\x90\x80\x80"), 1), 2);
     asserteq(cg_cell(&g, 0, 0, NULL), 0x10000);
     asserteq(cg_cell(&g, 0, 1, NULL), -1);
     assert_diff(&g, "[M 0 0][T 1][P 0x10000][M 0 2][T 0][P 0x20][P 0x20][F]");
@@ -547,7 +551,7 @@ TEST(putline_atend) {
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 2, 3);
     cg_setwcwidth(&g, cw_double, NULL);
-    asserteq(cg_putline(&g, 0, 3, "abc", 0), 3);
+    asserteq(cg_putslice(&g, 0, 3, SL("abc"), 0), 3);
     cg_free(&g);
 }
 
@@ -560,7 +564,7 @@ TEST(getter_values) {
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 3, 2, 5);
     asserteq(cg_rows(gp), 2);
-    asserteq(cg_cols(gp), 5);
+    asserteq(cg_ncols(gp), 5);
     asserteq(cg_top(gp), 3);
     cg_free(&g);
 }
@@ -712,20 +716,20 @@ TEST(begin_scroll_then_same_top) {
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 3, 4);
     cg_setwcwidth(&g, cw_double, NULL);
-    cg_putline(&g, 0, 0, "L1", 0);
-    cg_putline(&g, 1, 0, "L2", 0);
-    cg_putline(&g, 2, 0, "L3", 0);
+    cg_putslice(&g, 0, 0, SL("L1"), 0);
+    cg_putslice(&g, 1, 0, SL("L2"), 0);
+    cg_putslice(&g, 2, 0, SL("L3"), 0);
     cg_freeze(&g);
     cg_begin(&g, 1, 3, 4); /* scroll down 1 */
-    cg_putline(&g, 0, 0, "L2", 0);
-    cg_putline(&g, 1, 0, "L3", 0);
-    cg_putline(&g, 2, 0, "L4", 0);
+    cg_putslice(&g, 0, 0, SL("L2"), 0);
+    cg_putslice(&g, 1, 0, SL("L3"), 0);
+    cg_putslice(&g, 2, 0, SL("L4"), 0);
     assert_diff(&g, "[S 1 3 -1][M 2 0][P 'L'][M 2 1][P '4'][F]");
     cg_freeze(&g);
     cg_begin(&g, 1, 3, 4); /* same top: nothing may change */
-    cg_putline(&g, 0, 0, "L2", 0);
-    cg_putline(&g, 1, 0, "L3", 0);
-    cg_putline(&g, 2, 0, "L4", 0);
+    cg_putslice(&g, 0, 0, SL("L2"), 0);
+    cg_putslice(&g, 1, 0, SL("L3"), 0);
+    cg_putslice(&g, 2, 0, SL("L4"), 0);
     assert_diff(&g, "[F]");
     cg_free(&g);
 }
@@ -784,14 +788,14 @@ TEST(diff_scroll_expose_sd) {
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 1, 3, 6);
     cg_setwcwidth(&g, cw_double, NULL);
-    cg_putline(&g, 0, 0, " 866", 0);
-    cg_putline(&g, 1, 0, " 867", 0);
-    cg_putline(&g, 2, 0, " 868", 0);
+    cg_putslice(&g, 0, 0, SL(" 866"), 0);
+    cg_putslice(&g, 1, 0, SL(" 867"), 0);
+    cg_putslice(&g, 2, 0, SL(" 868"), 0);
     cg_freeze(&g);
     cg_begin(&g, 0, 3, 6); /* delta = +1 */
-    cg_putline(&g, 0, 0, " 865", 0);
-    cg_putline(&g, 1, 0, " 866", 0);
-    cg_putline(&g, 2, 0, " 867", 0);
+    cg_putslice(&g, 0, 0, SL(" 865"), 0);
+    cg_putslice(&g, 1, 0, SL(" 866"), 0);
+    cg_putslice(&g, 2, 0, SL(" 867"), 0);
     assert_diff(
             &g,
             "[S 1 3 1]"
@@ -807,14 +811,14 @@ TEST(diff_scroll_expose_su) {
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 3, 6);
     cg_setwcwidth(&g, cw_double, NULL);
-    cg_putline(&g, 0, 0, " 865", 0);
-    cg_putline(&g, 1, 0, " 866", 0);
-    cg_putline(&g, 2, 0, " 867", 0);
+    cg_putslice(&g, 0, 0, SL(" 865"), 0);
+    cg_putslice(&g, 1, 0, SL(" 866"), 0);
+    cg_putslice(&g, 2, 0, SL(" 867"), 0);
     cg_freeze(&g);
     cg_begin(&g, 1, 3, 6); /* delta = -1 */
-    cg_putline(&g, 0, 0, " 866", 0);
-    cg_putline(&g, 1, 0, " 867", 0);
-    cg_putline(&g, 2, 0, " 868", 0);
+    cg_putslice(&g, 0, 0, SL(" 866"), 0);
+    cg_putslice(&g, 1, 0, SL(" 867"), 0);
+    cg_putslice(&g, 2, 0, SL(" 868"), 0);
     assert_diff(
             &g,
             "[S 1 3 -1]"
@@ -1038,6 +1042,321 @@ TEST(tocp_trunc) {
 }
 
 /* ================================================================== */
+/*  column conversion (cg_dcol / cg_byte / cg_dcols)                   */
+/* ================================================================== */
+
+/* grid with optional width callback; tabstop via cg_settabstop */
+static void cc_init(cg_Grid *g, int wide, int ts) {
+    cg_init(g, test_alloc, NULL);
+    if (wide) cg_setwcwidth(g, cw_double, NULL);
+    if (ts > 1) cg_settabstop(g, ts);
+}
+
+#define ZH "\xe4\xb8\xad" /* 中 (CJK, width 2 via cw_double) */
+#define A2 "\xc3\x80"     /* U+0080 (width 2 via cw_double) */
+
+TEST(cols_ascii) {
+    cg_Grid g;
+    cc_init(&g, 0, 4);
+    asserteq(cg_cols(&g, 0, SL("abc")), 3);
+    asserteq(cg_cols(&g, 0, cg_slice("abc", 0)), 0);
+    asserteq(cg_cols(&g, 0, cg_slice("abc", 1)), 1);
+    asserteq(cg_cols(&g, 0, cg_slice("abc", 2)), 2);
+    cg_free(&g);
+}
+
+TEST(cols_empty) {
+    cg_Grid g;
+    cc_init(&g, 0, 4);
+    asserteq(cg_cols(&g, 0, SL("")), 0);
+    cg_free(&g);
+}
+
+TEST(cols_tab) {
+    cg_Grid g;
+    cc_init(&g, 0, 4);
+    asserteq(cg_cols(&g, 0, cg_slice("\ta", 1)), 4);
+    asserteq(cg_cols(&g, 0, SL("\ta")), 5);
+    asserteq(cg_cols(&g, 0, cg_slice("a\tb", 2)), 4);
+    asserteq(cg_cols(&g, 0, cg_slice("ab\tc", 3)), 4);
+    asserteq(cg_cols(&g, 0, cg_slice("abc\t", 4)), 4);
+    cg_free(&g);
+}
+
+TEST(cols_tabfold) {
+    cg_Grid g;
+    cc_init(&g, 0, 2);
+    asserteq(cg_cols(&g, 0, cg_slice("a\tb", 2)), 2);
+    cg_settabstop(&g, 1);
+    asserteq(cg_cols(&g, 0, cg_slice("a\tb", 2)), 2);
+    cg_settabstop(&g, 0);
+    asserteq(cg_cols(&g, 0, cg_slice("a\tb", 2)), 2);
+    cg_free(&g);
+}
+
+TEST(cols_wide) {
+    cg_Grid g;
+    cc_init(&g, 1, 4);
+    asserteq(cg_cols(&g, 0, cg_slice(ZH "a", 3)), 2);
+    asserteq(cg_cols(&g, 0, SL(ZH "a")), 3);
+    cg_free(&g);
+}
+
+TEST(cols_wide_nocb) {
+    cg_Grid g;
+    cc_init(&g, 0, 4);
+    asserteq(cg_cols(&g, 0, cg_slice(ZH "a", 3)), 1);
+    cg_free(&g);
+}
+
+TEST(cols_cont) {
+    char    buf[3];
+    cg_Grid g;
+    cc_init(&g, 1, 4);
+    buf[0] = test_byte(0x80);
+    buf[1] = 'a';
+    buf[2] = '\0';
+    asserteq(cg_cols(&g, 0, cg_slice(buf, 1)), 0); /* stray cont: skipped */
+    asserteq(cg_cols(&g, 0, cg_slice(buf, 2)), 1);
+    cg_free(&g);
+}
+
+TEST(cols_2byte) {
+    cg_Grid g;
+    cc_init(&g, 1, 4);
+    asserteq(cg_cols(&g, 0, cg_slice(A2 "a", 2)), 2);
+    asserteq(cg_cols(&g, 0, cg_slice(A2 "a", 3)), 3);
+    cg_free(&g);
+}
+
+TEST(cols_start) {
+    /* start shifts the tab alignment: tab at col 2 -> 2 wide (to 4) */
+    cg_Grid g;
+    cc_init(&g, 0, 4);
+    asserteq(cg_cols(&g, 2, SL("\t")), 4);
+    asserteq(cg_cols(&g, 0, SL("\t")), 4);
+    asserteq(cg_cols(&g, 3, SL("\tb")), 5);
+    cg_free(&g);
+}
+
+TEST(byte_ascii) {
+    cg_Grid g;
+    cc_init(&g, 0, 4);
+    asserteq(cg_byte(&g, 0, SL("abc"), 0), 0);
+    asserteq(cg_byte(&g, 0, SL("abc"), 2), 2);
+    asserteq(cg_byte(&g, 0, SL("abc"), 9), 3);
+    asserteq(cg_byte(&g, 0, SL("abc"), -1), 0);
+    cg_free(&g);
+}
+
+TEST(byte_tab) {
+    cg_Grid g;
+    cc_init(&g, 0, 4);
+    asserteq(cg_byte(&g, 0, SL("a\tb"), 1), 1);
+    asserteq(cg_byte(&g, 0, SL("a\tb"), 3), 1); /* inside tab: tab start */
+    asserteq(cg_byte(&g, 0, SL("a\tb"), 4), 2);
+    asserteq(cg_byte(&g, 0, SL("a\tb"), 5), 3);
+    asserteq(cg_byte(&g, 0, SL("a\tb"), 6), 3);
+    asserteq(cg_byte(&g, 0, SL("\ta"), 2), 0);  /* lead tab, col 0 */
+    asserteq(cg_byte(&g, 0, SL("\ta"), 4), 1);
+    cg_settabstop(&g, 1);
+    asserteq(cg_byte(&g, 0, SL("\ta"), 1), 1); /* tabstop fold -> 1 */
+    cg_free(&g);
+}
+
+TEST(byte_wide) {
+    cg_Grid g;
+    cc_init(&g, 1, 4);
+    asserteq(cg_byte(&g, 0, SL(ZH "a"), 1), 0); /* inside wide: char start */
+    asserteq(cg_byte(&g, 0, SL(ZH "a"), 2), 3);
+    asserteq(cg_byte(&g, 0, SL(ZH "a"), 3), 4); /* past end -> len */
+    cg_free(&g);
+}
+
+TEST(byte_wide_nocb) {
+    cg_Grid g;
+    cc_init(&g, 0, 4);
+    asserteq(cg_byte(&g, 0, SL(ZH "a"), 1), 3);
+    cg_free(&g);
+}
+
+TEST(byte_cont) {
+    char    buf[3];
+    cg_Grid g;
+    cc_init(&g, 0, 4);
+    buf[0] = test_byte(0x80);
+    buf[1] = 'a';
+    buf[2] = '\0';
+    asserteq(cg_byte(&g, 0, cg_slice(buf, 2), 1), 2); /* 'a' at col 0, col 1 = EOL */
+    cg_free(&g);
+}
+
+TEST(byte_start) {
+    /* col is relative to c: "	b" from col 2 -> tab 2..4, b at 4 */
+    cg_Grid g;
+    cc_init(&g, 0, 4);
+    asserteq(cg_byte(&g, 2, SL("\tb"), 1), 0); /* col 3 inside tab */
+    asserteq(cg_byte(&g, 2, SL("\tb"), 2), 1); /* col 4 = b start */
+    asserteq(cg_byte(&g, 2, SL("\tb"), 3), 2); /* past end -> len */
+    cg_free(&g);
+}
+
+/* truncated tail: cg_next advances one byte with width 1 (no stall) */
+TEST(byte_trunc) {
+    char    buf[3];
+    cg_Grid g;
+    cc_init(&g, 1, 4);
+    buf[0] = test_byte(0xe4);
+    buf[1] = test_byte(0xb8);
+    buf[2] = '\0';
+    asserteq(cg_byte(&g, 0, cg_slice(buf, 2), 5), 2);
+    cg_free(&g);
+}
+
+TEST(next_ascii) {
+    cg_Slice s = SL("abc");
+    cg_Grid  g;
+    cc_init(&g, 0, 4);
+    asserteq(cg_next(&g, 0, &s), 1);
+    asserteq(s.s - SL("abc").s, 1);
+    asserteq(cg_next(&g, 0, &s), 1);
+    asserteq(cg_next(&g, 0, &s), 1);
+    asserteq(s.s == s.e, 1);
+    asserteq(cg_next(&g, 0, &s), 0); /* empty: no advance */
+    cg_free(&g);
+}
+
+TEST(next_wide) {
+    cg_Slice s = SL(ZH "a");
+    cg_Grid  g;
+    cc_init(&g, 1, 4);
+    asserteq(cg_next(&g, 0, &s), 2); /* 中: width 2, 3 bytes */
+    asserteq(s.s - SL(ZH "a").s, 3);
+    asserteq(cg_next(&g, 0, &s), 1);
+    cg_free(&g);
+}
+
+TEST(next_tab) {
+    cg_Slice s = SL("\ta");
+    cg_Grid  g;
+    cc_init(&g, 0, 4);
+    asserteq(cg_next(&g, 0, &s), 4); /* tab at col 0: to col 4 */
+    asserteq(cg_next(&g, 2, &s), 1);
+    s = SL("\t");
+    asserteq(cg_next(&g, 2, &s), 2); /* tab at col 2: to col 4 */
+    cg_free(&g);
+}
+
+TEST(next_cont) {
+    cg_Slice s = SL("\x80" "a");
+    cg_Grid  g;
+    cc_init(&g, 1, 4);
+    asserteq(cg_next(&g, 0, &s), 0); /* stray continuation: skipped */
+    asserteq(cg_next(&g, 0, &s), 1);
+    cg_free(&g);
+}
+
+TEST(next_trunc) {
+    char    buf[3];
+    cg_Slice s;
+    cg_Grid  g;
+    cc_init(&g, 1, 4);
+    buf[0] = test_byte(0xe4);
+    buf[1] = test_byte(0xb8);
+    buf[2] = '\0';
+    s = cg_slice(buf, 2);
+    asserteq(cg_next(&g, 0, &s), 1); /* truncated tail: 1 byte, width 1 */
+    asserteq(cg_next(&g, 0, &s), 0); /* continuation byte: skipped */
+    cg_free(&g);
+}
+
+/* iterating cg_next yields the per-char (byte, col) pairs dcols used
+ * to provide: "a\t" ZH "b" -> (0,0) (1,1) (2,4) (5,6), end col 7 */
+TEST(next_iter) {
+    cg_Slice s = SL("a\t" ZH "b"), base = SL("a\t" ZH "b");
+    cg_Grid  g;
+    int      col = 0, k = 0;
+    cc_init(&g, 1, 4);
+    while (s.s < s.e) {
+        int w = cg_next(&g, col, &s);
+        if (k == 0) { asserteq((int)(s.s - base.s), 1); asserteq(col, 0); }
+        if (k == 1) { asserteq((int)(s.s - base.s), 2); asserteq(col, 1); }
+        if (k == 2) { asserteq((int)(s.s - base.s), 5); asserteq(col, 4); }
+        if (k == 3) { asserteq((int)(s.s - base.s), 6); asserteq(col, 6); }
+        col += w, k++;
+    }
+    asserteq(k, 4);
+    asserteq(col, 7); /* end-of-line column */
+    cg_free(&g);
+}
+
+TEST(settabstop_null) { cg_settabstop(NULL, 4); }
+
+TEST(putline_tab) {
+    cg_Grid g;
+    cc_init(&g, 0, 4);
+    cg_begin(&g, 0, 1, 8);
+    asserteq(cg_putslice(&g, 0, 0, SL("a\tb"), 1), 5);
+    asserteq(cg_cell(&g, 0, 0, NULL), 'a');
+    asserteq(cg_cell(&g, 0, 1, NULL), ' ');
+    asserteq(cg_cell(&g, 0, 3, NULL), ' ');
+    asserteq(cg_cell(&g, 0, 4, NULL), 'b');
+    cg_free(&g);
+}
+
+TEST(putline_tabfold) {
+    cg_Grid g;
+    cc_init(&g, 0, 1);
+    cg_begin(&g, 0, 1, 8);
+    /* tabstop <= 1: tab stays a literal tab char, width 1 (matches
+     * the column math fold) */
+    asserteq(cg_putslice(&g, 0, 0, SL("a\tb"), 1), 3);
+    asserteq(cg_cell(&g, 0, 1, NULL), 9);
+    asserteq(cg_cell(&g, 0, 2, NULL), 'b');
+    cg_free(&g);
+}
+
+TEST(putline_tabedge) {
+    cg_Grid g;
+    cc_init(&g, 0, 4);
+    cg_begin(&g, 0, 1, 5);
+    asserteq(cg_putslice(&g, 0, 0, SL("a\tb"), 1), 5);
+    asserteq(cg_cell(&g, 0, 4, NULL), 'b');
+    /* trailing tab expands within the edge: "ab\t" covers cols 0-3 */
+    asserteq(cg_putslice(&g, 0, 0, SL("ab\t"), 0), 4);
+    asserteq(cg_cell(&g, 0, 3, NULL), ' ');
+    cg_free(&g);
+}
+
+TEST(putline_tabmid) {
+    /* tab after wide char: width folds to the tab stop from the
+     * rendered column (2-wide char advances c by 2) */
+    cg_Grid g;
+    cc_init(&g, 1, 4);
+    cg_begin(&g, 0, 1, 8);
+    asserteq(cg_putslice(&g, 0, 0, SL(ZH "\t" "b"), 1), 5);
+    asserteq(cg_cell(&g, 0, 4, NULL), 'b');
+    cg_free(&g);
+}
+
+TEST(putslice_trunc) {
+    char    buf[3];
+    cg_Grid g;
+    cc_init(&g, 1, 4);
+    cg_begin(&g, 0, 1, 4);
+    buf[0] = test_byte(0xe4);
+    buf[1] = test_byte(0xb8);
+    buf[2] = '\0';
+    /* truncated 0xe4: single byte width 1, continuation skipped */
+    asserteq(cg_putslice(&g, 0, 0, cg_slice(buf, 2), 1), 1);
+    asserteq(cg_cell(&g, 0, 0, NULL), 0xe4);
+    cg_free(&g);
+}
+
+#undef ZH
+#undef A2
+
+/* ================================================================== */
 /*  edge cases                                                         */
 /* ================================================================== */
 
@@ -1048,7 +1367,7 @@ TEST(empty_grid) {
     cg_span(&g, 0, 0, 2, 1);
     cg_clearrow(&g, 0, 0, 2);
     cg_fill(&g, 0, 0, 2, '.');
-    asserteq(cg_putline(&g, 0, 0, "a", 0), 0);
+    asserteq(cg_putslice(&g, 0, 0, SL("a"), 0), 0);
     asserteq(cg_cell(&g, 0, 0, NULL), 0);
     asserteq(cg_back(&g, 0, 0, NULL), 0);
     asserteq(cg_isdirty(&g, 0, 0), 0);
@@ -1063,7 +1382,7 @@ TEST(resize_cols) {
     cg_put(&g, 0, 0, 'A', 0);
     cg_freeze(&g);
     cg_begin(&g, 0, 2, 5);
-    asserteq(cg_cols(gp), 5);
+    asserteq(cg_ncols(gp), 5);
     asserteq(cg_cell(&g, 0, 0, NULL), 'A');
     cg_free(&g);
 }

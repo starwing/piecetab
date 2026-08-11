@@ -6,6 +6,7 @@
 #define LUA_LIB
 #include <assert.h>
 #include <lauxlib.h>
+#include <limits.h>
 #include <lua.h>
 #include <stdio.h>
 #include <string.h>
@@ -52,6 +53,13 @@ static int lua53_geti(lua_State *L, int idx, lua_Integer i) {
     lua_gettable(L, idx);
     return lua_type(L, -1);
 }
+#endif
+
+/* lua_rawseti takes int (5.1/5.2) or lua_Integer (5.3+) */
+#if LUA_VERSION_NUM < 503
+# define lcg_rawseti(L, i, n) lua_rawseti((L), (i), (int)(n))
+#else
+# define lcg_rawseti(L, i, n) lua_rawseti((L), (i), (n))
 #endif
 
 /* ---- grid userdata ---- */
@@ -125,6 +133,7 @@ static int Lgrid_new(lua_State *L) {
     cg_Grid *g = (cg_Grid *)lua_newuserdata(L, sizeof(cg_Grid));
     cg_init(g, NULL, NULL);
     cg_setwcwidth(g, lcgW_width, NULL);
+    cg_settabstop(g, 4);
     luaL_setmetatable(L, LCG_GRID_TYPE);
     return 1;
 }
@@ -181,7 +190,10 @@ static int Lgrid_fill(lua_State *L) {
     int      cs = (int)luaL_checkinteger(L, 3);
     int      ce = (int)luaL_checkinteger(L, 4);
     int      cp = (int)luaL_checkinteger(L, 5);
-    return cg_fill(g, r, cs, ce, cp), lua_settop(L, 1), 1;
+    cg_fill(g, r, cs, ce, cp);
+    if (!lua_isnoneornil(L, 6)) /* optional st: combine with a span */
+        cg_span(g, r, cs, ce, (unsigned)luaL_checkinteger(L, 6));
+    return lua_settop(L, 1), 1;
 }
 
 static int Lgrid_span(lua_State *L) {
@@ -193,14 +205,22 @@ static int Lgrid_span(lua_State *L) {
     return cg_span(g, r, cs, ce, st), lua_settop(L, 1), 1;
 }
 
-static int Lgrid_putline(lua_State *L) {
+static int Lgrid_putslice(lua_State *L) {
     cg_Grid    *g = lcg_check(L, 1);
     int         r = (int)luaL_checkinteger(L, 2);
     int         c = (int)luaL_checkinteger(L, 3);
+    unsigned    st = (unsigned)luaL_checkinteger(L, 4);
     size_t      len;
-    const char *s = luaL_checklstring(L, 4, &len);
-    unsigned    st = (unsigned)luaL_optinteger(L, 5, 0);
-    return lua_pushinteger(L, cg_putline(g, r, c, s, st)), 1;
+    const char *s = luaL_checklstring(L, 5, &len);
+    lua_Integer i = luaL_optinteger(L, 6, 1);
+    lua_Integer j = luaL_optinteger(L, 7, (lua_Integer)len);
+    if (i < 1) i = 1;
+    if (j > (lua_Integer)len) j = (lua_Integer)len;
+    if (j < i) return lua_pushinteger(L, c), 1;
+    /* 1-based inclusive (string.sub semantics) */
+    return lua_pushinteger(L,
+            cg_putslice(g, r, c, cg_slice(s + (i - 1), (size_t)(j - i + 1)),
+                    st)), 1;
 }
 
 /* ===== Getter methods ===== */
@@ -238,8 +258,8 @@ static int Lgrid_isdirty(lua_State *L) {
 static int Lgrid_rows(lua_State *L)
 { return lua_pushinteger(L, cg_rows(lcg_check(L, 1))), 1; }
 
-static int Lgrid_cols(lua_State *L)
-{ return lua_pushinteger(L, cg_cols(lcg_check(L, 1))), 1; }
+static int Lgrid_ncols(lua_State *L)
+{ return lua_pushinteger(L, cg_ncols(lcg_check(L, 1))), 1; }
 
 static int Lgrid_top(lua_State *L)
 { return lua_pushinteger(L, cg_top(lcg_check(L, 1))), 1; }
@@ -395,7 +415,9 @@ static int Lgrid_render(lua_State *L) {
     else
         luaL_checktype(L, 3, LUA_TTABLE);
     lcg_initdiff(&d, L, 3, fd, cg_rows(g));
-    return lcg_checkerror(L, cg_diff(g, &d.base)), lua_settop(L, 1), 1;
+    if (fd < 0) luaL_buffinit(L, &d.b); /* buffer mode: return the CSI */
+    lcg_checkerror(L, cg_diff(g, &d.base));
+    return fd < 0 ? (luaL_pushresult(&d.b), 1) : (lua_settop(L, 1), 1);
 }
 
 /* ===== winsize ===== */
@@ -413,6 +435,96 @@ static int Lgrid_winsize(lua_State *L) {
     return 0;
 }
 
+/* ===== column conversion (Grid:cols / Grid:byte / Grid:next) ===== */
+
+/* Grid:cols(text, off?, c?) — display column at byte off (default #text)
+ * of text rendered from column c (default 0). */
+static int Lgrid_cols(lua_State *L) {
+    cg_Grid    *g = lcg_check(L, 1);
+    size_t      len, tlen;
+    const char *s = luaL_checklstring(L, 2, &tlen);
+    int         c = (int)luaL_optinteger(L, 4, 0);
+    len = (size_t)luaL_optinteger(L, 3, (lua_Integer)tlen);
+    if (len > tlen) len = tlen;
+    return lua_pushinteger(L, cg_cols(g, c, cg_slice(s, len))), 1;
+}
+
+/* Grid:byte(text, col, c?) — byte offset of column c+col (col relative
+ * to c, default 0). */
+static int Lgrid_byte(lua_State *L) {
+    cg_Grid    *g = lcg_check(L, 1);
+    size_t      len;
+    const char *s = luaL_checklstring(L, 2, &len);
+    int         col = (int)luaL_checkinteger(L, 3);
+    int         c = (int)luaL_optinteger(L, 4, 0);
+    return lua_pushinteger(L,
+            (lua_Integer)cg_byte(g, c, cg_slice(s, len), col)), 1;
+}
+
+/* iterator body: state table {grid, text, off, len, col} passed as the
+ * generic-for state. Yields (byte 1-based, start col); advances via
+ * cg_next. */
+static int Lgrid_next_iter(lua_State *L) {
+    cg_Grid    *g;
+    const char *s;
+    size_t      tlen;
+    lua_Integer off, len, col;
+    cg_Slice    sl;
+    int         w;
+    lua_getfield(L, 1, "grid");
+    g = (cg_Grid *)lua_touserdata(L, -1);
+    lua_getfield(L, 1, "text");
+    s = lua_tolstring(L, -1, &tlen);
+    lua_getfield(L, 1, "off");
+    off = lua_tointeger(L, -1);
+    lua_getfield(L, 1, "len");
+    len = lua_tointeger(L, -1);
+    lua_getfield(L, 1, "col");
+    col = lua_tointeger(L, -1);
+    lua_pop(L, 5);
+    if (off >= len) return 0;
+    sl.s = s + off, sl.e = s + len;
+    w = cg_next((const cg_Grid *)g, (int)col, &sl);
+    lua_pushinteger(L, off + 1); /* byte (1-based) */
+    lua_pushinteger(L, col);     /* start column */
+    lua_pushinteger(L, off + (lua_Integer)(sl.s - (s + off)));
+    lua_setfield(L, 1, "off");
+    lua_pushinteger(L, col + w);
+    lua_setfield(L, 1, "col");
+    return 2;
+}
+
+/* Grid:next(text, c?) — cluster iterator: for byte, col in g:next(text) */
+static int Lgrid_next(lua_State *L) {
+    lua_Integer c = luaL_optinteger(L, 3, 0); /* read args first */
+    size_t      len;
+    luaL_checklstring(L, 2, &len);
+    lua_newtable(L); /* state */
+    lua_pushvalue(L, 1); /* grid */
+    lua_setfield(L, -2, "grid");
+    lua_pushvalue(L, 2); /* text */
+    lua_setfield(L, -2, "text");
+    lua_pushinteger(L, 0); /* off */
+    lua_setfield(L, -2, "off");
+    lua_pushinteger(L, (lua_Integer)len); /* len */
+    lua_setfield(L, -2, "len");
+    lua_pushinteger(L, c); /* col */
+    lua_setfield(L, -2, "col");
+    lua_pushcfunction(L, Lgrid_next_iter);
+    lua_pushvalue(L, -2); /* state */
+    return 2;             /* iter, state */
+}
+
+static int Lgrid_settabstop(lua_State *L) {
+    cg_Grid *g = lcg_check(L, 1);
+    int      ts = (int)luaL_checkinteger(L, 2);
+    return cg_settabstop(g, ts), lua_settop(L, 1), 1;
+}
+
+static int Lgrid_tabstop(lua_State *L) {
+    return lua_pushinteger(L, cg_tabstop(lcg_check(L, 1))), 1;
+}
+
 /* ===== Module registration ===== */
 
 LUALIB_API int luaopen_cellgrid(lua_State *L) {
@@ -428,16 +540,21 @@ LUALIB_API int luaopen_cellgrid(lua_State *L) {
             ENTRY(clearrow),
             ENTRY(fill),
             ENTRY(span),
-            ENTRY(putline),
+            ENTRY(putslice),
             ENTRY(diff),
             ENTRY(render),
             ENTRY(cell),
             ENTRY(back),
             ENTRY(isdirty),
             ENTRY(rows),
-            ENTRY(cols),
+            ENTRY(ncols),
             ENTRY(top),
             ENTRY(winsize),
+            ENTRY(cols),
+            ENTRY(byte),
+            ENTRY(next),
+            ENTRY(settabstop),
+            ENTRY(tabstop),
 #undef ENTRY
             {NULL, NULL}};
     if (luaL_newmetatable(L, LCG_GRID_TYPE)) {

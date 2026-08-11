@@ -166,9 +166,20 @@ editor.lua 是 C 模块库的 demo——cellgrid/termfeed 均由 editor demo 需
 | 候选 | 位置 | 说明 |
 |---|---|---|
 | 字符移动原语 | `cursor_move_char`（utf8.next/offset + pt seek） | UTF-8 委托 lua-utf8 已完成（Task 4b）；余下 pt 侧逻辑（seek/边界 clamp）可入 pt 或独立 C 模块（配合 undo 对齐） |
-| 显示列换算 | `text_byte_to_dcol`/`text_dcol_to_byte`（tab 展开 + 宽字符） | cellgrid 家族候选；render_line 的 tab 逻辑（Task 5 迁移）同属此候选 |
+| 显示列换算 | `text_byte_to_dcol`/`text_dcol_to_byte`（tab 展开 + 宽字符） | **已孵化完成（2026-08-12）**：cellgrid 坐标族 `cg_next/cg_cols/cg_byte/cg_putslice`（slice 形态），见 design_cellgrid.md §3.9 |
 | 单词移动 | `move_word_forward/backward` + `word_class` | 暂留 Lua（vim 语义属编辑器逻辑）；若入 kana/多语言分词再 C 化 |
-| 渲染管线 | render_line 的 style 批量 putline | spantree 落地后与 highlighter 合并进 C 渲染路径 |
+| 渲染管线 | render_line 的 style 批量 putslice | spantree 落地后与 highlighter 合并进 C 渲染路径 |
+
+**hint/vtext 层摩擦点**（2026-08-12 记录，spantree 消解）：cellgrid
+不理解 vtext——hint 拼接循环（hint 段 + 文本段 → 显示流）在 editor
+层。putslice 的 tab 展开基数 = 写入列（渲染列停靠），overlay 场景
+下与坐标（文本列停靠）不一致——render_line 拆 tab（文本列基数 +
+hint 偏移公式）。**两套坐标模型**（逻辑列 = 文本语义/goal；显示列 =
+渲染位置）是自然形态（Neovim textcol/screencol 同款），拼接循环与
+显示流坐标映射（byte↔show col）为 hint 层职责。spantree 落地后
+vtext 作为**带宽度节点**挂树：树遍历 = 拼接流，拼接循环与坐标映射
+由树迭代天然提供，摩擦消解。vtext 子系统（宽度语义/坐标映射/编辑
+移位）是 spantree 该项能力的技术孵化器。
 
 `word_class` 为纯查表小函数，永久留 Lua 亦可，不标记。
 

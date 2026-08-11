@@ -28,6 +28,14 @@
   pt_locate），用导航器——不混用
 - 如果 API 之间组合需要大量代码，说明 API 有缺口，应报告而非在绑定层
   用胶水填坑
+- **Lua 接口不返回"一次性表"**——消费形态交给消费者（迭代器 =
+  generic-for 让用户驱动；内存由用户侧生命周期管理）。反面案例：
+  cellgrid v2 的 `dcols` 返回 per-byte 起始列表（Lua 表），被迭代器
+  `g:next(text)`（C 原子操作 `cg_next` + 闭包）取代。迭代器形态：
+  纯 cfunction + state 表（generic-for 的 state 参数）——**upvalue
+  伪索引不可用于栈 API**（lua_tointeger/luaL_checklstring 传
+  lua_upvalueindex 是未定义行为），状态必须经 state 参数或
+  lua_getupvalue/setupvalue 访问
 
 ### 0.2 绑定代码铁律：充分利用回调/遍历 API 的已有参数
 

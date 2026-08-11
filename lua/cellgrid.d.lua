@@ -36,12 +36,14 @@ function Grid:put(r, c, cp, st) end
 ---@param ce integer  end column (exclusive)
 function Grid:clearrow(r, cs, ce) end
 
----Fill codepoints in row [cs, ce). Does not change style.
+---Fill codepoints in row [cs, ce). Optional st combines with a
+---span (fill + style in one call).
 ---@param r  integer  row
 ---@param cs integer  start column
 ---@param ce integer  end column (exclusive)
 ---@param cp integer  codepoint
-function Grid:fill(r, cs, ce, cp) end
+---@param st? integer  style id (when given, also spans the range)
+function Grid:fill(r, cs, ce, cp, st) end
 
 ---Set style in row [cs, ce). Does not change codepoints.
 ---@param r  integer  row
@@ -49,15 +51,6 @@ function Grid:fill(r, cs, ce, cp) end
 ---@param ce integer  end column (exclusive)
 ---@param st integer  style ID
 function Grid:span(r, cs, ce, st) end
-
----Write a UTF-8 string at (r, c) with style. Handles wide chars.
----Returns the absolute column after the last character written.
----@param r  integer  row
----@param c  integer  start column
----@param s  string   UTF-8 text
----@param st? integer  style ID (default 0)
----@return integer  end column
-function Grid:putline(r, c, s, st) end
 
 ---Generate CSI string from diff of current vs frozen frame.
 ---@param tbl? cellgrid.DiffTable  style/format overrides (optional)
@@ -93,10 +86,54 @@ function Grid:isdirty(r, c) end
 function Grid:rows() end
 
 ---@return integer
-function Grid:cols() end
+function Grid:ncols() end
 
 ---@return integer
 function Grid:top() end
+
+---Set tab expansion width used by cols/byte/next (and putslice's
+---tab handling).
+---@param ts integer  tab width (>1 expands, <=1 = single space)
+function Grid:settabstop(ts) end
+
+---Current tab expansion width.
+---@return integer
+function Grid:tabstop() end
+
+---Display column at byte off of text (tab expanded, wcwidth from
+---unidata). Text starts at column c.
+---@param text string  UTF-8 text
+---@param off? integer 0-based byte offset (default #text = full width)
+---@param c?   integer starting column (default 0)
+---@return integer  display column
+function Grid:cols(text, off, c) end
+
+---Byte offset (0..#text) of column c+col, clamped to char start.
+---@param text string  UTF-8 text
+---@param col  integer display column (relative to c)
+---@param c?   integer starting column (default 0)
+---@return integer  0-based byte offset
+function Grid:byte(text, col, c) end
+
+---Cluster iterator: for byte, col in g:next(text) — yields each
+---character's 1-based byte offset and starting display column
+---(tab expanded; continuation bytes yield width 0).
+---@param text string  UTF-8 text
+---@param c?   integer starting column (default 0)
+---@return fun(): integer?, integer?  iterator
+function Grid:next(text, c) end
+
+---Write a span of s[i..j] at (r, c) with style. Tabs expand to
+---spaces (grid tabstop, render-column base); wide chars handled.
+---i/j follow string.sub semantics: 1-based, inclusive.
+---@param r  integer  row
+---@param c  integer  start column
+---@param st integer  style id
+---@param s  string   UTF-8 text
+---@param i? integer  start byte offset (default 1)
+---@param j? integer  end byte offset, inclusive (default #s)
+---@return integer  end column
+function Grid:putslice(r, c, st, s, i, j) end
 
 --------------------------------------------------------------------------------
 ---@class cellgrid.DiffTable

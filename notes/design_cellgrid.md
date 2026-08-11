@@ -6,7 +6,8 @@
 >
 > **职责边界**：纯终端帧缓冲——存 cell、记脏、出 diff。
 > UTF-8→codepoint 内置。宽度计算通过 `cg_setwcwidth` 由用户注入。
-> byte↔display column 转换归编辑器层，不在 cellgrid 范围内。
+> byte↔display column 转换（§三.9 坐标族）2026-08 孵化入库：
+> 坐标换算与渲染共用同一宽度回调，消灭 lua-utf8 width 双源差异。
 
 ## 一、定位
 
@@ -14,10 +15,13 @@ cellgrid 是**终端帧缓冲**——矩形 cell 网格，双重缓冲、滚动�
 宽字符、逐 cell style，输出最小 diff（回调模式）。
 
 **不在 cellgrid 范围内的**（归编辑器层）：
-- 行号计算、tab 展开
-- byte↔display column 转换（grid 只管 display column）
-- 语法染色结果存储（那是 spantree 的事）
+- 行号计算
 - 终端控制码生成（cellgrid 只出 diff 回调，渲染端生成 ANSI）
+- 语法染色结果存储（那是 spantree 的事）
+
+**2026-08 划入**（原归编辑器层，见 plans/plan_cols.md）：
+- tab 展开 + byte↔display column 转换（§三.9 坐标族）——宽度经
+  `cg_setwcwidth`/`cg_settabstop` 注入，与 `cg_putslice` 共用，保证渲染/坐标一致
 
 与 Neovim grid 的取舍：
 - **取**：双重缓冲 + 全量比较 diff、滚动检测、宽字符处理
@@ -177,12 +181,15 @@ CG_API void cg_span(cg_Grid *G, int r, int cs, int ce, unsigned st);
 ### 3.4 文本行写入
 
 ```c
-CG_API int cg_putline(cg_Grid *G, int r, int c, const char *s, unsigned st);
+CG_API int cg_putslice(cg_Grid *G, int r, int c, cg_Slice s, unsigned st);
 ```
 
-UTF-8 字符串写入，内部解码为 codepoint 后调用 `cgF_putcp`。
-跳过非法 continuation byte。返回文本末绝对列号（方便调用方知道下段起点）。
-tab 展开在编辑器层预完成。
+slice 内 UTF-8 写入，内部解码为 codepoint 后调用 `cgF_putcp`。
+跳过非法 continuation byte。返回文本末绝对列号（方便调用方知道
+下段起点）。`\t` 展开为空格（宽度 = `ts - c%ts`，基数 = 写入列
+c——渲染列停靠；ts≤1 原样写 tab 字符）。NUL 无特殊语义（普通
+字符，宽 1）。**overlay（vtext/hint）场景**：调用方拆 tab（文本列
+基数，坐标一致），见 §3.9 摩擦点。
 
 ### 3.5 Diff（回调模式）
 
@@ -266,6 +273,70 @@ CG_API void cg_setwcwidth(cg_Grid *G, cg_WcWidthf *f, void *ud);
 设置后所有 cell 宽度计算走该回调。未设置时默认 width=1。
 每个 grid 独立持有函数指针和用户数据。
 
+### 3.9 坐标族（byte ↔ display column，slice 形态）
+
+```c
+typedef struct cg_Slice {
+    const char *s;
+    const char *e;
+} cg_Slice;
+
+CG_API cg_Slice cg_slice(const char *s, size_t len);
+CG_API int      cg_next(const cg_Grid *G, int c, cg_Slice *s);
+CG_API int      cg_cols(const cg_Grid *G, int c, cg_Slice s);
+CG_API size_t   cg_byte(const cg_Grid *G, int c, cg_Slice s, int col);
+CG_API int      cg_putslice(cg_Grid *G, int r, int c, cg_Slice s,
+                            unsigned st);
+```
+
+**形态演进**（2026-08-12 三轮设计定案，详见 plans/plan_cols.md）：
+- v1 `cg_Cols` 配置 struct → 命名与 `cg_cols()`（列数）冲突、宽度回调
+  本就是 grid 字段，中间层多余 → 删
+- v2 函数收 grid + `(s, len)` → "len 即边界"的 Parse-no-validate 语义
+  确立；但 tab 展开依赖当前列，宽度原语必须带"起始列"上下文
+- v3 **slice 定案**：`(s, e)` 指针对——79 字解放（`cg_byte` 5 参可行）、
+  迭代器指针算术自然、为 UAX#29 grapheme 预留升级位（未来只改
+  `cg_next`）
+
+**原子原语语义**（tab/宽度经 grid：`cg_settabstop`/`cg_setwcwidth`）：
+- `cg_next(G, c, s*)`：s 前进一个 cluster，返回其显示宽度——**一次
+  解析出边界+宽度**（UAX#29 只解析一次）；tab 宽 `ts - c%ts`（ts≤1
+  折叠 1）；孤立 continuation 前进 1 字节宽 0；截断尾当单字节
+- `cg_cols(G, c, s)`：整串终止列（= `cg_next` 迭代）；`s` 为前缀
+  子 slice 时即"前 N 字节的列"（byte→col 查询）
+- `cg_byte(G, c, s, col)`：列 `c+col` 的字节（col 相对 c，hscroll
+  场景 c=视口列）；clamp 字符起始；超行尾→len
+- `cg_putslice(G, r, c, s, st)`：原 putline 的 slice 版（NUL 无特殊
+  语义）；tab 展开空格（基数 = 写入列 c——**渲染列停靠**，终端语义）
+
+**宽度语义定案**（对拍暴露，editor 跟随渲染）：
+- 孤立 continuation 跳过（lua-utf8 +1 列 → 随 putslice 跳过）
+- ambiwidth（U+00A1/é）宽 2（lcgW_width 表，异于 lua-utf8）
+- 宽度折叠 `w>1→2, 其余→1`（含零宽折叠 1）
+- 截断序列当单字节；`cg_next` 不卡死（byte 方向无 stall）
+
+**hint 层摩擦点**（2026-08-12 记录）：cellgrid 不理解 vtext/hint——
+拼接循环（hint 段 + 文本段 → 显示流）在 editor 层。putslice 的
+tab 展开（渲染列停靠）只在无 overlay 场景与坐标（文本列停靠）一致；
+overlay 场景 editor 渲染层拆 tab（文本列基数）。摩擦点由 spantree
+消解（vtext 带宽度节点 → 树遍历 = 拼接流），见 design_spantree.md。
+
+**边界行为**：
+
+| 函数 | 边界 | 零参数 | NULL |
+|------|------|--------|------|
+| `cg_slice` | — | len=0→s==e 空 slice | s=NULL+len=0 合法（不读写） |
+| `cg_next` | 截断尾→1 字节宽 1 | s 空→0 不动 | s=NULL 未定义 |
+| `cg_cols` | — | s 空→c | — |
+| `cg_byte` | col<0→0；col 落字符内→字符起始；超行尾→len | — | — |
+| `cg_putslice` | 行列越界→返回 c | s 空→返回 c | — |
+
+**绑定层**（lua/cellgrid.c）：`g:cols(text, off?, c?)` / `g:byte(text,
+col, c?)` / `g:next(text, c?)`（generic-for 迭代器，产出 1-based
+byte + 起始列；C 闭包 = 纯 cfunction + state 表，upvalue 伪索引
+不可用于栈 API）/ `g:putslice(r, c, s, st)` / `g:settabstop(ts)` /
+`g:tabstop()`。宽度固定注入 `lcgW_width`；Lgrid_new 默认 tabstop 4。
+
 ## 四、宽字符处理
 
 宽度计算走 `cg_setwcwidth` 设置的回调。内部编码工具：`cgK_tocp`、`cgK_utflen`。
@@ -300,6 +371,7 @@ cell 同值——diff 时不会误标脏。
 | `cgP_` | 前置条件检查（checkrc） |
 | `cgR_` | ring buffer 索引（cgR_idx 宏） |
 | `cgS_` | 静态/系统工具（defallocf） |
+| `cgC_` | 坐标族：列换算辅助（cgC_wc/cgC_tabw） |
 
 **清空操作的三级语义**（概念统一）：
 
@@ -331,9 +403,14 @@ int cgK_tocp(const char *s, int len);   /* UTF-8→codepoint */
 | `cg_clearrow` | r 越界→nop | cs>=ce→nop | — |
 | `cg_fill` | r 越界→nop | cs>=ce→nop | — |
 | `cg_span` | r 越界→nop，cs/ce clamp | cs>=ce→nop | — |
-| `cg_putline` | 行列越界→返回 c | s=""→返回 c | s=NULL→返回 c |
+| `cg_putslice` | 行列越界→返回 c | s 空→返回 c | — |
 | `cg_diff` | — | — | G=NULL 或 rows==0 或 D=NULL→`CG_ERRPARAM` |
 | `cg_freeze` | — | — | G=NULL 或 rows==0→nop |
 | `cg_cell` | 行列越界→返回 0 且 *st=0 | — | st=NULL ok |
 | `cg_back` | 行列越界→返回 0 且 *st=0 | — | st=NULL ok |
 | `cg_isdirty` | 行列越界→返回 0 | — | — |
+| `cg_slice` | 见 §3.9 | len=0→空 slice | s=NULL+len=0 合法 |
+| `cg_next` | 见 §3.9 | s 空→0 | s=NULL 未定义 |
+| `cg_cols` | 见 §3.9 | s 空→c | — |
+| `cg_byte` | 见 §3.9 | col≤0→0 | — |
+| `cg_putslice` | 见 §3.9 | s 空→返回 c | — |
