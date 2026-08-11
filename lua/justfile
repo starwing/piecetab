@@ -40,6 +40,9 @@ build-ts: ts-grammars
 
 ts *args='': (build-ts) (run "treesitter_test" args)
 
+# run every test suite (needs lua-utf8 rock, tmux, tree-sitter grammars)
+test: pt cg tf json lsp ed tmux ts
+
 cov mod t:
     rm -f *.gcda luajit/*.gcda
     mkdir -p luajit
