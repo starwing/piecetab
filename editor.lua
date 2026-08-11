@@ -722,8 +722,10 @@ local function lsp_diag_at(spans, off)
   return best
 end
 
--- Display-column shift from inlay hints at or before `dcol` (hints are
--- sorted by dcol; injected text pushes the body right).
+-- Display-column shift from inlay hints strictly before `dcol`. The
+-- hint-start byte (its dcol) maps onto the hint's first char — cursor
+-- sits on the hint there, matching i-insert (before the hint) — while
+-- bytes past it shift past the hint (VSCode/Neovim behavior).
 --- @param hints table?
 --- @param dcol integer
 --- @return integer
@@ -731,7 +733,7 @@ local function hint_offset(hints, dcol)
   if not hints then return 0 end
   local w = 0
   for _, h in ipairs(hints) do
-    if h.dcol <= dcol then
+    if h.dcol < dcol then
       w = w + utf8.width(h.text)
     else
       break
