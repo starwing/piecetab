@@ -81,30 +81,23 @@ static int lyy_pushval(lua_State *L, yyjson_val *val, int depth) {
     yyjson_type     type = yyjson_get_type(val);
     if (depth >= LY_MAXDEPTH) return luaL_error(L, "json: nesting too deep");
     switch (type) {
-    case YYJSON_TYPE_NULL:
-        lyy_pushmt(L, LY_NULL_MT);
-        break;
-    case YYJSON_TYPE_BOOL: lua_pushboolean(L, yyjson_get_bool(val)); break;
+    case YYJSON_TYPE_NULL: return lyy_pushmt(L, LY_NULL_MT), 1;
+    case YYJSON_TYPE_BOOL: return lua_pushboolean(L, yyjson_get_bool(val)), 1;
     case YYJSON_TYPE_NUM:
         if (yyjson_is_real(val))
-            lua_pushnumber(L, yyjson_get_real(val));
-        else
-            lua_pushinteger(
-                    L, yyjson_is_sint(val) ? yyjson_get_sint(val)
-                                           : (lua_Integer)yyjson_get_uint(val));
-        break;
+            return lua_pushnumber(L, yyjson_get_real(val)), 1;
+        if (yyjson_is_sint(val))
+            return lua_pushinteger(L, yyjson_get_sint(val)), 1;
+        return lua_pushinteger(L, (lua_Integer)yyjson_get_uint(val)), 1;
     case YYJSON_TYPE_STR:
-        lua_pushlstring(L, yyjson_get_str(val), (size_t)yyjson_get_len(val));
-        break;
+        return lua_pushlstring(L, yyjson_get_str(val), yyjson_get_len(val)), 1;
     case YYJSON_TYPE_ARR:
         aiter = yyjson_arr_iter_with(val);
-        i = 0;
         lua_createtable(L, (int)yyjson_arr_size(val), 0);
         luaL_setmetatable(L, LY_ARR_MT);
-        while (yyjson_arr_iter_has_next(&aiter)) {
+        for (i = 0; yyjson_arr_iter_has_next(&aiter); ++i) {
             lyy_pushval(L, yyjson_arr_iter_next(&aiter), depth + 1);
             lua_rawseti(L, -2, (int)(i + 1));
-            i++;
         }
         break;
     case YYJSON_TYPE_OBJ:
@@ -113,7 +106,6 @@ static int lyy_pushval(lua_State *L, yyjson_val *val, int depth) {
         luaL_setmetatable(L, LY_OBJ_MT);
         while (yyjson_obj_iter_has_next(&oiter)) {
             key = yyjson_obj_iter_next(&oiter);
-            /* keys are always strings in parsed JSON (structural) */
             lyy_pushval(L, yyjson_obj_iter_get_val(key), depth + 1);
             lua_setfield(L, -2, yyjson_get_str(key));
         }
@@ -255,123 +247,102 @@ static lyy_Val *lyy_mutpush(lua_State *L, int idx, lyy_Doc *d, int depth) {
     return NULL;
 }
 
-/* copy out into a Lua string (caller owns out until after pcall) */
-static int lyy_strpush(lua_State *L) {
-    const char *out = (const char *)lua_touserdata(L, 1);
-    size_t      len = (size_t)lua_tointeger(L, 2);
-    return lua_pushlstring(L, out, len), 1;
-}
-
-/* push a malloc'd string OOM-safely: code after pcall runs on both
- * paths, so one free covers success and failure alike */
-static int lyy_pushstr(lua_State *L, const char *out, size_t len) {
-    lua_pushcfunction(L, lyy_strpush);
-    lua_pushlightuserdata(L, (void *)out);
-    lua_pushinteger(L, (lua_Integer)len);
-    int r = lua_pcall(L, 2, 1, 0);
-    free((void *)out);
-    return r == LUA_OK ? 1 : lua_error(L);
-}
-
-static int Lencode(lua_State *L) {
+/* encode work: runs inside pcall so the mut doc is freed on error too;
+ * doc/out cross the pcall via lightuserdata (out lives in Lencode's frame) */
+static int lyy_encoder(lua_State *L) {
+    lyy_Doc *d = (lyy_Doc *)lua_touserdata(L, 2);
+    char   **out = (char **)lua_touserdata(L, 3);
     size_t   len;
-    lyy_Doc *d = yyjson_mut_doc_new(NULL);
     lyy_Val *root = lyy_mutpush(L, 1, d, 0);
     yyjson_mut_doc_set_root(d, root);
     /* compact output: JSON-RPC wire format */
-    char *out = yyjson_mut_write_opts(d, 0, NULL, &len, NULL);
+    *out = yyjson_mut_write_opts(d, 0, NULL, &len, NULL);
+    if (*out == NULL) return luaL_error(L, "json: write failed");
+    return lua_pushlstring(L, *out, len), 1;
+}
+
+static int Lencode(lua_State *L) {
+    lyy_Doc *d = yyjson_mut_doc_new(NULL);
+    char    *out = NULL;
+    int      r;
+    if (d == NULL) return luaL_error(L, "json: out of memory");
+    lua_settop(L, 1);
+    lua_pushcfunction(L, lyy_encoder);
+    lua_insert(L, 1);
+    lua_pushlightuserdata(L, d);
+    lua_pushlightuserdata(L, &out);
+    r = lua_pcall(L, 3, LUA_MULTRET, 0);
     yyjson_mut_doc_free(d);
-    if (out == NULL) return luaL_error(L, "json: write failed");
-    return lyy_pushstr(L, out, len);
+    free(out);
+    return r == LUA_OK ? lua_gettop(L) : lua_error(L);
 }
 
 /* type constructors: tag t (or a fresh table) with the marker metatable */
 
 static int Larray(lua_State *L) {
-    if (lua_gettop(L) < 1) lua_createtable(L, 0, 0);
-    luaL_setmetatable(L, LY_ARR_MT);
-    return 1;
+    if (lua_isnoneornil(L, 2)) lua_createtable(L, 0, 0);
+    return luaL_setmetatable(L, LY_ARR_MT), 1;
 }
 
 static int Lobject(lua_State *L) {
-    if (lua_gettop(L) < 1) lua_createtable(L, 0, 0);
-    luaL_setmetatable(L, LY_OBJ_MT);
-    return 1;
+    if (lua_isnoneornil(L, 2)) lua_createtable(L, 0, 0);
+    return luaL_setmetatable(L, LY_OBJ_MT), 1;
 }
 
-/* JSON kind of a Lua value: marker metatable first ("null"/"array"/
- * "object"), then scalar types, then table shape (dense 1..#t array
- * else object). Unsupported values (nil, function, userdata, ...)
- * return nil. */
 static int Ltype(lua_State *L) {
     const char *m;
-    int         t = lua_type(L, 1);
+    int         isint, t = lua_type(L, 1);
+    size_t      len;
     switch (t) {
-    case LUA_TBOOLEAN:
-        m = "boolean";
-        break;
-    case LUA_TNUMBER: {
-        int isint;
+    case LUA_TBOOLEAN: m = "boolean"; break;
+    case LUA_TNUMBER:
         lyy_tointegerx(L, 1, &isint);
         m = isint ? "integer" : "number";
         break;
-    }
-    case LUA_TSTRING:
-        m = "string";
-        break;
+    case LUA_TSTRING: m = "string"; break;
     case LUA_TTABLE:
-        /* marker metatable first; push immediately after (no Lua
-         * allocation between the lookup and the copy-out) */
-        m = lyy_marker(L, 1);
-        if (m) return lua_pushstring(L, m), 1;
-        {
-            size_t len = (size_t)lua_rawlen(L, 1);
-            m = len > 0 && lyy_isarray(L, 1, len) ? "array" : "object";
-        }
+        if ((m = lyy_marker(L, 1))) return lua_pushstring(L, m), 1;
+        len = (size_t)lua_rawlen(L, 1);
+        m = len > 0 && lyy_isarray(L, 1, len) ? "array" : "object";
         break;
-    default:
-        return lua_pushnil(L), 1;
+    default: return lua_pushnil(L), 1;
     }
-    lua_pushstring(L, m);
-    return 1;
+    return lua_pushstring(L, m), 1;
 }
 
 LUALIB_API int luaopen_json(lua_State *L) {
-    luaL_Reg libs[] = {
+    luaL_Reg libs[] = {{"version", NULL}, {"array", NULL}, {"object", NULL},
 #define ENTRY(name) {#name, L##name}
-            ENTRY(decode),
-            ENTRY(encode),
-            ENTRY(array),
-            ENTRY(object),
-            ENTRY(type),
+                       ENTRY(decode),     ENTRY(encode),   ENTRY(type),
 #undef ENTRY
-            {"version", NULL},
-            {NULL, NULL}};
+                       {NULL, NULL}};
     luaL_newlib(L, libs);
     lua_pushliteral(L, YYJSON_VERSION_STRING);
     lua_setfield(L, -2, "version");
-    /* marker metatables: null is exposed as json.null (a table), so
-     * setmetatable(t, json.null) tags t as a JSON null */
     if (luaL_newmetatable(L, LY_ARR_MT)) {
         lua_pushliteral(L, LY_TYPE_ARR);
         lua_setfield(L, -2, LY_TYPEFLD);
+        lua_createtable(L, 0, 1);
+        lua_pushcfunction(L, Larray);
+        lua_setfield(L, -2, "__call");
+        lua_setmetatable(L, -2);
     }
-    lua_pop(L, 1); /* metatable */
+    lua_setfield(L, -2, "array");
     if (luaL_newmetatable(L, LY_OBJ_MT)) {
         lua_pushliteral(L, LY_TYPE_OBJ);
         lua_setfield(L, -2, LY_TYPEFLD);
+        lua_createtable(L, 0, 1);
+        lua_pushcfunction(L, Lobject);
+        lua_setfield(L, -2, "__call");
+        lua_setmetatable(L, -2);
     }
-    lua_pop(L, 1); /* metatable */
+    lua_setfield(L, -2, "object");
     if (luaL_newmetatable(L, LY_NULL_MT)) {
         lua_pushliteral(L, LY_TYPE_NUL);
         lua_setfield(L, -2, LY_TYPEFLD);
-        /* self-referential: json.null (this metatable) is itself a
-         * tagged null — any table (or the marker itself) encodes null */
         lua_pushvalue(L, -1);
         lua_setmetatable(L, -2);
     }
-    lua_pop(L, 1); /* metatable */
-    luaL_getmetatable(L, LY_NULL_MT);
     lua_setfield(L, -2, "null");
     return 1;
 }
