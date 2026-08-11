@@ -1314,7 +1314,7 @@ do
       local out = {}
       for _, item in ipairs(params and params.items or {}) do
         if item.section == "Lua" then
-          out[#out + 1] = { hint = { enable = true } }
+          out[#out + 1] = { hint = { enable = true, setType = true } }
         else
           out[#out + 1] = yyjson.null
         end
@@ -1467,7 +1467,7 @@ do
       cur_off = cur_off + #line_text + 1
       local row = line_idx - self.scroll_line + 1
       lines_data[#lines_data + 1] = {
-        row = row, text = line_text, start = line_start
+        row = row, text = line_text, start = line_start, line = line_idx
       }
     end
 
@@ -1478,7 +1478,7 @@ do
     for _, ld in ipairs(lines_data) do
       local r0 = ld.row - 1
       local segs = hl.line_segments(spans or {}, ld.start, ld.start + #ld.text)
-      local hints = self.lsp_hints and self.lsp_hints[line_idx]
+      local hints = self.lsp_hints and self.lsp_hints[ld.line]
       if hints then
         for _, h in ipairs(hints) do h.style = self.styles.dim end
       end

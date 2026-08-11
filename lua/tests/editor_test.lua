@@ -1442,6 +1442,24 @@ function TestHint:testNullSilent()
   os.remove(path)
 end
 
+function TestHint:testInjectMultiLine()
+  -- hints on a later line: per-line cache lookup must use the line
+  -- being rendered (regression: line_idx left over from the pass loop)
+  local e, path = hint_ed([[
+    { { position = { line = 2, character = 0 }, label = "p2:" } }]],
+    "aaa\nbbb\nccc\nddd\n")
+  frame(e)
+  lu.assertTrue(lsp_drive(e, function() return e.lsp_hints ~= nil end),
+    "hint response")
+  frame(e)
+  local dim = e.sc:intern(Ed.ATTR_DIM)
+  local _, st = e.grid:cell(2, 4) -- row 2 = doc line 2, hint at col 0
+  lu.assertEquals(st, dim)
+  e.lsp:stop()
+  lspio.close(e.lsp.io)
+  os.remove(path)
+end
+
 function TestHint:testConfigAnswer()
   -- server asks workspace/configuration (LuaLS style): editor answers
   -- with hint.enable=true, unknown sections as null
