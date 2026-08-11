@@ -193,6 +193,21 @@ function TestLspClient:testDiagPush()
   os.remove(path)
 end
 
+function TestLspClient:testSyncFull()
+  -- undo/redo path: one full didChange (no range) replaces the doc
+  local changes = {}
+  local c, path = new_client(CODE, { "hello", "world" })
+  c:on("test/didChange", function(p) changes[#changes + 1] = p end)
+  lu.assertTrue(drive(c, function() return c.state == "running" end))
+  c:sync_full()
+  lu.assertTrue(drive(c, function() return #changes == 1 end), "sync")
+  lu.assertEquals(changes[1].textDocument.version, 2)
+  lu.assertEquals(changes[1].contentChanges[1].text, "hello\nworld")
+  lu.assertNil(changes[1].contentChanges[1].range, "full replace, no range")
+  lspio.close(c.io)
+  os.remove(path)
+end
+
 function TestLspClient:testShutdownExit()
   local c, path = new_client(CODE, { "x" })
   lu.assertTrue(drive(c, function() return c.state == "running" end))

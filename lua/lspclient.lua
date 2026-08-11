@@ -215,6 +215,17 @@ function lspclient:notify_edit(off, del, s)
   })
 end
 
+-- Resync the whole document after jumps the client cannot localize
+-- (undo/redo): one full didChange (no range = whole-document replace).
+function lspclient:sync_full()
+  if self.state ~= "running" then return end
+  self.version = self.version + 1
+  self:notify("textDocument/didChange", {
+    textDocument = { uri = self.uri, version = self.version },
+    contentChanges = { { text = self.opts.get_text() } },
+  })
+end
+
 -- Graceful shutdown: shutdown request, exit notification, then the
 -- process ends itself (EOF detected on the next poll).
 function lspclient:stop()

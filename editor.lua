@@ -864,6 +864,15 @@ local function exec_command(self)
 end
 
 -- built-in normal keymaps (per-instance, called from Ed.new)
+-- Full resync after undo/redo: the doc jump can't be localized, so the
+-- server gets a whole-document didChange and caches refresh.
+local function resync_lsp(ed)
+  if ed.lsp then
+    ed.lsp:sync_full()
+    if ed.lsp_sem then ed.lsp_sem.dirty = true end
+  end
+end
+
 local function install_normal_keys(self)
   local n = self.keymaps.normal
   n.h = function(ed) cursor_move_char(ed.doc, -1) end
@@ -904,6 +913,7 @@ local function install_normal_keys(self)
   n.u = function(ed)
     ed.doc:undo()
     if ed.hl then ed.hl:reset() end
+    resync_lsp(ed)
   end
   n.p = function(ed)
     if not ed.clip then return end
@@ -917,6 +927,7 @@ local function install_normal_keys(self)
   n["<C-r>"] = function(ed)
     ed.doc:redo()
     if ed.hl then ed.hl:reset() end
+    resync_lsp(ed)
   end
   n["<C-l>"] = function(ed) ed.grid:clear() end
   n[":"] = function(ed)

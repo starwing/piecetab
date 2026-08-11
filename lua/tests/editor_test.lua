@@ -1211,4 +1211,69 @@ end
   os.remove(path)
 end
 
+function TestLspDiag:testUndoResyncs()
+  -- edit -> diag; undo (full resync) -> server clears -> underline gone
+  local path = fake_server([[
+local function push(v, msg)
+  sendmsg({ jsonrpc = "2.0", method = "textDocument/publishDiagnostics",
+    params = { uri = "file://", version = v, diagnostics = {
+      { range = { start = { line = 0, character = 0 },
+        ["end"] = { line = 0, character = 5 } },
+        message = msg, severity = 1 } } } })
+end
+while true do
+  local m = readmsg()
+  if not m then break end
+  if m.id then
+    if m.method == "initialize" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = { capabilities = {} } })
+    elseif m.method == "shutdown" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = y.null })
+    end
+  elseif m.method == "textDocument/didOpen" then
+    push(1, "oops")
+  elseif m.method == "textDocument/didChange" then
+    local v = m.params.textDocument.version
+    if m.params.contentChanges[1].range then
+      push(v, "bad")
+    else
+      sendmsg({ jsonrpc = "2.0", method = "textDocument/publishDiagnostics",
+        params = { uri = "file://", version = v, diagnostics = {} } })
+      sendmsg({ jsonrpc = "2.0", method = "test/full" })
+    end
+  elseif m.method == "exit" then
+    os.exit(0)
+  end
+end
+]])
+  local e = make_ed("hello\n")
+  e:lsp_start({ "lua", path })
+  local full = false
+  e.lsp:on("test/full", function() full = true end)
+  lu.assertTrue(lsp_drive(e, function() return e.lsp_diag ~= nil end),
+    "first push")
+  frame(e)
+  local und = e.sc:intern(Ed.ATTR_DIAG)
+  local _, st = e.grid:cell(0, 4) -- 'h' (v1 range 0-5)
+  lu.assertEquals(st, und)
+  -- insert error, esc commits: v2 diag on "Xhello"
+  e:dispatch("i")
+  e:dispatch("X")
+  e:dispatch("<Escape>")
+  lu.assertTrue(lsp_drive(e, function()
+    return e.lsp_diag and e.lsp_diag.version == 2 end), "v2 push")
+  -- undo: full resync, server clears the diag
+  e:dispatch("u")
+  lu.assertTrue(lsp_drive(e, function() return full end), "full didChange")
+  lu.assertTrue(lsp_drive(e, function()
+    return e.lsp_diag and e.lsp_diag.version == 3 end), "v3 clear")
+  lu.assertEquals(#e.lsp_diag.spans, 0)
+  frame(e)
+  local _, st2 = e.grid:cell(0, 4) -- 'h' back to plain
+  lu.assertNotEquals(st2, und)
+  e.lsp:stop()
+  lspio.close(e.lsp.io)
+  os.remove(path)
+end
+
 os.exit(lu.LuaUnit.run(), true)
