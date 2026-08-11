@@ -1478,7 +1478,7 @@ do
       if self.lsp_sem then self.lsp_sem.dirty = true end
       self:edit_hints(off, del, s)
       self.lsp_hint_dirty = true
-      self.last_edit_t = os.clock()
+      self.last_edit_t = luv.hrtime() / 1e9 -- wall clock, not CPU time
     end
     self.doc:edit(del, s)
     if self.hl then self.hl:notify_edit(off, del, #s) end
@@ -1492,7 +1492,9 @@ do
     if not (self.lsp and self.lsp.state == "running") then return end
     if not (self.lsp.capabilities.inlayHintProvider
         and not self.lsp_hint_pending) then return end
-    local idle = os.clock() - (self.last_edit_t or 0) >= self.hint_idle
+    -- wall-clock idle: os.clock() is CPU time and freezes while the
+    -- main loop blocks in getkey — idle would never elapse
+    local idle = luv.hrtime() / 1e9 - (self.last_edit_t or 0) >= self.hint_idle
     if not (self.lsp_hint_dirty and idle
         or self.lsp_hint_view ~= self.scroll_line) then return end
     local rows = self.term:size()
