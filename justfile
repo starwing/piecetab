@@ -41,3 +41,10 @@ clean: clean-gcda
     rm -f tests/linecache_test_fanout4 tests/linecache_test_fanout8 tests/piecetab_test_fanout4 tests/undotree_test tests/cellgrid_test tests/termfeed_test
     rm -fr tests/*.dSYM
     rm -fr build
+
+# LuaLS type check on lua sources (target: zero warnings in lsp.lua/editor.lua/tests)
+
+luals:
+    rm -rf /tmp/luals_check
+    mkdir -p /tmp/luals_check/log
+    lua-language-server --check . --checklevel=Warning --configpath=.luarc.json --logpath=/tmp/luals_check/log

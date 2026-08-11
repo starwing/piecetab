@@ -130,15 +130,12 @@ end
 
 lsp.RPC = RPC
 
-local IO = {}
-local IM = { __index = IO }
-
 -- lspio: LSP server process bridge over luv (libuv binding).
 -- Owns spawn + stdio pipes; pumps libuv callbacks on demand so the
 -- editor main loop (blocking termfeed getkey) never restructures:
 -- each frame: lspio.pump(h) then drain messages via jsonrpc.decoder.
 
---- @class lspio.Handle
+--- @class lsp.IO
 --- @field exit boolean  process exited
 --- @field exit_code integer
 --- @field proc table
@@ -147,6 +144,8 @@ local IM = { __index = IO }
 --- @field stdout table
 --- @field buf table
 --- @field outqueue table
+local IO = {}
+local IM = { __index = IO }
 
 -- argv minus the executable (luv args exclude it; plain loop keeps
 -- 5.1/LuaJIT compat where table.unpack does not exist)
@@ -160,10 +159,10 @@ end
 
 -- Spawn a server process; argv[1] = executable. Stderr inherited.
 --- @param argv string[]
---- @return lspio.Handle?
+--- @return lsp.IO?
 --- @return string?  err (executable not found, etc.)
 function IO.spawn(argv)
-  --- @type lspio.Handle
+  --- @type lsp.IO
   local h = setmetatable({
     stdin = luv.new_pipe(false),
     stdout = luv.new_pipe(false),
@@ -195,7 +194,7 @@ end
 -- Persistent chunk reader: "" = no data yet,
 -- nil = process exited. Index advances across pauses, so the reader
 -- survives "again" retries (frames are consumed incrementally).
---- @param h lspio.Handle
+--- @param h lsp.IO
 --- @return fun(): string?
 function IO.reader(h)
   local i = 1
@@ -211,7 +210,7 @@ function IO.reader(h)
 end
 
 -- Flush the out queue; partial writes stay queued (retried on pump).
---- @param h lspio.Handle
+--- @param h lsp.IO
 function IO.drain(h)
   while #h.outqueue > 0 do
     local n = luv.try_write(h.stdin, h.outqueue[1])
@@ -225,21 +224,21 @@ function IO.drain(h)
 end
 
 -- Queue raw bytes for the server (written on next pump).
---- @param h lspio.Handle
+--- @param h lsp.IO
 --- @param bytes string
 function IO.send(h, bytes)
   h.outqueue[#h.outqueue + 1] = bytes
 end
 
 -- Pump libuv callbacks once (non-blocking); process pending writes.
---- @param h lspio.Handle
+--- @param h lsp.IO
 function IO.pump(h)
   luv.run("nowait")
   IO.drain(h)
 end
 
 -- Terminate the server process.
---- @param h lspio.Handle
+--- @param h lsp.IO
 function IO.close(h)
   if not h.exit and h.proc then
     luv.process_kill(h.proc)
@@ -251,9 +250,6 @@ end
 
 lsp.IO = IO
 
-local Protocol = {}
-local PM = { __index = Protocol }
-
 -- lspclient: LSP client core — lifecycle state machine, pending requests,
 -- notification dispatch, incremental text sync.
 -- Editor-agnostic: transport (lspio) spawns the server process; document
@@ -261,9 +257,9 @@ local PM = { __index = Protocol }
 -- tables). Every edit is synced immediately (one didChange per docedit),
 -- measured against the state the server already has — no merge/rebase.
 
---- @class lspclient.Client
+--- @class lsp.Protocol
 --- @field state string  starting|running|shutting|exited
---- @field io table?
+--- @field io lsp.IO?
 --- @field dec table
 --- @field pending table
 --- @field handlers table
@@ -273,6 +269,8 @@ local PM = { __index = Protocol }
 --- @field langid string
 --- @field capabilities table
 --- @field opts table
+local Protocol = {}
+local PM = { __index = Protocol }
 
 -- UTF-8 char length from its lead byte (continuation bytes skipped).
 --- @param b integer
@@ -311,7 +309,7 @@ end
 --   on_status(state, msg?) -> state change callback
 --   config? -> per-section config table (default: Lua hints on)
 --- @param opts table
---- @return lspclient.Client
+--- @return lsp.Protocol
 function Protocol.new(opts)
   opts.config = opts.config
     or { Lua = { hint = { enable = true, setType = true } } }

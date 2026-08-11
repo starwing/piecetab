@@ -973,6 +973,7 @@ end
 ---@field tabstop integer
 ---@field log fun(fmt: string, ...: any)
 ---@field done boolean
+---@field lsp lsp.Protocol?  LSP client (nil = off)
 ---@field term editor.Term
 ---@field grid cellgrid.Grid
 ---@field keymaps table<string, table<string, fun(self: editor.Ed, key: string)>>
