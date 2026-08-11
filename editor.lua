@@ -11,9 +11,8 @@ local cg = require("cellgrid")
 local utf8 = require("lua-utf8")
 local tf = require("termfeed")
 local ts = require("treesitter")
-local lspclient = require("lspclient")
+local lsp = require("lsp")
 local lsp_span = require("lsp_span")
-local yyjson = require("yyjson")
 local luv = require("luv")
 
 -- ================================================================
@@ -1343,7 +1342,7 @@ do
     if #fname > 0 and fname:sub(1, 1) ~= "/" then
       fname = luv.cwd() .. "/" .. fname
     end
-    self.lsp = lspclient.new({
+    self.lsp = lsp.Protocol.new({
       get_text = function() return ed.doc:dump() end,
       get_line = function(lnum)
         local saved = ed.doc:offset()
@@ -1383,19 +1382,6 @@ do
     -- null answers (workspace still indexing) get bounded delayed retries
     self.lsp_hint_retry = 0
     self.lsp_hint_null = 0
-    -- answer LuaLS config requests: hints on (VSCode-default behavior),
-    -- rest of the Lua section left unset so defaults apply
-    self.lsp:on_server("workspace/configuration", function(params)
-      local out = {}
-      for _, item in ipairs(params and params.items or {}) do
-        if item.section == "Lua" then
-          out[#out + 1] = { hint = { enable = true, setType = true } }
-        else
-          out[#out + 1] = yyjson.null
-        end
-      end
-      return out
-    end)
     self.lsp:on("textDocument/publishDiagnostics", function(p)
       if p.uri ~= self.lsp.uri then return end
       -- drop stale snapshots (out-of-order pushes)

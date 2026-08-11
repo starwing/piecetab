@@ -11,7 +11,7 @@ package.cpath = (_G["jit"] and root .. "/lua/luajit/?.so;"
 
 local lu = require "luaunit"
 local Ed = require "editor"
-local lspio = require "lspio"
+local lsp = require "lsp"
 local yyjson = require "yyjson"
 
 local ROWS, COLS = 6, 40
@@ -1110,7 +1110,7 @@ function TestLspSemantic:testOverrideAndCoexist()
   local _, st4 = e.grid:cell(0, 21) -- 'r' of return (semantic number wins)
   lu.assertEquals(st4, nu)
   e.lsp:stop()
-  lspio.close(e.lsp.io)
+  lsp.IO.close(e.lsp.io)
   os.remove(path)
 end
 
@@ -1134,7 +1134,7 @@ function TestLspSemantic:testUtf16Decode()
   lu.assertEquals(c1, st)
   lu.assertEquals(c2, st)
   e.lsp:stop()
-  lspio.close(e.lsp.io)
+  lsp.IO.close(e.lsp.io)
   os.remove(path)
   -- emoji: 4 UTF-8 bytes = 2 UTF-16 units -> span length 4
   local path2 = fake_server(sem_code("0,1,2,1,0"))
@@ -1147,7 +1147,7 @@ function TestLspSemantic:testUtf16Decode()
   lu.assertEquals(e2.lsp_sem.spans[1].offset, 1)
   lu.assertEquals(e2.lsp_sem.spans[1].length, 4)
   e2.lsp:stop()
-  lspio.close(e2.lsp.io)
+  lsp.IO.close(e2.lsp.io)
   os.remove(path2)
 end
 
@@ -1209,7 +1209,7 @@ end
   local _, st5 = e.grid:cell(0, 4) -- 'h' no longer underlined
   lu.assertNotEquals(st5, und)
   e.lsp:stop()
-  lspio.close(e.lsp.io)
+  lsp.IO.close(e.lsp.io)
   os.remove(path)
 end
 
@@ -1274,7 +1274,7 @@ end
   local _, st2 = e.grid:cell(0, 4) -- 'h' back to plain
   lu.assertNotEquals(st2, und)
   e.lsp:stop()
-  lspio.close(e.lsp.io)
+  lsp.IO.close(e.lsp.io)
   os.remove(path)
 end
 
@@ -1325,7 +1325,7 @@ end
   s = frame(e)
   lu.assertNotStrContains(s, "diag: warn")
   e.lsp:stop()
-  lspio.close(e.lsp.io)
+  lsp.IO.close(e.lsp.io)
   os.remove(path)
 end
 
@@ -1355,7 +1355,7 @@ end
   local s = frame(e)
   lu.assertStrContains(s, "lsp:on", "right segment persistent, short form")
   e.lsp:stop()
-  lspio.close(e.lsp.io)
+  lsp.IO.close(e.lsp.io)
   os.remove(path)
 end
 
@@ -1410,7 +1410,7 @@ function TestHint:testInjectShift()
   local _, c4 = e.grid:cell(0, 8) -- 'l' of local shifted by #"int:"=4
   lu.assertEquals(c4, e.sc:intern({}))
   e.lsp:stop()
-  lspio.close(e.lsp.io)
+  lsp.IO.close(e.lsp.io)
   os.remove(path)
 end
 
@@ -1428,7 +1428,7 @@ function TestHint:testScrollRefetch()
   frame(e)
   lu.assertTrue(lsp_drive(e, function() return reqs >= 2 end), "scrolled refetch")
   e.lsp:stop()
-  lspio.close(e.lsp.io)
+  lsp.IO.close(e.lsp.io)
   os.remove(path)
 end
 
@@ -1453,7 +1453,7 @@ function TestHint:testNullSilent()
   lu.assertEquals(e.lsp_hint_retry, 0, "quiet after budget")
   lu.assertNil(e.lsp_hints)
   e.lsp:stop()
-  lspio.close(e.lsp.io)
+  lsp.IO.close(e.lsp.io)
   os.remove(path)
 end
 
@@ -1471,7 +1471,7 @@ function TestHint:testInjectMultiLine()
   local _, st = e.grid:cell(2, 4) -- row 2 = doc line 2, hint at col 0
   lu.assertEquals(st, dim)
   e.lsp:stop()
-  lspio.close(e.lsp.io)
+  lsp.IO.close(e.lsp.io)
   os.remove(path)
 end
 
@@ -1499,7 +1499,7 @@ end
   lu.assertTrue(lsp_drive(e, function() return e.lsp.state == "running" end))
   lu.assertStrContains(e.lsp.uri, "file:///", "absolute uri")
   e.lsp:stop()
-  lspio.close(e.lsp.io)
+  lsp.IO.close(e.lsp.io)
   os.remove(sp)
 end
 
@@ -1548,7 +1548,7 @@ function TestHint:testCursorMotionSkipsHint()
   frame(e)
   lu.assertStrContains(e.term.s, "\27[1;5H\27[?25h", false, "gap sits on hint") -- 0+3+2
   e.lsp:stop()
-  lspio.close(e.lsp.io)
+  lsp.IO.close(e.lsp.io)
   os.remove(path)
 end
 
@@ -1578,7 +1578,7 @@ function TestHint:testEditShiftsHints()
   e:docedit(0, "a\nb")
   lu.assertNil(e.lsp_hints, "multi-line edit clears cache")
   e.lsp:stop()
-  lspio.close(e.lsp.io)
+  lsp.IO.close(e.lsp.io)
   os.remove(path)
 end
 
@@ -1623,7 +1623,7 @@ end
     return e.lsp_hints and e.lsp_hints[0] and e.lsp_hints[0][1].dcol == 2 end),
     "fresh response applied, stale dropped")
   e.lsp:stop()
-  lspio.close(e.lsp.io)
+  lsp.IO.close(e.lsp.io)
   os.remove(path)
 end
 
@@ -1642,7 +1642,7 @@ function TestHint:testTrailingHintSafe()
   e:docedit(0, "xxxxx")
   lu.assertTrue(pcall(frame, e), "render with shifted trailing hint")
   e.lsp:stop()
-  lspio.close(e.lsp.io)
+  lsp.IO.close(e.lsp.io)
   os.remove(path)
 end
 
@@ -1678,7 +1678,7 @@ end
   lu.assertEquals(cfg.result[1].hint.enable, true)
   lu.assertEquals(cfg.result[2], yyjson.null)
   e.lsp:stop()
-  lspio.close(e.lsp.io)
+  lsp.IO.close(e.lsp.io)
   os.remove(path)
 end
 
