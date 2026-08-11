@@ -982,6 +982,7 @@ end
 ---@field show_pieces boolean  piece-boundary visualization layer
 ---@field sel_start integer?  visual-mode selection anchor (byte offset)
 ---@field clip string?  unnamed register (yank buffer)
+---@field vtexts table<integer, table<integer, {dcol: integer, text: string, style?: integer}>?>  injected display text per line, ascending dcol
 local Ed = {}
 
 -- forward declaration: filled in Section 5 (dispatch reads it via upvalue)
@@ -1286,6 +1287,7 @@ do
     self.grid = grid or cg.new()
     self.sc = sc.new()
     self.styles = { dim = self.sc:intern(ATTR_DIM) }
+    self.vtexts = {}
     self.show_pieces = true -- piece-boundary visualization (debug aid)
     self.keymaps = { normal = {}, insert = {}, command = {}, visual = {} }
     self.commands = {}
@@ -1418,6 +1420,102 @@ do
     return ok
   end
 
+  -- vtext: injected display text (virt text). Data lives on Ed: rendering,
+  -- cursor columns and edit shifting are core responsibilities; consumers
+  -- (LSP inlay hints today) write via set_vtext/clear_vtexts.
+  --- @param line integer
+  --- @param list table<integer, {dcol: integer, text: string, style?: integer}>?  array of entries (nil/empty clears)
+  function Ed:set_vtext(line, list)
+    if list and #list > 0 then
+      self.vtexts[line] = list
+    else
+      self.vtexts[line] = nil
+    end
+  end
+
+  function Ed:clear_vtexts()
+    self.vtexts = {}
+  end
+
+  -- Display column at (line, bytecol), shifted past injected text.
+  -- at_start = insert-gap semantics: the hint-start byte maps onto the
+  -- hint's first char (append, input lands before the hint).
+  --- @param line integer
+  --- @param bytecol integer  byte offset within the line
+  --- @param at_start boolean
+  --- @return integer
+  function Ed:vtext_dcol(line, bytecol, at_start)
+    local lst = self.vtexts[line]
+    local saved = self.doc:offset()
+    self.doc:seek("line", line)
+    local text = self.doc:read("l") or ""
+    self.doc:seek("set", saved)
+    local dcol = text_byte_to_dcol(text, bytecol, self.tabstop)
+    local w = 0
+    for _, h in ipairs(lst or {}) do
+      if at_start then
+        if h.dcol >= dcol then break end
+      elseif h.dcol > dcol then
+        break
+      end
+      w = w + utf8.width(h.text)
+    end
+    return dcol + w
+  end
+
+  -- Text column for a screen column: subtract the width of every vtext
+  -- block wholly before it (past the line end: identity).
+  --- @param line integer
+  --- @param scol integer  display column
+  --- @return integer
+  function Ed:screen_to_text_dcol(line, scol)
+    local lst = self.vtexts[line]
+    local w = 0
+    for _, h in ipairs(lst or {}) do
+      if scol < h.dcol + w then break end
+      w = w + utf8.width(h.text)
+    end
+    return scol - w
+  end
+
+  -- Shift vtext entries after an edit (injected text: stale positions
+  -- would squeeze/relocate new chars). Same-line hints past the edit
+  -- point shift by the byte delta; hints inside the deleted range are
+  -- dropped; multi-line edits clear the slot.
+  --- @param off integer
+  --- @param del integer
+  --- @param s string
+  function Ed:shift_vtexts(off, del, s)
+    local saved = self.doc:offset()
+    self.doc:seek("set", off)
+    local line = self.doc:line()
+    self.doc:seek("set", off + del)
+    local eline = self.doc:line()
+    self.doc:seek("set", saved)
+    if line ~= eline or s:find("\n", 1, true) then
+      self.vtexts = {}
+      return
+    end
+    local lst = self.vtexts[line]
+    if not lst then return end
+    self.doc:seek("line", line)
+    local base = self.doc:offset()
+    local text = self.doc:read("l") or ""
+    self.doc:seek("set", saved)
+    local edcol = text_byte_to_dcol(text, off - base, self.tabstop)
+    local delta = #s - del
+    local out = {}
+    for _, h in ipairs(lst) do
+      if h.dcol < edcol then
+        out[#out + 1] = h
+      elseif h.dcol >= edcol + del then
+        h.dcol = h.dcol + delta
+        out[#out + 1] = h
+      end
+    end
+    self.vtexts[line] = #out > 0 and out or nil
+  end
+
   --- Shift cached hints after an edit (they are injected text: stale
   -- positions would squeeze/relocate new chars). Same-line hints past
   -- the edit point shift by the byte delta (approx: tab/wide-char
@@ -1462,6 +1560,7 @@ do
   --- Edit at cursor with highlight notification (single edit funnel).
   function Ed:docedit(del, s)
     local off = self.doc:offset()
+    self:shift_vtexts(off, del, s)
     if self.lsp then
       self.lsp:notify_edit(off, del, s)
       if self.lsp_sem then self.lsp_sem.dirty = true end
@@ -1632,7 +1731,8 @@ do
     for _, ld in ipairs(lines_data) do
       local r0 = ld.row - 1
       local segs = hl.line_segments(spans or {}, ld.start, ld.start + #ld.text)
-      local hints = self.lsp_hints and self.lsp_hints[ld.line]
+      local hints = self.vtexts[ld.line]
+          or (self.lsp_hints and self.lsp_hints[ld.line])
       if hints then
         for _, h in ipairs(hints) do h.style = self.styles.dim end
       end

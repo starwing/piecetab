@@ -1682,4 +1682,72 @@ end
   os.remove(path)
 end
 
+-- vtext: injected display text on the Ed core (no LSP involved)
+TestVtext = {}
+
+function TestVtext:setUp()
+  self.e = make_ed("hello\nworld\n")
+  self.e:set_vtext(0, { { dcol = 0, text = "int:" } })
+end
+
+function TestVtext:testSetAndClear()
+  lu.assertEquals(#self.e.vtexts[0], 1)
+  self.e:set_vtext(0, nil)
+  lu.assertNil(self.e.vtexts[0])
+  self.e:set_vtext(0, { { dcol = 1, text = "a" } })
+  self.e:clear_vtexts()
+  lu.assertEquals(next(self.e.vtexts), nil)
+end
+
+function TestVtext:testVtextDcolNormalSkipsHint()
+  -- normal: hint-start byte shows past the injection (col 0 + "int:" 4)
+  lu.assertEquals(self.e:vtext_dcol(0, 0, false), 4)
+  -- byte 1 ('e') shifts too
+  lu.assertEquals(self.e:vtext_dcol(0, 1, false), 5)
+end
+
+function TestVtext:testVtextDcolInsertGap()
+  -- insert gap: hint-start byte maps onto the hint's first char
+  -- (append: input lands before the hint)
+  lu.assertEquals(self.e:vtext_dcol(0, 0, true), 0)
+end
+
+function TestVtext:testScreenToTextDcol()
+  lu.assertEquals(self.e:screen_to_text_dcol(0, 4), 0) -- screen 4 = text 0
+  lu.assertEquals(self.e:screen_to_text_dcol(0, 5), 1) -- screen 5 = text 1
+  lu.assertEquals(self.e:screen_to_text_dcol(1, 7), 7) -- no vtext: identity
+end
+
+function TestVtext:testShiftVtextsSameLine()
+  -- edit before the hint: hint shifts right by the byte delta
+  self.e.doc:seek("set", 0)
+  self.e:shift_vtexts(0, 0, "x")
+  lu.assertEquals(self.e.vtexts[0][1].dcol, 1)
+  -- delete it back: hint shifts left
+  self.e:shift_vtexts(0, 1, "")
+  lu.assertEquals(self.e.vtexts[0][1].dcol, 0)
+  -- hint inside the deleted range: dropped, slot goes nil
+  self.e.doc:seek("set", 0)
+  self.e:shift_vtexts(0, 1, "") -- delete 'h', range [0,1) covers dcol 0
+  lu.assertNil(self.e.vtexts[0])
+end
+
+function TestVtext:testShiftVtextsCrossLineClears()
+  self.e:shift_vtexts(0, 0, "a\nb")
+  lu.assertEquals(next(self.e.vtexts), nil)
+end
+
+function TestVtext:testRenderLineInjectsVtext()
+  -- render_line injects vtext text into the grid (mirror of the
+  -- lsp_hints TestHint:testInjectShift path, same grid assertions)
+  local dim = self.e.sc:intern(Ed.ATTR_DIM)
+  self.e:render()
+  local _, st = self.e.grid:cell(0, 4) -- injection at content col 0
+  lu.assertEquals(st, dim)
+  self.e.vtexts[0][1].style = dim -- render pre-sets the style
+  self.e:render()
+  local _, c4 = self.e.grid:cell(0, 8) -- 'h' of hello shifted by 4
+  lu.assertEquals(c4, self.e.sc:intern({}))
+end
+
 os.exit(lu.LuaUnit.run(), true)
