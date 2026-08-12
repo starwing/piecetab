@@ -271,7 +271,7 @@ static void cgF_blankrow(cg_Grid *G, int row) {
 
 static void *cgS_defallocf(void *ud, void *p, size_t osize, size_t nsize) {
     void *np;
-    if ((void)ud, (void)osize, nsize == 0) return ((void)free(p), NULL);
+    if ((void)ud, (void)osize, nsize == 0) return (void)free(p), (void *)NULL;
     return (np = realloc(p, nsize)) ? np : ((void)abort(), NULL);
 }
 
