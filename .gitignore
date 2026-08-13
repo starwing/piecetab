@@ -32,3 +32,7 @@ tests/linecache_test_fanout8
 tests/piecetab_test_fanout4
 tests/*.gen.inc
 tmp_*notes/reports/
+
+# DSH project skills (local, mirrors .opencode/agents)
+.dsh/
+tests/spantree_test_fanout4
