@@ -13,6 +13,7 @@ ut *args='': (test "tests/undotree_test" args)
 cg *args='': (test "tests/cellgrid_test" args)
 tf *args='': (test "tests/termfeed_test" args)
 sp *args='': (test "tests/spantree_test_fanout4" args)
+sp8 *args='': (test "tests/spantree_test_fanout8" args)
 
 # coverage
 
@@ -23,7 +24,7 @@ pt-cov: clean-gcda (cov-run "tests/piecetab_test_fanout4" INCS) (cov-show "piece
 ut-cov: clean-gcda (cov-run "tests/undotree_test" INCS) (cov-show "undotree.h")
 cg-cov: clean-gcda (cov-run "tests/cellgrid_test" INCS) (cov-show "cellgrid.h")
 tf-cov: clean-gcda (cov-run "tests/termfeed_test" INCS) (cov-show "termfeed.h")
-sp-cov: clean-gcda (cov-run "tests/spantree_test_fanout4" INCS) (cov-show "spantree.h")
+sp-cov: clean-gcda (cov-run "tests/spantree_test_fanout4" INCS) (cov-run "tests/spantree_test_fanout8" INCS) (cov-show "spantree.h")
 
 lc-lines: (cov-lines "linecache.h")
 pt-lines: (cov-lines "piecetab.h")
@@ -42,7 +43,7 @@ sp-unbranched: (cov-unbranched "spantree.h")
 # lua bindings & tests live in lua/justfile — run with: just lua/<recipe>
 
 clean: clean-gcda
-    rm -f tests/linecache_test_fanout4 tests/linecache_test_fanout8 tests/piecetab_test_fanout4 tests/undotree_test tests/cellgrid_test tests/termfeed_test tests/spantree_test_fanout4
+    rm -f tests/linecache_test_fanout4 tests/linecache_test_fanout8 tests/piecetab_test_fanout4 tests/undotree_test tests/cellgrid_test tests/termfeed_test tests/spantree_test_fanout4 tests/spantree_test_fanout8
     rm -fr tests/*.dSYM
     rm -fr build
 

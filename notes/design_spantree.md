@@ -253,7 +253,57 @@ style id 同款抽象：cellgrid 是最终消费者但不管 attr 格式，spant
   （层 levels），rt[1] = 叶容器们（层 levels-1），rt[levels-fl] =
   fl 层节点们。摘取/驻留必须按层落槽，禁止跨层混放
 - 不变式（既有）：**除非 Cursor 指向整树结尾，否则 Cursor 不指叶尾**
-  （findseg 段尾前进到下一段；locend 树尾态 poff=末段长）
+  （findleaf 段尾前进到下一段；locend 树尾态 poff=末段长）
+
+#### 光标契约（2026-08-14 二轮审核定案）
+
+**光标三态**：
+
+| 态 | poff | off | paths |
+|---|---|---|---|
+| 正常态 | [0, 段长) | 段前字节 | 段槽 |
+| 树尾态 | 末段长 | bytes - 末段长 | 末段槽 |
+| 虚拟态 | 0 | ≥ bytes | 末段槽（树尾路径） |
+
+- 虚拟态由 seek/locate/advance 越尾分支与 spI_pad 产生；**虚拟态回退
+  入树须真实重定位**——树外字节无树结构可减，不能走 backwardoff
+- 树尾态 off == bytes（poff=末段长）与虚拟态（poff=0）区分：前者是
+  末段内位置，后者是树尾之外
+
+**seek/locate/advance 调用清单（例外论证，禁其余调用点）**：
+
+| 调用点 | 原语 | 理由 |
+|---|---|---|
+| sp_fill | sp_seek 构造 R | advance 空树 no-op 不可用（v8） |
+| sp_fill | sp_locate(C, off0) | pad R 动树后 C 回位（v8） |
+| spD_remove | sp_advance(&R, len) | R 为 C 的栈副本，构造区间右端的自然原语 |
+| sp_insert | sp_advance(C, -ins) | insert 语义：核心插入收尾在插入段尾，光标回插入点（piecetab pt_insert 同款） |
+| spI_splitins | sp_locate(C, C->off) | 满容器分裂后 paths 按字节重建（落地细节 8） |
+| spI_mergeleft/right | sp_locate(C, C->off) | foldchain 破坏 paths 后重建段尾态（落地细节 8） |
+| spF_filterleaf | sp_advance(C, ±len) | 区间右边界定位与回退（len ≤ 段剩余恒成立） |
+| spF_fillrange | sp_locate ×2 | 阶段 5 绝对位置重染（步骤 10） |
+
+**sp_advance 实现（本轮修订）**：不再调 sp_locate（公共 API 互调 +
+从头重扫）。d 按符号分路，规避 size_t 回绕比较：向前越尾 →
+locend + poff=0 + off=off+d 直设（虚拟态不夹）；虚拟起点回退入树 →
+findleaf 重定位（夹 0）；树内回退 → backwardoff(min(off, step))
+（自然夹 0）。
+
+**内部函数光标契约**：
+
+| 函数 | 前置 | 后置 |
+|---|---|---|
+| spK_findleaf(C, l, &poff) | paths[0..l-1] 有效、off = 前缀路程 | 完整 paths、poff 段内、off 段前 |
+| spK_locend(C) | 树非空 | 树尾态 |
+| spK_forwardoff / backwardoff | 正常态、目标在树内 | 正常态、前进/后退 d |
+| spD_remove(C, len) | 任意 | 光标于删除点（offset 不变） |
+| spI_insert(C, ins, useleft) | 光标于插入点（任意态含虚拟） | 插入段尾（poff=ins，恒；useleft 只定继承方向，光标收尾由公共 API 派生：append 即此态，insert 经 advance 回插入点） |
+| spI_splitins(C, len, id) | 光标于插入点 | 插入段尾（poff = len） |
+| spI_merge(C) | 插入段尾（assert poff == 段长） | 合并段尾（offset 不变） |
+| spI_pad(C) | 任意 | 树尾态（offset 不变） |
+| spF_filterleaf(C, len, in) | 区间头 | 区间尾（早退 poff=0 下一段头；主路径 poff=段长） |
+| spF_appendseg(C, id, len) | 链尾段（assert i ≥ cc-1） | 链尾（随 append 推进，落地细节 4） |
+| spD_stitch(L, rt) | 链尾段（mergeleaf 前提，落地细节 2） | L 位置保持 |
 
 #### 机制一：剥洋葱原语
 
@@ -302,8 +352,7 @@ peel(rt):
 一部分，保留不剥）
 
 ```
-prefixpeel(l, rt):               # 层 l 的内容已在 rt[levels-l]
-  1. [剥前缀] 对前缀所有节点完整剥洋葱回填（arb + append merge 回 L 链）
+peeldown(l, rt):                 # 层 l 的内容已在 rt[levels-l]  1. [剥前缀] 对前缀所有节点完整剥洋葱回填（arb + append merge 回 L 链）
               # 剥洋葱带 R 边界：每层只下放 R 路径左侧的节点
   2. [R 前移] memmove 让 R 到 children[0]（前缀剥完，槽压缩；后缀跟着前移）
   3. [下放]   R->children 全部放进 rt[levels-l-1]
@@ -313,7 +362,7 @@ prefixpeel(l, rt):               # 层 l 的内容已在 rt[levels-l]
               # 无内容，不进 R 右森林（挂回 = 逆操作无溢出，见论证 8）
   4. [新前缀] 通过 R->paths 得到新 rt 层的前缀：
               R->paths[l+1] 指向的槽之前的孩子们 = 新前缀（R 路径孩子的左侧）
-  5. [递归]   对层 l+1、rt、新前缀递归调用 prefixpeel——直到叶层
+  5. [递归]   对层 l+1、rt、新前缀递归调用 peeldown——直到叶层
   6. [叶层]   l = levels-1（R 叶容器下放后）或 fl = levels（R 直接是段）：
               剥 R->paths[levels] 前的叶们（arb + append merge 回 L 链）；
               R 段 + R 右段们（R 残留）留在 rt[0]
@@ -380,7 +429,7 @@ sp_fill(C, id, len):
      # 在 filterleaf 内对当前段自算）；树尾 fill 时右边界
      # poff == 段长不裂，0 长半段不产生
   11. 返回——光标定位到 fill 末尾 = 步骤 10b 的 filterleaf 自然结果
-      （其内部 spI_merge seek 到区间末 off + len，append 语义；
+      （其内部 spI_merge 按"光标=插入段尾"不变量收尾，append 语义；
       R Cursor 在前缀剥填后废弃，见落地细节 3）
 ```
 
@@ -471,11 +520,50 @@ sp_fill(C, id, len):
    1a/1b 统一 kl ∈ [fl+1, levels]，阶段 2a 为 kl = fl）；剥回
    append 与 stitch 各自加回；arb 只改 id 不改变段长 → 全程净 0，
    tree->bytes 恒不变（fill 是度量保持操作）
-7. **reserve 瞬时峰值（TODO）**：剥洋葱下放 free 与 append 垂链新
-   建的瞬时差——第一轮（L 右段们填满 L 叶容器 → 垂链新建 ≤ levels
-   个节点，此刻无 free）可能瞬时负；累计平衡（密铺，论证 1）。
-   4*levels+5 粗略够（第一轮垂链 + 后置裂 2(levels+1) + 潜在扩根）；
-   实现后用 SP_POOL_STATS 断言实测，不够再加
+7. **reserve 顺序与预算（2026-08-14 定案；2026-08-14 修订：splice
+   改为 remove + edit 组合）**：reserve 必须在 pad 之前——pad 的
+   insertrt 满叶分裂会消耗 freelist（levels+1 个节点），裸奔即
+   ralloc 断言。fill 预算 = 6*levels+7（两个 pad 的 insertrt +
+   阶段预算 4*levels+5）；insert/append 预算 = 3*levels+4（pad 的
+   insertrt + splitins）；remove 预算 = 4*levels+5（cutrange + stitch
+   的节点需求）。splice 无独立预算——remove 与 edit 各自 reserve
+   （reserve 只保 freelist 水位，重复调用无害；虚拟光标下 remove
+   早退、pad 后光标总在树尾，先删后插与原先插后删语义等价）。
+   非虚拟 fill 不消耗 pad 预算，多预留无害（reserve 只保 freelist
+   水位）
+8. **跨容器合并的树结构维护（2026-08-14 定案，fill_brute 逼出；
+   2026-08-14 修订：fanout8 逼出 foldchain 阈值分层；
+   2026-08-14 修订：foldchain 复用 foldnode，mergeleft/mergeright
+   共用 spI_neighbor 走邻容器；
+   2026-08-14 修订：merge 光标不变量——零 seek 收尾）**：
+   spI_merge 跨容器合并（mergeleft/mergeright）吸收邻容器段后，邻容器
+   可能掏空（1→0）或欠满（2→1）——**不调 spD_remove**（太重的递归
+   删除），本地化解决：spN_remove 单节点内删段 + `spI_foldchain` 沿侧链
+   （fork 层以下恒挂首槽）逐级删空壳/fold 欠满链接，fork 层（槽
+   ip-1 / ip+1）空壳删槽后交 `spD_rebalance(C, d0)` 的 foldnode 收尾。
+   链上欠满链接必有兄弟可 fold（单孩子链在沿途已塌缩，assert 保）。
+   插入点容器的容器内合并欠满由 spI_merge 末尾 rebalance 兜底（cc ≥
+   FANOUT/2 时 O(1) 早退）。foldnode 合并分支必须 free 被并入的空壳
+   （B+ 骨架移植补全，与 cutrange 三处 free 同族——L 右兄弟子树、R 前缀
+   子树、fl 层 mid+R 空壳，cutrange 现经 spN_purge 批量释放）；
+   foldchain 非空链接的 fold/balance 复用 spD_foldnode（mergeleft 先
+   还原 paths 到 sav 链后调用），空壳直删+爬升保留专用分支。
+   **merge 光标不变量（零 seek 收尾）**：splitins 结束光标恒在
+   **插入段尾**（poff=段长，sp_offset=endoff，m<need 满容器分裂后以
+   `sp_locate(C, C->off)` 重建 paths——off 为字节计数不受分裂影响）；
+   merge 前置 assert 该态。左邻合并循环维护 off/poff（段头左移），
+   右邻合并零维护（段向右长）。mergeleft 简单路径光标随 paths 落左叶
+   末段尾（off -= bl, poff += bl）；mergeright 简单路径光标不动
+   （paths 还原 sav，插入段尾仍在合并段内）。foldchain 破坏 paths 后
+   以 `sp_locate(C, C->off)` + `poff = off0/offn - off` 重建段尾态。
+   merge 全程零 seek/advance，收尾光标 sp_offset == endoff 恒成立。
+   **foldchain 阈值分层**：折叠条件原为硬编码 cc < 2（fanout4 下
+   FANOUT/2 == 2 恰好一致）；fanout8 下中间层欠满阈值 = FANOUT/2 = 4，
+   mergeleft/mergeright 掏空容器使中间层 cc 4→3（<4 但 ≥2）时旧逻辑
+   不折叠 → 欠满残留、checktree 失败。修复：叶容器层（x == levels-1）
+   阈值 2（叶容器无最小 cc），中间层（x < levels-1）阈值 FANOUT/2；
+   折叠后 par 检查 `x == 0 || cc(par) >= FANOUT/2` 同理分层。
+   fanout4 行为不变。
 
 #### 边界情况
 

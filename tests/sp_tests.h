@@ -235,4 +235,21 @@ SP_STATIC int sp_comparetree(const sp_Tree *a, const sp_Tree *b) {
         sp_freetree(__d);                                                    \
     } while (0)
 
+/* serialize the segment stream as "[id:len][id:len]..." for content
+ * comparison against a naive model (tree validity stays with
+ * sp_checktree, this only pins the content) */
+SP_STATIC void sp_serialtree(sp_Tree *t, char *buf) {
+    sp_Cursor    C;
+    const sp_Id *id;
+    size_t       len;
+    int          r = 0;
+    buf[0] = '\0';
+    assertok(sp_seek(&C, t, 0) == SP_OK);
+    while ((id = sp_style(&C, &len)) != NULL)
+        r += snprintf(
+                buf + r, 4096 - (size_t)r, "[%lu:%lu]", test_lu(*id),
+                test_lu(len)),
+                sp_next(&C, &len);
+}
+
 #endif /* SP_TESTS_H */

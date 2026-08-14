@@ -36,3 +36,4 @@ tmp_*notes/reports/
 # DSH project skills (local, mirrors .opencode/agents)
 .dsh/
 tests/spantree_test_fanout4
+tests/spantree_test_fanout8
