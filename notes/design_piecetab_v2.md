@@ -80,6 +80,11 @@ levels = 3 的树：从 root 到 piece 共 levels+2 = 5 层
 **必须调用 `ptM_upmask`** 沿 paths 向上传播 mask 位。`ptI_splitins` 仅处理了度量
 （upbytes），mask 上推由调用方负责。
 
+**不变量：位 ≥ cc 恒为 0** — cc 收缩处（`ptN_remove`、`ptD_balancenode`、
+`ptI_splitroot`/`ptI_splitchild` 裂半、`ptD_mergeleaf` merged 路径）统一以
+`ptM_clamp(p)` 截断：`p->mask &= ptM_mask(ptN_cc(p))`。残值位会被未掩码读
+（`mask != 0`）误判为 hole 假阳性（fuzz 实录 pt_holebit_repro.txt）。
+
 ---
 
 ## 二、叶类型（叶 = piece，术语参见 §一.1）

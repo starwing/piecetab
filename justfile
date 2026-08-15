@@ -15,6 +15,12 @@ tf *args='': (test "tests/termfeed_test" args)
 sp *args='': (test "tests/spantree_test_fanout4" args)
 sp8 *args='': (test "tests/spantree_test_fanout8" args)
 
+# fuzz: seeded random-op stress with per-op invariant checks
+fuzz-sp seed='1': (fuzz-run "sp" seed)
+fuzz-pt seed='1': (fuzz-run "pt" seed)
+fuzz-lc seed='1': (fuzz-run "lc" seed)
+fuzz-replay lib path: (fuzz-run lib "replay" path)
+
 # coverage
 
 cov: clean-gcda (cov-run "tests/linecache_test_fanout4" INCS) (cov-run "tests/linecache_test_fanout8" INCS) (cov-run "tests/piecetab_test_fanout4" INCS) (cov-run "tests/undotree_test" INCS) (cov-run "tests/cellgrid_test" INCS) (cov-run "tests/termfeed_test" INCS) (cov-run "tests/spantree_test_fanout4" INCS) (cov-show "piecetab.h linecache.h undotree.h cellgrid.h termfeed.h spantree.h")

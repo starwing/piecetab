@@ -365,6 +365,7 @@ PT_API unsigned pt_retain(pt_Buffer b) {
     return b ? ++((pt_Tree *)b)->refc : 0;
 }
 PT_API pt_Buffer pt_empty(pt_State *S) { return S ? &S->empty : NULL; }
+static void      ptM_clamp(pt_Node *p) { p->mask &= ptM_mask(ptN_cc(p)); }
 
 static void ptM_sethole(pt_Node *n, int i, int h) {
     assert(i >= 0 && i < PT_FANOUT);
@@ -424,7 +425,7 @@ static void ptN_remove(pt_State *S, pt_Node *p, int k, int s, int e) {
     assert(s <= e && e <= ptN_cc(p));
     ptN_purge(S, p, k, s, e, p->version);
     ptN_move(p, s, e, ptN_cc(p) - e);
-    ptN_setcc(p, ptN_cc(p) - (e - s));
+    ptN_setcc(p, ptN_cc(p) - (e - s)), ptM_clamp(p);
 }
 
 static void ptN_makespace(pt_Node *p, int i, int n) {
@@ -754,12 +755,13 @@ static void ptI_splitroot(pt_Cursor *C) {
     pt_Node *nw = (pt_Node *)ptP_ralloc(&C->tree->S->nodes);
     int      i = ptK_idx(C, r, 0), mid = ptN_cc(&save) / 2;
     int      nc = ptN_cc(&save) - mid;
-    *pp = save, pp->mask &= ptM_mask(mid), ptN_setcc(pp, mid);
+    *pp = save, ptN_setcc(pp, mid), ptM_clamp(pp);
     nw->mask = 0, ptN_copy(nw, 0, &save, mid, nc), ptN_setcc(nw, nc);
     pp->version = nw->version = C->tree->root.version;
     r->children[0] = pp, r->children[1] = nw, ptN_setcc(r, 2);
     r->bytes[0] = ptN_sumbytes(pp, 0, mid);
     r->bytes[1] = C->tree->bytes - r->bytes[0];
+    ptM_clamp(r); /* old root cc may exceed 2: reset bits before the rewrite */
     ptM_sethole(r, 0, pp->mask != 0), ptM_sethole(r, 1, nw->mask != 0);
     C->tree->levels++;
     memmove(C->paths + 1, C->paths, C->tree->levels * sizeof(pt_Node **));
@@ -774,7 +776,7 @@ static void ptI_splitchild(pt_Cursor *C, int l) {
     int       i = ptK_idx(C, p = ptK_parent(C, l), l);
     nw = (pt_Node *)ptP_ralloc(&S->nodes), nw->version = C->tree->root.version;
     nw->mask = 0, ptN_copy(nw, 0, nd, mid, nc), ptN_setcc(nw, nc);
-    nd->mask &= ptM_mask(mid), ptN_setcc(nd, mid);
+    ptN_setcc(nd, mid), ptM_clamp(nd);
     ptN_makespace(p, i + 1, 1), p->children[i + 1] = nw;
     p->bytes[i] = ptN_sumbytes(nd, 0, mid);
     p->bytes[i + 1] = ptN_sumbytes(nw, 0, nc);
@@ -1004,7 +1006,8 @@ static int ptD_balancenode(pt_Node **ns, int left, pt_Delta *ds) {
         ptN_copy(ns[1], 0, ns[0], l - d, d);
         *ds = (pt_Delta)ptN_sumbytes(ns[1], 0, d);
     }
-    return ptN_setcc(ns[0], l - d), ptN_setcc(ns[1], r + d), d;
+    ptN_setcc(ns[0], l - d), ptN_setcc(ns[1], r + d);
+    return ptM_clamp(ns[0]), ptM_clamp(ns[1]), d;
 }
 
 static int ptD_foldnode(pt_Cursor *C, int lfirst, int l) {
@@ -1018,7 +1021,7 @@ static int ptD_foldnode(pt_Cursor *C, int lfirst, int l) {
     if ((cL = ptN_cc(ns[0])) + (cR = ptN_cc(ns[1])) <= PT_FANOUT) {
         ptN_copy(ns[0], cL, ns[1], 0, cR);
         ptN_setcc(*ns, ptN_cc(*ns) + cR), ptN_setcc(ns[1], ptN_cc(ns[1]) - cR);
-        p->bytes[i] += p->bytes[i + 1], ns[0]->mask |= ns[1]->mask << cL;
+        p->bytes[i] += p->bytes[i + 1];
         ptM_sethole(p, i, !!(ns[0]->mask & ptM_mask(cL + cR)));
         if (*ns != o)
             cp[1] = &ns[0]->children[cp[1] - ns[1]->children + cL], cp[0] -= 1;
@@ -1098,7 +1101,7 @@ static int ptD_mergeleaf(pt_Cursor *C, pt_Node *rt) {
         rt->bytes[0] += bc, rt->children[0] = p->children[cc - 1];
         ptM_up(C, l - 1, -(pt_Delta)bc);
         if (ptK_idx(C, p, l) == cc) C->off -= bc, C->poff = bc;
-        C->paths[l] = &p->children[cc - 1], ptN_setcc(p, cc - 1);
+        C->paths[l] = &p->children[cc - 1], ptN_setcc(p, cc - 1), ptM_clamp(p);
     }
     return (int)d;
 }

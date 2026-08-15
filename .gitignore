@@ -25,15 +25,18 @@ notes/reports/
 *.pdb
 *.exp
 *.lib
-lc_insert_demo
 tests/pt_bench.c
 tests/linecache_test_fanout4
 tests/linecache_test_fanout8
 tests/piecetab_test_fanout4
+tests/spantree_test_fanout4
+tests/spantree_test_fanout8
 tests/*.gen.inc
-tmp_*notes/reports/
+fuzz/*_fuzz
+fuzz/pt_fuzz_fast
+fuzz/pt_replay
+
+tmp_*
 
 # DSH project skills (local, mirrors .opencode/agents)
 .dsh/
-tests/spantree_test_fanout4
-tests/spantree_test_fanout8

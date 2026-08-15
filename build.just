@@ -20,6 +20,11 @@ LUAJIT_INC := `
     exit 0
 `
 
+# fuzz tools: fuzz writes the op log to /tmp/<lib>_oplog.txt before each
+# op, so a crash leaves a replayable log (just fuzz-replay <lib> <path>)
+fuzz-run lib mode arg='1':
+    {{ CC }} {{ CFLAGS }} {{ INCS }} -Ifuzz -g -O0 -fsanitize=address,undefined -o fuzz/{{ lib }}_fuzz fuzz/{{ lib }}_fuzz.c && ./fuzz/{{ lib }}_fuzz {{ mode }} {{ arg }}
+
 # t = test source without .c suffix (may include dir), inc = include flags
 dbg-run t inc *tests='':
     lua misc/gen_entries.lua {{ t }}.c {{ t }}.gen.inc

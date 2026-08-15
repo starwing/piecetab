@@ -176,6 +176,13 @@ grep '^static' piecetab.h
 `ptM_up(C, l, db)` 一体完成：度量差 `db` 累加 + 逐层重算 mask 位
 （`db==0` 且 mask 无变化时提前剪枝）。`ptM_up(C, levels, 0)` 惯用法 = 纯 mask 修正。
 
+- **不变量：位 ≥ cc 恒为 0** — 任何 cc 收缩处（`ptN_remove`、`ptD_balancenode`、
+  `ptI_splitroot`/`ptI_splitchild` 的裂半、`ptD_mergeleaf` merged 路径）必须调用
+  `ptM_clamp` 截断 mask；否则残留位被未掩码读（`mask != 0`，foldnode balance /
+  splitchild sethole 等）误判为 hole。`ptN_move` 左移与 foldnode merge 均不另行清位
+  （前者由 `ptN_remove` 的 `ptM_clamp` 兜底，后者 mask 已由 `ptN_copy` 携带，
+  勿重复 OR）。
+
 ## 八、COW / 事务模型
 
 - **transient**: 首次编辑时 `ptK_markdirty` fork 新 tree（`version = ++max_version`,
