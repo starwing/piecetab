@@ -167,6 +167,7 @@ int lc_remove(lc_Cursor *L, lc_Cursor *R);
 **参数校验**:
 - `L==NULL` 或 `R==NULL` 或 `!L->tree` 或 `L->tree != R->tree`: 返回 `LC_ERRPARAM`
 - 空区间、逆序、L 越界: 返回 `LC_OK`，no-op
+- R 越树尾（trailing 区）合法: 删除跑到树尾，L 所在行整体删除（行前缀不保留）
 
 **返回值**: `LC_OK`（成功或 no-op），`LC_ERRPARAM`（参数非法）。操作后 R 失效（树结构已变），L 指向删除点。
 

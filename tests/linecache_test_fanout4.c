@@ -1335,6 +1335,81 @@ TEST(remove_basic) {
     lc_close(S);
 }
 
+/* R overshoots past the tree end (lc_advance col overshoot): rmleaf
+ * deletes L's line to the leaf end and drops the virtual remainder
+ * (fuzz lc_remove_repro.txt) */
+TEST(remove_rend_overtail) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newcache(S);
+    lc_Cursor C, R;
+    lc_scanV(c, 2, 10);
+    lc_seek(&C, c, 6);
+    R = C, lc_advance(&R, 19);
+    asserteq(lc_remove(&C, &R), LC_OK);
+    assertok(lc_checktree(c));
+    assertok(lc_checkcursor(&C, 6));
+    asserteq(lc_breaks(c), 1);
+    asserteq(lc_bytes(c), 2);
+    lc_delcache(S, c);
+    lc_close(S);
+}
+
+/* virtual R across leaves (same container): trimleft's whole-leaf
+ * branch and cutrange's breaks==0 skip consume the emptied tail leaf */
+TEST(remove_rend_overtail_range) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newcache(S);
+    lc_Cursor C, R;
+    lc_scanV(c, 5, 5, 5, 5, 5, 5, 5, 5);
+    lc_seek(&C, c, 7);
+    R = C, lc_advance(&R, 40);
+    asserteq(lc_remove(&C, &R), LC_OK);
+    assertok(lc_checktree(c));
+    assertok(lc_checkcursor(&C, 7));
+    asserteq(lc_breaks(c), 1);
+    asserteq(lc_bytes(c), 5);
+    lc_asserttree(c, 0, botV(leafV(5)));
+    lc_delcache(S, c);
+    lc_close(S);
+}
+
+/* virtual R across containers: cutrange's per-level loop skips the
+ * emptied tail subtree at every level */
+TEST(remove_rend_overtail_range2) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newcache(S);
+    lc_Cursor C, R;
+    lc_scanV(c, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5);
+    lc_seek(&C, c, 7);
+    R = C, lc_advance(&R, 97);
+    asserteq(lc_remove(&C, &R), LC_OK);
+    assertok(lc_checktree(c));
+    assertok(lc_checkcursor(&C, 7));
+    asserteq(lc_breaks(c), 1);
+    asserteq(lc_bytes(c), 5);
+    lc_asserttree(c, 0, botV(leafV(5)));
+    lc_delcache(S, c);
+    lc_close(S);
+}
+
+/* leaf fold underfills a root child (cc 2→1): rebalance must fold at
+ * the root level too (fuzz seed 7 op 219) */
+TEST(remove_foldroot) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = cacheV(
+            S, 1,
+            innerV(botV(leafV(4, 1, 3), leafV(1, 7, 1)),
+                   botV(leafV(1, 1, 1, 1), leafV(1, 1, 1, 1))));
+    lc_Cursor C, R;
+    lc_seek(&C, c, 3);
+    R = C, lc_advance(&R, 3);
+    asserteq(lc_remove(&C, &R), LC_OK);
+    assertok(lc_checktree(c));
+    assertok(lc_checkcursor(&C, 3));
+    lc_delcache(S, c);
+    lc_close(S);
+}
+
 TEST(splice_params) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
@@ -1600,13 +1675,14 @@ TEST(splice_cov_rebalance) {
     lc_Cursor C;
     /* L at offset 0 leaf0[2,2]: splice del=3 → leaf becomes [1]
      * underfull → foldleaf merge → botV0.cc=1 → rebalance(1)
-     * → foldnode at inner0: cl=1 cr=2 → merge (returns 1) */
+     * → foldnode at inner0: cl=1 cr=2 → merge (returns 1);
+     * root-level fold merges inner0+inner1 → root collapses (levels 1) */
     lc_seek(&C, c, 0);
     lc_splice(&C, 3, 0);
     lc_asserttree(
-            c, 2,
-            innerV(innerV(botV(leafV(1, 2, 2, 2), leafV(2, 2), leafV(2, 2))),
-                   innerV(botV(leafV(2)))));
+            c, 1,
+            innerV(botV(leafV(1, 2, 2, 2), leafV(2, 2), leafV(2, 2)),
+                   botV(leafV(2))));
     assertok(lc_checktree_allow_empty(c, 1));
     assertok(lc_checkcursor(&C, 0));
     ;

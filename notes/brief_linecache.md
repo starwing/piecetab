@@ -341,7 +341,7 @@ grep '^static.*lcX_' linecache.h
 | `lc_append` | — | C==NULL→ERRPARAM | 正常追加 | 回滚sC→ERRMEM |
 | `lc_insert` | — | 同 append | 同 append | 同 append |
 | `lc_splice` | off≥bytes→仅col+=ins | del=0,ins=0→完全无操作 | col+=ins | 委托 remove |
-| `lc_remove` | L≥R→无操作 | NULL/非同树→ERRPARAM | 无操作 | assert 预留 |
+| `lc_remove` | L≥R→无操作；R 越尾合法→删至树尾，L 所在行整体删除 | NULL/非同树→ERRPARAM | 无操作 | assert 预留 |
 | `lc_seek` | **软 clamp**, col=excess | C/c==NULL→ERRPARAM | 跳 locend, col=n | 无分配 |
 | `lc_seekline` | **硬 ERR_PARAM** | C/c==NULL→ERRPARAM | paths[0]=root.children | 无分配 |
 | `lc_advance` | clamp 到端 | C/tree==NULL→ERRPARAM | — | 无分配 |

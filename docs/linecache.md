@@ -167,6 +167,8 @@ int lc_remove(lc_Cursor *L, lc_Cursor *R);
 **Parameter validation**:
 - `L==NULL` or `R==NULL` or `!L->tree` or `L->tree != R->tree`: returns `LC_ERRPARAM`
 - Empty interval, inverted order, or L out of bounds: returns `LC_OK`, no-op
+- R beyond the tree end (trailing region) is valid: the removal runs to
+  the tail and L's line is deleted whole (its prefix is not kept)
 
 **Return values**: `LC_OK` (success or no-op), `LC_ERRPARAM` (invalid parameters). After the operation, R is invalidated (tree structure changed); L points to the deletion point.
 

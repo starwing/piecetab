@@ -670,16 +670,21 @@ static int lcD_foldnode(lc_Cursor *C, int lfirst, int l) {
 }
 
 static void lcD_rebalance(lc_Cursor *C, int l) {
+    lc_Node *p;
     assert(l == 0 || l < lcK_levels(C));
     for (; l > 0; --l) {
-        lc_Node *p = lcK_parent(C, l);
+        p = lcK_parent(C, l);
         if (lcN_cc(p->children[lcK_idx(C, p, l)]) >= LC_FANOUT / 2) return;
         assert(lcN_cc(p) > 1);
         if (!lcD_foldnode(C, 0, l)) return;
     }
+    if (l == 0 && lcK_levels(C) > 0) { /* fold the root children */
+        int i = lcK_idx(C, p = &C->tree->root, 0);
+        if (lcN_cc(p->children[i]) < LC_FANOUT / 2 && lcN_cc(p) >= 2)
+            lcD_foldnode(C, 0, 0);
+    }
     while (lcK_levels(C) && lcN_cc(&C->tree->root) == 1) {
-        lc_Node *p;
-        int      i = lcK_idx(C, p = lcK_parent(C, 1), 1);
+        int i = lcK_idx(C, p = lcK_parent(C, 1), 1);
         C->tree->root = *p;
         lcP_free(&C->tree->S->nodes, p);
         C->tree->levels--, C->paths[0] += i;
@@ -700,7 +705,8 @@ static int lcD_rmleaf(lc_Cursor *C, size_t del) {
         del -= lf->bytes[end], removed -= lf->bytes[end];
     memmove(&lf->bytes[C->lnu], &lf->bytes[end], (lc - end) * sizeof(unsigned));
     if (end < lc) lf->bytes[C->lnu] += (unsigned)(C->col - (lc_Delta)del);
-    removed -= (lc_Delta)del + (end == lc ? C->col : 0);
+    /* leftover del at end==lc is the virtual overshoot, not content */
+    removed -= (end == lc) ? C->col : (lc_Delta)del;
     lcM_up(C, l, removed, -(lc_Delta)(end - C->lnu));
     if (lcD_foldleaf(C)) lcD_rebalance(C, l - 1);
     return C->loff = lcL_sumbytes(lcK_leaf(C), 0, C->lnu), 1;
