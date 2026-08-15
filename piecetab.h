@@ -1037,14 +1037,20 @@ static int ptD_foldnode(pt_Cursor *C, int lfirst, int l) {
 }
 
 static void ptD_rebalance(pt_Cursor *C, int l) {
+    pt_Node *p;
     assert(l == 0 || l < ptK_levels(C));
-    for (; l >= 0 && l < ptK_levels(C); --l) {
-        pt_Node *p = ptK_parent(C, l);
-        if (ptN_cc(p->children[ptK_idx(C, p, l)]) >= PT_FANOUT / 2) break;
-        if (ptN_cc(p) < 2) break; /* lone-child root: collapse below */
-        if (!ptD_foldnode(C, 0, l)) break;
+    for (; l > 0; --l) {
+        p = ptK_parent(C, l);
+        if (ptN_cc(p->children[ptK_idx(C, p, l)]) >= PT_FANOUT / 2) return;
+        assert(ptN_cc(p) > 1);
+        if (!ptD_foldnode(C, 0, l)) return;
     }
-    while (ptK_levels(C) > 0 && ptN_cc(&C->tree->root) == 1) {
+    if (l == 0 && ptK_levels(C) > 0) { /* fold the root children */
+        int i = ptK_idx(C, p = &C->tree->root, 0);
+        if (ptN_cc(p->children[i]) < PT_FANOUT / 2 && ptN_cc(p) >= 2)
+            ptD_foldnode(C, 0, 0);
+    }
+    while (ptK_levels(C) && ptN_cc(&C->tree->root) == 1) {
         pt_Node *only = ptK_parent(C, 1);
         int      i = ptK_idx(C, only, 1);
         C->tree->root = *only;
