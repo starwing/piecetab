@@ -453,8 +453,7 @@ PT_API pt_State *pt_open(pt_Alloc *allocf, void *ud) {
     if (allocf == NULL) allocf = &ptS_defallocf;
     S = (pt_State *)allocf(ud, NULL, 0, sizeof(pt_State));
     if (!S) return NULL;
-    memset(S, 0, sizeof(pt_State));
-    S->alloc_ud = ud, S->allocf = allocf;
+    memset(S, 0, sizeof(pt_State)), S->alloc_ud = ud, S->allocf = allocf;
     ptP_init(&S->nodes, sizeof(pt_Node));
     ptP_init(&S->holes, sizeof(pt_Hole));
     ptP_init(&S->trees, sizeof(pt_Tree));
@@ -609,7 +608,7 @@ PT_API const char *pt_next(pt_Cursor *C, size_t *plen) {
     bc = p->bytes[i] - C->poff;
     while (i + 1 >= ptN_cc(p) && --l >= 0)
         i = ptK_idx(C, p = ptK_parent(C, l), l);
-    if (l < 0) return C->poff += bc, plen && (*plen = 0), (const char *)NULL;
+    if (l < 0) return (C->poff += bc, (void)(plen && (*plen = 0))), NULL;
     C->paths[l] += 1, C->off += bc + C->poff, C->poff = 0;
     while (++l <= ptK_levels(C)) C->paths[l] = &ptK_parent(C, l)->children[0];
     return pt_piece(C, plen);
@@ -1169,7 +1168,7 @@ static void ptD_cutpiece(pt_Cursor *C, size_t lo, size_t hi) {
 static void ptD_rmleaf(pt_Cursor *C, size_t del) {
     pt_Node *p = ptK_parent(C, ptK_levels(C));
     int      l = ptK_levels(C), i = ptK_idx(C, p, l), oc = ptN_cc(p);
-    size_t   endpoff = C->poff + del;
+    size_t   endpoff = C->poff + del, doff = C->off + C->poff;
     assert(endpoff <= p->bytes[i]);
     if (!ptM_ishole(p, i) && C->poff > 0 && endpoff < p->bytes[i]) {
         for (l = ptK_levels(C); l >= 0; --l)
@@ -1183,11 +1182,13 @@ static void ptD_rmleaf(pt_Cursor *C, size_t del) {
         C->paths[l] = &p->children[0], C->off = 0, C->poff = 0;
     else if (ptK_idx(C, p, l) == ptN_cc(p)) {
         C->paths[l] -= 1;
-        C->poff = p->bytes[ptN_cc(p) - 1];
-        C->off -= p->bytes[ptN_cc(p) - 1];
+        C->poff = p->bytes[ptN_cc(p) - 1], C->off -= p->bytes[ptN_cc(p) - 1];
     }
     if (ptN_cc(p) < oc && l > 0)
         ptD_rebalance(C, l - 1), ptM_up(C, ptK_levels(C), 0);
+    p = ptK_parent(C, ptK_levels(C)), i = ptK_idx(C, p, ptK_levels(C));
+    if (C->poff == p->bytes[i] && doff < ptK_bytes(C))
+        ptK_forwardoff(C, 0); /* rest at the head of the next piece */
 }
 
 static int ptD_cowpaths(pt_Cursor *L, pt_Cursor *R) {

@@ -33,6 +33,7 @@ tests/spantree_test_fanout4
 tests/spantree_test_fanout8
 tests/*.gen.inc
 fuzz/*_fuzz
+fuzz/*_fuzz_dbg
 fuzz/pt_fuzz_fast
 fuzz/pt_replay
 

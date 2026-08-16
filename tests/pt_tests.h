@@ -162,6 +162,10 @@ PT_STATIC int pt_checkcursor(pt_Cursor *C, size_t expected_off) {
     check(C->poff <= p->bytes[i],
           "[chk] POFF out of bounds poff=%lu bytes[%d]=%lu\n", test_lu(C->poff),
           i, test_lu(p->bytes[i]));
+    check(C->poff < p->bytes[i] || pt_offset(C) == ptK_bytes(C),
+          "[chk] PIECE END mid-tree poff=%lu len=%lu off=%lu bytes=%lu\n",
+          test_lu(C->poff), test_lu(p->bytes[i]), test_lu(pt_offset(C)),
+          test_lu(ptK_bytes(C)));
     return 1;
 }
 

@@ -23,14 +23,23 @@
 
 #define FZ_OPLOG "/tmp/pt_oplog.txt"
 
+/* full-tree check frequency: O(tree size) per call, so fuzz mode checks
+ * every FZ_CHECK ops and replay mode checks every op (crash pinpointing) */
+#define FZ_CHECK 256
+
 static char fz_buf[64];
+static char fz_rdbuf[64]; /* read target, never inserted into the tree */
 
 /* structural checker for the fuzz: child-count bounds, byte sums and
  * hole-size caps. The test checker's ADJACENT-literals clause is
  * skipped — zero-copy merging is an edit-point opportunity, not a
- * library invariant (pt_compact exists to coalesce such states). */
-static int fz_checknode(const pt_Node *n, int rl, int mc, int *has_hole) {
-    int i, hh;
+ * library invariant (pt_compact exists to coalesce such states).
+ * Returns the subtree byte sum (0 also signals failure; a legal empty
+ * node cannot occur — min-child-count is enforced) so parents verify
+ * bytes[i] without a second ptN_sumbytes pass. */
+static size_t fz_checknode(const pt_Node *n, int rl, int mc, int *has_hole) {
+    int    i, hh;
+    size_t sum = 0;
     check(n->child_count >= mc, "[chk] N[%p] rl=%d cc=%d<%d\n", (void *)n, rl,
           n->child_count, mc);
     check(n->child_count <= PT_FANOUT, "[chk] N[%p] rl=%d cc=%d>%d\n",
@@ -38,6 +47,7 @@ static int fz_checknode(const pt_Node *n, int rl, int mc, int *has_hole) {
     *has_hole = 0;
     for (i = 0; i < n->child_count; ++i) {
         if (rl == 0) {
+            sum += n->bytes[i];
             if (ptM_ishole(n, i)) {
                 check(n->bytes[i] > 0 && n->bytes[i] <= PT_MAX_HOLESIZE,
                       "[chk] HOLE rl=%d i=%d bytes=%lu > %d\n", rl, i,
@@ -48,18 +58,18 @@ static int fz_checknode(const pt_Node *n, int rl, int mc, int *has_hole) {
                       rl, i, test_lu(n->bytes[i]));
         } else {
             pt_Node *c = n->children[i];
-            if (!fz_checknode(c, rl - 1, mc ? PT_FANOUT / 2 : 0, &hh)) return 0;
-            check(n->bytes[i] == ptN_sumbytes(c, 0, c->child_count),
+            size_t   cs = fz_checknode(c, rl - 1, mc ? PT_FANOUT / 2 : 0, &hh);
+            check(n->bytes[i] == cs,
                   "[chk] INNER rl=%d i=%d bytes=%lu sum=%lu node=%p\n", rl, i,
-                  test_lu(n->bytes[i]),
-                  test_lu(ptN_sumbytes(c, 0, c->child_count)), (void *)c);
+                  test_lu(n->bytes[i]), test_lu(cs), (void *)c);
             check((ptM_ishole(n, i) != 0) == (hh != 0),
                   "[chk] MASK rl=%d i=%d mask=%d has_hole=%d\n", rl, i,
                   ptM_ishole(n, i) != 0, hh);
             if (hh) *has_hole = 1;
+            sum += cs;
         }
     }
-    return 1;
+    return sum;
 }
 
 static int fz_checktree(pt_Buffer b) {
@@ -69,19 +79,17 @@ static int fz_checktree(pt_Buffer b) {
     if (b->root.child_count == 0) {
         check(b->bytes == 0, "[chk] EMPTY tree has bytes=%lu\n",
               test_lu(b->bytes));
-    } else if (b->levels > 0 || b->root.child_count > 1) {
-        if (!fz_checknode(&b->root, b->levels, 1, &hh)) return 0;
-    } else
+    } else if (b->levels > 0 || b->root.child_count > 1)
+        check(fz_checknode(&b->root, b->levels, 1, &hh) == b->bytes,
+              "[chk] ROOT bytes=%lu\n", test_lu(b->bytes));
+    else
         check(b->root.bytes[0] > 0, "[chk] SINGLE bytes=%lu\n",
               test_lu(b->root.bytes[0]));
-    check(b->bytes == ptN_sumbytes(&b->root, 0, b->root.child_count),
-          "[chk] ROOT bytes=%lu sum=%lu\n", test_lu(b->bytes),
-          test_lu(ptN_sumbytes(&b->root, 0, b->root.child_count)));
     return 1;
 }
 
 static void runop(pt_Cursor *C, fz_Op *o, FILE *lf) {
-    size_t exp = o->off;
+    size_t exp = o->off, k, n;
     if (lf) fz_write(lf, o);
     assertok(pt_locate(C, o->off) == PT_OK);
     if (o->op < 40) {
@@ -92,15 +100,25 @@ static void runop(pt_Cursor *C, fz_Op *o, FILE *lf) {
     } else if (o->op < 80) {
         assertok(pt_splice(C, o->extra % 20, fz_buf, o->len) == PT_OK);
         exp += o->len;
-    } else if (o->op < 92) {
+    } else if (o->op < 90) {
         assertok(pt_advance(C, (pt_Delta)o->extra) == PT_OK);
         exp = pt_offset(C); /* the advance clamps at the end */
         assertok(pt_remove(C, o->len) == PT_OK);
+    } else if (o->op < 93) {
+        k = o->extra % 5 + 1;
+        while (k && pt_next(C, &n) != NULL) --k;
+        exp = pt_offset(C);
+    } else if (o->op < 96) {
+        k = o->extra % 5 + 1;
+        while (k && pt_prev(C, &n) != NULL) --k;
+        exp = pt_offset(C);
+    } else if (o->op < 98) {
+        pt_read(C, fz_rdbuf, o->len % 17);
+        exp = pt_offset(C);
     } else {
         assertok(pt_edit(C, o->extra % 20, fz_buf, o->len % 17) == PT_OK);
         exp += o->len % 17;
     }
-    assertok(fz_checktree(C->tree));
     assertok(pt_checkcursor(C, exp));
 }
 
@@ -115,7 +133,10 @@ int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "replay") == 0) {
         fz_Op o;
         assertok(freopen(argc > 2 ? argv[2] : FZ_OPLOG, "r", stdin));
-        for (n = 0; fz_read(&o); ++n) runop(&C, &o, NULL);
+        for (n = 0; fz_read(&o); ++n) {
+            runop(&C, &o, NULL);
+            assertok(fz_checktree(C.tree)); /* every op: pinpoint the bug */
+        }
         printf("replayed %d ops OK\n", n);
     } else {
         fz_Op o;
@@ -128,6 +149,7 @@ int main(int argc, char **argv) {
             o.len = fz_rnd() % 20;
             o.extra = fz_rnd() % 40;
             runop(&C, &o, lf);
+            if ((i & (FZ_CHECK - 1)) == 0) assertok(fz_checktree(C.tree));
         }
         printf("fuzz OK (seed %u, ops %d, bytes %lu)\n", seed, n,
                (unsigned long)pt_bytes(C.tree));

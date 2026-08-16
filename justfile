@@ -21,6 +21,11 @@ fuzz-pt seed='1': (fuzz-run "pt" seed)
 fuzz-lc seed='1': (fuzz-run "lc" seed)
 fuzz-replay lib path: (fuzz-run lib "replay" path)
 
+# debug fuzz: ASan/UBSan build, precise fault isolation
+dfz-sp seed='1': (dfz-run "sp" seed)
+dfz-pt seed='1': (dfz-run "pt" seed)
+dfz-lc seed='1': (dfz-run "lc" seed)
+
 # coverage
 
 cov: clean-gcda (cov-run "tests/linecache_test_fanout4" INCS) (cov-run "tests/linecache_test_fanout8" INCS) (cov-run "tests/piecetab_test_fanout4" INCS) (cov-run "tests/undotree_test" INCS) (cov-run "tests/cellgrid_test" INCS) (cov-run "tests/termfeed_test" INCS) (cov-run "tests/spantree_test_fanout4" INCS) (cov-show "piecetab.h linecache.h undotree.h cellgrid.h termfeed.h spantree.h")

@@ -5025,4 +5025,75 @@ TEST(compact_oom_makechain) {
     pt_close(S);
 }
 
+/* edit whose deletion stops mid-literal (rmleaf splits the piece): the
+ * cursor must not rest at a mid-tree piece end, and reads must run
+ * through the delete point. See audit_pieceend_pt.md. */
+TEST(edit_pieceend_escape) {
+    static char f1[] = "abc", f2[] = "abc";
+    static char deep[40][8];
+    pt_State   *S = pt_open(&test_alloc, NULL);
+    pt_Buffer   b, o;
+    pt_Cursor   c, d;
+    char        rd[17];
+    size_t      n, k;
+    pt_Node    *p;
+    int         i;
+    const char *pc;
+
+    /* flat: two pieces in one leaf container (levels == 0) */
+    b = pt_from(S, f1, 3);
+    pt_seek(&c, b, 3);
+    pt_append(&c, f2, 3);
+    o = b;
+    b = pt_commit(&c);
+    pt_release(o);
+    pt_seek(&c, b, 1);
+    asserteq(pt_edit(&c, 1, "X", 1), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 2));
+    p = ptK_parent(&c, ptK_levels(&c)), i = ptK_idx(&c, p, ptK_levels(&c));
+    asserteq(c.poff < p->bytes[i], 1); /* never mid-tree at a piece end */
+    n = 9;
+    pc = pt_piece(&c, &n);
+    assertok(pc != NULL);
+    asserteq(n, 1);
+    asserteq(memcmp(pc, "c", 1), 0);
+    n = pt_read(&c, rd, 16);
+    rd[n] = '\0';
+    assertstreq(rd, "cabc");
+    pt_seek(&d, c.tree, 0);
+    n = pt_read(&d, rd, 16);
+    rd[n] = '\0';
+    assertstreq(rd, "aXcabc");
+    pt_release(c.tree), pt_release(b);
+
+    /* deep: 40 pieces spanning three inner levels (levels == 3) */
+    for (k = 0; k < 40; ++k) memcpy(deep[k], "abc", 3);
+    b = pt_from(S, deep[0], 3);
+    pt_seek(&c, b, 3);
+    for (k = 1; k < 40; ++k) pt_append(&c, deep[k], 3);
+    o = b;
+    b = pt_commit(&c);
+    pt_release(o);
+    pt_seek(&c, b, 1);
+    asserteq(pt_edit(&c, 1, "X", 1), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 2));
+    p = ptK_parent(&c, ptK_levels(&c)), i = ptK_idx(&c, p, ptK_levels(&c));
+    asserteq(c.poff < p->bytes[i], 1); /* never mid-tree at a piece end */
+    n = 9;
+    pc = pt_piece(&c, &n);
+    assertok(pc != NULL);
+    asserteq(n, 1);
+    asserteq(memcmp(pc, "c", 1), 0);
+    n = pt_read(&c, rd, 16);
+    rd[n] = '\0';
+    assertstreq(rd, "cabcabcabcabcabc");
+    pt_release(c.tree), pt_release(b);
+
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
 #include "piecetab_test_fanout4.gen.inc"
