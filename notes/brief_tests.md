@@ -48,7 +48,7 @@
   - pt_edit 插入会分裂出 hole piece（`[0,off)` + hole + 剩余），piece
     数 = 1 + 编辑次数；断言 piece 布局前先用 `doc:piece("len"/"next")`
     遍历 dump 实际结构（或先跑调试脚本验证）
-  - 多层合成断言用 `e.sc:intern({fg=.., bg=..})` 取 handle 对比，不写
+  - 多层合成断言用 `e.comp:intern({fg=.., bg=..})` 取 handle 对比，不写
     死 handle 数值（intern 顺序依赖渲染时机）
 - **调试**：独立脚本（/tmp/*.lua）+ fake term + `io.write` 复现渲染，
     对应 C 侧 `test_log`（AGENTS.md 调试节）；渲染断言用 cell() 逐格
@@ -93,9 +93,32 @@
 - **可覆盖的 OOM 路径必须覆盖**：`drainpool` + `oom_alloc` 精准触发，不留未覆盖 OOM 分支
 - **可覆盖的逻辑分支必须覆盖**：确无法覆盖须写 **brute test（穷举）** 证明各输入组合正确
 
+## 覆盖率纠偏（2026-08-14 定案，spantree 绑定教训）
+
+- **95% 分支门槛含豁免余量**：确认不可达/幻影的分支逐条报告豁免即可，
+  **禁止以覆盖率为名改写代码逻辑或删惯用法守卫**——`if
+  (luaL_newmetatable(...))` 幂等注册、`__gc` 的 NULL 幂等守卫、OOM
+  检查均属惯用法，删之有害。brief_refine §30 的"删防御检查"只适用于
+  API 契约已保证的冗余分支，不适用于守卫惯用法。
+- 豁免报告要求：每条附证据——结构保证论证（枚举恒界/契约）、gcov
+  幻影证据（DA 已执行行上的 BRDA 边）、不可注入路径（如 lua_Alloc
+  无 OOM 注入手段）。
+- **luals 零诊断**：无法干净消解的诊断直接注释豁免
+  （`---@diagnostic disable-next-line: xxx`），**不写绕过代码**（如
+  ANY 变量凑类型）。
+- **shell 工具走 justfile**：subagent 权限白名单只放行 `just`；需要
+  awk/sed/python 等 shell 工具时，**先写进 justfile recipe 再
+  `just` 调用**（build.just 已有 cov-lines/cov-unbranched 范式）。
+  Coder 应意识到：只要封装进 just 即可使用任何工具。
+
 ## 编写要点
 
 - 每个测试：调用 API 后校验树不变量 + 游标，结束断言无泄漏（如 `S->nodes.live_objs == 0`）
+- **编辑循环每步必挂 `sp_checkcursor`**（2026-08-15 教训：differ/fill_brute
+  曾只验树不验游标，mergeleft 光标脱节 bug 潜伏到 fuzz 才炸——树校验
+  对光标状态失明；`checktree` 绿 ≠ 光标对。pt/lc 测试早已挂
+  checkcursor，spantree 补齐）。游标期望位置按操作语义给：append/
+  splice/fill = pos+len，insert/remove = pos
 - 边界/内部路径首选 `cacheV` 精确树，大量 break 用 `lc_rscanV`
 - C89：局部变量声明在函数开头（`-Wdeclaration-after-statement` 报错）
 - `lc_rscanner` 原地修改数组，重复使用须重建

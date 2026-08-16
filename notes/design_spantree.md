@@ -3,12 +3,35 @@
 > 源自 marktree 调研讨论，背景分析见 `notes/research_marktree.md`
 > （尤其第六节定位方式对比、第七节 extmark 模型）。
 > 状态：**arbiter 单层模型已定案**（2026-08-12：方案 E 取代层向量
-> 方案 A，论证见 §六）；开放问题已决议（§九）；attr 不透明 id 与
-> sc 分工见 §6.5；实施计划见 plans/plan_spantree.md。
+> 方案 A，论证见 §六）；开放问题已决议（§十）；attr 不透明 id 与
+> sc 分工见 §6.5；**ns 标记与按 ns 操作定案见 §九**（2026-08-15 初
+> 案：第三度量通道 + 剪枝下降；2026-08-15 三轮审核修订：arb 出参
+> mask + sp_addns/sp_delns 封装，fill 签名不变——定案 v3；
+> 2026-08-15 四轮审核修订：spM_up 统一 remask（ptM_up 同构）、
+> 维护清单补全（makechain/stitchnode/merge 祖先链）、树内 ns 域
+> [1..SP_MASK_BITS] + op 载荷 ns 无限（§8.2 同步修订）、
+> sp_clear 批量剪枝清除（§9.4a，ptC_freeze 稀疏同构）、
+> filtered next inclusive 语义——定案 v4）；
+> 2026-08-16 五轮审核修订：filtered next 落点由"匹配段尾"改为
+> "下一段头"（变体 B——落段尾破坏 peek 配对与导航层不变式，
+> 论证与实测见 §9.2、notes/reports/audit_pieceend_pt.md；
+> 同轮：pt_checkcursor 补禁树中段尾校验（lc 同款移植）、
+> ptD_rmleaf 裂段光标逃逸修复）——定案 v5。
+> 2026-08-16 六轮审核修订：变体 B 回滚——piecetab 侧实测使用方
+> 未简化（pt_read/ptZ_append 反而更复杂），审计结论"exclusive
+> 才是使用方使用最简的形式"；sp_next 定案 exclusive（pt_next
+> 逐行同构），消费循环 = style 预查 + next 剪枝步进；树内严禁
+> 段尾态纪律恢复（sp_checkcursor 禁则 + spK_offtail 收尾）——
+> 定案 v6。
+> 实施计划见 plans/plan_spantree_ns.md。
 >
 > 设计方法论：**API 语义先行，数据结构反推**。边界语义单方向决定结构
 > 可行域——字节缝语义（区间可为 0）排除 B+ 计量树；字节覆盖语义
 > （L>0）排除 B 树点标记。本文档所有结构决策皆由 API 语义倒推。
+>
+> Lua 绑定与 editor 接入定案见 `notes/design_spantree_lua.md`
+> （2026-08-14：compositor C 化 + arbiter 语义 + API 摩擦检查结论
+> spantree.h 零改动）。
 
 ## 一、定位
 
@@ -118,10 +141,19 @@ attribute 都被其他写者覆盖，也该有【我写过】的痕迹"。而记
 **机制**：
 - 段 = `(len, sp_Id)`——单 id，无层槽
 - 写入唯一原语 `sp_fill(C, id, len)`：对区间内每段调
-  `arbiter(ud, 段当前 id, 传入 id)`，**写返回值**（0 = 清段，arbiter
-  可自行调 id finalizer；**0 也进 arbiter**，spantree 不特判）
-- id 空间 = attr 编码 ∪ **operator 编码**（写者/操作可编码进 id：如
-  负数或大 id 区间；挥发 id 用后清空 intern 映射）
+  `arbiter(ud, id, 段当前 id, &mask)`，写返回 id 与 mask（0 = 清段，
+  arbiter 可自行调 id finalizer；**0 也进 arbiter**，spantree 不特判）
+- **2026-08-16 修订（id 生命周期，§9.7 定案）**：arb 回调升级为
+  **三态契约**——`arb(0, old)` = 死亡事件（合并/删除/freetree 由
+  树补发；真清写同形）、`arb(in, 0)` = 新生事件（写空段/复制/
+  继承，**必须原样返回 in**）、`arb(in, old)` = 合并决策（出口
+  双向计数：ret != old → old-- / ret != 0 → ret++；filterleaf
+  以保护 +1 使出口 −1 永不提前归零，见 §9.7）。refcnt 依据 =
+  report_sp_idref.md 事件矩阵审计。
+- id 空间 = attr 编码 ∪ **operator 编码**（写者/操作/ns 可编码进
+  id：如负数或大 id 区间；挥发 id 用后清空 intern 映射）——
+  **2026-08-15 修订**：ns 不进 id，走叶 mask 并排数组（第三度量
+  通道），arb 经 sp_addns/sp_delns 报告结果 ns 集（§九 v3）
 - 合成 = 无损结构：`merged = {parent = {w: old_contrib, ...}}`（写者
   标签 + 历史树，存 sc 的 intern 表，**树完全无感**）
 
@@ -253,7 +285,14 @@ style id 同款抽象：cellgrid 是最终消费者但不管 attr 格式，spant
   （层 levels），rt[1] = 叶容器们（层 levels-1），rt[levels-fl] =
   fl 层节点们。摘取/驻留必须按层落槽，禁止跨层混放
 - 不变式（既有）：**除非 Cursor 指向整树结尾，否则 Cursor 不指叶尾**
-  （findleaf 段尾前进到下一段；locend 树尾态 poff=末段长）
+  （findleaf 段尾前进到下一段；locend 树尾态 poff=末段长）。
+  **2026-08-16 v6 复核强化（exclusive 定案）**：导航层
+  （seek/locate/advance/next/prev）全部落段头/段内/树尾，零产出
+  树中段尾态——next 改 exclusive（跳过当前段落下一匹配段头）保
+  住此不变式；编辑层逃逸（插入段尾/合并段尾落点）经 spK_offtail
+  于 API 边界收尾（树尾豁免；fill/append 逃逸实测，remove 路径
+  不逃逸）；sp_checkcursor 补禁则校验（pt/lc 同款：offset >= bytes
+  豁免，否则 poff < 段长）
 
 #### 光标契约（2026-08-14 二轮审核定案）
 
@@ -263,18 +302,22 @@ style id 同款抽象：cellgrid 是最终消费者但不管 attr 格式，spant
 |---|---|---|---|
 | 正常态 | [0, 段长) | 段前字节 | 段槽 |
 | 树尾态 | 末段长 | bytes - 末段长 | 末段槽 |
-| 虚拟态 | 0 | ≥ bytes | 末段槽（树尾路径） |
+| 虚拟态 | ≥ 末段长 | bytes - 末段长 | 末段槽（树尾路径） |
 
+- **虚拟态 = 树尾态 + 超出量入 poff**（2026-08-16 定案）：off 恒
+  < bytes（i 恒有效），超出树尾的部分全进 poff（poff ≥ 段长）；
+  linecache `lnu == breaks[i]` 同款。段内判定 = `poff < 段长` 单
+  条件——off 项只剩空树守卫语义（bytes == 0 时 off == 0 == bytes）
 - 虚拟态由 seek/locate/advance 越尾分支与 spI_pad 产生；**虚拟态回退
   入树须真实重定位**——树外字节无树结构可减，不能走 backwardoff
-- 树尾态 off == bytes（poff=末段长）与虚拟态（poff=0）区分：前者是
+- 树尾态（poff == 末段长）与虚拟态（poff > 末段长）区分：前者是
   末段内位置，后者是树尾之外
 
 **seek/locate/advance 调用清单（例外论证，禁其余调用点）**：
 
 | 调用点 | 原语 | 理由 |
 |---|---|---|
-| sp_fill | sp_seek 构造 R | advance 空树 no-op 不可用（v8） |
+| sp_fill | sp_seek 构造 R | seek 空树即可落虚拟态（advance 亦可，seek 为 v8 流程保留） |
 | sp_fill | sp_locate(C, off0) | pad R 动树后 C 回位（v8） |
 | spD_remove | sp_advance(&R, len) | R 为 C 的栈副本，构造区间右端的自然原语 |
 | sp_insert | sp_advance(C, -ins) | insert 语义：核心插入收尾在插入段尾，光标回插入点（piecetab pt_insert 同款） |
@@ -283,11 +326,16 @@ style id 同款抽象：cellgrid 是最终消费者但不管 attr 格式，spant
 | spF_filterleaf | sp_advance(C, ±len) | 区间右边界定位与回退（len ≤ 段剩余恒成立） |
 | spF_fillrange | sp_locate ×2 | 阶段 5 绝对位置重染（步骤 10） |
 
-**sp_advance 实现（本轮修订）**：不再调 sp_locate（公共 API 互调 +
-从头重扫）。d 按符号分路，规避 size_t 回绕比较：向前越尾 →
-locend + poff=0 + off=off+d 直设（虚拟态不夹）；虚拟起点回退入树 →
-findleaf 重定位（夹 0）；树内回退 → backwardoff(min(off, step))
-（自然夹 0）。
+**sp_advance 实现（2026-08-16 二轮修订：虚拟态统一，advance =
+相对 seek）**：不再调 sp_locate（公共 API 互调 + 从头重扫）。
+**空树不再 no-op**——no-op 是 piecetab 无虚拟态时代的结论（越尾夹树
+尾，空树树尾 = 0）；spantree 越尾进虚拟态，advance(5) 空树 = 虚拟
+offset 5，与 seek(5) 一致（pt 式 d==0 早退同删：d==0 全路径幂等）。
+负向两分支 + 回绕比较：`-d > off` → backwardoff(off)（自然夹 0）；
+否则 backwardoff(-d)——**虚拟起点经 backwardoff 天然完备**（poff 部
+分覆盖"留虚拟/退入末段"，超出 poff 时目标 ≤ 末段首，爬层自 idx−1
+起步正确），无需 findleaf 特判（初版三分支冗余）。向前越尾 →
+locend + poff += (off+d − bytes)（超出量入 poff，虚拟态不夹）。
 
 **内部函数光标契约**：
 
@@ -296,8 +344,9 @@ findleaf 重定位（夹 0）；树内回退 → backwardoff(min(off, step))
 | spK_findleaf(C, l, &poff) | paths[0..l-1] 有效、off = 前缀路程 | 完整 paths、poff 段内、off 段前 |
 | spK_locend(C) | 树非空 | 树尾态 |
 | spK_forwardoff / backwardoff | 正常态、目标在树内 | 正常态、前进/后退 d |
-| spD_remove(C, len) | 任意 | 光标于删除点（offset 不变） |
-| spI_insert(C, ins, useleft) | 光标于插入点（任意态含虚拟） | 插入段尾（poff=ins，恒；useleft 只定继承方向，光标收尾由公共 API 派生：append 即此态，insert 经 advance 回插入点） |
+| spK_offtail(C) | 任意 | 段内/树尾态（树中段尾步进下一段头，树尾豁免；树内严禁段尾纪律的 API 边界收尾） |
+| spD_remove(C, len) | 任意 | 光标于删除点（offset 不变，段尾态已收尾） |
+| spI_insert(C, ins, useleft) | 光标于插入点（任意态含虚拟） | 插入段尾（poff=ins，恒；useleft 只定继承方向；API 边界经 spK_offtail 收尾——append 即此态，insert 经 advance 回插入点） |
 | spI_splitins(C, len, id) | 光标于插入点 | 插入段尾（poff = len） |
 | spI_merge(C) | 插入段尾（assert poff == 段长） | 合并段尾（offset 不变） |
 | spI_pad(C) | 任意 | 树尾态（offset 不变） |
@@ -459,11 +508,16 @@ sp_fill(C, id, len):
    论证 8 已证本算法输出 = 逆操作场景，无溢出
 4. **严格段数守恒**（沿自 v4）：摘挂内容 = 整段们（边界两半不摘
    不裂）→ 剥回段数 ≤ 摘出段数 → append 需求 ≤ 空槽 → 剥回不溢出
-5. **arb 契约**：剥洋葱每段恰好一次 + 后置裂两次 filterleaf 各算
-   一次（nidL/nidR 在 filterleaf 内对当前段自算）；合并（规范形）
-   不调 arbiter；pad notice（R 虚拟时 arb(0,0) 恰一次，返回值弃用）
-   是物化通知非染色写入，不计入段染色——fill_virtual 断言
-   arb_notifypad == 2 = pad notice + 物化段染色
+5. **arb 契约**：合并决策对每段恰一次（剥洋葱 + 后置裂两次
+   filterleaf 各算一次，nidL/nidR 在 filterleaf 内对当前段自
+   算）；合并/死亡经 `arb(0, id)`、复制新生经 `arb(id, 0)` 事件
+   调用（§9.7 三态契约，2026-08-16 修订）；pad notice（R 虚拟
+   时 arb(0,0,&m) 恰一次，返回值与 m 弃用）是物化通知非染色写
+   入，不计入段染色——fill_virtual 断言 arb_notifypad == 2 =
+   pad notice + 物化段染色。§九 v3 起 arb 调用带
+   `sp_Mask *mask` in/out（in = 段当前 mask；out = 新 id 的精
+   确 ns 集，经 sp_addns/sp_delns 操作，树写回），id == 0 时树
+   强制 mask = 0
 6. **rt 容量**：剥洋葱逐节点下放（每次 ≤ FANOUT 到空槽）→ 每槽
    恒 ≤ FANOUT；摘挂阶段每层槽 ≤ FANOUT（兄弟数上限）
 7. **复杂度**：O(定位 + 段数 × arbiter + 摘挂层循环)；一次扫描
@@ -590,6 +644,42 @@ sp_fill(C, id, len):
   扩展、实前缀+虚拟尾（跨叶 filterrange）
 - **R == bytes（树尾）**：不 pad，仅 locend 修正 poff（advance 越过
   尾会置 poff=0，locend 恢复末段长）
+
+### 6.7 删除 stitch 的左邻吸收（spD_mergeleft 重写定案，2026-08-15）
+
+> 动机：spD_stitch 的左叶容器被 cutrange 掏空（cc==0）且 rt[0] 非空时，
+> 走 mergeleft 而非 mergeleaf。初版把 rt[0] 首段"推入"左邻容器——合并段
+> 跨过删除空隙盖住光标位置，后续 splitins 在失效光标上崩溃（mergeleft
+> 光标脱节 bug，report_sp_mergeleft_handoff.md）。重写后合并方向反转。
+> piecetab/linecache 无此函数（无 id 合并概念），独有逻辑。
+
+**合并方向（定案）**：左邻容器尾段**拉入** rt[0] 首段——合并段落入
+cut 侧的空容器，光标留在 cut 链上只左移 bj（join 段长），不走失效
+光标。
+
+- **叉点（fork）**：自叶层向上首个 L 路径 `idx > 0` 的层——L 路径
+  贴最左沿止于此，左邻子树挂在叉点槽 i-1 上；全路径最左（无叉点）
+  = 无左邻，mergeleft 早退。fork 是"左邻链"与"共享祖先"的分界：
+  链内（fork 至叶）逐层记账，fork 以上共享 cut 侧祖先、一次
+  `spM_up(fork-1, -bc)`；dropleftchain 以 fork 为链根（chain[fork]
+  = 叉点左兄弟子树），叉点层的删/折同样在此层同步 paths[fork]。
+- **pull-more**：join 后若左邻容器欠满（cc < FANOUT/2），继续把尾部
+  段拉入 rt[0] 前部（spN_makespace+spN_copy 逐段），直到容器健康
+  或空。保证"健康或空"、绝不半空——后续折叠永不携带欠满孩子；
+  rt[0] 装满即停，幸存容器经 dropleftchain 折叠。拉取的槽是移动
+  不是死亡，零 arb 事件（与 join 不同）。
+- **spD_dropleftchain**：叉点左兄弟链向下至叶容器——链上自下而上
+  （spD_foldbelow）删空节点 + 欠满者折入左兄弟（spD_foldleft），
+  首个健康节点即停；叉点层的删/折同步 `paths[fork] -= 1`；
+  链头无左兄弟（i==0）走 spD_foldright 折入光标子节点（合并：光标
+  槽右移 cN；平衡：子节点移入幸存者——两路都需调用方修正 paths）。
+- **foldleft/foldright 返回契约**：1 = 并入（调用方 free 节点 +
+  删槽）；0 = 平衡（两节点保留）。
+- **光标落点**：合并段位于 rt[0] 第 e 槽（e = 追加拉取的段数），
+  光标指其内部空隙边界：`off -= bj, poff = bj, paths[l] += e`。
+- **记账**：左邻链每层 `bytes[i] -= bc` + `mask[i] = OR(children[i])`
+  （自 fork 到叶），fork 以上经 `spM_up(L, fork-1, -bc)`。
+
 ## 七、高亮引擎接口抽象（支持后期换框架）
 
 调研（notes/research_highlighter.md）表明四类引擎输出归一为
@@ -642,8 +732,11 @@ set_extmark 的 ~35 个 opts 键（keysets_defs.h:29-67），分三类：
   经 arbiter 写入。**gravity 在身份层模拟**（漂移收敛规则见
   research_marktree.md 3.2 节：left→删除点、right→新文本后），
   spantree 本体不引入 gravity
-- **ns 映射到 id 空间分组**：ns 动态无限——身份层为每个 ns 维护
-  写者标识，经 arbiter 的 operator 机制（§6.3）撤销/更新，树无感
+- **ns 动态无限由身份层承载（2026-08-15 v4 修订）**：extmark 动态
+  ns 语义由身份层维护——映射到树内 ns 热槽（1..SP_MASK_BITS，mask
+  通道，§九；复用策略后续定）；冷 ns 查询 = `sp_next(0)` 全扫 +
+  intern 解码谓词（身份层持 intern，可判任意 merged id 的 ns 成员），
+  零树改动。树内 ns 域有限（§9.2），无限语义在消费端兑现
 - `ephemeral` + decoration provider 与本设计"快层不进树 + arbiter
   合成"同构，理念兼容零成本
 - **hint/vtext 调和条款（2026-08-12）**：vtext 作**注入节点**挂树
@@ -654,7 +747,386 @@ set_extmark 的 ~35 个 opts 键（keysets_defs.h:29-67），分三类：
 - 即使最终不逐字兼容，extmark API 也是身份层 API 的**免费需求规格**
   （经考验、文档完善），按其语义骨架设计避免闭门造车
 
-## 九、开放问题
+## 九、ns 标记与按 ns 操作（2026-08-15 定案 v4，四轮审核修订）
+
+> 动机链（第一性推演）：染色模型（存合成结果、丢身份）→ 清理/查询
+> 须扫描或消费端跟踪区间 = 语义摩擦 → 需"按 ns"操作（del/find）
+> → 高效 = 剪枝下降，不能全扫（GB 文件下扫描则建树无意义）→ 剪枝
+> 靠子树聚合（度量骨架的第三通道）。方案推演与否决记录见
+> notes/reports/research_spantree_usage.md。
+>
+> 抽象演进记录（三轮教训）：
+> - v1：fill 带 ns 参数 + 操作式 mask 维护——推演依赖 arb 行为与
+>   动词一致，arb 自由返回时无法甄别（Parse not validate 违背）
+> - v2：arbiter 出参精确 mask / ns 通道投影——mask 布局泄漏进
+>   arb 接口（用户：**用户不应知道 ns 用 mask 存储**）
+> - **v3 定案**：fill 签名不变（ns 语义全进 id，op 编码，§6.3
+>   原设计）；arb 加 `sp_Mask *mask` in/out 出参，**经 sp_addns/
+>   sp_delns 操作，不直接写位**（位布局封装）；mask 定位 =
+>   附加优化（next/prev 剪枝），fill 全范围遍历（fill 本来就不
+>   管 ns——写操作必须触达 range 内所有段）。
+> - arb 契约：out mask = 返回 id 的**精确 ns 集**（arb 自解码自答；
+>   树零校验）。id == 0 时树强制 mask = 0（公理收敛，不信 arb）。
+
+### 9.1 方案空间与定案
+
+| 方案 | 否决/采纳 | 理由 |
+|---|---|---|
+| 扫描 + 谓词（fill(clear(w), 全域)） | 保底路径 | O(段数)；del_ns 全树写本就 O(段数)，谓词版仅省 arb 调用 |
+| id2node + refkey（marktree 式 O(1)） | 否决 | 前提 parent 指针（本骨架无）；搬 key 处处维护 = 最贵不变式（research §1.1/建议 2） |
+| bloom filter 节点摘要 | **否决（用户）** | 位不可清空——ns 状态可删除，bloom 无删除 |
+| mask + 溢出位（冷热分离） | **否决（用户）** | 只是指定某 ns 当 "others"，后续开发债 |
+| ownerf 回调（用户管 id→owner 映射） | 否决 | merged 值属多 ns——ownerf 必须返 mask 而非单 owner |
+| id 高 6 位编码 ns | 否决 | merged 值多 ns 编码不下；id 全宽留给身份 |
+| fill 带 ns 参数 + 操作式 mask 维护 | **被 v3 取代** | 推演与 arb 结果脱钩，无法甄别（Parse not validate 违背） |
+| arb 出参精确 mask（v2） | **被 v3 吸收** | 方向对；mask 布局封装进 sp_addns/sp_delns 后成 v3 |
+| ns 通道投影（splitf/joinf） | 否决 | 每段多两次回调 + 接口三重奏，抽象过度；v3 更简 |
+| **arb 出参 mask + addns/delns 封装 + fill 不变（v3）** | **定案** | arb 报告结果 ns 集（与写回 id 同源，构造级同步）；位布局封装；fill 零迁移 |
+
+**ns 定案**：命名 ns（namespace，与 marktree 一致）；**0 = 无归属**；
+1..上限有效（上限 = sp_Mask 位宽：64 位平台 64、32 位平台 32——
+C89 无 long long，sp_Mask = size_t）。位布局（bit(ns-1)）对用户
+隐藏，全部经 sp_addns/sp_delns。
+
+### 9.2 API 定案（v4）
+
+```c
+typedef size_t sp_Mask;   /* ns 位集；位布局对用户隐藏 */
+#define SP_MASK_BITS (sizeof(sp_Mask) * CHAR_BIT)
+
+/* mask 操作：唯一合法入口。ns == 0 / 越界 -> SP_ERRPARAM。 */
+SP_API int sp_addns(sp_Mask *mask, int ns);
+SP_API int sp_delns(sp_Mask *mask, int ns);
+
+/* Arbiter v4：mask 是 in/out。in = old 的 ns 集（树传入，arb 免解
+ * 码可得）；out = 返回 id 的精确 ns 集——**经 sp_addns/sp_delns 操
+ * 作，不直接写位**（库文档明示）。id == 0（清）时返回 0。
+ * 参数序（ud, id, old, mask）：新值在前，old + mask 成组殿后
+ * （旧-新-旧 序无信息可读；返回类型 unsigned -> sp_Id 同步）。 */
+typedef sp_Id sp_Arbiterf(void *ud, sp_Id id, sp_Id old, sp_Mask *mask);
+
+/* fill 签名不变：ns 语义全进 id（op 载荷，§6.3）；fill 不管 ns，
+ * range 内每段 arb（写操作必须触达所有段）。 */
+SP_API int sp_fill(sp_Cursor *C, sp_Id id, size_t len);
+
+/* ns 过滤迭代（mask 聚合剪枝下降），返回值改为 sp_Id 值（const
+ * sp_Id* 是层模型时代残留——指针暴露树内槽位，段尾/NULL 语义别
+ * 扭）；ns == 0 = 无过滤（= 旧语义，含全部段）；无匹配/段尾返回 0
+ * （id 0 = 未染色，天然哨兵）。sp_style 同步改值返回并吸收
+ * sp_stylemask 的 mask 出参（2026-08-16 修订：pmask != NULL 时
+ * 返回段精确 ns 集，NULL 则跳过）。
+ * ns 域 = [0, SP_MASK_BITS]；超界 ns 视作查询空域：返回 0、
+ * plen = 0、光标不动（树内 ns 域有限，冷 ns 查询归身份层全扫谓词，
+ * §8.2）。 */
+SP_API sp_Id sp_next(sp_Cursor *C, int ns, size_t *plen);
+SP_API sp_Id sp_prev(sp_Cursor *C, int ns, size_t *plen);
+SP_API sp_Id sp_style(sp_Cursor *C, size_t *plen, sp_Mask *pmask);
+
+/* 剪枝清除：对 mask 含 ns 位的每叶恰调一次 arb(ud, id, old, &m)
+ * 并写回（写回规则同 fill：id 0 → mask 0）；非匹配叶不通知 arb
+ * （与 fill 每段必调不同——剪枝是 sp_clear 存在的理由）。算法 =
+ * 批量剪枝下降 + 容器内批量 arb（piecetab ptC_nexthole/ptC_freeze
+ * 稀疏同构），见 §9.4a。ns 越界 -> SP_ERRPARAM；空树无匹配叶，
+ * 早退 SP_OK。 */
+SP_API int sp_clear(sp_Tree *T, int ns, sp_Id id);
+```
+
+- **树写回规则**：`new = arb(ud, in, old, &m)`（m 初值 = 段当前
+  mask）→ 段 id = new，mask = (new == 0) ? 0 : m——id 0 公理：
+  mask 恒 0（arb 报矛盾值也收敛）。
+- **filtered 迭代精确语义（2026-08-16 v6 定案：exclusive。v5 变体 B
+  ——返回当前段剩余落下一段头——经 piecetab 侧实测后回滚：使用方
+  并未简化，pt_read/ptZ_append 反而更复杂；审计结论"exclusive 才
+  是使用方使用最简的形式"。ns==0 与 ns≠0 完全同构，无不对称）**：
+  - next(ns) = **exclusive**（pt_next 同构）：跳过当前段，剪枝
+    下降（mask 聚合）找下一匹配段，返回整段 plen = 段长、**落匹配
+    段头**（poff = 0）；树尾/虚拟/空树（poff >= 段长）返 0。匹配
+    判定 = `(段 mask & bit(ns-1)) != 0`。
+  - 消费循环（pt_piece + pt_next 的 ns 版，写进绑定层与 sp_clear）：
+    `style 预查当前段（mask 判定）→ 处理 → next 步进`——peek 恒可
+    用（next 落段头），无死循环（落段头 + 跳过已消费段 = 结构保
+    证），非匹配子树经 next 剪枝跳过。
+  - prev(ns≠0) 不变：poff > 0 时当前段匹配 → 返回当前段（plen =
+    poff，落段头，同旧）；不匹配或段头 → 向前单步循环；树头返 0。
+    prev(0) = 同款。
+  - **树内严禁段尾态**（光标纪律，与 piecetab/linecache 共享不变
+    式恢复）：API 返回时光标不得处于树中段尾（poff == 段长且
+    offset < bytes）——sp_checkcursor 禁则（pt/lc 同款）；编辑 API
+    （append/splice/fill）的插入段尾落点经 spK_offtail 步进下一段
+    头收尾（offset 不变），树尾态豁免。sp_prev 落段头天然合规。
+- **"ns 已完全消失"通知 = 存在性检查**：消费循环形式
+  （`seek(0) + style 预查 + sp_next(ns) 循环`）首轮零匹配即消失
+  ——无需 pcount 出参。
+- **arb 契约**（库文档明示）：out mask = 返回 id 的精确 ns 集（域
+  [1..SP_MASK_BITS]；op 载荷 ns 不限，属 arb 私有解码，不进 mask）。
+  建议基于 in mask 增量操作（加/删动作 addns/delns），全替换路径
+  由 arb 自行重建。mask 报错 = 剪枝假阴性 = arb 实现 bug（树对
+  mask 零校验，checktree 只验聚合一致性）。
+- **兼容迁移**：fill 零迁移；arb 实现补 (sp_Mask *mask) 参 + 参数
+  序 (in, old) + 返回类型 sp_Id；sp_next/sp_prev/sp_style 调用点
+  改值接收 + next/prev 补 ns 参。
+
+### 9.3 聚合与维护（第三度量通道）
+
+- sp_Node 增 `sp_Mask mask[SP_FANOUT]` 并排数组：叶槽 = 叶精确
+  ns 集；内槽 = OR(子槽)。piecetab 单字段技巧（1 bit/child）不适
+  用——双维（槽 × ns 位）；并排数组使 spN_copy/move memcpy 自动
+  覆盖批量搬位（漏点 = 剪枝假阴性 = 正确性 bug 的主要防线）。
+- **spM_up 统一 remask（2026-08-15 v4 定案，ptM_up 逐行同构，
+  无 set/clear 分路；2026-08-15 实施修订：删 `!changed && !db`
+  早停——merge 系内联更新抢先改槽，changed 探测失真 → 上层聚合
+  假阴性（ns_differ 逼出：mergeleft 内联重算右链后，调用方
+  spM_up 首层 b==a 误停）→ 每层无条件重算 OR + 爬到顶。db≠0
+  调用本就无条件爬满（字节必传），删除仅影响 db==0 路径，性能
+  无回退）**：每爬升层 bytes += db 后调
+  `spM_remask(p, i)`（l < levels 时重算 OR(子槽)，l == levels 叶
+  槽不动）；**去 db==0 早退**——fill 度量保持但改 mask，纯
+  mask 传播 = `spM_up(C, levels-1, 0)` 调用。remask = O(cc ≤
+  FANOUT) 扫描，无唯一子槽特判。
+- **spM_up 只爬光标路径**——路径外的槽 mask 更新全部手工：
+  bytes 求和点（splitroot/splitchild/foldnode）同点重算 OR；
+  makechain/stitchnode/merge 系见下。
+- **手工维护清单（并排数组外仅此，逐点核对 piecetab 先例）**：
+  - spI_onepiece：mask[0] = 0
+  - spI_fillrt：slot0 = 新段 mask（调用方传）；slot1 = 原段 mask
+    （p->mask[i]）
+  - spI_splitins / spI_inherit：新段 id + mask 双继承（pad = 0）
+  - spI_splitroot：r->mask[0] = OR(pp)、r->mask[1] = OR(nw)
+  - spI_splitchild：p->mask[i]/[i+1] = OR(nd)/OR(nw)
+  - spF_splitseg：mask[i+1] = mask[i]；**满路径 rt[0].mask[0] =
+    mask[i]**（insertrt 经 spN_copy 自动进树）
+  - spF_appendseg：新槽 mask = 段 mask（签名加参）；同 id 合并
+    分支 mask OR
+  - spF_filterleaf：setid 后写回 mask = m + **新增传播调用点
+    spM_up(C, levels-1, 0)**（db=0，依赖去早退）
+  - spI_merge 容器内同 id 合并：mask[i-1] |= mask[i]（左）、
+    mask[i] |= mask[i+1]（右），spN_remove 前执行
+  - spD_mergeleaf：rt[0].mask[0] |= p->mask[cc-1]（spN_setcc 前）
+  - spI_mergeleft / spI_mergeright：**祖先链槽 mask 同步**——内联
+    字节更新循环里左侧链槽 |= M（吸收叶 mask）、右侧链槽重算 OR
+    （失去叶；自底向上序，先子后父，pf 层最后）；foldchain 路径
+    由 foldnode 兜底
+  - spD_mergeleft（stitch）：join 分支 `rt[0].mask[0] |= M`；链循环
+    每层 `mask[i] = OR(children[i])`；`spM_up(L, fork-1, -bc)` 覆盖
+    fork 以上
+  - **spD_makechain：新槽 bytes 与 mask 均置 0**（piecetab
+    ptD_makechain 先例：`nn->mask = 0` + 父槽位清零——ralloc 内存
+    非零，漏置 = 假阴性）
+  - **spD_stitchnode：每轮顶部 `p->bytes[i] += db` 后
+    spM_remask(p, i)**（kl < levels 时）——覆盖上一轮 findroom
+    链拷贝挂入的深链节点父槽（piecetab `ptM_remask(p, i, k)` 同
+    款）
+  - spD_foldnode：合并分支 p->mask[i] = OR(ns[0])；平衡分支
+    p->mask[i]/[i+1] = OR(ns[0])/OR(ns[1])；**两分支末尾均
+    spM_up(C, l-1, 0)**——fold 改变 p 自身聚合（删槽/搬位），p 的
+    父槽必须上推（2026-08-15 实施逼出：fold 链停止时上层聚合漏
+    传）
+  - spI_foldchain：cc==0 删槽分支同样 spM_up(C, x-1, 0)
+  - spD_balancenode：槽经 spN_copy/move 自动，无父级操作
+  - spD_cutrange：**末尾补 spM_up(L, levels-1, 0)**——中间层删右
+    兄弟子树改变 L 路径槽聚合，字节内联更新覆盖不到 mask；fl-1
+    以上的 -db 爬升不受影响
+  - spC_clearleaf：arb 可能仅改 mask 不动 id（changed == 0 路径）
+    ——spM_up(C, levels-1, 0) 无条件刷新（§9.4a 步骤 7；漏刷 =
+    聚合假阳性，sp_next 下降 assert，clear_maskrefresh 测试逼出）
+  - spD_rebalance 根塌缩：经 struct 赋值自动
+- 编辑继承：splice/append/insert 新段 mask = 继承段 mask 全量
+  （随 id 同源）；remove 槽随 spN_move 搬移。
+- 语义 = **精确集合**（arb 报告同源）：mask 无 ns 位 ⇒ 子树必无该
+  ns 段；有 ⇒ 下降细查。不是 bloom：删除减位由 arb 报告驱动，
+  无位积累。
+- 编辑漂移：splice 平移段（mask 随段走），聚合沿 splice 路径重算。
+- fill 不剪枝（写必须触达全部段）；next/prev 剪枝靠聚合。
+
+### 9.4 消费端语义
+
+- **del_ns(ns)** = `sp_clear(T, ns, op_clear_ns(ns))`（热 ns，剪枝
+  O(匹配叶)）；**op 载荷 ns 无限**（冷 ns 走 `fill(C, op_clear_ns,
+  bytes)` 全扫——不限 SP_MASK_BITS，del 不依赖 mask）
+- **del_object(id)** = `fill(C, op_del_object, 区间)`（op 载荷带对
+  象 id；arb 段内解码精确匹配删分支）——删最后贡献后 out mask 自
+  然无该 ns 位，假阳性不存在
+- **find/查询** = sp_next/sp_prev(ns) 迭代（mask 剪枝，消费端零
+  区间跟踪）——热 ns（≤ SP_MASK_BITS）；**冷 ns 查询** =
+  `sp_next(0)` 全扫 + 消费端 intern 解码谓词（身份层职责，§8.2）
+- 消费端词汇 = ns + id；mask 只经 sp_addns/sp_delns 出现在 arb
+  实现里，消费端永不出现
+
+### 9.4a sp_clear 算法定案（2026-08-15 v4，piecetab commit 稀疏同构）
+
+> 先例：piecetab.h `ptC_nexthole`（剪枝下降找下个含洞叶容器）+
+> `ptC_freeze`（容器内批量物化 + 压缩 + `ptM_up(C, l-1, 0)` 纯
+> mask 传播 + 欠满 rebalance）。sp_clear 拒绝逐段 filterleaf/fill
+> 方案（每段 O(levels) 定位重扫 = 违背批量铁律；GB 稀疏场景退化
+> 为 O(段数×levels)）。
+
+```
+sp_clear(T, ns, id):
+  1. [参数] ns ∈ [1, SP_MASK_BITS]，T 非空；空树早退
+  2. [游标] C = seek(T, 0)
+  3. [peek] style 查当前段 mask：无 ns 位 → sp_next(ns) 剪枝下降
+     跳至下一匹配段（内层槽 mask 无 ns 位即跳——ptC_nexthole 同构，
+     但按槽 mask & bit 判且**向前索引步进**（非 ptC_ 的从头重扫：
+     arb 可能返回仍含 ns 位的 id，重扫会重访已处理叶））；无 → 返回
+     有 → 处理该段所在容器（v6 exclusive：next 跳过已 peek 段，
+     落匹配段头——"skip 前先 peek"消费模式）
+  4. [批量 arb] 容器内所有匹配叶恰一次（先全部 arb 完再动结构）：
+      nid = arb(ud, id, old, &m)；nid == old → 不写；否则
+      setid + mask = (nid == 0) ? 0 : m
+  5. [容器内合并] 同 id 相邻叶合并扫描（ptC_freeze 压缩同构）——
+      此刻容器内匹配叶均已 arb，吸收无欠账
+  6. [边界合并，欠账零不变式] 合并只吸收"已 arb 或非匹配"的叶：
+      a. 左边界：与左邻容器 mergeleft（左邻全处理，自由吸收）
+      b. 右边界：右邻首叶与结果同 id 且**非匹配** → 吸收（循环至
+         非匹配链尽）；**匹配** → 不动，留待该容器自身处理（其步
+         骤 4 arb 后经 6a 回并）。右边界合并不依赖访问右邻容器——
+         含匹配叶为零的容器也经此修正规范形
+  7. [传播与折叠] spM_up(C, levels-1, 0) 纯 mask 传播（db=0，去早
+      退依赖）；容器欠满走既有 foldchain/rebalance（merge 机制
+      2026-08-14 定案），游标经 locate 重建后回步骤 3（落容器尾 =
+      下一容器首段头，peek 续扫）
+```
+
+- **复杂度**：O(匹配叶容器数 × (FANOUT + 匹配叶 × arb) + 边界合并
+  + 折叠)；非匹配子树零下降零 arb。**全程零分配**（setid/合并/折
+  叠只释放节点，无 split 无 ralloc——无需 reserve）
+- **欠账零不变式（正确性核心）**：每匹配叶恰一次 arb；任何合并不
+  得吸收"未 arb 的匹配叶"。容器内批量先 arb 后合并 + 边界 6a/6b
+  规则保证
+- **与 fill 的语义差**：fill 对区间内每段必调 arb；sp_clear 只调
+  匹配叶——arb 不得依赖非匹配段被调用（如计数语义的 arb 须接受
+  调用次数 = 匹配叶数）
+- **arb 返回仍匹配 id**：写回后该叶 mask 仍含 ns 位——向前索引步
+  进保证不重访（每叶仍恰一次），规范形不受影响
+
+### 9.5 测试要点
+
+- mask 聚合差分：随机 fill/splice/append/insert/remove 后
+  sp_next(ns) 遍历与全段扫描对照（fanout4/8 两档）
+- arb 精确报告：多 ns 段（a 画 + b 画 + 删 a 后仅剩 b）、
+  del_object 删最后贡献后 sp_next(ns) 零匹配（无假阳性）
+- id == 0 公理：arb 报矛盾 mask（返回 0 + 非零 mask）→ 树强制 0
+- 剪枝：mask 无 ns 位时 sp_next(ns) 零匹配、零下降
+- sp_addns/sp_delns：ns 0/越界/负数 → SP_ERRPARAM；往返一致
+- 编辑漂移/继承：splice、append、insert 后 mask 正确
+- 兼容：fill 签名不变；旧 arb（mask 原样返回）行为不变
+- filtered 迭代语义（v6 exclusive）：next 跳过当前段剪枝至下一
+  匹配段落段头（plen = 段长）；消费循环 style 预查 + next 步进
+  无死循环；段中起步跳过当前段；prev 中段态（plen=poff 落段头）；
+  越界 ns 返 0 光标不动；树内段尾态禁则（编辑 API 落点经
+  spK_offtail 收尾）
+- sp_clear（§9.4a）：arb 调用数 == 匹配叶数（arb_counting 先例）；
+  与 fill(op_clear_ns, bytes) 差分 id/mask 流一致（arb 对非匹配
+  段 no-op 时）；吸收合并欠账零（结果 id 与右邻非匹配同 id → 合
+  并且该叶未 arb；右邻匹配同 id → 不吸收、留待处理）；arb 返回仍
+  匹配 id 不重访；规范形 checktree 通过（含跨容器边界）；ns 越界/
+  空树/arb NULL；GB 级性能冒烟（合成段稀疏场景剪枝有效）
+
+### 9.6 eph（ephemeral）层定案（2026-08-16，绑定层实现）
+
+> 动机：调研（reports/research_sp_highlight_ns.md + 姊妹篇
+> research_extmark_ephemeral.md）判定——hl = 视口级派生可重建数据
+> （每帧重建），lsp = 快照持久（漂移有价值）。eph 层 = 给"每帧
+> 重建"数据一个 C 端平铺存储 + 读时与树合成，免 Lua 表构造与
+> 帧上 overlay；neovim 的 ephemeral 调研结论 = 不引入其"每帧全清
+> scratchpad"机制（spantree 无 gravity/undo 负担，快层已是库内
+> 等价物），本节 eph 是其**有持久语境的变体**：数据留在 C 存储、
+> 树编辑自动失效。
+
+**分工定案：eph 完全在绑定层（lua/spantree.c）实现。**
+
+- eph = 每 ns 一个 sv_ 平铺 segment 数组（naive spantree：memmove
+  维护规范形），不进 B+ 树、不占 mask 位、不参与 arb 写时折叠、
+  不随编辑漂移（编辑动词 = 全清）。
+- 无参读 = 树流 + 各 eph 层边界切分 merge；每子区间 **attr 黑盒
+  覆盖**（comp:attr(树 id) + 各 eph attr 按层序覆盖 → comp:intern
+  幂等）——零构成拆解、零 mapof、零 mask 读依赖（2026-08-16 v4
+  修订：v3 的 sp_stylemask 方案退场）。
+- **C 库无新增读 API**（v4 修订）；新增依赖 = **arb 三态契约与
+  全量调用点**（API 无修改，§9.7 定案）：新生段调 arb(id, 0)、
+  死亡（合并/删除/trim 归零/freetree）调 arb(0, id)、合并调
+  arb(id, old) 出口双向计数（filterleaf 以保护 +1 防瞬态
+  ref==0 误回收）。绑定层三态分派（design_spantree_lua.md v4
+  §3.2）：新生/合并出口 ref++、死亡与合并出口 old-- ref--。
+
+**eph 不变量**（绑定层）：
+1. 数组恒有序、不交叠、相邻异 id；fill 覆盖切分 + 规范化合并。
+2. 树编辑动词（splice/append/insert/remove，树级 + 游标级）= 先
+   全清 eph；普通 ns 的 fill/clear/reprio 不清（树段未位移）。
+3. eph fill/clear = 零树操作、零 epoch（读路径逐读重算零缓存）。
+4. 合成层序：p<0 上、p>=0 下（0 层 = 表层）；eph 间 (prio,
+   regseq) 升序，后层覆盖前层。
+
+测试要点（绑定侧 TestEph；C 侧无新增 API——v4）：覆盖切分/
+规范化/幂等覆盖、区间清/全清、合成流（p<0 上、p>=0 下、多层
+优先级、单层直返）、滚动残留两窗口正确、8 个编辑动词清空、
+eph fill 零 epoch。C 侧新增 = id 生命周期事件（§9.7）的
+fanout4/8 计数差分用例。
+
+### 9.7 id 生命周期契约（arb 三态，2026-08-16 定案）
+
+> 背景与论证：report_sp_idref.md——refcnt = 树段引用计数；旧 arb
+> 出口规则只覆盖部分事件（分裂/合并/删除静默、部分覆写欠计数、
+> ret==old 幻影）。全 API 事件矩阵审计后定案：**单 arb 回调三态
+> 分派**，树按段槽事件补发调用，无第二回调。
+
+**三态契约**（arb 文档注释同步）：
+
+```
+arb(ud, in, old, mask):
+    ret = in && old ? merge(in, old) : (in ? in : 0)
+    if (ret != 0) refcnt[ret] += 1   /* +1 先于 −1；ret==old 两笔抵消 */
+    if (old != 0) refcnt[old] -= 1
+    return ret
+```
+
+| 形态 | 语义 | 契约 |
+|---|---|---|
+| `arb(0, old)` | 死亡：一个持有 old 的段槽消失（合并/删除/trim 归零/freetree）；真清写 fill(0) 同形 | ret=0 → 仅 old--；返回 0（纯死亡弃用；清写写回） |
+| `arb(in, 0)` | 新生：一个持有 in 的段槽出现（写空段/分裂碎片/继承） | ret=in → 仅 in++；**必须原样返回 in**（空旧值无物可合成，转换自由本不存在） |
+| `arb(in, old)` | 合并决策 | ret=merge(in,old)；出口统一规则 +ret/−old（ret==old 两笔自然抵消，net 0）；**分裂碎片计数由 filterleaf 的保护/补片承担**（下） |
+
+**树侧事件清单**（全部经 arb；id 0 不计不发；`T->arb == NULL`
+时全部静默）：
+
+| 站点 | 调用 |
+|---|---|
+| spN_purge（加树参；k==0 分支逐叶） | `arb(0, id)`——统一覆盖 cutrange ×3 与 freetree |
+| 合并吸收（spI_merge 两循环 / spI_mergeleft / spI_mergeright / spD_mergeleaf / spD_mergeleft 吸收 / spF_appendseg 并入 / spC_compactleaf 并入） | `arb(0, id)`/次 |
+| spD_cutpiece 整槽删除、spD_trimright/trimleft 减至 0 | `arb(0, id)` |
+| spI_fillrt 新段与右半槽 | `arb(id, 0)`，返回值写入槽 |
+| spF_filterleaf | 见下 |
+| spF_splitseg / cut→rt / stitch / mergeleft 拉取（2026-08-16 修：拉取槽是移动非死亡） | 静默（filterleaf 已预支；逻辑移动零事件） |
+
+**filterleaf 保护/补片/cancel（出口双向计数的时序前提）**：
+
+```
+k = (poff > 0) + (poff + len < n)         /* 存活片段数 */
+if (k >= 1 && sid != 0) arb(sid, 0)       /* 保护：出口 −1 永不归零 */
+nid = arb(in, sid)                        /* 出口双向计数 */
+if (nid == sid && mask 未变):
+    if (k >= 1 && sid) arb(0, sid)        /* cancel，净 0 */
+    return                                /* 早退保留：零结构 churn */
+if (k == 2 && sid) arb(sid, 0)            /* 补第二片 */
+分裂（静默）→ 写回 nid → 合并（arb(0, id)）
+```
+
+- **早退保留**：arb 前置顺序不变（v8 流程），no-change（ret==sid
+  且 mask 同，构成复用热路径）零结构操作，仅多 2 次回调。
+- **refcnt 中途可暂时超前树状态 1**（保护 +1 至分裂落地或 cancel
+  才兑现）——穿越安全由"保护 +1 恒先于可归零的 −1"保证；k=0 时
+  出口 −1 归零 = 整段死亡，合法（arb 保留 old 入链时建链的结构
+  ++ 已先防住，见 report_sp_idref §六）。
+- **计数精确性**：k=0/1/2 部分覆写净 −1/0/+1；ret==old 净 0；
+  复用净 +1；append/insert 继承 +2/−2 成对净 0；remove/freetree
+  全 −1。差分测试 vs 全树扫描恒等。
+
+**测试要点**：三态分派各形态；计数差分 fuzz（随机编辑序列，
+fanout4/8）；部分覆写 k=0/1/2 与 ret==old/mask 变；保护/cancel
+对称；purge 承载的 remove/freetree 全量死亡；arb 调用计数测试
+改按合并态（in != 0 && old != 0）统计。
+
+## 十、开放问题
 
 1. ~~属性表达：合成值 vs 按层分离值~~ **已决议**：**arbiter 单层**
    （方案 E，2026-08-12）——合成值经 arbiter 无损结构表达，层向量
@@ -675,7 +1147,7 @@ set_extmark 的 ~35 个 opts 键（keysets_defs.h:29-67），分三类：
    （spantree_cdir_analysis.md:60 自认 hunk2 pa 在 X 坐标、B 方向在
    Y 坐标）。需求明确（如窗口期染色精确）再回炉。
 
-## 十、风险与测试策略
+## 十一、风险与测试策略
 
 - **方向语义贯穿调用链**：粘贴、redo、sam 命令、脚本编辑都须正确选
   append/insert。用错不崩溃只染错（软错误）→ **差分测试**：随机编辑
