@@ -304,23 +304,34 @@ SP_STATIC int sp_comparetree(const sp_Tree *a, const sp_Tree *b) {
     } while (0)
 
 /* serialize the segment stream as "[id:len][id:len]..." for content
- * comparison against a naive model (tree validity stays with
- * sp_checktree, this only pins the content) */
+ * comparison against a naive model. Adjacent same-id segments merge in
+ * the output (in-leaf merges are mandatory, seam neighbors are allowed
+ * to stay apart, so only the user-level stream is comparable). */
 SP_STATIC void sp_serialtree(sp_Tree *t, char *buf) {
     sp_Cursor C;
-    sp_Id     id;
-    size_t    len;
+    sp_Id     id, lid = 0;
+    size_t    len, run = 0;
     int       r = 0;
     buf[0] = '\0';
     assertok(sp_seek(&C, t, 0) == SP_OK);
     for (;;) {
         id = sp_style(&C, &len, NULL);
         if (len == 0) break; /* segment ids can be 0: plen marks the end */
-        r += snprintf(
-                buf + r, 4096 - (size_t)r, "[%lu:%lu]", test_lu(id),
-                test_lu(len)),
-                sp_next(&C, 0, &len);
+        if (id == lid && run)
+            run += len;
+        else {
+            if (run)
+                r += snprintf(
+                        buf + r, 4096 - (size_t)r, "[%lu:%lu]", test_lu(lid),
+                        test_lu(run));
+            lid = id, run = len;
+        }
+        sp_next(&C, 0, &len);
     }
+    if (run)
+        r += snprintf(
+                buf + r, 4096 - (size_t)r, "[%lu:%lu]", test_lu(lid),
+                test_lu(run));
 }
 
 /* ---- id lifecycle (three-shape arbiter) utilities ---- */

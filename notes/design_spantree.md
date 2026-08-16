@@ -23,7 +23,24 @@
 > 逐行同构），消费循环 = style 预查 + next 剪枝步进；树内严禁
 > 段尾态纪律恢复（sp_checkcursor 禁则 + spK_offtail 收尾）——
 > 定案 v6。
+> 2026-08-17 七轮审核修订：**规范形放宽定案（用户）**——全局
+> "相邻同 id 段必须合并"改为"**节点内必须合并，节点边界允许不
+> 合并**"（论证与代价见 §6.8）。跨容器合并义务整体废弃：remove
+> 的 spD_mergeleft/dropleftchain/foldbelow 删除（空容器直接挂回
+> rt[0]）、fill/insert 的 spI_mergeleft/mergeright/foldchain 删除
+> （同容器合并保留）。fill 密铺论证不受影响（append merge 是节点
+> 内操作，论证 1 精化后仍成立）。§6.7、落地细节 8 转存档。
 > 实施计划见 plans/plan_spantree_ns.md。
+> 2026-08-18 八轮实施落地：**叶容器内合并机制统一为 piecetab 同构**
+> ——新增 spK_seamleaf（叶内相邻同 id 合并，cursor helper）与
+> spD_seambound（foldnode 融合决策前预合并接缝 + 父指标 SEAM 同步），
+> spD_foldnode 按 piecetab 逻辑重写；spD_stitch 重写；spI_fillrt
+> 内合并 rt（动态 need）+ splitins/filterleaf/
+> cutpiece 尾部 seamleaf；删除 spD_foldleft/foldright/foldbelow/
+> dropleftchain/mergeleft 与 spI_foldchain/neighbor/absorbleft/
+> remaskleft/mergeleft/absorbright/remaskright/mergeright/merge、
+> spC_peekright。测试：serialtree/mcompare 合并跨容器待合并段后与
+> 模型比对（用户语义流）；fuzz 1M ops 全绿（seed 1/2/3/5/7 + ASan）。
 >
 > 设计方法论：**API 语义先行，数据结构反推**。边界语义单方向决定结构
 > 可行域——字节缝语义（区间可为 0）排除 B+ 计量树；字节覆盖语义
@@ -60,7 +77,7 @@ spantree 是**渲染染色最终结果的存储**（帧缓冲性质）：
 - **分裂**：`ptI_splitins`（字节点裂 piece）↔ spantree 段分裂
   （sp_fill 边界 / splice 插入）
 - **合并**：`ptD_mergeleaf` + stitch（相邻 piece 合并）↔ spantree
-  规范形合并（单 id 比较，§6.6 最终算法 merge 步）
+  节点内合并（单 id 比较，§6.8；跨容器不合并——规范形放宽定案）
 - **字节度量**：两者都不管行，只管字节块；编辑平移 = 度量树前缀和
   天然免费（对比 marktree splice 每层改 O(2T) 个 key）
 - 继承：B+ 骨架、池分配（pt_Pool）、splice、mergeleaf/stitch、scan
@@ -190,7 +207,8 @@ style id 同款抽象：cellgrid 是最终消费者但不管 attr 格式，spant
 - **spantree 分工**：位置域持久（offset + 单 id，编辑平移/删除）——
   "替写者管理每次写的 offset，不挥发"
 - id 0 = 未染色（对齐 sc style 0 = 空 attr 预置）
-- 规范形/stitch 合并 = 单 id 整数比较（**层模型的整向量比较陷阱消失**）
+- 节点内合并 = 单 id 整数比较（**层模型的整向量比较陷阱消失**；
+  跨容器不合并，§6.8）
 - attr/operator 格式演进零波及 spantree
 
 ### 6.6 区域运算：sp_fill 算法定案（2026-08-14 v8 前缀剥填 + 虚拟 pad 定案）
@@ -226,7 +244,7 @@ style id 同款抽象：cellgrid 是最终消费者但不管 attr 格式，spant
   递归至叶）+ stitch 挂回 R 右森林。密铺论证（lcB_append）保证
   摘挂阶段 fl 层不溢出
 - **v6**（2026-08-13，审核修订）：删 R 路径空壳（挂回 = 逆操作，
-  stitch 无溢出）；append merge 含同 id 合并（规范形前提）；光标 =
+  stitch 无溢出）；append merge 含节点内同 id 合并（§6.8，密铺前提）；光标 =
   L 链 seek 到 off+len（R 废弃）；树尾 fill 的 0 长半段不保留
 - **v7**（2026-08-13，审核修订）：阶段 1 仅当 fl < levels 执行
   （fl=levels 时 L 叶容器即 parent(fl)，切+剥会把 R 与 R 右整段
@@ -322,7 +340,7 @@ style id 同款抽象：cellgrid 是最终消费者但不管 attr 格式，spant
 | spD_remove | sp_advance(&R, len) | R 为 C 的栈副本，构造区间右端的自然原语 |
 | sp_insert | sp_advance(C, -ins) | insert 语义：核心插入收尾在插入段尾，光标回插入点（piecetab pt_insert 同款） |
 | spI_splitins | sp_locate(C, C->off) | 满容器分裂后 paths 按字节重建（落地细节 8） |
-| spI_mergeleft/right | sp_locate(C, C->off) | foldchain 破坏 paths 后重建段尾态（落地细节 8） |
+| spC_clearleaf | sp_locate(C, endoff) | 输出定位：容器尾契约位（sp_clear 循环 continue 后 peek 下一容器首段，树尾 break）；spM_up 传播不依赖 relocate——只用 paths[0..levels-1] 容器槽（compactleaf 只失效叶槽），各路径容器槽均有效且爬升经 p 祖先链，remask 全槽 OR 兜住叉点另一侧变化（2026-08-16 修订×3：原 endoff-1 前置 locate 冗余删除） |
 | spF_filterleaf | sp_advance(C, ±len) | 区间右边界定位与回退（len ≤ 段剩余恒成立） |
 | spF_fillrange | sp_locate ×2 | 阶段 5 绝对位置重染（步骤 10） |
 
@@ -346,12 +364,12 @@ locend + poff += (off+d − bytes)（超出量入 poff，虚拟态不夹）。
 | spK_forwardoff / backwardoff | 正常态、目标在树内 | 正常态、前进/后退 d |
 | spK_offtail(C) | 任意 | 段内/树尾态（树中段尾步进下一段头，树尾豁免；树内严禁段尾纪律的 API 边界收尾） |
 | spD_remove(C, len) | 任意 | 光标于删除点（offset 不变，段尾态已收尾） |
-| spI_insert(C, ins, useleft) | 光标于插入点（任意态含虚拟） | 插入段尾（poff=ins，恒；useleft 只定继承方向；API 边界经 spK_offtail 收尾——append 即此态，insert 经 advance 回插入点） |
+| spI_insert(C, ins, useleft) | 光标于插入点（正常/树尾/虚拟三态；树中段尾态 assert 拒绝——inherit 只处理段头/段内/树尾） | 插入段尾（poff=ins，恒；useleft 只定继承方向；API 边界经 spK_offtail 收尾——append 即此态，insert 经 advance 回插入点） |
 | spI_splitins(C, len, id) | 光标于插入点 | 插入段尾（poff = len） |
-| spI_merge(C) | 插入段尾（assert poff == 段长） | 合并段尾（offset 不变） |
+| spK_seamleaf(C, right) | 任意 | 叶内相邻同 id 段已合并（i = 光标槽 + right；合并后 cursor 在合并段内正确位置） |
 | spI_pad(C) | 任意 | 树尾态（offset 不变） |
-| spF_filterleaf(C, len, in) | 区间头 | 区间尾（早退 poff=0 下一段头；主路径 poff=段长） |
-| spF_appendseg(C, id, len) | 链尾段（assert i ≥ cc-1） | 链尾（随 append 推进，落地细节 4） |
+| spF_filterleaf(C, len, in) | 区间头 | 区间尾（早退 = advance 落点，段内/段头随 len；主路径 poff=段长） |
+| spF_appendspan(C, id, len) | 链尾段（assert i ≥ cc-1） | 链尾（随 append 推进，落地细节 4） |
 | spD_stitch(L, rt) | 链尾段（mergeleaf 前提，落地细节 2） | L 位置保持 |
 
 #### 机制一：剥洋葱原语
@@ -427,8 +445,9 @@ sp_fill(C, id, len):
   2. [pad C] C 虚拟（sp_offset > bytes）-> spI_pad(C) 物化
      [bytes, C) 为 id0 段（fill 区间外物化，不通知 arbiter）；
      C 落树尾，offset 不变（记 off0 = sp_offset(C)）
-  3. [pad R] R = seek(off0 + len)（seek 构造 R：advance 空树 no-op
-     不可用）；R 虚拟（> bytes）-> spI_pad(R) 物化
+  3. [pad R] R = seek(off0 + len)（seek 构造 R：advance 亦可——空树
+      no-op 理由已随 2026-08-16 advance 修订失效，seek 为 v8 流程
+      保留）；R 虚拟（> bytes）-> spI_pad(R) 物化
      [bytes, off0+len)（= fill 区间内虚拟部分，末字节 off0+len-1，
      pad 不含 R 位置），随后调一次 arb(0,0) 作 pad notice（返回值
      弃用），seek C 回 off0（树结构已变）；
@@ -477,9 +496,9 @@ sp_fill(C, id, len):
      # 定位与重染区域仍正确（合并段 id 未变，nid = arb(sid, in)
      # 在 filterleaf 内对当前段自算）；树尾 fill 时右边界
      # poff == 段长不裂，0 长半段不产生
-  11. 返回——光标定位到 fill 末尾 = 步骤 10b 的 filterleaf 自然结果
-      （其内部 spI_merge 按"光标=插入段尾"不变量收尾，append 语义；
-      R Cursor 在前缀剥填后废弃，见落地细节 3）
+   11. 返回——光标定位到 fill 末尾 = 步骤 10b 的 filterleaf 自然结果
+       （其内部两次 seamleaf 按"光标=插入段尾"不变量收尾，append
+       语义；R Cursor 在前缀剥填后废弃，见落地细节 3）
 ```
 
 #### 核心论证（密铺，勿再违背）
@@ -487,7 +506,8 @@ sp_fill(C, id, len):
 1. **密铺（第一性原理）**：append merge（spF_ 版，lcB_append 语义）
    是密铺——从开始 append 的地方起没有任何空隙，会被填成满树。
    **严格化前提**：arb 只改 id 不改变段长（内容不变）+ append merge
-   含**同 id 合并**（规范形，段数单调不增）→ 剥回段数 ≤ 摘出段数
+   含**节点内同 id 合并**（§6.8 放宽后仍为义务，段数单调不增）→
+   剥回段数 ≤ 摘出段数（合并只减不增，跨容器不合并不影响此式）
    → 叶容器数 ≤ 摘出叶容器数 → 链层 k 节点数 = ceil(叶容器数 /
    F^(levels-1-k))（密铺最小）≤ 摘出前层 k 节点数（合法树节点数 ≥
    密铺最小）→ **摘挂阶段每层节点数净减少（至少不增）**——剥洋葱
@@ -506,8 +526,10 @@ sp_fill(C, id, len):
    题专项解决，不阻塞本算法；即使挂回触发 makeroom/扩根（R 残留挂
    叶容器层时链尾叶容器满），在 stitch 自身语义下结果正确，可容忍。
    论证 8 已证本算法输出 = 逆操作场景，无溢出
-4. **严格段数守恒**（沿自 v4）：摘挂内容 = 整段们（边界两半不摘
-   不裂）→ 剥回段数 ≤ 摘出段数 → append 需求 ≤ 空槽 → 剥回不溢出
+4. **严格段数守恒**（沿自 v4；§6.8 放宽后改为节点内守恒）：摘挂
+   内容 = 整段们（边界两半不摘不裂）→ 剥回段数 ≤ 摘出段数（节点内
+   合并保证，跨容器段原样摘原样回，段数不变）→ append 需求 ≤ 空槽
+   → 剥回不溢出
 5. **arb 契约**：合并决策对每段恰一次（剥洋葱 + 后置裂两次
    filterleaf 各算一次，nidL/nidR 在 filterleaf 内对当前段自
    算）；合并/死亡经 `arb(0, id)`、复制新生经 `arb(id, 0)` 事件
@@ -558,14 +580,15 @@ sp_fill(C, id, len):
    （落地细节 4），作为 stitch 调用位置；最终光标 = 步骤 9b 的
    filterleaf 自然结果（off + len，append 语义）
 4. **append merge 原语**：spF_ 版（lcB_append 框架，密铺），fill
-   场景专用（挂载层 = 已切层）；**必须含同 id 合并（规范形）——
+   场景专用（挂载层 = 已切层）；**必须含节点内同 id 合并（§6.8——
    lcB_append 无合并概念（行无 id），spantree 版必须有，否则段数
-   不守恒、论证 1 前提失效**；**光标语义照 lcB_append：调用前提 =
-   光标在叶容器末段（assert i >= cc-1），填完叶容器后 paths 指向
-   最后填的段——剥洋葱全程把光标推至链尾**（stitch 前提，落地细
-   节 2）；填段时与左邻同 id 则并入（段数单调不增）
+   不守恒、论证 1 前提失效**；跨容器同 id 不合并，原样落位）；**光标
+   语义照 lcB_append：调用前提 = 光标在叶容器末段（assert i >= cc-1），
+   填完叶容器后 paths 指向最后填的段——剥洋葱全程把光标推至链尾**
+   （stitch 前提，落地细节 2）；填段时与左邻同 id 则并入（段数单调
+   不增）
 5. **filterleaf 的 splitseg 叶满路径**：后置裂复用 filterleaf 后
-   （阶段 5），其内部 spF_splitseg 的叶满路径仍借 spI_insertrt；
+   （阶段 5），其内部 spF_splitspan 的叶满路径仍借 spI_insertrt；
    filterrange 内禁 spI_ → spF_ 版标准分裂延后实现（当前测试样例
    避开叶满裂）
 6. **度量记账（切出减/剥回加）**：摘挂切出每层执行 spM_up 减度量
@@ -585,11 +608,13 @@ sp_fill(C, id, len):
    早退、pad 后光标总在树尾，先删后插与原先插后删语义等价）。
    非虚拟 fill 不消耗 pad 预算，多预留无害（reserve 只保 freelist
    水位）
-8. **跨容器合并的树结构维护（2026-08-14 定案，fill_brute 逼出；
-   2026-08-14 修订：fanout8 逼出 foldchain 阈值分层；
-   2026-08-14 修订：foldchain 复用 foldnode，mergeleft/mergeright
-   共用 spI_neighbor 走邻容器；
-   2026-08-14 修订：merge 光标不变量——零 seek 收尾）**：
+8. **跨容器合并的树结构维护（2026-08-17 废弃，存档）**：规范形
+   放宽（§6.8）后节点边界允许不合并，spI_merge 不再跨容器合并，
+   mergeleft/mergeright/foldchain 删除。以下为历史定案存档
+   （2026-08-14 fill_brute 逼出；2026-08-14 修订：fanout8 逼出
+   foldchain 阈值分层；2026-08-14 修订：foldchain 复用 foldnode，
+   mergeleft/mergeright 共用 spI_neighbor 走邻容器；
+   2026-08-14 修订：merge 光标不变量——零 seek 收尾）：
    spI_merge 跨容器合并（mergeleft/mergeright）吸收邻容器段后，邻容器
    可能掏空（1→0）或欠满（2→1）——**不调 spD_remove**（太重的递归
    删除），本地化解决：spN_remove 单节点内删段 + `spI_foldchain` 沿侧链
@@ -645,9 +670,14 @@ sp_fill(C, id, len):
 - **R == bytes（树尾）**：不 pad，仅 locend 修正 poff（advance 越过
   尾会置 poff=0，locend 恢复末段长）
 
-### 6.7 删除 stitch 的左邻吸收（spD_mergeleft 重写定案，2026-08-15）
+### 6.7 删除 stitch 的左邻吸收（spD_mergeleft——2026-08-17 废弃）
 
-> 动机：spD_stitch 的左叶容器被 cutrange 掏空（cc==0）且 rt[0] 非空时，
+> **废弃（2026-08-17，§6.8 规范形放宽）**：节点边界允许不合并，
+> remove 的 L 容器被掏空（cc==0）时不再拉取左邻尾段，rt[0] 直接
+> 挂回空容器；spD_mergeleft/dropleftchain/foldbelow/foldleft/
+> foldright 从代码删除。以下为历史定案存档（2026-08-15）。
+
+> 动机（存档）：spD_stitch 的左叶容器被 cutrange 掏空（cc==0）且 rt[0] 非空时，
 > 走 mergeleft 而非 mergeleaf。初版把 rt[0] 首段"推入"左邻容器——合并段
 > 跨过删除空隙盖住光标位置，后续 splitins 在失效光标上崩溃（mergeleft
 > 光标脱节 bug，report_sp_mergeleft_handoff.md）。重写后合并方向反转。
@@ -679,6 +709,46 @@ cut 侧的空容器，光标留在 cut 链上只左移 bj（join 段长），不
   光标指其内部空隙边界：`off -= bj, poff = bj, paths[l] += e`。
 - **记账**：左邻链每层 `bytes[i] -= bc` + `mask[i] = OR(children[i])`
   （自 fork 到叶），fork 以上经 `spM_up(L, fork-1, -bc)`。
+
+### 6.8 规范形放宽：节点内必须合并，节点边界允许不合并（2026-08-17 用户定案）
+
+**定案**：放弃全局规范形（"相邻同 id 段必须合并"），改为：
+
+- **节点内义务**：同一叶容器内相邻同 id 段必须合并（append merge、
+  spI_merge 同容器部分、spD_mergeleaf）——分裂/合并产生的同 id 段
+  一旦落入同一容器即合并
+- **节点边界允许不合并**：跨容器相邻同 id 段不强求合并，原样保留
+
+**代价论证（用户）**：非规范形最坏情况下每个叶容器至多 1 个额外
+段负担（左/右边界与邻容器同 id，均摊 1）——按 FANOUT 62 计，
+浪费容量 1/63 ≈ 1.58%，可接受。换取：跨容器合并义务整体删除
+（remove 的 mergeleft/dropleftchain/foldbelow + fill/insert 的
+spI_mergeleft/mergeright/foldchain），维护成本大幅下降、bug 面
+收窄（本会话三个 mask bug 全部出自跨容器合并路径）。
+
+**为什么节点内合并必须保留（密铺论证）**：fill 的剥回段数 ≤ 摘出
+段数依赖"append merge 合并同 id"（论证 1）——这是**节点内**操作
+（spF_appendspan 检查当前容器末段）。跨容器合并不参与此式（跨容器
+段摘出时原样、剥回时原样，段数不变）。故放宽后密铺论证仍成立。
+
+**保留义务清单（2026-08-18 落地，机制统一为 piecetab 同构）**：
+- 叶内合并原语：`spK_seamleaf(C, right)` 合并叶容器内相邻同 id 段
+  （i = cursor 槽 + right），同步 paths/off/poff 与 mask OR + died；
+  `spD_seambound` 在 foldnode 合并/平衡决策前预合并接缝（同 id 进
+  同一容器 = 叶内义务），并同步 p->bytes[i]/[i+1] 父指标（SEAM A/B，
+  修复了平衡只扣移动段、留下被并段字节的指标漂移）
+- fill/insert/append：fillrt 内合并 rt（born 后同 id 即并，动态
+  need）+ splitins 尾部两次 seamleaf（左/右向）+ filterleaf 尾部
+  两次 seamleaf；appendspan 容器末段同 id 合并（密铺论证依赖）
+- remove：cutpiece 删段后 seamleaf；spD_mergeleaf（rt[0] 首段与
+  L 容器尾段——挂回后同容器）；幽灵槽清理；L 容器掏空时直接挂回
+  rt[0]，不再拉取左邻。**无 d 回退**：spantree 只有段合并（无 hole
+  容量），可合并即整段并入 rt[0]，光标恒落 rt[0]（linecache 行可
+  被切开、piecetab hole 部分合并才需回退）
+- foldnode：seambound 预合并后 cL+cR 决策（合并可能使 >FANOUT 变
+  ==FANOUT，促成原先无法的融合），paths 修正用合并后 cL 值
+- 后续编辑会自然消化跨容器残留（同 id 段进入同一容器时合并），
+  残留段数 = O(容器边界) 有界，不随操作无界膨胀
 
 ## 七、高亮引擎接口抽象（支持后期换框架）
 
@@ -893,22 +963,22 @@ SP_API int sp_clear(sp_Tree *T, int ns, sp_Id id);
   - spI_splitins / spI_inherit：新段 id + mask 双继承（pad = 0）
   - spI_splitroot：r->mask[0] = OR(pp)、r->mask[1] = OR(nw)
   - spI_splitchild：p->mask[i]/[i+1] = OR(nd)/OR(nw)
-  - spF_splitseg：mask[i+1] = mask[i]；**满路径 rt[0].mask[0] =
+  - spF_splitspan：mask[i+1] = mask[i]；**满路径 rt[0].mask[0] =
     mask[i]**（insertrt 经 spN_copy 自动进树）
-  - spF_appendseg：新槽 mask = 段 mask（签名加参）；同 id 合并
+  - spF_appendspan：新槽 mask = 段 mask（签名加参）；同 id 合并
     分支 mask OR
   - spF_filterleaf：setid 后写回 mask = m + **新增传播调用点
     spM_up(C, levels-1, 0)**（db=0，依赖去早退）
-  - spI_merge 容器内同 id 合并：mask[i-1] |= mask[i]（左）、
-    mask[i] |= mask[i+1]（右），spN_remove 前执行
+  - spK_seamleaf 叶内合并：mask[i-1] |= mask[i]（spN_remove 前）
+  - spD_seambound 接缝合并：同 seamleaf（mask OR + died）
   - spD_mergeleaf：rt[0].mask[0] |= p->mask[cc-1]（spN_setcc 前）
   - spI_mergeleft / spI_mergeright：**祖先链槽 mask 同步**——内联
     字节更新循环里左侧链槽 |= M（吸收叶 mask）、右侧链槽重算 OR
     （失去叶；自底向上序，先子后父，pf 层最后）；foldchain 路径
-    由 foldnode 兜底
+    由 foldnode 兜底【2026-08-17 废弃：跨容器合并删除，§6.8】
   - spD_mergeleft（stitch）：join 分支 `rt[0].mask[0] |= M`；链循环
     每层 `mask[i] = OR(children[i])`；`spM_up(L, fork-1, -bc)` 覆盖
-    fork 以上
+    fork 以上【2026-08-17 废弃：§6.8】
   - **spD_makechain：新槽 bytes 与 mask 均置 0**（piecetab
     ptD_makechain 先例：`nn->mask = 0` + 父槽位清零——ralloc 内存
     非零，漏置 = 假阴性）
@@ -922,6 +992,7 @@ SP_API int sp_clear(sp_Tree *T, int ns, sp_Id id);
     父槽必须上推（2026-08-15 实施逼出：fold 链停止时上层聚合漏
     传）
   - spI_foldchain：cc==0 删槽分支同样 spM_up(C, x-1, 0)
+    【2026-08-17 废弃：§6.8】
   - spD_balancenode：槽经 spN_copy/move 自动，无父级操作
   - spD_cutrange：**末尾补 spM_up(L, levels-1, 0)**——中间层删右
     兄弟子树改变 L 路径槽聚合，字节内联更新覆盖不到 mask；fl-1
@@ -945,7 +1016,10 @@ SP_API int sp_clear(sp_Tree *T, int ns, sp_Id id);
   bytes)` 全扫——不限 SP_MASK_BITS，del 不依赖 mask）
 - **del_object(id)** = `fill(C, op_del_object, 区间)`（op 载荷带对
   象 id；arb 段内解码精确匹配删分支）——删最后贡献后 out mask 自
-  然无该 ns 位，假阳性不存在
+  然无该 ns 位，假阳性不存在。**绑定实现偏差（2026-08-16 审计，
+  Ltree_unmark）**：全扫收集命中 ns 集 + 逐 ns sp_clear(CLEAR(ns))
+  ——CLEAR(ns) 清整个 ns 槽而非仅该对象分支（design_spantree_lua
+  定案语义，非本库约束）
 - **find/查询** = sp_next/sp_prev(ns) 迭代（mask 剪枝，消费端零
   区间跟踪）——热 ns（≤ SP_MASK_BITS）；**冷 ns 查询** =
   `sp_next(0)` 全扫 + 消费端 intern 解码谓词（身份层职责，§8.2）
@@ -973,18 +1047,15 @@ sp_clear(T, ns, id):
   4. [批量 arb] 容器内所有匹配叶恰一次（先全部 arb 完再动结构）：
       nid = arb(ud, id, old, &m)；nid == old → 不写；否则
       setid + mask = (nid == 0) ? 0 : m
-  5. [容器内合并] 同 id 相邻叶合并扫描（ptC_freeze 压缩同构）——
-      此刻容器内匹配叶均已 arb，吸收无欠账
-  6. [边界合并，欠账零不变式] 合并只吸收"已 arb 或非匹配"的叶：
-      a. 左边界：与左邻容器 mergeleft（左邻全处理，自由吸收）
-      b. 右边界：右邻首叶与结果同 id 且**非匹配** → 吸收（循环至
-         非匹配链尽）；**匹配** → 不动，留待该容器自身处理（其步
-         骤 4 arb 后经 6a 回并）。右边界合并不依赖访问右邻容器——
-         含匹配叶为零的容器也经此修正规范形
-  7. [传播与折叠] spM_up(C, levels-1, 0) 纯 mask 传播（db=0，去早
-      退依赖）；容器欠满走既有 foldchain/rebalance（merge 机制
-      2026-08-14 定案），游标经 locate 重建后回步骤 3（落容器尾 =
-      下一容器首段头，peek 续扫）
+   5. [容器内合并] 同 id 相邻叶合并扫描（ptC_freeze 压缩同构）——
+       此刻容器内匹配叶均已 arb，吸收无欠账
+   6. [跨容器边界不合并（§6.8，2026-08-17）] 容器边界同 id 段原样
+       保留；历史定案（2026-08-16）为 6a 左邻 mergeleft + 6b 右邻
+       吸收，随跨容器合并义务一并废弃
+   7. [传播与折叠] spM_up(C, levels-1, 0) 纯 mask 传播（db=0，去早
+       退依赖；容器槽路径恒有效，无需前置 relocate）；
+       容器欠满走 rebalance（2026-08-17 起无 foldchain），游标 locate
+       落容器尾后回步骤 3（= 下一容器首段头，peek 续扫）
 ```
 
 - **复杂度**：O(匹配叶容器数 × (FANOUT + 匹配叶 × arb) + 边界合并
@@ -997,7 +1068,7 @@ sp_clear(T, ns, id):
   匹配叶——arb 不得依赖非匹配段被调用（如计数语义的 arb 须接受
   调用次数 = 匹配叶数）
 - **arb 返回仍匹配 id**：写回后该叶 mask 仍含 ns 位——向前索引步
-  进保证不重访（每叶仍恰一次），规范形不受影响
+  进保证不重访（每叶仍恰一次），节点内合并不受影响
 
 ### 9.5 测试要点
 
@@ -1017,9 +1088,8 @@ sp_clear(T, ns, id):
   spK_offtail 收尾）
 - sp_clear（§9.4a）：arb 调用数 == 匹配叶数（arb_counting 先例）；
   与 fill(op_clear_ns, bytes) 差分 id/mask 流一致（arb 对非匹配
-  段 no-op 时）；吸收合并欠账零（结果 id 与右邻非匹配同 id → 合
-  并且该叶未 arb；右邻匹配同 id → 不吸收、留待处理）；arb 返回仍
-  匹配 id 不重访；规范形 checktree 通过（含跨容器边界）；ns 越界/
+  段 no-op 时）；吸收合并欠账零（容器内合并仅吸收已 arb 叶）；arb
+  返回仍匹配 id 不重访；节点内合并 checktree 通过；ns 越界/
   空树/arb NULL；GB 级性能冒烟（合成段稀疏场景剪枝有效）
 
 ### 9.6 eph（ephemeral）层定案（2026-08-16，绑定层实现）
@@ -1036,7 +1106,7 @@ sp_clear(T, ns, id):
 **分工定案：eph 完全在绑定层（lua/spantree.c）实现。**
 
 - eph = 每 ns 一个 sv_ 平铺 segment 数组（naive spantree：memmove
-  维护规范形），不进 B+ 树、不占 mask 位、不参与 arb 写时折叠、
+  维护节点内合并），不进 B+ 树、不占 mask 位、不参与 arb 写时折叠、
   不随编辑漂移（编辑动词 = 全清）。
 - 无参读 = 树流 + 各 eph 层边界切分 merge；每子区间 **attr 黑盒
   覆盖**（comp:attr(树 id) + 各 eph attr 按层序覆盖 → comp:intern
@@ -1092,11 +1162,11 @@ arb(ud, in, old, mask):
 | 站点 | 调用 |
 |---|---|
 | spN_purge（加树参；k==0 分支逐叶） | `arb(0, id)`——统一覆盖 cutrange ×3 与 freetree |
-| 合并吸收（spI_merge 两循环 / spI_mergeleft / spI_mergeright / spD_mergeleaf / spD_mergeleft 吸收 / spF_appendseg 并入 / spC_compactleaf 并入） | `arb(0, id)`/次 |
+| 合并吸收（spK_seamleaf / spD_seambound / spD_mergeleaf / spF_appendspan 并入 / spC_compactleaf 并入 / spI_fillrt rt 内合并） | `arb(0, id)`/次 |
 | spD_cutpiece 整槽删除、spD_trimright/trimleft 减至 0 | `arb(0, id)` |
-| spI_fillrt 新段与右半槽 | `arb(id, 0)`，返回值写入槽 |
+| spI_fillrt 新段与右半槽 | `arb(id, 0)`，返回值写入槽；rt 内合并（born 后同 id）补 `arb(0, id)` 抵消 |
 | spF_filterleaf | 见下 |
-| spF_splitseg / cut→rt / stitch / mergeleft 拉取（2026-08-16 修：拉取槽是移动非死亡） | 静默（filterleaf 已预支；逻辑移动零事件） |
+| spF_splitspan / cut→rt / stitch | 静默（filterleaf 已预支；逻辑移动零事件） |
 
 **filterleaf 保护/补片/cancel（出口双向计数的时序前提）**：
 
@@ -1134,8 +1204,10 @@ fanout4/8）；部分覆写 k=0/1/2 与 ret==old/mask 变；保护/cancel
 2. ~~默认属性~~ **已决议（2026-08-12）**：id 0 = 未染色（对齐 sc
    style 0 = 空 attr 预置）。空文档、文档两端 append、全删后初始态
    = 未染色。渲染读端对 id 0 透传 → 默认样式。
-3. ~~规范形维护~~ **已决议**：stitch 缝合点**单 id 整数比较**，相邻
-   同属性段 merge（照 piecetab piece merge + checktree 经验）。
+3. ~~规范形维护~~ **已决议（2026-08-17 放宽，§6.8）**：节点内单
+   id 整数比较合并；节点边界允许不合并（跨容器合并义务删除）。
+   原决议（2026-08-12）为全局相邻同属性段 merge（照 piecetab
+   piece merge + checktree 经验），2026-08-17 用户定案放宽。
 4. ~~混合器仲裁细则~~ **被 arbiter 取代（2026-08-12）**：仲裁完全外置
    ——arbiter 回调（ud 上下文）+ operator id 空间（§6.3），无独立
    混合器组件；priority 语义由 sc 的 arbiter 实现决定。
