@@ -223,6 +223,19 @@ SS3 光标键复用 CSI 的 `tfC_cursorkey`；F1-F4 用 `cmd - 'P' + 1` 公式�
 - **终止条件单一且可前置** → `while (cond)` 而非 `for(;;)`——循环条件在
   头部是信息密度；`for(;;)` 只留给多体内退出点的循环（`ptC_freeze` 式
   双 return，写不出单一前置条件）
+- **`for(;;) { if (X) break; ... }` 中 X 明显可前置 → 必须写 while**：
+  break 式骨架的退出条件藏在体内中部，读者要扫过整循环才知道何时
+  退出；`while (!X)` 把退出语义提到头部。多退出点不构成豁免理由——
+  体内另有 return 不影响主退出条件前置（sp_next 上升：`for(;;){ if
+  (findslot < cc) break; ...}` → `while (findslot == cc) { ... }`，
+  体内仍有 `--l < 0` return 早退）
+- **`while (cond) { ...; update; }` 尾有循环变量更新 → 写
+  `for (; cond; update) { ... }`**：update 进 for 头，与 cond 相邻，
+  循环控制集中一处；体只剩业务逻辑（sp_next 下降：
+  `while (++l <= levels) { p = ...; i = ...; paths = ...; }` →
+  `for (; ++l <= levels; paths = ...) i = findslot(p = ..., ...)`）。
+  **例外**：update 非纯循环推进（夹业务副作用）或体与 update 有
+  长依赖时保持 while
 - **空 for 体用 `continue` 不用 `;`**——clang-format 对空 for 体振荡
 
 ### 19. 工具宏命名与位置
@@ -288,6 +301,11 @@ int func(lua_State *L, const char *s)
    （return 附近，不占函数头）
 4. **"做什么"** → 写进 design 文档
 5. **代码自明** → 直接删
+
+**体内零散多行注释同款处置**：压成单行只留必要内容；不重要直接
+删；长篇论证（顺序理由、预算推导、不变量）在 design 文档强调，
+代码只留一行索引式短注（2026-08-16 spantree 全库清理：8 处多行 →
+7 单行 + 1 删）。多行注释的存在本身是信号——先问"这信息值几行"。
 
 **注释最容易与实现不同步**——design 文档里 `cs_len -= 2` 的 ST 检测
 描述与代码 `-= 1` 长期不一致（brief_refine §16 早已记录此 bug，文档
@@ -490,6 +508,7 @@ JSON null → **registry 里的固定空表**（luaopen 建一次，`yyjson.null
 格式**——提行为条件赋值 + 单行 return（sp_next 尾：`if (bit)
 C->poff = p->bytes[i];` 再单行 return），或重组表达式让续行自然
 落在语句内部。禁 clang-format off 保单行（§21）。
+（实例随 2026-08-16 sp_next 重构已替换为 assert+记账逗号链，原则不变）
 
 ### 40. 发现意外修改：先评估来源，不确定就问，禁止自作主张保留/回滚
 

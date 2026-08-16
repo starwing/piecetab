@@ -132,8 +132,7 @@ SP_NS_END
 # define SP_FANOUT 62
 #endif /* SP_FANOUT */
 
-/* makeroom needs at most 2 free slots; a split of a full node leaves
- * FANOUT/2 free in the cursor's half, so require FANOUT >= 4. */
+/* a full-node split leaves FANOUT/2 free; makeroom needs 2, so >= 4 */
 SP_STATIC_ASSERT(SP_FANOUT >= 4);
 
 #ifndef SP_PAGE_SIZE
@@ -458,8 +457,6 @@ SP_API int sp_advance(sp_Cursor *C, sp_Delta d) {
     return spK_forwardoff(C, d), SP_OK;
 }
 
-/* step off a mid-tree span end: a cursor must never rest at a span
- * end unless it is the tree tail (edit APIs can land there mid-tree) */
 static void spK_offtail(sp_Cursor *C) {
     sp_Node *p;
     int      i;
@@ -481,85 +478,32 @@ SP_API sp_Id sp_style(sp_Cursor *C, size_t *plen, sp_Mask *pmask) {
     return spL_id(p, i);
 }
 
-static int spF_nextslot(sp_Cursor *C, sp_Mask bit, int l) {
-    sp_Node *p;
-    int      i;
-    for (i = spK_idx(C, p = spK_parent(C, l), l) + 1;; ++i) {
-        if (i >= spN_cc(p)) {
-            if (--l < 0) break;
-            i = spK_idx(C, p = spK_parent(C, l), l);
-        } else if (bit && !(p->mask[i] & bit))
-            C->off += p->bytes[i];
-        else
-            return C->paths[l] = &p->children[i], l;
-    }
-    return -1;
-}
-
-static int spF_prevslot(sp_Cursor *C, sp_Mask bit, int l) {
-    sp_Node *p;
-    int      i;
-    for (i = spK_idx(C, p = spK_parent(C, l), l) - 1;; --i) {
-        if (i < 0) {
-            if (--l < 0) break;
-            i = spK_idx(C, p = spK_parent(C, l), l);
-        } else if (bit && !(p->mask[i] & bit))
-            C->off -= p->bytes[i];
-        else
-            return C->paths[l] = &p->children[i], l;
-    }
-    return -1;
-}
-
-static void spF_descendnext(sp_Cursor *C, sp_Mask bit, int l) {
-    sp_Node *p;
-    int      i;
-    C->poff = 0;
-    if (!bit) {
-        while (++l <= spK_levels(C))
-            C->paths[l] = &spK_parent(C, l)->children[0];
-        return;
-    }
-    while (++l <= spK_levels(C)) {
-        p = spK_parent(C, l);
-        for (i = 0; !(p->mask[i] & bit); ++i) C->off += p->bytes[i];
-        C->paths[l] = &p->children[i];
-    }
-}
-
-static void spF_descendprev(sp_Cursor *C, sp_Mask bit, int l) {
-    sp_Node *p;
-    int      i;
-    if (!bit) {
-        while (++l <= spK_levels(C)) {
-            p = spK_parent(C, l);
-            C->paths[l] = &p->children[spN_cc(p) - 1];
-        }
-        return;
-    }
-    while (++l <= spK_levels(C)) {
-        p = spK_parent(C, l);
-        for (i = spN_cc(p) - 1; !(p->mask[i] & bit); --i) C->off -= p->bytes[i];
-        C->paths[l] = &p->children[i];
-    }
+static int spF_findslot(sp_Node *p, int i, int d, sp_Mask bit, size_t *pbc) {
+    for (; i >= 0 && i < spN_cc(p) && bit && !(p->mask[i] & bit); i += d)
+        *pbc += p->bytes[i];
+    return i;
 }
 
 SP_API sp_Id sp_next(sp_Cursor *C, int ns, size_t *plen) {
     sp_Mask  bit;
     sp_Node *p;
     int      i, l;
+    size_t   bc;
     if (C == NULL || C->tree == NULL) return (void)(plen && (*plen = 0)), 0;
     if (ns < 0 || ns > (int)SP_MASK_BITS) return (void)(plen && (*plen = 0)), 0;
     bit = ns ? (sp_Mask)1 << (ns - 1) : 0;
     l = spK_levels(C), i = spK_idx(C, p = spK_parent(C, l), l);
     if (C->tree->bytes == 0 || C->poff >= p->bytes[i])
         return (void)(plen && (*plen = 0)), 0;
-    C->off += p->bytes[i];
-    if ((l = spF_nextslot(C, bit, spK_levels(C))) < 0)
-        return spK_locend(C), (void)(plen && (*plen = 0)), 0;
-    spF_descendnext(C, bit, l);
-    i = spK_idx(C, p = spK_parent(C, spK_levels(C)), spK_levels(C));
-    assert(!bit || (p->mask[i] & bit));
+    bc = p->bytes[i];
+    while ((i = spF_findslot(p, i + 1, 1, bit, &bc)) == spN_cc(p)) {
+        if (--l < 0) return spK_locend(C), (void)(plen && (*plen = 0)), 0;
+        i = spK_idx(C, p = spK_parent(C, l), l);
+    }
+    C->paths[l] = &p->children[i];
+    for (; ++l <= spK_levels(C); C->paths[l] = &p->children[i])
+        i = spF_findslot(p = spK_parent(C, l), 0, 1, bit, &bc);
+    assert(!bit || (p->mask[i] & bit)), C->off += bc, C->poff = 0;
     return (void)(plen && (*plen = p->bytes[i])), spL_id(p, i);
 }
 
@@ -567,6 +511,7 @@ SP_API sp_Id sp_prev(sp_Cursor *C, int ns, size_t *plen) {
     sp_Mask  bit;
     sp_Node *p;
     int      i, l;
+    size_t   bc = 0;
     if (C == NULL || C->tree == NULL) return (void)(plen && (*plen = 0)), 0;
     if (ns < 0 || ns > (int)SP_MASK_BITS) return (void)(plen && (*plen = 0)), 0;
     bit = ns ? (sp_Mask)1 << (ns - 1) : 0;
@@ -575,14 +520,16 @@ SP_API sp_Id sp_prev(sp_Cursor *C, int ns, size_t *plen) {
     if (C->poff > 0 && (!bit || (p->mask[i] & bit)))
         return (void)(plen && (*plen = sp_min(C->poff, p->bytes[i]))),
                C->poff = 0, spL_id(p, i);
-    C->poff = 0;
-    if (C->off == 0) return (void)(plen && (*plen = 0)), 0;
-    if ((l = spF_prevslot(C, bit, spK_levels(C))) < 0)
-        return assert(bit), (void)(plen && (*plen = 0)), sp_locate(C, 0), 0;
-    spF_descendprev(C, bit, l);
-    i = spK_idx(C, p = spK_parent(C, spK_levels(C)), spK_levels(C));
-    assert(!bit || (p->mask[i] & bit));
-    C->off -= p->bytes[i], C->poff = 0;
+    if (C->off == 0) return (C->poff = 0), (void)(plen && (*plen = 0)), 0;
+    while ((i = spF_findslot(p, i - 1, -1, bit, &bc)) < 0) {
+        if (--l < 0)
+            return assert(bit), (void)(plen && (*plen = 0)), sp_locate(C, 0), 0;
+        i = spK_idx(C, p = spK_parent(C, l), l);
+    }
+    C->paths[l] = &p->children[i];
+    for (; ++l <= spK_levels(C); C->paths[l] = &p->children[i])
+        p = spK_parent(C, l), i = spF_findslot(p, spN_cc(p) - 1, -1, bit, &bc);
+    assert(!bit || (p->mask[i] & bit)), C->off -= bc + p->bytes[i], C->poff = 0;
     return (void)(plen && (*plen = p->bytes[i])), spL_id(p, i);
 }
 
@@ -1242,8 +1189,7 @@ static int spI_append(sp_Cursor *C, size_t ins, int growleft) {
     spI_pad(C);
     if (spK_bytes(C) == 0) return spI_onepiece(C, ins, 0), C->poff = ins, SP_OK;
     if (sp_offset(C) >= spK_bytes(C)) spK_locend(C);
-    /* inherits left when useleft, right otherwise; the cursor ends at
-     * the run's tail either way (sp_insert walks it back via advance) */
+    /* inherit left (useleft) or right; cursor ends at the run tail */
     spI_splitins(C, ins, spI_inherit(C, growleft, &m), m);
     spI_merge(C);
     return spK_offtail(C), SP_OK;
@@ -1478,8 +1424,7 @@ SP_API int sp_fill(sp_Cursor *C, sp_Id id, size_t len) {
     size_t    off0;
     if (!C || !C->tree) return SP_ERRPARAM;
     if (len == 0) return SP_OK;
-    /* reserve before pad: both pads may run insertrt splits (levels+1
-     * nodes each) on top of the phase budget (design detail 7) */
+    /* reserve before pad: both pads may split up to levels+1 nodes */
     r = spP_reserve(C->tree->S, &C->tree->S->nodes, 6 * spK_levels(C) + 7);
     if (r != SP_OK) return r;
     /* pad [bytes, C) as id 0 when the cursor sits virtual */
@@ -1501,8 +1446,7 @@ SP_API int sp_fill(sp_Cursor *C, sp_Id id, size_t len) {
     return spK_offtail(C), SP_OK;
 }
 
-/* prune-clear: bulk processing per leaf container (piecetab commit's
- * ptC_nexthole/ptC_freeze pattern); the cursor lands via sp_next */
+/* prune-clear: bulk arb per container, cursor lands via sp_next */
 
 static int spC_peekright(sp_Cursor *C, sp_Id id, sp_Mask bit) {
     sp_Node *p;
@@ -1552,18 +1496,14 @@ static void spC_clearleaf(sp_Cursor *C, sp_Mask bit, sp_Id id, size_t endoff) {
             if (nid != spL_id(p, i)) spL_setid(p, i, nid), changed = 1;
         }
     if (!changed) {
-        /* the arbiter may have reshaped masks even though no id moved:
-         * refresh the aggregate chain or later ns queries hit stale
-         * prunes (sp_next asserts on a false positive) */
+        /* masks may move without id changes: refresh or prunes go stale */
         spM_up(C, spK_levels(C) - 1, 0);
         sp_locate(C, endoff);
         return;
     }
     spC_compactleaf(C->tree, p);
     spC_mergebounds(C, bit);
-    /* propagate the aggregate changes along the processed container's
-     * ancestor chain (the boundary merges maintain up to the fork;
-     * levels above it are recomputed here, ptC_freeze-style) */
+    /* boundary merges covered to the fork; spM_up recomputes above */
     sp_locate(C, endoff - 1);
     spM_up(C, spK_levels(C) - 1, 0);
     sp_locate(C, endoff);
@@ -1586,8 +1526,7 @@ SP_API int sp_clear(sp_Tree *T, int ns, sp_Id id) {
             spC_clearleaf(&C, bit, id, endoff);
             continue; /* clearleaf lands at the container end */
         }
-        /* sp_next is exclusive: it skips the peeked segment and prunes
-         * past non-matching subtrees to the next match */
+        /* exclusive next: skips the peeked segment to the next match */
         if (sp_next(&C, ns, &len) == 0) break;
     }
     return SP_OK;
