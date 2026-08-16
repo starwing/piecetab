@@ -212,6 +212,18 @@ function Doc:line() end
 ---@return integer
 function Doc:linelen(lnum) end
 
+---Byte offset of the start of a line (0-based). Read-only: does not
+---move the doc cursor.
+---@param lnum integer  line number (0-based)
+---@return integer  byte offset of the line start
+function Doc:lineoffset(lnum) end
+
+---Line number and byte column for a byte offset (both 0-based).
+---Read-only: does not move the doc cursor. `off` is clamped to `[0, #doc]`.
+---@param off integer  0-based byte offset
+---@return integer line, integer col
+function Doc:linecol(off) end
+
 ---Total lines in the document (always `breaks + 1`). Syncs linecache.
 ---@return integer
 function Doc:breaks() end

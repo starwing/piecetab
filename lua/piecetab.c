@@ -801,6 +801,32 @@ static int Ldoc_linelen(lua_State *L) {
     return lua_pushinteger(L, (lua_Integer)lc_linelen(&C)), 1;
 }
 
+static int Ldoc_lineoffset(lua_State *L) {
+    lpt_Doc    *d = lpt_checkdoc(L, 1);
+    lua_Integer nu = luaL_checkinteger(L, 2);
+    lc_Cursor   C;
+    size_t      br, lnum, off;
+    lpt_checkerror(L, lpt_docsync(d, nu + 1, LPT_UNL));
+    br = lc_breaks(d->lc), lnum = (size_t)nu;
+    luaL_argcheck(L, lnum <= br, 2, "line number out of range");
+    if (lnum < br) lc_seekline(&C, d->lc, lnum);
+    off = lnum < br ? lc_lineoffset(&C) : lc_bytes(d->lc);
+    return lua_pushinteger(L, (lua_Integer)off), 1;
+}
+
+static int Ldoc_linecol(lua_State *L) {
+    lpt_Doc    *d = lpt_checkdoc(L, 1);
+    lua_Integer off = luaL_checkinteger(L, 2);
+    lc_Cursor   C;
+    size_t      total = pt_bytes(pt_buffer(&d->C));
+    luaL_argcheck(L, off >= 0, 2, "offset must be non-negative");
+    if ((size_t)off > total) off = (lua_Integer)total;
+    lpt_checkerror(L, lpt_docsync(d, LPT_UNL, (size_t)off));
+    assert(d->lc), lc_seek(&C, d->lc, (size_t)off);
+    lua_pushinteger(L, (lua_Integer)lc_line(&C));
+    return lua_pushinteger(L, (lua_Integer)lc_col(&C)), 2;
+}
+
 static int Ldoc_breaks(lua_State *L) {
     lpt_Doc *d = lpt_checkdoc(L, 1);
     size_t   total, trailing = 0;
@@ -976,6 +1002,7 @@ static void lpt_opendoc(lua_State *L) {
             ENTRY(remove),       ENTRY(offset),
             ENTRY(column),       ENTRY(line),
             ENTRY(linelen),      ENTRY(breaks),
+            ENTRY(lineoffset),   ENTRY(linecol),
             ENTRY(lines),        ENTRY(commit),
             ENTRY(undo),         ENTRY(redo),
             ENTRY(earlier),      ENTRY(later),

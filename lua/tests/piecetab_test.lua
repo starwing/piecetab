@@ -1179,6 +1179,153 @@ function TestDoc:testLineLenTrailing()
     lu.assertEquals(d:linelen(), 2)  -- current line at trailing
 end
 
+-- lineoffset / linecol: read-only line queries (cursor state untouched)
+
+function TestDoc:testLineoffsetBasic()
+    local d = pt.doc("hello\nworld")
+    lu.assertEquals(d:lineoffset(0), 0)
+    lu.assertEquals(d:lineoffset(1), 6)
+end
+
+function TestDoc:testLineoffsetSingleLine()
+    -- no \n: the whole doc is the trailing fragment, starts at 0
+    local d = pt.doc("hello")
+    lu.assertEquals(d:lineoffset(0), 0)
+end
+
+function TestDoc:testLineoffsetFragment()
+    -- trailing fragment line: offset = lc_bytes (fragment start)
+    local d = pt.doc("a\nb")
+    lu.assertEquals(d:lineoffset(0), 0)
+    lu.assertEquals(d:lineoffset(1), 2) -- "b" start
+end
+
+function TestDoc:testLineoffsetTrailingNL()
+    -- virtual empty line after trailing \n: start = doc end
+    local d = pt.doc("a\n")
+    lu.assertEquals(d:lineoffset(0), 0)
+    lu.assertEquals(d:lineoffset(1), 2) -- virtual empty line start
+end
+
+function TestDoc:testLineoffsetEmptyDoc()
+    local d = pt.doc("")
+    lu.assertEquals(d:lineoffset(0), 0)
+end
+
+function TestDoc:testLineoffsetOutOfRange()
+    local d = pt.doc("a\nb")
+    lu.assertErrorMsgContains("line number out of range",
+        function() d:lineoffset(2) end)
+    lu.assertErrorMsgContains("line number out of range",
+        function() d:lineoffset(-1) end)
+end
+
+function TestDoc:testLineoffsetReadonly()
+    -- read-only: doc cursor state (offset/line/column) unchanged
+    local d = pt.doc("a\nb\nc")
+    d:seek("set", 3)
+    local off, line, col = d:offset(), d:line(), d:column()
+    lu.assertEquals(d:lineoffset(1), 2)
+    lu.assertEquals(d:lineoffset(2), 4) -- fragment "c" start
+    lu.assertEquals(d:offset(), off)
+    lu.assertEquals(d:line(), line)
+    lu.assertEquals(d:column(), col)
+end
+
+function TestDoc:testLinecolBasic()
+    local d = pt.doc("hello\nworld")
+    local line, col = d:linecol(0)
+    lu.assertEquals(line, 0); lu.assertEquals(col, 0)
+    line, col = d:linecol(2)
+    lu.assertEquals(line, 0); lu.assertEquals(col, 2)
+    line, col = d:linecol(6)
+    lu.assertEquals(line, 1); lu.assertEquals(col, 0)
+    line, col = d:linecol(9)
+    lu.assertEquals(line, 1); lu.assertEquals(col, 3)
+end
+
+function TestDoc:testLinecolSingleLine()
+    local d = pt.doc("hello")
+    local line, col = d:linecol(3)
+    lu.assertEquals(line, 0); lu.assertEquals(col, 3)
+    line, col = d:linecol(5) -- doc end = fragment end
+    lu.assertEquals(line, 0); lu.assertEquals(col, 5)
+end
+
+function TestDoc:testLinecolFragment()
+    local d = pt.doc("a\nb")
+    local line, col = d:linecol(2) -- fragment start
+    lu.assertEquals(line, 1); lu.assertEquals(col, 0)
+    line, col = d:linecol(3) -- fragment end (doc end)
+    lu.assertEquals(line, 1); lu.assertEquals(col, 1)
+end
+
+function TestDoc:testLinecolEndAndClamp()
+    local d = pt.doc("hello\nworld")
+    local line, col = d:linecol(11) -- doc end = last line end
+    lu.assertEquals(line, 1); lu.assertEquals(col, 5)
+    line, col = d:linecol(999) -- clamped to #doc
+    lu.assertEquals(line, 1); lu.assertEquals(col, 5)
+end
+
+function TestDoc:testLinecolEmptyLines()
+    -- blank line: "a\n\nb" -> lines "a", "", fragment "b"
+    local d = pt.doc("a\n\nb")
+    local line, col = d:linecol(1) -- after "a" newline
+    lu.assertEquals(line, 0); lu.assertEquals(col, 1)
+    line, col = d:linecol(2) -- blank line start
+    lu.assertEquals(line, 1); lu.assertEquals(col, 0)
+    line, col = d:linecol(3) -- fragment "b" start
+    lu.assertEquals(line, 2); lu.assertEquals(col, 0)
+end
+
+function TestDoc:testLinecolUtf8Bytes()
+    -- columns are byte offsets within the line, not codepoints
+    local d = pt.doc("héllo\nwörld") -- é, ö = 2 bytes each
+    local line, col = d:linecol(2)   -- inside é (line 0)
+    lu.assertEquals(line, 0); lu.assertEquals(col, 2)
+    line, col = d:linecol(7) -- start of line 1 ("w")
+    lu.assertEquals(line, 1); lu.assertEquals(col, 0)
+    line, col = d:linecol(9) -- inside ö (line 1)
+    lu.assertEquals(line, 1); lu.assertEquals(col, 2)
+end
+
+function TestDoc:testLinecolEmptyDoc()
+    local d = pt.doc("")
+    local line, col = d:linecol(0)
+    lu.assertEquals(line, 0); lu.assertEquals(col, 0)
+    line, col = d:linecol(999) -- clamped
+    lu.assertEquals(line, 0); lu.assertEquals(col, 0)
+end
+
+function TestDoc:testLinecolNeg()
+    local d = pt.doc("hi")
+    lu.assertErrorMsgContains("offset must be non-negative",
+        function() d:linecol(-1) end)
+end
+
+function TestDoc:testLinecolVsSeek()
+    -- linecol(off) must match (line(), column()) after seek("set", off)
+    local d = pt.doc("a\nbb\nccc")
+    for off = 0, #d do
+        local line, col = d:linecol(off)
+        d:seek("set", off)
+        lu.assertEquals(line, d:line(), "line at " .. off)
+        lu.assertEquals(col, d:column(), "col at " .. off)
+    end
+end
+
+function TestDoc:testLinecolReadonly()
+    local d = pt.doc("a\nb\nc")
+    d:seek("set", 1)
+    local off, line, col = d:offset(), d:line(), d:column()
+    d:linecol(4)
+    d:linecol(0)
+    lu.assertEquals(d:offset(), off)
+    lu.assertEquals(d:line(), line)
+    lu.assertEquals(d:column(), col)
+end
+
 -- branch coverage: negative offset / empty-string errors
 
 function TestBuffer:testReadNegOffset()
