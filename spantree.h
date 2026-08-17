@@ -1209,21 +1209,18 @@ SP_API int sp_fill(sp_Cursor *C, sp_Id id, size_t len) {
     sp_Cursor R;
     int       fl, r;
     size_t    off0;
+    sp_Mask   m = 0;
     if (!C || !C->tree) return SP_ERRPARAM;
     if (len == 0) return SP_OK;
     /* reserve before pad: both pads may split up to levels+1 nodes */
     r = spP_reserve(C->tree->S, &C->tree->S->nodes, 6 * spK_levels(C) + 7);
     if (r != SP_OK) return r;
-    /* pad [bytes, C) as id 0 when the cursor sits virtual */
-    spI_pad(C), off0 = sp_offset(C);
+    spI_pad(C), off0 = sp_offset(C); /* pad [bytes, C) from virtual */
     /* seek builds R (off0 + len may sit virtual) */
-    sp_seek(&R, C->tree, off0 + len);
-    if (sp_offset(&R) > C->tree->bytes) {
-        /* pad [bytes, off0+len); arb(0,0) announces the pad */
-        sp_Mask m = 0;
-        spI_pad(&R), spF_arb(&R, 0, 0, &m, 0);
-        sp_locate(C, off0);
-    } else if (sp_offset(&R) >= C->tree->bytes)
+    r = sp_seek(&R, C->tree, off0 + len), assert(r == SP_OK);
+    if (sp_offset(&R) > C->tree->bytes) /* pad [bytes, off0+len) & announces */
+        spI_pad(&R), spF_arb(&R, 0, 0, &m, 0), sp_locate(C, off0);
+    else if (sp_offset(&R) >= C->tree->bytes)
         spK_locend(&R);
     fl = spD_splitpaths(C, &R);
     if (fl > spK_levels(C))

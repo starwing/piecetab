@@ -476,7 +476,7 @@ TEST(idref8_differ) {
     long      counts[SP_REFN];
     unsigned  seed = 3;
     int       step;
-    mk8tree(S, t);
+    assert(t), mk8tree(S, t);
     memset(&r, 0, sizeof(SpRef));
     spA_seed(&r, t), sp_setarbiter(t, spA_ref, &r);
     for (step = 0; step < 300; ++step) {
