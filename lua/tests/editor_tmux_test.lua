@@ -18,13 +18,12 @@ end
 local lu = require "luaunit"
 local tmux = require "tmux"
 
--- short-lived temp files in the cwd: short names keep the status bar
--- within the pane width (long /var/folders paths would truncate it)
-local tmp_n = 0
+-- short-lived temp files in TMPDIR: os.tmpname() returns a unique path
+-- per call; contents are (over)written by tmux.new's io.open(path, "w").
+-- Long paths may truncate the status bar, but no assertion depends on it.
 --- @return string
 local function tmpfile()
-  tmp_n = tmp_n + 1
-  return string.format("t%d_%d", os.time() % 100000, tmp_n)
+  return os.tmpname()
 end
 
 -- fakelsp: LSP server script wired through the editor's PT_LSP_CMD

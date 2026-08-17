@@ -28,6 +28,25 @@ end
 
 local LINES = 20 -- document lines for scroll tests
 
+-- Compare a cell style handle against an attr table at key level: tree
+-- fill segments carry merged (arbiter-composed) ids, so a plain intern
+-- handle never equals them — assert the folded attr instead.
+local function assert_style(e, st, attr)
+  local a = e.comp:attr(st)
+  lu.assertNotNil(a, "style id " .. tostring(st) .. " has no attr")
+  for k, v in pairs(attr) do
+    lu.assertEquals(a[k], v, "style key " .. tostring(k))
+  end
+end
+
+-- Opposite: every set key in attr must be absent/different on the cell.
+local function assert_not_style(e, st, attr)
+  local a = e.comp:attr(st)
+  for k, v in pairs(attr) do
+    lu.assertNotEquals(a and a[k], v, "style key " .. tostring(k))
+  end
+end
+
 local function make_doc()
   local t = {}
   for i = 1, LINES do t[i] = "line " .. i end
@@ -613,11 +632,11 @@ function TestStyleTable:testFullStateReset()
   -- SGR codes are cumulative: each style CSI must fully reset prior
   -- state, or a DIM->color transition (line number -> keyword) leaks
   -- the DIM attribute onto the colored cell
-  local s = Ed.newsc()
+  local e = make_ed("")
   local attrs = { { fg = 207 }, { bg = 237, dim = true },
                   { bold = true, underline = true } }
   for i, a in ipairs(attrs) do
-    lu.assertStrContains(s:csi(s:intern(a)), "\27[0m", false, "attr " .. i)
+    lu.assertStrContains(e:csi(e.comp:intern(a)), "\27[0m", false, "attr " .. i)
   end
 end
 
@@ -630,14 +649,12 @@ function TestSyntax:testKeywordC()
   e:open_language("c")
   frame(e)
   local _, st = e.grid:cell(0, 4) -- content col 0 ('i' of int)
-  lu.assertEquals(st, e.sc:intern(Ed.ATTR_KEYWORD))
+  assert_style(e, st, Ed.ATTR_KEYWORD)
   local _, st2 = e.grid:cell(0, 8) -- content col 4 ('m' of main)
-  assert(st2 ~= e.sc:intern(Ed.ATTR_KEYWORD),
-         "main should not be keyword: " .. tostring(st2))
-  assert(st2 == e.sc:intern(Ed.ATTR_FUNCTION),
-         "main should be function: " .. tostring(st2))
+  assert_not_style(e, st2, Ed.ATTR_KEYWORD)
+  assert_style(e, st2, Ed.ATTR_FUNCTION)
   local _, st3 = e.grid:cell(0, 21) -- content col 17 ('r' of return)
-  lu.assertEquals(st3, e.sc:intern(Ed.ATTR_KEYWORD))
+  assert_style(e, st3, Ed.ATTR_KEYWORD)
 end
 
 function TestSyntax:testCommentStringC()
@@ -646,9 +663,9 @@ function TestSyntax:testCommentStringC()
   e:open_language("c")
   frame(e)
   local _, st = e.grid:cell(0, 11) -- content col 7 ('/' of comment)
-  lu.assertEquals(st, e.sc:intern(Ed.ATTR_COMMENT))
+  assert_style(e, st, Ed.ATTR_COMMENT)
   local _, st2 = e.grid:cell(0, 32) -- content col 28 ('"' of string)
-  lu.assertEquals(st2, e.sc:intern(Ed.ATTR_STRING))
+  assert_style(e, st2, Ed.ATTR_STRING)
 end
 
 function TestSyntax:testEditUpdatesHighlight()
@@ -660,7 +677,7 @@ function TestSyntax:testEditUpdatesHighlight()
 
   frame(e)
   local _, st = e.grid:cell(0, 21) -- content col 17 ("eturn" start)
-  lu.assertNotEquals(st, e.sc:intern(Ed.ATTR_KEYWORD))
+  assert_not_style(e, st, Ed.ATTR_KEYWORD)
 end
 
 function TestSyntax:testNoLanguageNoHighlight()
@@ -673,34 +690,34 @@ end
 TestSc = {}
 
 function TestSc:testInternReuse()
-  local s = Ed.newsc()
+  local s = Ed.newcompositor()
   lu.assertEquals(s:intern({ fg = 207 }), s:intern({ fg = 207 }))
   lu.assertEquals(s:intern({}), 0) -- default attr pre-interned as style 0
 end
 
 function TestSc:testInternDistinct()
-  local s = Ed.newsc()
+  local s = Ed.newcompositor()
   lu.assertNotEquals(s:intern({ fg = 1 }), s:intern({ bg = 1 }))
   lu.assertNotEquals(s:intern({ fg = 1 }), s:intern({ fg = 2 }))
   lu.assertNotEquals(s:intern({ bold = true }), s:intern({ underline = true }))
 end
 
 function TestSc:testInternFieldOrderIrrelevant()
-  local s = Ed.newsc()
+  local s = Ed.newcompositor()
   lu.assertEquals(s:intern({ fg = 1, bold = true }),
                   s:intern({ bold = true, fg = 1 }))
 end
 
 function TestSc:testInternUnsetSkipped()
-  local s = Ed.newsc()
+  local s = Ed.newcompositor()
   lu.assertEquals(s:intern({ bold = true }),
                   s:intern({ bold = true, underline = false, dim = nil }))
 end
 
 function TestSc:testInverseLookup()
-  local s = Ed.newsc()
+  local s = Ed.newcompositor()
   local id = s:intern({ fg = 207, bg = { r = 1, g = 2, b = 3 }, bold = true })
-  local a = s:attr(id)
+  local a = assert(s:attr(id))
   lu.assertEquals(a.fg, 207)
   lu.assertEquals(a.bg.r, 1)
   lu.assertTrue(a.bold)
@@ -708,15 +725,16 @@ function TestSc:testInverseLookup()
 end
 
 function TestSc:testCsiGeneration()
-  local s = Ed.newsc()
-  lu.assertEquals(s:csi(0), "\27[0m")
-  lu.assertEquals(s:csi(s:intern({})), "\27[0m")
-  lu.assertEquals(s:csi(s:intern({ fg = 207 })), "\27[0m\27[38;5;207m")
-  lu.assertEquals(s:csi(s:intern({ bold = true, bg = 237 })),
+  -- csi lives on Ed (the spantree tree has zero format knowledge)
+  local e = make_ed("")
+  lu.assertEquals(e:csi(0), "\27[0m")
+  lu.assertEquals(e:csi(e.comp:intern({})), "\27[0m")
+  lu.assertEquals(e:csi(e.comp:intern({ fg = 207 })), "\27[0m\27[38;5;207m")
+  lu.assertEquals(e:csi(e.comp:intern({ bold = true, bg = 237 })),
                   "\27[0m\27[1;48;5;237m")
-  lu.assertEquals(s:csi(s:intern({ fg = { r = 1, g = 2, b = 3 } })),
+  lu.assertEquals(e:csi(e.comp:intern({ fg = { r = 1, g = 2, b = 3 } })),
                   "\27[0m\27[38;2;1;2;3m")
-  lu.assertNil(s:csi(999))
+  lu.assertNil(e:csi(999))
 end
 
 TestLayers = {}
@@ -737,7 +755,7 @@ end
 function TestLayers:testPiecesAlternate()
   local e = make_pieces("aaaa bbbb\n")
   frame(e)
-  local bg = e.sc:intern(Ed.ATTR_GRAY_BG)
+  local bg = e.comp:intern(Ed.ATTR_GRAY_BG)
   local _, st = e.grid:cell(0, 4) -- 'a' (piece 1, plain)
   lu.assertEquals(st, 0)
   local _, st2 = e.grid:cell(0, 8) -- 'X' (piece 2, gray)
@@ -761,7 +779,7 @@ function TestLayers:testPieceGrayOnlyOnEvenPieces()
   local e = make_pieces("aaaa bbbb\n")
   frame(e)
   local _, st = e.grid:cell(0, 9) -- 'Y' (piece 2, gray)
-  lu.assertEquals(st, e.sc:intern(Ed.ATTR_GRAY_BG))
+  lu.assertEquals(st, e.comp:intern(Ed.ATTR_GRAY_BG))
   local _, st2 = e.grid:cell(0, 4) -- 'a' (piece 1, plain)
   lu.assertEquals(st2, 0)
 end
@@ -775,15 +793,14 @@ function TestLayers:testLayeredCompose()
   e:docedit(0, "Q")
   e.show_pieces = true
   frame(e)
-  local bg = e.sc:intern(Ed.ATTR_GRAY_BG)
-  local kw = e.sc:intern(Ed.ATTR_KEYWORD)
+  local bg = e.comp:intern(Ed.ATTR_GRAY_BG)
   local _, st = e.grid:cell(0, 4) -- 'i' (piece 1, plain): keyword only
-  lu.assertEquals(st, kw)
+  assert_style(e, st, Ed.ATTR_KEYWORD)
   local _, st2 = e.grid:cell(0, 8) -- 'Q' (piece 2, gray): no syntax
   lu.assertEquals(st2, bg)
   local _, st3 = e.grid:cell(0, 9) -- 'x' (piece 3, plain): nothing
   lu.assertEquals(st3, 0)
-  lu.assertNotEquals(kw, bg)
+  lu.assertNotEquals(bg, 0)
 end
 
 -- "aaaXYa\nbbbb\n": pieces [0,3) plain, [3,5) gray, [5,12) plain —
@@ -797,7 +814,7 @@ function TestLayers:testPieceAcrossLineBoundary()
   local _, st = e.grid:cell(0, 4) -- 'a' col 0 (piece 1, plain)
   lu.assertEquals(st, 0)
   local _, st2 = e.grid:cell(0, 8) -- 'Y' col 4 (piece 2, gray, same row)
-  lu.assertEquals(st2, e.sc:intern(Ed.ATTR_GRAY_BG))
+  lu.assertEquals(st2, e.comp:intern(Ed.ATTR_GRAY_BG))
   local _, st3 = e.grid:cell(1, 4) -- row 1 col 0 (piece 3, plain)
   lu.assertEquals(st3, 0)
 end
@@ -813,11 +830,11 @@ function TestLayers:testMergeLayersUnsetPassesThrough()
   e.show_pieces = true
   frame(e)
   local _, st = e.grid:cell(0, 4) -- 'c' of char (piece 1, plain): keyword
-  lu.assertEquals(st, e.sc:intern(Ed.ATTR_KEYWORD))
+  assert_style(e, st, Ed.ATTR_KEYWORD)
   local _, st2 = e.grid:cell(0, 16) -- '"' (piece 2, gray): string + gray
-  lu.assertEquals(st2, e.sc:intern({ fg = 114, bg = 237 }))
+  lu.assertEquals(st2, e.comp:intern({ fg = 114, bg = 237 }))
   local _, st3 = e.grid:cell(0, 18) -- 'a' (piece 3, plain): string only
-  lu.assertEquals(st3, e.sc:intern(Ed.ATTR_STRING))
+  assert_style(e, st3, Ed.ATTR_STRING)
 end
 
 TestVisual = {}
@@ -829,7 +846,7 @@ function TestVisual:testEnterAndExtend()
   lu.assertEquals(e.sel_start, 0)
   local s = frame(e)
   lu.assertStrContains(s, "VISUAL") -- status bar mode
-  local rev = e.sc:intern(Ed.ATTR_REVERSE)
+  local rev = e.comp:intern(Ed.ATTR_REVERSE)
   -- cursor char is inside the selection immediately (vim charwise)
   local _, st = e.grid:cell(0, 4) -- 'a'
   lu.assertEquals(st, rev)
@@ -849,7 +866,7 @@ function TestVisual:testReverseSelectionExtendsBackward()
   e:dispatch("l") -- cursor 2, selection [0,3) = "abc"
   e:dispatch("h") -- cursor 1, selection [0,2) = "ab"
   frame(e)
-  local rev = e.sc:intern(Ed.ATTR_REVERSE)
+  local rev = e.comp:intern(Ed.ATTR_REVERSE)
   local _, st = e.grid:cell(0, 5) -- 'b' (cursor char)
   lu.assertEquals(st, rev)
   local _, st2 = e.grid:cell(0, 6) -- 'c' (outside selection)
@@ -868,7 +885,7 @@ function TestVisual:testThreeLayerCompose()
   e:dispatch("l")
   frame(e)
   local _, st = e.grid:cell(0, 16) -- content col 12
-  lu.assertEquals(st, e.sc:intern({ fg = 114, reverse = true, bg = 237 }))
+  lu.assertEquals(st, e.comp:intern({ fg = 114, reverse = true, bg = 237 }))
 end
 
 function TestVisual:testEscapeClears()
@@ -926,7 +943,7 @@ function TestVisual:testMultilineSelection()
   e:dispatch("v") -- sel_start 0
   e:dispatch("j") -- cursor line 1 col 0, selection "ab\nc"
   frame(e)
-  local rev = e.sc:intern(Ed.ATTR_REVERSE)
+  local rev = e.comp:intern(Ed.ATTR_REVERSE)
   local _, st = e.grid:cell(0, 4) -- 'a'
   lu.assertEquals(st, rev)
   local _, st2 = e.grid:cell(0, 5) -- 'b'

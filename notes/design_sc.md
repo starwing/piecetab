@@ -1,8 +1,8 @@
 # sc（style compositor）孵化记录
 
-> 状态：**editor.lua 内嵌类，已落地（2026-08）**。多层高亮孵化的第一步。
-> 本文档记录当前实现形态、设计决策与 C 化评估点——接口随演进固化后，
-> 酌情转 Lua C 模块（Lua 特有）或 stb header（通用问题）。
+> 状态：**已 C 化进 spantree.c（design_spantree_lua.md）**。本文档记录
+> sc 孵化期形态与设计决策——editor.lua 现用 `sp.compositor()`（行为
+> 等价），合成由 spantree 树 arbiter 承担。
 
 ## 一、定位
 
