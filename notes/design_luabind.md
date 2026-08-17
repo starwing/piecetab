@@ -155,6 +155,10 @@ d:line() → lnum                       -- 当前位置行号
 d:column() → col                      -- 当前位置列（行内字节偏移）
 d:linelen([lnum]) → n                 -- 行长含 \n；残段/虚拟尾行 =
                                        --   pt_bytes - lc_bytes
+d:lineoffset(lnum) → off             -- 第 lnum 行起始字节偏移（0-based，
+                                       --   lnum ∈ [0, breaks()]；只读，不动游标）
+d:linecol(off) → line, col           -- 字节 offset → 行号 + 行内字节列
+                                       --   （0-based；只读，不动游标）
 d:breaks() → n                        -- 行数（= lc_breaks + 尾残段修正）；
                                        --   尾 \n 的虚拟空行不计（editor 行号语义）
 d:lines([fmt, ...])                   -- 迭代器，反复调 read(fmt, ...) 直到 nil；
@@ -413,7 +417,11 @@ lpt_docsync(L, d, tbytes, tlines):
 | 10  | undotree.h 不含 lc_Cache，doc 需自行管理 lc 位点                          | 绑定层自己维护 lck/lcok，借 ut_freshdiff+ut_hunks 做增量追赶                              |
 | 11  | lc_seek 越界软 clamp vs lc_seekline 越界硬 ERR_PARAM                      | 不一致，需注意。seekline 前必须校验 lnum ≤ breaks                                         |
 | 12  | ut_switch 在 journal 非空时拒绝（ERR_PARAM）                                | undo 丢弃草稿前必须先 ut_discard                                                           |
-| 13  | hunkapply 跨多 hunk 无原子性：lc_append 自身回滚，但部分 hunk 成功、部分失败后 lc 不一致                               | **已解决**：hunkapply 前保存 `hs[0].pa`（最早修改点）；失败时 `lc_remove` 截断 lc 中 [pa, lc_bytes) 范围（保留 pa 前不受影响的正确数据），lcvid 不更新让下次 docsync 重 diff 补回被截区域。不新增 C API。 |
+| 13 | hunkapply 跨多 hunk 无原子性：lc_append 自身回滚，但部分 hunk 成功、部分失败后 lc 不一致                               | **已解决**：hunkapply 前保存 `hs[0].pa`（最早修改点）；失败时 `lc_remove` 截断 lc 中 [pa, lc_bytes) 范围（保留 pa 前不受影响的正确数据），lcvid 不更新让下次 docsync 重 diff 补回被截区域。不新增 C API。 |
+| 17 | sp_Cursor 编辑后 paths 悬垂（UB）                          | spantree 绑定层 epoch 守卫，读时抛错（design_spantree_lua.md §二）                              |
+| 18 | spantree 编辑动词基于 cursor，Lua 侧以 offset 调用          | 树方法内部 sp_seek 栈游标（游标无资源，无泄漏——摩擦 #6 对 spantree 不成立）                     |
+| 19 | sp_style 返回树内指针                                      | 绑定即刻拷贝 id 值，不暴露指针                                                                  |
+| 20 | spantree 树无 undo                                         | undo/redo 经 hunk 重放 splice 同步字节（editor 层），染色由写者 dirty→重染兜底                   |
 
 ### 7.4 绑定层代码审计（undotree.h 集成后，2026-07 勘误）
 

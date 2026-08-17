@@ -5,7 +5,8 @@
         "lua/cellgrid.d.lua",
         "lua/termfeed.d.lua",
         "lua/lua-utf8.d.lua",
-        "lua/treesitter.d.lua"
+        "lua/treesitter.d.lua",
+        "lua/spantree.d.lua"
     ],
     "runtime.version": "Lua 5.4",
     "workspace.ignoreDir": [

@@ -9,7 +9,8 @@
                 "PT_IMPLEMENTATION",
                 "LC_IMPLEMENTATION",
                 "UT_IMPLEMENTATION",
-                "CG_IMPLEMENTATION"
+                "CG_IMPLEMENTATION",
+                "SP_IMPLEMENTATION"
             ],
             "compilerPath": "/usr/bin/clang",
             "cStandard": "c89",

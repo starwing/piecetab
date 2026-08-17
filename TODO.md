@@ -43,13 +43,17 @@
 
 ## 后续候选（多层高亮落地后评估）
 
+- **spantree 储备**（库+绑定已完成，2026-08）：demo 无消费者——
+  第一性结论（notes/reports/research_spantree_usage.md）：hl = 视口
+  纯函数、LSP = 版本化快照（数组替换+切片，Lua 管即可）、快层不进
+  树——均非"标记即忘"。真消费者 = 身份层/extmark 兼容、记忆型插件
+  痕迹、vtext 注入节点（design_spantree.md §八/P5），到那时再接入。
+  editor.lua 已退场（compositor 的 intern/attr 样式服务保留在用）
 - **hint text**（虚拟文本）：渲染注入能力，基于多层基础；LSP
   inlay hints 前置
-- **C 化评估**：整个 Lua 栈通盘考虑（sc/合成器/渲染管线），
-  哪些值得 C 化、以何形态（Lua C 模块 vs stb header）
-- **spantree**：技术储备齐备（design_spantree.md 核心定案），
-  **需要才上**——层存储 + 混合器 + 身份层（extmark）；virt_text
-  "渲染注入不承诺"决议是否推翻待 hint text 设计时裁定
+- **C 化评估**：整个 Lua 栈通盘考虑（sc 已 C 化进 spantree 绑定；
+  剩余：合成器/渲染管线），哪些值得 C 化、以何形态（Lua C 模块
+  vs stb header）
 - **LSP 集成**（大目标）：semantic tokens → 层写者、
   inlay hints → hint text、diagnostics → 身份层
 - **LSP undo 增量同步**（✅ 已落地 2026-08）：`doc:undo(f)` 回调式
@@ -74,4 +78,9 @@
 - tree-sitter 0.26 绑定（兼容 5.1/5.5，grammar .so 加载）
 - editor.lua class 化重写 + 注册表 + luaunit 测试框架
 - editor.lua 真实 tree-sitter 语法高亮（增量，C/Lua）
+- **spantree 落地**（2026-08）：C 库（arbiter 单层）+ Lua 绑定
+  （compositor C 化 + __hash + epoch 守卫，定案
+  notes/design_spantree_lua.md；API 摩擦检查结论：spantree.h 零改动）
+  + 搜索高亮 demo 曾接入后按第一性退场（见"后续候选"储备条目）。
+  compositor（intern/attr/__hash 样式服务）保留在 editor.lua 使用
 - CI（GitHub Actions：build + test + coverage）+ README badges

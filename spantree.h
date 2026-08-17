@@ -967,7 +967,7 @@ static void spI_pad(sp_Cursor *C) {
 }
 
 static int spI_append(sp_Cursor *C, size_t ins, int growleft) {
-    sp_Mask m;
+    sp_Mask m = 0;
     int     r;
     if (!C || !C->tree) return SP_ERRPARAM;
     if (ins == 0) return SP_OK;

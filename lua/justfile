@@ -21,12 +21,13 @@ cg *args='': (build "cellgrid") (run "cellgrid_test" args)
 tf *args='': (build "termfeed") (run "termfeed_test" args)
 json *args='': (build "json") (run "json_test" args)
 lsp *args='': (build "json") (run "lsp_test" args)
+sp *args='': (build "spantree") (run "spantree_test" args)
 # editor demo needs lua-utf8 rock (PUC Lua only)
-ed *args='': (build-lua "piecetab") (build-lua "cellgrid") (build-lua "termfeed")
+ed *args='': (build-lua "piecetab") (build-lua "cellgrid") (build-lua "termfeed") (build-lua "spantree")
     lua tests/editor_test.lua {{ args }}
 # display integration tests: real terminal via tmux helper
 # (needs tmux in PATH; json.so is required by lsp.lua in the session)
-ed-tmux *args='': (build-lua "piecetab") (build-lua "cellgrid") (build-lua "termfeed") (build-lua "json")
+ed-tmux *args='': (build-lua "piecetab") (build-lua "cellgrid") (build-lua "termfeed") (build-lua "json") (build-lua "spantree")
     lua tests/editor_tmux_test.lua {{ args }}
 
 TS_INC := "-I/opt/homebrew/include"
@@ -43,7 +44,7 @@ build-ts: ts-grammars
 ts *args='': (build-ts) (run "treesitter_test" args)
 
 # run every test suite (needs lua-utf8 rock, tmux, tree-sitter grammars)
-test: pt cg tf json lsp ed ed-tmux ts
+test: pt cg tf json lsp ed ed-tmux ts sp
 
 cov mod t:
     rm -f *.gcda luajit/*.gcda
@@ -60,6 +61,7 @@ cov mod t:
 pt-cov: (cov "piecetab" "piecetab_test")
 cg-cov: (cov "cellgrid" "cellgrid_test")
 tf-cov: (cov "termfeed" "termfeed_test")
+sp-cov: (cov "spantree" "spantree_test")
 
 json-cov:
     rm -f *.gcda luajit/*.gcda
@@ -94,6 +96,8 @@ pt-lines: (lines "piecetab")
 cg-lines: (lines "cellgrid")
 tf-lines: (lines "termfeed")
 ts-lines: (lines "treesitter")
+sp-lines: (lines "spantree")
+sp-unbranched: (cov-unbranched "spantree")
 
 clean: clean-gcda
     rm -f *.so luajit/*.so *.gcda luajit/*.gcda lua_coverage.info lcov.info
