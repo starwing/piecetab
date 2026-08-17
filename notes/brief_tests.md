@@ -21,6 +21,7 @@
 |---|---|
 | `just lc` / `just lc8` | linecache（FANOUT=4 / 8） |
 | `just pt` | piecetab |
+| `just sp` / `just sp8` | spantree（FANOUT=4 / 8） |
 | `just ut` | undotree |
 | `just cg` | cellgrid |
 | `just tf` | termfeed |
@@ -29,6 +30,15 @@
 - `just lc @splice_trailing`：`@` 仅运行首个匹配
 - 覆盖率：`just <xx>-cov`（生成 lcov.info）、`just <xx>-lines`（未覆盖行源码）、`just <xx>-unbranched`（未覆盖分支）、`just cov`（全量）、`just clean`
 - **Lua 绑定测试在 `lua/justfile`**，命名与根 justfile 对齐：`just lua/pt`、`just lua/ts`、`just lua/ts-cov`、`just lua/ts-lines`、`just lua/clean`（`just lua/<recipe>` 自动执行该目录下 justfile）。根 justfile 不设其他位置 justfile 的入口
+
+## Fuzz 测试
+
+- 源文件 `fuzz/<lib>_fuzz.c`（pt/sp/lc，fanout 4），共享脚手架 `fuzz/fz.h`（种子 RNG、op 日志 io、op 表宏）
+- 运行：`just <lib>-fuzz [seed]`（如 `just pt-fuzz 1`）；崩溃重放：`just fuzz-replay <lib> <path>`；消毒版 `just dfz-<lib> [seed]`（ASan/UBSan）
+- **op 表统一为 X-macro 权重表**：每 fuzz 定义 `FZ_KIND(X)`（每 op 一行 `X(NAME, weight)`）后展开 `FZ_TABLE()`，得到 enum、名字表、权重表和 `fz_opidx`/`fz_opname`；`o->op = rnd()%100` 按累计权重映射到 op——**权重和必须保持 100**（超 100 的尾部行永不命中），调权重只改数字不重排；加新 op = 表加一行 + `runop` 加 case
+- 崩溃契约：每 op 先写 `/tmp/<lib>_oplog.txt` 再执行，崩溃即用 `just fuzz-replay <lib> /tmp/<lib>_oplog.txt` 重放定位
+- 查树频率：游标检查每 op（O(1)），树检查每 `FZ_CHECK` op（O(树大小)，默认 256）；`-DFZ_CHECK=1` 最强扫描（justfile 改 CFLAGS 或直接 gcc -D）
+- **禁止在 fuzz 里手写弱化 check 副本**：直接用 tests 标准 `pt_checktree`/`lc_checktree`/`sp_checktree`。教训：标准 checktree 曾漏叶容器内合并检查（pt 的 ADJACENT、sp 的 SEGMERGE 相邻段检查），已补进 tests 标准版（tests/pt_tests.h、tests/sp_tests.h）——fuzz 与单测共用一份，两边同步受益
 
 ## Lua 测试（luaunit）
 

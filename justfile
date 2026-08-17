@@ -16,9 +16,9 @@ sp *args='': (test "tests/spantree_test_fanout4" args)
 sp8 *args='': (test "tests/spantree_test_fanout8" args)
 
 # fuzz: seeded random-op stress with per-op invariant checks
-fuzz-sp seed='1': (fuzz-run "sp" seed)
-fuzz-pt seed='1': (fuzz-run "pt" seed)
-fuzz-lc seed='1': (fuzz-run "lc" seed)
+sp-fuzz seed='1': (fuzz-run "sp" seed)
+pt-fuzz seed='1': (fuzz-run "pt" seed)
+lc-fuzz seed='1': (fuzz-run "lc" seed)
 fuzz-replay lib path: (fuzz-run lib "replay" path)
 
 # debug fuzz: ASan/UBSan build, precise fault isolation

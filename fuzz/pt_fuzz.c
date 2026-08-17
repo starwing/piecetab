@@ -37,29 +37,11 @@
     X(READ, 2)          \
     X(EDIT, 2)
 
-#define FZ_ENUM(n, p) FZ_##n,
-enum { FZ_KIND(FZ_ENUM) FZ_KIND_NUM };
-#define FZ_NAME(n, p) #n,
-static const char *const fz_opnames[] = { FZ_KIND(FZ_NAME) };
-#define FZ_PCT(n, p) p,
-static const unsigned fz_oppcts[] = { FZ_KIND(FZ_PCT) };
-#define FZ_KIND_N ((unsigned)(sizeof(fz_oppcts) / sizeof(fz_oppcts[0])))
-
-static unsigned fz_opidx(unsigned op) {
-    unsigned i, acc = 0;
-    for (i = 0; i < FZ_KIND_N; ++i)
-        if (op < (acc += fz_oppcts[i])) return i;
-    return FZ_KIND_N - 1;
-}
-
-static const char *fz_opname(unsigned op) {
-    return fz_opnames[fz_opidx(op)];
-}
+FZ_TABLE()
 
 static char fz_pool[1 << 24];
 static size_t fz_used;
 static unsigned fz_dseed; /* independent stream so replay reproduces */
-static unsigned fz_opno;
 
 /* FZ_SEAM_PCT% of slices are placed immediately after the previous one,
  * producing physically-adjacent literals that exercise the seam-merge /

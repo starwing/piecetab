@@ -23,11 +23,11 @@ LUAJIT_INC := `
 # fuzz tools: fuzz writes the op log to /tmp/<lib>_oplog.txt before each
 # op, so a crash leaves a replayable log (just fuzz-replay <lib> <path>)
 # fast daily run (-O2, no sanitizers); dfz-* is the sanitized variant
-fuzz-run lib mode arg='1':
+fuzz-run lib mode arg='':
     {{ CC }} {{ CFLAGS }} {{ INCS }} -Ifuzz -g -O2 -o fuzz/{{ lib }}_fuzz fuzz/{{ lib }}_fuzz.c && ./fuzz/{{ lib }}_fuzz {{ mode }} {{ arg }}
 
 # debug fuzz: same stress under ASan/UBSan for precise fault isolation
-dfz-run lib mode arg='1':
+dfz-run lib mode arg='':
     {{ CC }} {{ CFLAGS }} {{ INCS }} -Ifuzz -g -O1 -fsanitize=address,undefined -o fuzz/{{ lib }}_fuzz_dbg fuzz/{{ lib }}_fuzz.c && ./fuzz/{{ lib }}_fuzz_dbg {{ mode }} {{ arg }}
 
 # t = test source without .c suffix (may include dir), inc = include flags

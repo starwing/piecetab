@@ -331,7 +331,7 @@ TEST(remove_mergeleft_foldfirst) {
                                     leafV(39, 1)))));
     sp_Cursor C;
     char      buf[256];
-    assertok(sp_checktree(t));
+    assertok(sp_checktree_allow_unseamedspan(t, 1)); /* pre-merge input */
     asserteq(sp_seek(&C, t, 1356), SP_OK);
     asserteq(sp_splice(&C, 18, 19), SP_OK);
     assertok(sp_checktree(t));

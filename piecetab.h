@@ -1443,9 +1443,8 @@ PT_API pt_Buffer pt_compact(pt_State *S, pt_Buffer b) {
     pt_Cursor  nC, oC;
     pt_Compact B;
     int        r;
-    if (S == NULL || b == NULL || b->S != S) return NULL;
+    if (S == NULL || b == NULL || b->S != S || b->root.mask) return NULL;
     if (b->bytes == 0) return pt_empty(S);
-    assert(b->root.mask == 0); /* committed blob has no hole */
     pt_seek(&oC, b, 0), pt_seek(&nC, pt_empty(S), 0);
     memset(&B, 0, sizeof(B)), B.oC = &oC;
     if ((r = ptZ_collect(S, b, &B)) == PT_OK) r = ptZ_build(&nC, &B);

@@ -488,7 +488,7 @@ TEST(remove) {
     spL_setid(&t->root, 1, 2), t->root.bytes[1] = 5;
     spL_setid(&t->root, 2, 2), t->root.bytes[2] = 4;
     spN_setcc(&t->root, 3), t->bytes = 12;
-    assertok(sp_checktree(t));
+    assertok(sp_checktree_allow_unseamedspan(t, 1)); /* pre-merge input */
     asserteq(sp_seek(&L, t, 3), SP_OK);
     asserteq(sp_seek(&R, t, 8), SP_OK);
     asserteq(sp_remove(&L, &R), SP_OK);
@@ -1127,7 +1127,7 @@ TEST(api_param) {
     sp_freetree(NULL);
     sp_setarbiter(NULL, NULL, NULL);
     /* tree and cursor param checks */
-    t = sp_newtree(S);
+    t = sp_newtree(S), assert(t);
     assertok(t != NULL);
     asserteq(sp_seek(NULL, t, 0), SP_ERRPARAM);
     asserteq(sp_seek(&C, NULL, 0), SP_ERRPARAM);
@@ -2836,7 +2836,7 @@ TEST(remove_mergeleft_foldfirst) {
                              innerV(leafV(15, 1), leafV(16, 1)))));
     sp_Cursor C;
     char      buf[256];
-    assertok(sp_checktree(t));
+    assertok(sp_checktree_allow_unseamedspan(t, 1)); /* pre-merge input */
     asserteq(sp_seek(&C, t, 1338), SP_OK);
     asserteq(sp_splice(&C, 18, 19), SP_OK);
     assertok(sp_checktree(t));
@@ -3134,7 +3134,7 @@ TEST(idref_fill) {
     long      counts[SP_REFN];
     int       i;
     memset(&r, 0, sizeof(SpRef));
-    sp_setarbiter(t, spA_ref, &r);
+    assert(t), sp_setarbiter(t, spA_ref, &r);
     /* birth over uncolored: the pad notice plus arb(1, 0) */
     asserteq(sp_seek(&C, t, 0), SP_OK);
     asserteq(sp_fill(&C, 1, 10), SP_OK);
@@ -3197,7 +3197,7 @@ TEST(idref_edit) {
     SpRef     r;
     long      counts[SP_REFN];
     memset(&r, 0, sizeof(SpRef));
-    sp_setarbiter(t, spA_ref, &r);
+    assert(t), sp_setarbiter(t, spA_ref, &r);
     /* [0,5)1 [5,10)2 */
     asserteq(sp_seek(&C, t, 0), SP_OK);
     asserteq(sp_fill(&C, 1, 5), SP_OK);
@@ -3247,7 +3247,7 @@ TEST(idref_clear) {
     SpRef     r;
     long      counts[SP_REFN];
     memset(&r, 0, sizeof(SpRef));
-    sp_setarbiter(t, spA_ref, &r);
+    assert(t), sp_setarbiter(t, spA_ref, &r);
     asserteq(sp_seek(&C, t, 0), SP_OK);
     asserteq(sp_fill(&C, 5, 10), SP_OK);
     asserteq(sp_seek(&C, t, 10), SP_OK);
