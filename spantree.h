@@ -1192,13 +1192,12 @@ static void spF_filterrange(sp_Cursor *C, sp_Cursor *R, int fl, sp_Id in) {
 static void spF_fillrange(sp_Cursor *C, sp_Cursor *R, int fl, sp_Id in) {
     sp_Node *p;
     int      i;
-    size_t   off0, len, pl, bl, pr, br;
+    size_t   off0, len, pl, bl, pr;
     off0 = sp_offset(C), len = sp_offset(R) - off0;
-    p = spK_parent(C, spK_levels(C)), i = spK_idx(C, p, spK_levels(C));
+    i = spK_idx(C, p = spK_parent(C, spK_levels(C)), spK_levels(C));
     pl = C->poff, bl = p->bytes[i];
-    p = spK_parent(R, spK_levels(R)), i = spK_idx(R, p, spK_levels(R));
-    pr = R->poff, br = p->bytes[i];
-    assert(pr <= br);
+    i = spK_idx(R, p = spK_parent(R, spK_levels(R)), spK_levels(R));
+    pr = R->poff, assert(pr <= p->bytes[i]);
     spF_filterrange(C, R, fl, in);
     sp_locate(C, off0);
     spF_filterleaf(C, bl - pl, in);

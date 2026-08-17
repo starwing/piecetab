@@ -2156,8 +2156,8 @@ static void mserial(char *buf) {
     int i, r = 0;
     buf[0] = '\0';
     for (i = 0; i < mn; ++i)
-        r += snprintf(
-                buf + r, 4096 - (size_t)r, "[%lu:%lu]", test_lu(msegs[i].id),
+        r += sprintf(
+                buf + r, "[%lu:%lu]", test_lu(msegs[i].id),
                 test_lu(msegs[i].len));
 }
 

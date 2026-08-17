@@ -42,8 +42,8 @@ SP_STATIC void sp_refillpool(sp_Pool *p, sp_Drain d) {
  * signals failure — a legal node cannot sum to 0) and the OR of the
  * leaf masks so parents verify bytes[i]/mask[i] without a second pass. */
 
-SP_STATIC size_t sp_checknode(const sp_Node *n, int rl, int mc, sp_Mask *pmsk,
-                              int allow_unseamed) {
+SP_STATIC size_t sp_checknode(
+        const sp_Node *n, int rl, int mc, sp_Mask *pmsk, int allow_unseamed) {
     size_t  sum = 0;
     int     i;
     sp_Mask m = 0;
@@ -63,8 +63,9 @@ SP_STATIC size_t sp_checknode(const sp_Node *n, int rl, int mc, sp_Mask *pmsk,
             size_t  cs;
             check(n->child_count >= mc, "[chk] N[%p] rl=%d cc=%d<%d\n",
                   (void *)n, rl, n->child_count, mc);
-            cs = sp_checknode(n->children[i], rl - 1, mc ? SP_FANOUT / 2 : 0,
-                              &csmsk, allow_unseamed);
+            cs = sp_checknode(
+                    n->children[i], rl - 1, mc ? SP_FANOUT / 2 : 0, &csmsk,
+                    allow_unseamed);
             check(n->bytes[i] == cs,
                   "[chk] INNER rl=%d i=%d cc=%d bytes=%lu sum=%lu node=%p\n",
                   rl, i, n->child_count, test_lu(n->bytes[i]), test_lu(cs),
@@ -334,17 +335,12 @@ SP_STATIC void sp_serialtree(sp_Tree *t, char *buf) {
             run += len;
         else {
             if (run)
-                r += snprintf(
-                        buf + r, 4096 - (size_t)r, "[%lu:%lu]", test_lu(lid),
-                        test_lu(run));
+                r += sprintf(buf + r, "[%lu:%lu]", test_lu(lid), test_lu(run));
             lid = id, run = len;
         }
         sp_next(&C, 0, &len);
     }
-    if (run)
-        r += snprintf(
-                buf + r, 4096 - (size_t)r, "[%lu:%lu]", test_lu(lid),
-                test_lu(run));
+    if (run) r += sprintf(buf + r, "[%lu:%lu]", test_lu(lid), test_lu(run));
 }
 
 /* ---- id lifecycle (three-shape arbiter) utilities ---- */
