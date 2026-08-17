@@ -3889,6 +3889,32 @@ TEST(next_basic) {
     pt_close(S);
 }
 
+/* next on an emptied tree must not move the cursor: pt_advance guards
+ * the empty tree but pt_next read the stale bytes[0] and pushed poff
+ * past it into a virtual end — fuzz seed 3 op 169264 */
+TEST(next_emptied_tree) {
+    pt_State   *S = pt_open(&test_alloc, NULL);
+    pt_Buffer   b = pt_empty(S);
+    pt_Cursor   c;
+    const char *p;
+    size_t      n;
+
+    pt_seek(&c, b, 0);
+    assertok(pt_append(&c, "abcdefgh", 8) == PT_OK);
+    assertok(pt_locate(&c, 0) == PT_OK); /* back to the head */
+    assertok(pt_remove(&c, 8) == PT_OK); /* tree empties */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 0));
+    p = pt_next(&c, &n);
+    asserteq(p, NULL);
+    assertok(pt_checkcursor(&c, 0)); /* cursor must stay put */
+
+    pt_release(c.tree), pt_release(b);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
 TEST(prev_basic) {
     pt_State   *S = pt_open(&test_alloc, NULL);
     pt_Buffer   b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));

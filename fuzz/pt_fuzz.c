@@ -1,14 +1,19 @@
 /* pt_fuzz.c — seeded random-op stress for piecetab (fanout 4). Every
- * op runs the full tree and cursor invariant checks; the op log lands
- * in /tmp/pt_oplog.txt so a crash replays with "replay <path>".
+ * op runs the tree and cursor invariant checks; the op log lands in
+ * /tmp/pt_oplog.txt so a crash replays with "replay <path>".
  *
  *   ./pt_fuzz [seed]        fuzz with the seed (default 1)
  *   ./pt_fuzz replay [path] replay the op log, checking each op
  *
- * op probabilities (percent): append / insert / splice(extra%20) /
- * remove(advance extra) / next / prev / read / edit(extra%20, len%17);
- * the cursor expectation is pos+len for append/splice/edit and the
- * post-advance position for insert/remove. */
+ * o->op = rnd % 100 maps through the op table below (weights sum to
+ * 100). COMMIT freezes the dirty tree into the held buffer (the caller
+ * owns the reference), ROLLBACK drops the edits back to the fork source
+ * and COMPACT rebuilds the held buffer — compaction only applies to a
+ * committed tree, so commit/rollback/compact form a transient state
+ * machine: while the cursor holds no tree (after commit/rollback) the
+ * next op seeks back to the held buffer. The cursor expectation is
+ * pos+len for append/splice/edit, the post-advance position for
+ * insert/remove and the walked position for next/prev/read. */
 #define PT_FANOUT         4
 #define PT_PAGE_SIZE      512
 #define PT_MAX_HOLESIZE   16
@@ -28,14 +33,17 @@
 #define FZ_CHECK 256
 
 #define FZ_KIND(X)      \
-    X(APPEND, 40)       \
-    X(INSERT, 20)       \
-    X(SPLICE, 20)       \
-    X(REMOVE, 10)       \
-    X(NEXT, 3)          \
-    X(PREV, 3)          \
-    X(READ, 2)          \
-    X(EDIT, 2)
+    X(APPEND, 32)       \
+    X(INSERT, 16)       \
+    X(SPLICE, 16)       \
+    X(REMOVE, 9)        \
+    X(NEXT, 4)          \
+    X(PREV, 4)          \
+    X(READ, 3)          \
+    X(EDIT, 3)          \
+    X(COMMIT, 5)        \
+    X(ROLLBACK, 3)      \
+    X(COMPACT, 5)
 
 FZ_TABLE()
 
@@ -60,6 +68,8 @@ static char *fz_data(size_t len) {
 
 static char fz_rdbuf[64]; /* read target, never inserted into the tree */
 
+static pt_Buffer fz_held; /* caller-owned committed buffer, may be NULL */
+
 static void __attribute((unused)) fz_dumpnode(const pt_Node *n, int l) {
     int i;
     for (i = 0; i < n->child_count; ++i) {
@@ -79,6 +89,10 @@ static void runop(pt_Cursor *C, fz_Op *o, FILE *lf) {
     size_t exp = o->off, k, n;
     if (lf) fz_write(lf, o);
     ++fz_opno;
+    if (C->tree == NULL) { /* no tree: restore from the held buffer */
+        assertok(fz_held != NULL);
+        assertok(pt_seek(C, fz_held, o->off) == PT_OK);
+    }
     assertok(pt_locate(C, o->off) == PT_OK);
     switch (fz_opidx(o->op)) {
     case FZ_APPEND:
@@ -116,8 +130,36 @@ static void runop(pt_Cursor *C, fz_Op *o, FILE *lf) {
         assertok(pt_edit(C, o->extra % 20, fz_data(o->len % 17), o->len % 17) == PT_OK);
         exp += o->len % 17;
         break;
+    case FZ_COMMIT: {
+        pt_Buffer b = pt_commit(C);
+        assertok(b != NULL);
+        if (fz_held) pt_release(fz_held);
+        fz_held = b;
+        break;
     }
-    if (!pt_checkcursor(C, exp)) {
+    case FZ_ROLLBACK: {
+        pt_Buffer b = pt_rollback(C);
+        assertok(b != NULL);
+        if (fz_held) pt_release(fz_held);
+        fz_held = b;
+        break;
+    }
+    case FZ_COMPACT: {
+        pt_Buffer nb;
+        if (fz_held == NULL) break;
+        if (C->tree == fz_held) { /* detach the cursor before purge */
+            assertok(pt_seek(C, pt_empty(fz_held->S), 0) == PT_OK);
+            exp = 0;
+        }
+        nb = pt_compact(fz_held->S, fz_held);
+        if (nb != NULL) {
+            pt_release(fz_held);
+            fz_held = nb;
+        }
+        break;
+    }
+    }
+    if (C->tree && !pt_checkcursor(C, exp)) {
         int      li, ll;
         pt_Node *pp;
         fprintf(stderr, "cursor fail at op %u: %s(off=%lu len=%lu "
@@ -148,27 +190,32 @@ int main(int argc, char **argv) {
         assertok(freopen(argc > 2 ? argv[2] : FZ_OPLOG, "r", stdin));
         for (n = 0; fz_read(&o); ++n) {
             runop(&C, &o, NULL);
-            if ((n & (FZ_CHECK - 1)) == 0 && !pt_checktree(C.tree)) {
+            if ((n & (FZ_CHECK - 1)) == 0
+                && ((C.tree && !pt_checktree(C.tree))
+                    || (fz_held && !pt_checktree(fz_held)))) {
                 fprintf(stderr, "op %d: %s(off=%lu len=%lu extra=%lu)\n", n,
                         fz_opname(o.op), o.off, o.len, o.extra);
-                fz_dumpnode(&C.tree->root, C.tree->levels);
+                if (C.tree) fz_dumpnode(&C.tree->root, C.tree->levels);
                 abort();
             }
         }
         printf("replayed %d ops OK\n", n);
-        fz_dumpnode(&C.tree->root, C.tree->levels);
+        if (C.tree) fz_dumpnode(&C.tree->root, C.tree->levels);
     } else {
         fz_Op o;
         seed = fz_seed = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 0) : 1u;
         assertok((lf = fopen(FZ_OPLOG, "w")) != NULL);
         for (i = 0; i < n; ++i) {
+            size_t bsz = C.tree ? (size_t)pt_bytes(C.tree)
+                                : (fz_held ? (size_t)pt_bytes(fz_held) : 0);
             o.op = fz_rnd() % 100;
-            o.off = fz_rnd()
-                    % (pt_bytes(C.tree) ? (unsigned)(pt_bytes(C.tree) + 1) : 1);
+            o.off = fz_rnd() % (bsz ? (unsigned)(bsz + 1) : 1);
             o.len = fz_rnd() % 20;
             o.extra = fz_rnd() % 40;
             runop(&C, &o, lf);
-            if ((i & (FZ_CHECK - 1)) == 0 && !pt_checktree(C.tree)) {
+            if ((i & (FZ_CHECK - 1)) == 0
+                && ((C.tree && !pt_checktree(C.tree))
+                    || (fz_held && !pt_checktree(fz_held)))) {
                 fprintf(stderr, "check fail at op %d: %s(off=%lu len=%lu "
                                 "extra=%lu)\n",
                         i, fz_opname(o.op), o.off, o.len, o.extra);

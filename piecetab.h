@@ -603,6 +603,8 @@ PT_API const char *pt_next(pt_Cursor *C, size_t *plen) {
     size_t   bc;
     pt_Node *p;
     if (C == NULL || C->tree == NULL) return NULL;
+    if (ptK_bytes(C) == 0) /* emptied tree: stay put */
+        return (void)(plen && (*plen = 0)), NULL;
     l = ptK_levels(C), i = ptK_idx(C, p = ptK_parent(C, l), l);
     if (C->poff == p->bytes[i]) return (void)(plen && (*plen = 0)), NULL;
     bc = p->bytes[i] - C->poff;
