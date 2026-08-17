@@ -155,9 +155,9 @@ grep '^static' piecetab.h
 
 | 前缀   | 全称        | 职责                  | 代表函数                                                                                                                                                                                                              |
 | ------ | ----------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ptK_` | Kurser      | 游标导航 + 编辑态入口 | `findleaf`, `locend`, `forwardoff`, `backwardoff`; `markdirty`, `cow`, `beginedit`（COW 类，归属存疑，见命名议题）                                                                                                    |
+| `ptK_` | Kurser      | 游标导航 + 编辑态入口 | `findleaf`, `locend`, `forwardoff`, `backwardoff`; `markdirty`, `cow`, `beginedit`（COW 类，归属存疑，见命名议题）; `seamleaf`（叶内相邻连续 literal 合并原语，含 paths 修正）                                                                    |
 | `ptI_` | Insert      | 插入/裂叶             | `onepiece`, `splitroot`, `splitchild`, `fillrt`, `stitchrt`, `splitins`（对应 lc 的 `lcB_`）                                                                                                                          |
-| `ptD_` | Delete      | 删除/平衡/缝合        | `trimleft`, `trimright`, `cutrange`, `cutpiece`, `rmleaf`, `rmrange`, `makechain`, `findroom`, `backwardnode`, `balancenode`, `foldnode`, `rebalance`, `mergeleaf`, `stitch`, `stitchnode`, `checkstitch`, `cowpaths` |
+| `ptD_` | Delete      | 删除/平衡/缝合        | `trimleft`, `trimright`, `cutrange`, `cutpiece`, `rmleaf`, `rmrange`, `makechain`, `findroom`, `backwardnode`, `balancenode`, `foldnode`, `seambound`, `rebalance`, `mergeleaf`, `stitch`, `stitchnode`, `checkstitch`, `cowpaths` |
 | `ptM_` | Mask/Metric | 位图 + 度量传播       | `ishole`, `sethole`, `iterhole`（mask）; `up`（度量+mask 一体向上传播）                                                                                                                                               |
 | `ptN_` | Node        | 节点运作              | `sumbytes`, `copy`, `move`, `remove`, `makespace`, `purge`（版本感知递归释放）                                                                                                                                        |
 | `ptH_` | Hole        | hole 操作             | `new`, `append`, `remove`（宏 `fit`, `reserve`）                                                                                                                                                                      |
@@ -204,7 +204,19 @@ grep '^static' piecetab.h
   返回值为调用者持有引用，源树被返回值续命故无条件安全）并 detach cursor。
   clean cursor 时 commit/rollback 均 retain 当前树返回
 - **树内硬不变式**：同叶相邻两 literal 不得物理相连（`pt_checknode` 校验）；
-  插入路径双向合并 + commit 合并共同维护
+  插入路径双向合并 + 删除路径 `seamleaf`（cutpiece/append/splitins）+ commit
+  合并共同维护。`ptK_seamleaf(C, right)` 为叶内合并原语：合并 (i-1, i) 对
+  （i = 游标槽 + right，right∈{0,1}），检查物理连续则合并删槽，并修正
+  paths[levels]（含删槽后右侧槽左移同步）。foldnode 在
+  merge/balance 决策**前**调 `ptD_seambound` 预合并 ns[0].last 与 ns[1].first
+  边界缝（游标在 ns[0] 则左叶吸收右 first，在 ns[1] 则右叶吸收左 last），
+  消除 foldseam + F1/F2；**seambound 删/吸收片时必须同步 `p->bytes[i]/[i+1]`
+  父度量**（否则 balance 只减移动片、残留被删片字节 → checkcursor 路径累计虚高，
+  26 seed 曾挂；旧 foldseam 版走 `ptD_balancenode` 的 move/copy 自动搬度量故无此问题）。
+  foldnode 内 `o = *ns`（游标节点）必已 COW 私有（`beginedit`/`cowpaths`/
+  `makechain` 保证 paths 上 [0, levels) 节点 version==root.version），故只
+  COW 邻居、o 直接原地改即可；原始逗号式 `ns[0]=cow(...), ns[1]=cow(...)`
+  第二个 cow 读 `*ns` 已被覆盖，靠 o 恒已 COW 才不炸——已改单分支 cow + assert 守护。
 - **compact**: `pt_compact(S, b)` 产出 from=empty 的紧凑新 blob：
   `ptZ_collect` 收 from 链全部 arena block 区间（`pt_Range` 数组倍增）→
   qsort → `ptZ_bulkbuild` lc_scan 式批量建树（`bulkleaf` 填最右叶容器 +
@@ -229,11 +241,12 @@ grep '^static' piecetab.h
 
 1. 右游标 R = C + advance(len)；`ptD_cowpaths` COW 两路径并求分叉层 `fl`
 2. 同叶 → `ptD_rmleaf`（`ptD_cutpiece` 叶内四情形切割；literal 中裂需
-   makeroom 式裂层）
+   makeroom 式裂层）。每情形后调 `ptK_seamleaf` 处理新相邻对
 3. 跨叶 → `ptD_rmrange`: `trimright(L)`/`trimleft(R)` →
    `ptD_cutrange`（洋葱剥层：L 右侧删除、R 右余存入 `rt[k]`）→
    `ptD_stitch`（`mergeleaf` 试合并断口叶 → `stitchnode` 逐层缝回 rt →
-   `rebalance` 收尾，游标落删除点）
+   `rebalance` 收尾，游标落删除点）。缝入/平衡产生的叶内边界 seam 由
+   foldnode 决策前的 `ptD_seambound` 预合并统一处理（含 merge/balance 双路径）
 4. `rt[k]` 索引恒守 `k = levels - l`（洋葱层铁律，同 lc）
 5. **批量插入遗产已部分恢复**（为 `pt_compact` 批量建树）：
    `ptD_makechain` 恢复根加深（`from < 0`）+ `nofail` 参数（0 = 自带

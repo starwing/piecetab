@@ -656,6 +656,34 @@ TEST(append_merge_left) {
     pt_close(S);
 }
 
+/* pt_append into the middle of a literal piece where s+len abuts the
+ * piece tail: ptI_fillrt merges the inserted data with the right
+ * remainder into one contiguous piece instead of splitting */
+TEST(append_fillrt_merge) {
+    pt_State   *S = pt_open(&test_alloc, NULL);
+    pt_Buffer   b = treeV(0, leafV(litV("abcdef")));
+    pt_Cursor   c;
+    const char *lit;
+    char        rd[16];
+    size_t      nr;
+    pt_seek(&c, b, 2);
+    assertok(pt_checkcursor(&c, 2));
+    lit = (const char *)b->root.children[0]; /* s+len == lit+2 */
+    asserteq(pt_append(&c, lit, 2), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 4));
+    asserteq(pt_bytes(c.tree), 8);
+    pt_asserttree(c.tree, 0, leafV(litV("ab"), litV("abcdef")));
+    pt_seek(&c, c.tree, 0);
+    nr = pt_read(&c, rd, 8);
+    asserteq(nr, 8);
+    asserteq(memcmp(rd, "ababcdef", 8), 0);
+    pt_release(c.tree), pt_release(b);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
 /* T3k: differential — incremental advance must match a fresh pt_seek */
 
 TEST(advance_brute) {
@@ -2373,6 +2401,189 @@ TEST(remove_stitch_overflow) {
     pt_seek(&c, b, 0);
     asserteq(pt_remove(&c, 3), PT_OK);
     assertok(pt_checktree_allow_empty(c.tree, 1));
+    pt_release(c.tree), pt_release(b);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* levels=1: single-leaf rmleaf folds the root's two leaf children.  The
+   leaf boundary holds adjacent literals (legal across leaves, e.g. after
+   compact); the fold splice point turns them into an in-leaf adjacency
+   that foldnode never absorbs. */
+TEST(remove_fold_adjacent_lit) {
+    static char mem[20];
+    pt_Node    *lfA, *lfB;
+    pt_Buffer   b;
+    pt_State   *S = pt_open(&test_alloc, NULL);
+    pt_Cursor   c;
+    memcpy(mem + 0, "aaaa", 4);
+    memcpy(mem + 6, "bbbb", 4);
+    memcpy(mem + 10, "cccc", 4);
+    memcpy(mem + 16, "dddd", 4);
+    lfA = leafV(litV_(mem + 0, 4), litV_(mem + 6, 4));
+    lfB = leafV(litV_(mem + 10, 4), litV_(mem + 16, 4));
+    b = treeV(1, innerV(lfA, lfB));
+    pt_seek(&c, b, 0);
+    asserteq(pt_remove(&c, 4), PT_OK);
+    assertok(pt_checktree(c.tree));
+    pt_release(c.tree), pt_release(b);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* ================= seam merge coverage: insert paths =================
+   All construct in-leaf adjacent literals that are also physically
+   contiguous (same origin buffer), then exercise the merge sites:
+   case1 (append bridges prev), case2 (append bridges next),
+   splitins po==n (inserted data bridges the following piece). */
+
+TEST(seam_insert_append_left) {
+    static const char buf[] = "abcdefXYZ";
+    pt_State         *S = pt_open(&test_alloc, NULL);
+    pt_Buffer         b = treeV(
+            0, leafV(litV_(buf + 0, 3), litV_(buf + 6, 3)));
+    pt_Cursor         c;
+    pt_seek(&c, b, 3); /* cursor at head of "XYZ" */
+    asserteq(pt_append(&c, buf + 3, 3), PT_OK); /* "def" bridges both */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 6));
+    pt_asserttree(c.tree, 0, leafV(litV_(buf + 0, 9)));
+    pt_release(c.tree), pt_release(b);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+TEST(seam_insert_append_right) {
+    static const char buf[] = "abcdefg";
+    pt_State         *S = pt_open(&test_alloc, NULL);
+    pt_Buffer         b = treeV(
+            0, leafV(litV_(buf + 0, 3), litV_(buf + 6, 1)));
+    pt_Cursor         c;
+    pt_seek(&c, b, 3); /* cursor at tail of "abc" */
+    asserteq(pt_append(&c, buf + 3, 3), PT_OK); /* "def" bridges both */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 6));
+    pt_asserttree(c.tree, 0, leafV(litV_(buf + 0, 7)));
+    pt_release(c.tree), pt_release(b);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+TEST(seam_insert_tail_bridge) {
+    static const char buf[] = "abcdefgh";
+    pt_State         *S = pt_open(&test_alloc, NULL);
+    pt_Buffer         b = treeV(
+            0, leafV(litV_(buf + 0, 2), litV_(buf + 5, 3)));
+    pt_Cursor         c;
+    pt_seek(&c, b, 2); /* cursor at tail of "ab" */
+    asserteq(pt_append(&c, buf + 3, 2), PT_OK); /* "cd" bridges next */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 4));
+    pt_asserttree(c.tree, 0,
+                  leafV(litV_(buf + 0, 2), litV_(buf + 3, 5)));
+    pt_release(c.tree), pt_release(b);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* ================= seam merge coverage: remove paths =================
+   hole-erase fuses both sides; head/tail shrink re-points a piece onto
+   its neighbor (overlapping origin buffers are legal — the checker only
+   tests adjacency); foldnode pre-merges the orig-left-last with
+   orig-right-first at the boundary before the merge/balance decision, so
+   a boundary seam drops cL+cR by one and can turn balance into merge. */
+
+TEST(seam_remove_hole_erase) {
+    static const char buf[] = "abcdef";
+    pt_State         *S = pt_open(&test_alloc, NULL);
+    pt_Cursor         c;
+    editV(&c, 0, 0, leafV(litV_(buf + 0, 3), holeV("X"), litV_(buf + 3, 3)));
+    pt_seek(&c, c.tree, 3);
+    asserteq(pt_remove(&c, 1), PT_OK);
+    assertok(pt_checktree(c.tree));
+    pt_asserttree(c.tree, 0, leafV(litV_(buf + 0, 6)));
+    pt_release(c.tree);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+TEST(seam_remove_head_shrink) {
+    static const char buf[] = "abcdefghi";
+    pt_State         *S = pt_open(&test_alloc, NULL);
+    pt_Buffer         b = treeV(
+            0, leafV(litV_(buf + 4, 4), litV_(buf + 5, 4)));
+    pt_Cursor         c;
+    pt_seek(&c, b, 4); /* head of second piece */
+    asserteq(pt_remove(&c, 3), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 4));
+    pt_asserttree(c.tree, 0, leafV(litV_(buf + 4, 5)));
+    pt_release(c.tree), pt_release(b);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+TEST(seam_remove_tail_shrink) {
+    static const char buf[] = "abcdefgh";
+    pt_State         *S = pt_open(&test_alloc, NULL);
+    pt_Buffer         b = treeV(
+            0, leafV(litV_(buf + 0, 3), litV_(buf + 4, 4)));
+    pt_Cursor         c;
+    pt_seek(&c, b, 5); /* inside "efgh", 4 bytes remain to the end */
+    asserteq(pt_remove(&c, 4), PT_OK); /* clamp: rmleaf tail-shrink last */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 5));
+    pt_asserttree(c.tree, 0,
+                  leafV(litV_(buf + 0, 3), litV_(buf + 4, 2)));
+    pt_release(c.tree), pt_release(b);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+TEST(seam_remove_balance_left) {
+    static const char buf[] = "abcdefghij";
+    pt_State         *S = pt_open(&test_alloc, NULL);
+    pt_Buffer         b = treeV(
+            1, innerV(leafV(litV("a"), litV_(buf + 0, 3)),
+                      leafV(litV_(buf + 3, 3), litV("c"), litV("d"),
+                            litV("e"))));
+    pt_Cursor         c;
+    pt_seek(&c, b, 0);
+    asserteq(pt_remove(&c, 1), PT_OK); /* drop "a": left leaf underfull */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 0));
+    /* seambound pre-merge fuses "abc"+"def" (physically adjacent), cL+cR
+     * drops to 4 <= FANOUT so foldnode merges the pair into one leaf. */
+    pt_asserttree(c.tree, 0,
+                  leafV(litV_(buf + 0, 6), litV("c"), litV("d"), litV("e")));
+    pt_release(c.tree), pt_release(b);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+TEST(seam_remove_balance_right) {
+    static const char buf[] = "abcdefghij";
+    pt_State         *S = pt_open(&test_alloc, NULL);
+    pt_Buffer         b = treeV(
+            1, innerV(leafV(litV("a"), litV("b"), litV("c"), litV_(buf + 0, 3)),
+                      leafV(litV("Y"), litV_(buf + 3, 3))));
+    pt_Cursor         c;
+    pt_seek(&c, b, 6); /* cursor at head of "Y" */
+    asserteq(pt_remove(&c, 1), PT_OK); /* drop "Y": right leaf underfull */
+    assertok(pt_checktree(c.tree));
+    /* seambound pre-merge fuses "abc"+"def" (physically adjacent), cL+cR
+     * drops to 4 <= FANOUT so foldnode merges the pair into one leaf. */
+    pt_asserttree(c.tree, 0,
+                  leafV(litV("a"), litV("b"), litV("c"), litV_(buf + 0, 6)));
     pt_release(c.tree), pt_release(b);
     asserteq(S->nodes.live_obj, 0);
     asserteq(S->holes.live_obj, 0);
