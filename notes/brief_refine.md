@@ -520,3 +520,21 @@ C->poff = p->bytes[i];` 再单行 return），或重组表达式让续行自然
 改回来。规则：**diff 与预期不符时先正确评估——语义等价性、风格
 倾向、可能来源（用户/formatter/其他进程）——拿不准就停下来询问，
 绝不允许对未知修改自作主张保留或回滚**。
+
+### 41. 绑定层内部函数不带分类码（统一 `xx_` 前缀）
+
+分类码（`xxX_name`）只属**库头文件**（piecetab.h 等单头文件库）；
+绑定层（lua/*.c）内部工具函数一律 `xx_` 前缀——lpt_charstep 而非
+lptM_charstep（教训 2026-08-18 piecetab.c：Coder 产出 lptM_byteat/
+lptK_seekchar 违反绑定层惯例，绑定层无多模块混用，分类码纯噪声）。
+
+### 42. 顺序字节读取复用单一 Cursor 推进，禁逐字节 seek 重定位
+
+读多字节序列（utf8 回扫/步进）必须**一次定位 + Cursor 顺序推进**
+（pt_read 每次调用推进状态、跨 piece 安全；pt_advance 支持负 delta），
+禁止每字节 pt_seek/locate 重建 Cursor——每次 seek 丢弃 Cursor 连续
+状态（AGENTS.md 铁律：Cursor helper 严禁 locate）且重做定位。utf8
+后退：一次定位后回扫 ≤4 字节窗口（pt_advance 负回退 + pt_read 顺序
+读 + 尾部找 lead），窗口 4 字节必含 lead（utf8 最长 4 字节/3 续字节）。
+（教训 2026-08-18 piecetab.c seek("char")：原实现后退每字节一次
+pt_seek，O(4n) 次定位 → 改单 Cursor 顺序走）

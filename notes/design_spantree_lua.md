@@ -1,18 +1,33 @@
-# spantree Lua 绑定设计（v4 定案）
+# spantree Lua 绑定设计（v5 定案）
 
-> 状态：**v4 定案（2026-08-16，全案重写）**。v3（2026-08-16）
-> 引入 eph 层；v4 推翻重建（触发：comp 域与 ns/id 体系的层级错
-> 位——id 公用而 ns 私有；合成 id 构成与树段的 mask 双键撞车）：
+> 状态：**v5 定案（2026-08-19，组件化重写）**。v4（2026-08-16）
+> 单对象 Tree 内嵌 Comp；v5 推翻重建（触发：绑定结构应为组件
+> 组合而非 Tree 内嵌转发——样式服务（intern/id↔attr/ns 注册）
+> 属 Compositor 组件，Tree 构建时绑定并消费之；Tree 不得转发
+> 样式接口）：
 >
-> - **单对象**：`sp.new()` → Tree，**内嵌 Comp**——无独立
->   compositor 工厂；需要纯样式服务 = new 一个 Tree 只用样式
->   接口。一渲染窗（cellgrid）+ 一 Doc = 一 Tree。
+> - **独立 Compositor 组件**：`sp.compositor()` → 全新 cp_State
+>   （每次调用独立态，互不连通）；`sp.new(comp)` 创建 Tree 并
+>   绑定（必传，绑定后不可改）。同一 Compositor 内 id 互通；
+>   用户可自由创建多套互不连通的 Compositor + 其关联 Tree 组
+>   （多文件/多渲染窗场景各自成组）。
+> - **接口归属**：Compositor = 样式服务面（setfields/intern/
+>   attr/namespace——ns 注册于 cp，与 setfields 同组）；Tree =
+>   染色/编辑/读面（mark/clear/span/styled/...），**不提供
+>   setfields/id↔attr 转换/ns 注册**。Cursor = 游标面（独立
+>   metatable）。
+> - **模块表 = Tree metatable**：`require "spantree"` 返回的
+>   `sp` 表同时是 Tree 的 metatable（同表同引用）——`sp.new` /
+>   `sp.compositor` / `sp.cursor`（= `t:cursor`）工厂都在表上，
+>   Tree 方法（bytes/mark/...）即模块方法（`t:bytes()` =
+>   `sp.bytes(t)` 双形态）。
 > - **spantree.c 三块**：`cp_`（compositor 完整实现：attr intern
->   + ns 注册 + op 空间 + 合成 id 体系，全局）、`sv_`（minispan：
->   arrayvec 平铺 (off, id, len) 列表，无 mask）、`lst`（绑定层：
->   cp + sv + sp 统合，最终 Lua 接口）。
-> - **ns/op/合成体系在 cp（全局）**——插件对每个文件一视同仁，
->   多树共享注册、优先级、op 与合成 id。
+>   + ns 注册 + op 空间 + 合成 id 体系，**per-Compositor 态**）、
+>   `sv_`（minispan：arrayvec 平铺 (off, id, len) 列表，无 mask）、
+>   `lst`（绑定层：cp + sv + sp 统合，最终 Lua 接口）。
+> - **ns/op/合成体系在 cp（per-Compositor）**——绑定同一
+>   Compositor 的多 Tree 共享注册、优先级、op 与合成 id；不同
+>   Compositor 间零互通。
 > - **id 分区**：普通区（attr id 与 op id 混排，树段区分靠 mask）
 >   与合成区（≥ COMP_ID_START，稠密 k + freelist）。
 > - **全 id refcnt**（树段引用计数）；合成 id ref 0 → 回收复用。
@@ -42,24 +57,27 @@
 
 ## 一、定位
 
-单模块 `require "spantree"`，**单对象 Tree**（内嵌 Comp，无独立
-compositor）。C 侧三块：
+单模块 `require "spantree"`，**组件组合**：Compositor（样式服务）
++ Tree（染色/读，构建时绑定 Compositor）+ Cursor（游标）。C 侧
+三块：
 
 - **cp_**（compositor）：attr 表 ↔ style id 的 intern/逆查/字段
   白名单 + ns 注册表（名字制、优先级）+ op 空间 + 合成 id 体系
-  （cons 链 + refcnt + 构成 hash）。**全局**——多 Tree 共享同一
-  cp 态（实现 = 全局单例态或按需共享，实施定）。
+  （cons 链 + refcnt + 构成 hash）。**per-Compositor 态**——每个
+  `sp.compositor()` 调用新建独立 cp_State；同一 Compositor 内
+  id/ns 互通，不同 Compositor 零互通。
 - **sv_**（minispan）：naive 平铺 span 列表（arrayvec 存 off/id/
   len），接口尽量兼容 sp_（fill/clear/upper/lower/next/prev），
   **无 mask、无 arbiter、无 B+ 结构**。eph 层 = 每 ns 一个 sv_
-  列表。
+  列表（随所属 Tree）。
 - **lst**（绑定层）：cp + sv + sp 统合，对外 Lua 接口。前缀 lst
   （完整功能绑定，非 spantree 专属）。
 
 ns 即写者（extmark 同构：namespace = 贡献者身份）：merge map =
 `(ns → attr)` 单槽对；ns 层按优先级折叠（高覆盖低，同优先级按
 注册序，后注册覆盖）。ns 0 = 无归属（非注册槽，最低层，mask 0）。
-ns/优先级注册于 cp（全局）。
+ns/优先级注册于 cp（**per-Compositor**——绑定同 Compositor 的
+Tree 共享，跨 Compositor 隔离）。
 
 eph 层（ns mode = "ephemeral"）：**不进树**。每 eph ns 一个 sv_
 平铺 segment 列表（规范形：有序、不交叠、相邻同 id 合并）。
@@ -77,17 +95,17 @@ mask 位）；任何树编辑动词自动清空全部 eph 层。
 
 ```
 普通区 [0, COMP_ID_START)：attr id（用户面 id——intern 所得）与
-  op id（(ns, attr) 全局 intern，内部用）混排——区分不靠 id 域而
-  靠树段 mask：mask 0 = 平铺 attr 段、mask 非 0 且 id 普通 =
-  单 ns op 段
+  op id（(ns, attr) intern，内部用，归属本 Compositor）混排——区
+  分不靠 id 域而靠树段 mask：mask 0 = 平铺 attr 段、mask 非 0 且
+  id 普通 = 单 ns op 段
 合成区 [COMP_ID_START, ...)：cons 链节点（内部用，用户零感知）——
   k = id - COMP_ID_START 稠密 + freelist 复用
 ```
 
 - **拆解输出 = attr id**：span/next/prev 的"非合成 id" = 构成里
   每个 op 的 attr 面（attr() 可查）；用户 unmark 也按 attr id。
-- `t:attr(id)` 两区统一查（attr id 与合成 id 都返回 table——渲染
-  端对 styled() 的返回 id 同样可查），零迁移。
+- `comp:attr(id)` 两区统一查（attr id 与合成 id 都返回 table——
+  渲染端对 styled() 的返回 id 同样可查），零迁移。
 - **eph 合成不进合成区**：styled() 的 eph 折叠 = attr 黑盒覆盖 +
   普通 intern（hash 幂等）——无生命周期、零 refcnt 参与。
 - 合成区只服务树内持久 merged（写路径 arb 产物）。
@@ -100,7 +118,7 @@ mask 位）；任何树编辑动词自动清空全部 eph 层。
 | lsp_ephfill/lsp_ephclear/lsp_ephupper/lsp_ephlower/lsp_ephnorm | sv_ 整体迁移 | 算法不变（§3.4） |
 | lsp_mergecalc 的边界扫描 + attr 覆盖 fold | lst 读路径 | 删 pairs 拆解、改 attr 黑盒 |
 | epoch 守卫/cursor seek 锚定/iter 模式/arb pcall 事务性 | lst | 语义不变 |
-| ns 名字制/flags 解析/查询双返回 | lst（注册表上移 cp） | 语义不变 + 全局化 |
+| ns 名字制/flags 解析/查询双返回 | lst（注册表归属 cp） | 语义不变（cp 态 per-Comp） |
 | TestEph 全部用例、TestTree/TestMerge 大部分 | 沿用 | 合成流断言保持 |
 | sp_stylemask 并入 sp_style | sp_style 加 pmask 出参（NULL 跳过），C 测试改 stylemask 用例 |
 
@@ -108,51 +126,61 @@ mask 位）；任何树编辑动词自动清空全部 eph 层。
 
 ```lua
 local sp = require "spantree"
+-- sp = 模块表 = Tree 的 metatable（同表同引用）；工厂与方法同表：
+--   sp.new / sp.compositor / sp.cursor（= t:cursor）在表上，Tree
+--   方法（bytes/mark/...）亦在表上——t:bytes() = sp.bytes(t) 双形态
 
--- 单对象：Tree 内嵌 Comp（无独立 compositor 工厂；需要纯样式服务
---   = new 一个 Tree 只用样式接口）
-local t = sp.new()          -- 一渲染窗 + 一 Doc = 一 Tree；cp 态
-                            --   全局共享（多 Tree 共享 ns/op/合成
-                            --   id 体系）
+-- 组件组合：Compositor（样式服务）→ Tree（染色/读，绑定）→ Cursor
+local comp = sp.compositor()    -- **全新 cp_State**（每次调用独立，
+                                --   互不连通；同 Compositor 内 id/ns
+                                --   互通）；绑定其 Tree 者共享之
+local t = sp.new(comp)          -- 创建 Tree 并**绑定 comp（必传，
+                                --   绑定后不可改）**；一渲染窗 + 一
+                                --   Doc = 一 Tree；多套
+                                --   Compositor+Tree 组互不连通
 
--- 样式接口（cp 面，Tree 直供——editor 现用 comp:intern/attr 迁移
---   为 t:intern/t:attr，零语义变化）
-t:setfields(fields)         -- 字段白名单（乱序可，C 侧排序一次）；
-                            --   默认 SGR 全集；未列字段忽略
-t:intern(attr) → id         -- attr id（**用户唯一 id 面**）；canon +
-                            --   hash 复用；0 = 空 attr 预置；__hash
-                            --   元方法短路（返回值须字符串）直接作键
-t:attr(id) → table          -- 逆查（两区统一——attr id 与 styled()
-                            --   返回的 id 均可查；不拷贝，调用者
-                            --   不得改）
+-- Compositor: 样式接口（cp 面；Tree 不提供——editor 现用
+--   comp:intern/attr 直移，零语义变化）
+comp:setfields(fields)          -- 字段白名单（乱序可，C 侧排序一次）；
+                                --   默认 SGR 全集；未列字段忽略
+comp:intern(attr) → id          -- attr id（**用户唯一 id 面**）；canon
+                                --   + hash 复用；0 = 空 attr 预置；
+                                --   __hash 元方法短路（返回值须字符
+                                --   串）直接作键
+comp:attr(id) → table           -- 逆查（两区统一——attr id 与
+                                --   styled() 返回的 id 均可查；不拷
+                                --   贝，调用者不得改）
 
--- ns 层（= 写者；名字制，ns id 不暴露；注册于 cp = 全局——任一
---   Tree 注册后共享该 cp 态的 Tree 均可见）
-t:namespace(name) → p, mode -- 查询：优先级 + mode（nil = 普通、
-                            --   "ephemeral" = 挥发）；未注册 = 单返 nil
-t:namespace(name, p) → oldp -- 注册（p 数字，必传）；已注册 = 改优先
-                            --   级（普通 ns 全树重折叠；eph ns 零树
-                            --   操作）并返回旧优先级；首次注册 nil
-t:namespace(name, p, flags) → oldp
-                            -- flags 字符串，逐字符解析："c" = 严格
-                            --   注册（撞名报错）、"e" = ephemeral
-                            --   （可组合 "ce"/"ec"）；非法字符报错；
-                            --   无 "c" 撞名 = 改注册（mode 不同 =
-                            --   注销重注册，旧层数据随注销清除）
-t:namespace(name, nil) → oldp
-                            -- 注销：普通 ns = 各共享树 sp_clear 剪枝
-                            --   清该 ns？——**v4 待定**：注销只清当前
-                            --   树的层 + 注册表全局移除（他树残留段
-                            --   变孤儿构成，展开时该 ns 已无注册
-                            --   优先级——按 op 内嵌 ns 号处理）；
-                            --   eph ns = 清空该 ns 列表并释放；
-                            --   未知名报错；返回旧优先级
+-- Compositor: ns 层（= 写者；名字制，ns id 不暴露；注册于 cp =
+--   本 Compositor——绑定同 Compositor 的 Tree 均可见，跨
+--   Compositor 隔离）
+comp:namespace(name) → p, mode  -- 查询：优先级 + mode（nil = 普通、
+                                --   "ephemeral" = 挥发）；未注册 =
+                                --   单返 nil
+comp:namespace(name, p) → oldp  -- 注册（p 数字，必传）；已注册 = 改
+                                --   优先级（普通 ns = 各绑定树全树
+                                --   重折叠；eph ns 零树操作）并返回
+                                --   旧优先级；首次注册 nil
+comp:namespace(name, p, flags) → oldp
+                                -- flags 字符串，逐字符解析："c" = 严
+                                --   格注册（撞名报错）、"e" =
+                                --   ephemeral（可组合 "ce"/"ec"）；
+                                --   非法字符报错；无 "c" 撞名 = 改注
+                                --   册（mode 不同 = 注销重注册，旧层
+                                --   数据随注销清除）
+comp:namespace(name, nil) → oldp
+                                -- 注销：普通 ns = **各绑定树**
+                                --   sp_clear 剪枝清该 ns + 注册表移
+                                --   除；eph ns = 各绑定树清空该 ns
+                                --   列表并释放；未知名报错；返回旧
+                                --   优先级
 
 -- tree: 染色/编辑（offset 制，内部栈游标；fill 返 id，其余返 self）
 t:bytes() → n
 t:mark(ns, attr_or_id, off, len) → id
                             -- **载荷双形态**：attr table（内部
-                            --   intern）或 attr id（t:intern 所得）；
+                            --   intern）或 attr id（comp:intern
+                            --   所得）；
                             --   **返回 attr id**（extmark set 返 id
                             --   同款——用户存它供 unmark/复用）；
                             --   ns = 名字（须已注册，未知名报错）；
@@ -186,8 +214,8 @@ t:span(ns?, off, len) → iter  -- **标记流**：for off, len, table, id in
 t:styled(off, len) → iter   -- **渲染合成流**：for off, len, table, id
                               --   in ...（四元组）；table = 合成 attr
                               --   表、id = 合成结果（树段 id / 平铺
-                              --   id / eph 折叠 intern id——attr() 均
-                              --   可查，用户可直接忽略）；语义沿 v3
+                              --   id / eph 折叠 intern id——comp:attr()
+                              --   均可查，用户可直接忽略）；语义沿 v3
                               --   合成流（树 + 全部 eph 层边界切分
                               --   fold）
 t:cursor() → c                    -- 新 cursor 句柄（创建于树头 off=0）
@@ -256,8 +284,9 @@ c:remove(len)               -- 内部第二游标 seek+advance(len)，
   O(1) 步进）；cursor = 复用句柄（创建后反复 seek/编辑/next，免
   反复分配）。无状态每调用 sp_seek 的原语（span/find）否决——
   每段 O(levels) seek 不可接受。
-- 遍历产出 id 经 `t:attr(id)` 解码——两区统一（attr id 与 styled
-  返回的 id 均可查），渲染路径（editor.lua Ed:csi）改走 styled。
+- 遍历产出 id 经 `comp:attr(id)` 解码——两区统一（attr id 与
+  styled 返回的 id 均可查），渲染路径（editor.lua Ed:csi）改走
+  styled。
 - epoch 语义（v1 沿革）：**树编辑** = epoch++（含普通 ns 的 fill/
   clear、reprio 重折叠）；eph fill/clear = 零 epoch（树未动，读路径
   逐读重算零缓存）。cursor 创建/seek/自身编辑后同步 c->epoch =
@@ -273,14 +302,15 @@ c:remove(len)               -- 内部第二游标 seek+advance(len)，
 ### 3.1 数据结构
 
 ```
-cp_（compositor，全局态——所有 Tree 共享；v4 大改）
+cp_（compositor 态，per-Compositor——每 sp.compositor() 一份；
+绑定同 Compositor 的 Tree 共享；v5 从 v4 全局态改）
 ├── 普通区：ref_attrs（registry 表）——attr id ↔ attr 表；by_attr
 │     hash（canon/__hash 键）——intern 复用（同 attr 同 id）
-├── ns 注册表（全局）：ns_byid（ref_nsb：name → ns id）+ prio/
+├── ns 注册表：ns_byid（ref_nsb：name → ns id）+ prio/
 │     regseq C 数组（动态 grow；id ≤ SP_MASK_BITS 普通 ns——mask
 │     位 ns-1、id > SP_MASK_BITS eph ns）+ nsstack freelist +
 │     nsnext/ephnext
-├── op 空间（全局）：(ns, attr) → op id——byop 表 + opkind/opns/
+├── op 空间：(ns, attr) → op id——byop 表 + opkind/opns/
 │     opattr C 数组（grow）。op id ∈ 普通区（与 attr id 混排，
 │     树段区分靠 mask）。op id 从普通区高位往下分配？——**实施定**
 │     （attr intern 单调递增，op 若共用同一计数器则混排无害）
@@ -295,8 +325,18 @@ cp_（compositor，全局态——所有 Tree 共享；v4 大改）
 ```
 
 ```
-lst_Tree userdata（v4：减 ns/op/mapof，加 sv）
-├── cp：cp_ 态引用（全局共享——注册表级 ref 或静态态，实施定）
+lst_Comp userdata（v5 新增：Compositor = cp 态的 owner 句柄）
+├── cp：cp_State 内嵌（零二级分配；ref 表随 userdata gc 释放）
+├── ref_trees：registry 弱表（绑定 Tree userdata → true）——ns
+│     注销剪枝 / 改优先级重折叠的遍历目标；Tree gc 后自动消失
+└── L：lua_State（arb pcall 上下文同 Tree 自带，此处仅 gc 用）
+```
+
+```
+lst_Tree userdata（v4：减 ns/op/mapof，加 sv；v5：cp 改指绑定
+Compositor 的态，不可改绑）
+├── cp：cp_State *（绑定 Compositor 的态——sp.new(comp) 写入，
+│     绑定后不可改）
 ├── T：sp_Tree *（段存储 + arbiter + 编辑同步 + mask 剪枝）
 ├── sv：sv_List 数组（每 eph ns 一个；索引 = nsid -
 │      SP_MASK_BITS - 1）
@@ -339,15 +379,16 @@ lst_Cur userdata（v3 沿革，前缀 lst）
   分配）；n==1 且 ns==0 → 返回 attr id（平铺）；n==0 → 0。
 - **id 分区与树段解码**：段 id < COMP_ID_START = 普通区——mask
   非 0 = 单 ns op 段、mask 0 = 平铺 attr 段；id ≥ COMP_ID_START
-  = 合成段。t:attr 两区统一（合成 id 的 attr = 折叠表）。
-- **优先级**：prio/regseq 在 comp（全局）；折叠序 = 展开后按
-  (prio, regseq) 排序（ns 0 恒最前）。改优先级 = 改 prio[] + 各
-  共享树全树 fill(REORDER)（arb 每段重折叠）；eph ns 零树操作。
-- **ns 槽复用**：普通 ns 注销推 id 入 nsstack（全局）；eph ns 注
-  销 = 数组释放槽清零不复用。mode 变更 = 注销 + 重注册。**注销
-  与他树残留**：注册表全局移除后他树残留段的构成仍含该 ns——
-  展开按 op 内嵌 ns 号处理（优先级缺失 = 视为 0/最底），下一轮
-  arb 重折叠自然收敛（待实施验证）。
+  = 合成段。comp:attr 两区统一（合成 id 的 attr = 折叠表）。
+- **优先级**：prio/regseq 在 comp（per-Compositor）；折叠序 = 展
+  开后按 (prio, regseq) 排序（ns 0 恒最前）。改优先级 = 改 prio[]
+  + **各绑定树**全树 fill(REORDER)（arb 每段重折叠）；eph ns 零
+  树操作。
+- **ns 槽复用**：普通 ns 注销推 id 入 nsstack；eph ns 注销 = 数组
+  释放槽清零不复用。mode 变更 = 注销 + 重注册。**注销清绑定树**：
+  v5 注销走 Compositor（comp:namespace(name, nil)）——普通 ns 对
+  各绑定树 sp_clear 剪枝、eph ns 清各绑定树列表，注册表移除后零
+  残留（v4 的"他树残留孤儿构成"问题随遍历剪枝消除）。
 
 ### 3.2 arbiter（三态契约 + cons 链流程）
 
@@ -451,7 +492,7 @@ left ∧ right ∧ t == s+1 → 单段一拆二（悬垂段尾部后移一位插
   覆盖 x → 段起点 cap s、段末端 cap e
 无 eph 覆盖 → 直返 treeid（零合成零 intern）
 fold = attr 黑盒覆盖：空表 → 按层序合并 p>=0 eph attr
-  （升序）→ t:attr(treeid) → p<0 eph attr（升序），后层覆盖
+  （升序）→ comp:attr(treeid) → p<0 eph attr（升序），后层覆盖
   前层 → intern（普通区幂等，无合成区参与、零 refcnt）
 ```
 
@@ -511,6 +552,64 @@ sv_cover(L, x, &id, &ps, &pe)     -- 覆盖查询
   sv_ 独立后 minispan 自成一库（后续系统可用），lst_Tree 统合
   （cp + spantree 树 + sv）——对应 Doc 统合全家桶的架构形态。
 
+### 3.6 cp/sv 库边界与内存契约（v6 精炼定案）
+
+cp_/sv_ 是 **stb-style 单头文件库**（先写在 spantree.c，理论上可
+独立抽头文件）：公共 API `cp_xxx`/`sv_xxx`（被绑定层 lst_ 调用），
+内部 helper `cpX_xxx`/`svX_xxx`（分类码，只在本库内互调）。命名
+铁律同 spantree.h：公共 `xx_name`、内部 `xxX_name`、内部 struct
+`xx_Name`、数据宏 `XX_NAME`。
+
+**分类码表**：
+
+| 库 | 分类码 | 用途 | 例 |
+|---|---|---|---|
+| cp | G | 数组增长 | cpG_nsgrow / cpG_opgrow / cpG_chaingrow |
+| cp | C | canon 序列化 | cpC_part / cpC_canon |
+| cp | L | intern 核心（key→id 幂等） | cpL_lookup |
+| cp | O | op 空间 intern | cpO_opkey |
+| cp | P | 链/合成区机制 | cpP_hashkey / cpP_release |
+| cp | N | ns 注册表操作 | cpN_salloc / cpN_sset / cpN_sdel |
+| cp | S | 优先级排序 | cpS_less（cp_sort 内部比较器） |
+| sv | G | 数组增长 | svG_segrow |
+| sv | N | 规范形合并 | svN_norm |
+
+**公共 API 全集**（被 lst 绑定层调用）：
+
+```
+cp: cp_init / cp_free / cp_setfields / cp_internattr / cp_attr /
+    cp_op / cp_apply / cp_sort / cp_expand / cp_foldattr /
+    cp_composite / cp_refup / cp_refdown / cp_nsget /
+    cp_nsregister / cp_nsunregister
+sv: sv_fill / sv_clear / sv_cover / sv_upper / sv_lower / sv_reset
+```
+
+`cp_init` 建新态（ref 表 + 默认 whitelist + 空 attr id 0）、`cp_free`
+释放（全 C 数组 free + registry unref）——从 lst_compnew/Lcomp_gc
+提取，保证 Compositor 生命周期与 cp 态解耦。`cp_apply`（op→pair
+list）与 `cp_sort`（按 (prio, regseq) 排序）是折叠原语，lst_merge/
+lst_foldmake 调用。`cp_refup/refdown` 为 arb 三态契约出口计数。
+
+**内存契约（v6 核心）**：
+
+- **cp/sv 内部零 Lua allocf**——所有数组用 **malloc/realloc/free**
+  后端（移植 undotree.h 的 utV_ 数组，见下）；哈希表（attr intern/
+  op 空间/链复用/ns 注册表）继续用 Lua 表（ref 于 registry，随
+  Compositor __gc unref）。
+- **数组一律 Vec**（`cpV_`/`svV_` 系列，移植 utV_）：`cpV_Header
+  { unsigned len, cap; }` 前置，`cpV_len/cpV_init/cpV_end/cpV_push/
+  cpV_reserve/cpV_free`；OOM 由调用方经 L luaL_error（cp/sv 公共
+  API 保留 L 参数）。
+- 数组字段：cp_State 的 prio/regseq/opkind/opns/opattr/chain/idfree/
+  refcnt（cpV_）；sv_List 的 off/len/id（svV_）；lst_Tree 的 ephs
+  （sv_List[]，svV_）与 rtmp（lst_Pair[]，cpV_）。
+- **无泄露保证**：内存全在 State（cp_State/sv_List/lst_Tree），
+  `cp_free`/`Ltree_gc` 逐字段 Vec free——不依赖 Lua allocf 回调。
+
+**函数头注释**：cp/sv/lst 公共与内部函数一律无函数头注释（§24）；
+契约（输入/输出/in/out 参数）写函数体内 return 附近或 design 文档；
+调用方前提用 assert。
+
 ## 四、API 摩擦检查（沿 v1 §四，随 v4 修订）
 
 对照 spantree.h 逐项核对（2026-08-16 修订）：
@@ -522,10 +621,10 @@ sv_cover(L, x, &id, &ps, &pe)     -- 覆盖查询
 | sp_next/sp_prev/sp_style 值返回 | 绑定迁移值接收 + ns 透传（v1 编译已断，必迁） | §9.2 |
 | **id 生命周期（v4 新依赖）** | arb 三态契约（design_spantree §9.7）：树保证新生 arb(id,0)/死亡 arb(0,id)/合并 arb(id,old) 出口无条件双向计数 + filterleaf 保护/cancel | §3.2 |
 | 按 ns 查区间 | span(ns)/next(ns)/prev(ns) = 拆解取该 ns 槽（attr id 输出）；eph ns 走 sv_ 二分 | §9.2/§3.4 |
-| 按 ns 全树清 | namespace(name, nil) = sp_clear(T, nsn, CLEAR(ns))；eph = sv_ 清空；ns 注册表全局移除 | §9.4 |
+| 按 ns 全树清 | comp:namespace(name, nil) = 各绑定树 sp_clear(T, nsn, CLEAR(ns))；eph = 各绑定树 sv_ 清空；ns 注册表移除 | §9.4 |
 | 编辑自动清 eph | 树 4 + 游标 4 编辑动词先 sv_resetall；普通 ns fill/clear 不清 | §3.4 |
 | 游标编辑后悬垂 | epoch 守卫（沿 v1）；eph fill 零 epoch（树未动） | design_luabind #17 |
-| op 载荷 ns 跨树 | **v4 消除**：ns/op 全局于 cp（v1 病灶的最终解） | §3.1 |
+| op 载荷 ns 跨树 | **v5 收敛**：ns/op 归属 per-Compositor——绑定同 Compositor 的树互通，跨 Compositor 隔离（v1 病灶最终解） | §3.1 |
 | 合成读的树段 mask | **v4 消除**：styled = attr 黑盒（不拆解）；span/next/prev = cons 链解码（id 直取链）——sp_stylemask 退场 | §3.4 |
 | 标记按 id 删 | unmark(id) = 扫描 + 段构成含该 attr id → arb CLEAR(ns) 清槽（id2node 否决的扫描代价） | §二/§3.4 |
 
@@ -533,52 +632,57 @@ sv_cover(L, x, &id, &ps, &pe)     -- 覆盖查询
 
 > v1 §5 的树写者接入方案已退场（research_spantree_usage.md 终局
 > 结论）：editor.lua 现只用 comp:intern/comp:attr（hl/lsp/piece/
-> visual 直叠合成）。**v4 迁移**：`sp.compositor()` 删除 →
-> `local t = sp.new()`（内嵌 cp），`comp:intern/attr/setfields` →
-> `t:intern/t:attr/t:setfields`——零语义变化；editor 的 comp 变量
-> 改为 Tree 句柄（Ed.newcompositor → 建 Tree，样式接口透传）；
+> visual 直叠合成）。**v5 迁移**：`Ed.newcompositor()` → `sp.compositor()`
+> （返回 Compositor，非 Tree）；`Ed.new()` 建
+> `self.comp = sp.compositor()` + `self.tree = sp.new(self.comp)`
+> ——comp:intern/attr/setfields 调用点零改动（Compositor 保留同
+> 名接口）；Tree 持 comp 供真消费者（身份层/extmark）接入。
 > **渲染读改 styled 四元组**（Ed:csi 走 t:styled(s, e)，table
 > 直用免查）。
 > 真消费者（身份层/extmark）到账后按 ns 即写者模型接入：
-> t:namespace(name, prio) 注册层、local id = t:mark(name, attr,
-> off, len)（返 id 供 unmark/复用）染色、t:clear(name) 清层、
-> t:unmark(id) 按 id 扫描清。
+> comp:namespace(name, prio) 注册层、local id = t:mark(name,
+> attr, off, len)（返 id 供 unmark/复用）染色、t:clear(name) 清
+> 层、t:unmark(id) 按 id 扫描清。
 > **hl 接入预案**（Q1 调研，reports/research_sp_highlight_ns.md
 > §五）：lsp sem/diag 进树（普通 ns 快照 fill）、hl 进 eph
-> （t:namespace("hl", 1, "e") + 每帧 t:clear("hl") + 逐 span
+> （comp:namespace("hl", 1, "e") + 每帧 t:clear("hl") + 逐 span
 > t:mark("hl", attr, off, len) + t:styled(s, e) 样式流读）。
 
 ## 六、测试与验收
 
-- `lua/tests/spantree_test.lua` **按 v4 全量重写**（luaunit，双
-  运行时）：TestStyle（cp 面经 Tree：intern 复用/顺序无关/nil
-  跳过/逆查两区/__hash 短路/__hash 非字符串报错/setfields——
-  沿 TestCompositor 用例，入口改 t:）、TestNs（沿 v3 + **全局
-  共享**：两 Tree 的 ns 注册互见/优先级互见/注销全局移除）、
-  TestEph 沿 v3 语义改 styled 四元组断言（合成流幂等保持）、
-  TestTree/TestMerge 沿 v2；**TestSpan 新增**（拆解输出 attr id/
-  table 四元组、多标记重叠多出、优先级序、ns 过滤单槽、eph ns
-  步进、cursor 标记索引状态（同段多标记 next/prev 逐个出）、
-  style 当前标记）、**TestIds 新增**（分区判定：平铺/op/合成三
-  类段 id 的 mask 解码、单槽 op 直存零合成、refcnt 随 arb 增减、
-  合成 id 回收复用（段清空后同构成重 fill 拿回同 id）、链展开
-  压缩不变量（行为断言：重复 100 次覆盖后解码正确且新分配槽数
-  有界）、构成复用（同构成 ref++）、释放级联（段清空后链节点回
-  收）、unmark 按 attr id 清槽返计数/未知 id 返 0/部分命中/
-  跨 ns 同 attr 全删）、**TestArbRelease 依赖项**（remove/splice
-  删段 ref--：C 侧补通知后启用）。
+- `lua/tests/spantree_test.lua` **按 v5 全量重写**（luaunit，双
+  运行时）：TestStyle（cp 面经 Compositor：intern 复用/顺序无关/
+  nil 跳过/逆查两区/__hash 短路/__hash 非字符串报错/setfields——
+  沿 TestCompositor 用例，入口改 comp:）、TestNs（沿 v3 + **per-
+  Comp 隔离**：两 Compositor 的 ns 注册互不可见/同 Comp 多 Tree
+  互见/注销清绑定树）、TestEph 沿 v3 语义改 styled 四元组断言
+  （合成流幂等保持）、TestTree/TestMerge 沿 v2；**TestComp 新增**
+  （sp.compositor() 每次全新态：两 Comp intern id 互异/ns 注册隔
+  离/绑定 Tree 各自成组；sp.new(comp) 必传——缺参/非 Comp 报错；
+  绑定不可改）、**TestSpan 新增**（拆解输出 attr id/table 四元
+  组、多标记重叠多出、优先级序、ns 过滤单槽、eph ns 步进、cursor
+  标记索引状态（同段多标记 next/prev 逐个出）、style 当前标记）、
+  **TestIds 新增**（分区判定：平铺/op/合成三类段 id 的 mask 解码、
+  单槽 op 直存零合成、refcnt 随 arb 增减、合成 id 回收复用（段清
+  空后同构成重 fill 拿回同 id）、链展开压缩不变量（行为断言：重
+  复 100 次覆盖后解码正确且新分配槽数有界）、构成复用（同构成
+  ref++）、释放级联（段清空后链节点回收）、unmark 按 attr id 清
+  槽返计数/未知 id 返 0/部分命中/跨 ns 同 attr 全删）、
+  **TestArbRelease 依赖项**（remove/splice 删段 ref--：C 侧补通
+  知后启用）。
 - justfile（lua/justfile 沿用）：`sp` / `sp-cov` / `sp-lines` /
   `sp-unbranched`。覆盖率铁律：spantree.c 行 100%、分支 ≥95%
   （豁免清单附 evidence）。
-- `lua/spantree.d.lua` @meta 同步（单对象 API 全重写：Tree 合并
-  Compositor 方法、span/styled/unmark、四元组返回、id 失效
-  语义注释）。
+- `lua/spantree.d.lua` @meta 同步（组件化 API 全重写：Compositor
+  类 + Tree 类 + Cursor 类、span/styled/unmark、四元组返回、id
+  失效语义注释；模块表 = Tree metatable 双形态说明）。
 - C 侧：spantree.h arb 三态契约与全量调用点（新生/死亡/合并出口
   双向 + filterleaf 保护/cancel）+ 对应 fanout4/8 用例；
   sp_stylemask 并入 sp_style（pmask 出参，NULL 跳过），C 测试改
   stylemask 用例。
 - `just lua/test` 全绿 + `just luals` 零诊断；**editor_test.lua
-  按 §五 迁移**（comp 来源与调用点全改 t:、渲染走 styled）。
+  按 §五 迁移**（Ed.newcompositor 返 Compositor、Ed.new 建 comp+
+  tree、渲染走 styled）。
 - 文档同步：design_spantree.md §9.2 更新（sp_style 吸收
   sp_stylemask、arb 三态契约）；本文件 §四表已更新。
 
@@ -586,9 +690,10 @@ sv_cover(L, x, &id, &ps, &pe)     -- 覆盖查询
 
 - **普通区 id 回收**：refcnt 维护（树段引用），ref 0 暂不回收——
   调用方句柄（Lua 变量/eph 数组/渲染缓存）悬垂不可判定；机制
-  齐（refcnt 全 id 域），回收触发策略（comp gc / 显式 API）后
-  定。工作集可接受（op/attr 组合数 = 插件用色数）。
-- ns 注销与他树残留段的收敛语义（§3.1 待实施验证）。
+  齐（refcnt 全 id 域），回收触发策略（Compositor gc / 显式 API）
+  后定。工作集可接受（op/attr 组合数 = 插件用色数）。
+- ns 注销的绑定树遍历剪枝代价：注销为 O(绑定树数) 全树扫描——
+  绑定树少（≤2）可接受；后续如需优化可按 ns 反查段索引。
 - ns 优先级域/类型：Lua number 全权（整数/浮点均可，比较即序）。
 - 名字串校验：非空字符串（luaL_checklstring + 空串报错）。
 - eph（sv_）数组 cap 保留不回收（清空 = n 置零；段数峰值视口

@@ -1,23 +1,19 @@
 --- @meta spantree
 
 --------------------------------------------------------------------------------
----@class spantree.Tree
----Span storage with an embedded style compositor: attr tables intern
----to stable style ids, namespace layers fold by priority, edits shift
----spans. Compositor state is global — every tree shares intern ids and
----the namespace registry. Edits invalidate previously created cursors
----and span/styled iterators.
-local Tree
-
----Total bytes in the tree (edit-sync length, no content).
----@return integer
-function Tree:bytes() end
+---@class spantree.Compositor
+---Style compositor: attr tables intern to stable style ids, the canon
+---field whitelist and the namespace registry (ns = writer identity,
+---extmark-style) live here. Each sp.compositor() call owns a fresh
+---state — trees bound to it share ids/namespaces, trees of other
+---compositors are isolated.
+local Compositor
 
 ---Set the canon field whitelist: only listed field names take part in
 ---intern canon (sorted once; unlisted fields are ignored). Default is
 ---the SGR set fg/bg/bold/dim/italic/underline/reverse.
 ---@param fields string[]  field names, any order
-function Tree:setfields(fields) end
+function Compositor:setfields(fields) end
 
 ---Intern an attr table to a style id. Identical attrs intern to the
 ---same id; 0 is the pre-interned empty attr. A table with a __hash
@@ -26,31 +22,46 @@ function Tree:setfields(fields) end
 ---@param attr table  attribute fields (fg/bg numbers, rgb tables,
 ---                   bold/dim/italic/underline/reverse booleans)
 ---@return integer  attr id
-function Tree:intern(attr) end
+function Compositor:intern(attr) end
 
 ---Inverse lookup: style id -> attr table (owned, do not mutate).
 ---Both attr ids and styled() ids resolve here. Nil for unknown ids.
 ---@param id integer  style id
 ---@return table?
-function Tree:attr(id) end
+function Compositor:attr(id) end
 
 ---Namespace registry (ns = writer identity, extmark-style).
 ---
 ---1 arg: query — returns the priority and the mode ("ephemeral" for
 ---eph ns, nil for ordinary), or a single nil when unregistered.
----2 args, nil priority: unregister — returns the old priority.
+---2 args, nil priority: unregister — prunes every bound tree's layer
+---and returns the old priority.
 ---2 args, numeric priority: register — on an existing name updates
----the priority and returns the old one; fresh registration returns
----nil.
+---the priority (re-folds every bound tree) and returns the old one;
+---fresh registration returns nil.
 ---3 args: flags string, chars parsed individually: "c" = strict
 ---register (raises when the name exists), "e" = ephemeral mode; both
 ---may combine ("ce"/"ec").
 ---@param name string  namespace name (non-empty)
 ---@return number?  priority (nil = unregistered)
 ---@return string?  "ephemeral" (query only; nil = ordinary)
----@overload fun(self: spantree.Tree, name: string, p: number, flags?: string): number?
----@overload fun(self: spantree.Tree, name: string, p: nil): number?
-function Tree:namespace(name) end
+---@overload fun(self: spantree.Compositor, name: string, p: number, flags?: string): number?
+---@overload fun(self: spantree.Compositor, name: string, p: nil): number?
+function Compositor:namespace(name) end
+
+--------------------------------------------------------------------------------
+---@class spantree.Tree
+---Span storage bound to one compositor (set at sp.new(comp), never
+---rebindable): namespace layers fold by priority, edits shift spans.
+---The tree consumes the compositor's services; it does not expose
+---style functions (setfields/intern/attr/namespace live on the
+---compositor). Edits invalidate previously created cursors and
+---span/styled iterators.
+local Tree
+
+---Total bytes in the tree (edit-sync length, no content).
+---@return integer
+function Tree:bytes() end
 
 ---Write attr (or an interned attr id) into the ns layer over
 ---[off, off+len). Same ns overwrites; other layers survive by
@@ -118,7 +129,7 @@ function Tree:span(ns, off, len) end
 
 ---Style-flow iterator over [off, off+len): yields (off, len, attr, id)
 ---per folded run — attr = the folded attr table, id = the synthetic
----style id (resolves via t:attr). Do not cache styled ids across
+---style id (resolves via comp:attr). Do not cache styled ids across
 ---edits (composite ids may be recycled); attr ids are stable.
 ---@param off integer  0-based start offset
 ---@param len integer  range length
@@ -236,12 +247,23 @@ function Cursor:insert(ins) end
 function Cursor:remove(len) end
 
 --------------------------------------------------------------------------------
--- Module exports (return value of `require "spantree"`)
+-- Module exports (return value of `require "spantree"`). The module
+-- table IS the Tree metatable (same table, same reference): the
+-- factories (new/compositor/cursor) and every Tree method share it,
+-- so t:bytes() == sp.bytes(t) both work and sp.cursor(t) == t:cursor().
 
 local spantree = {}
 
----Create a new span tree (compositor state is shared across trees).
+---Create a new compositor owning a fresh isolated state (attr intern,
+---ns registry, op/composite id space). Trees bound to it share the
+---state; different compositors never do.
+---@return spantree.Compositor
+function spantree.compositor() end
+
+---Create a new span tree bound to the given compositor (mandatory,
+---never rebindable).
+---@param comp spantree.Compositor
 ---@return spantree.Tree
-function spantree.new() end
+function spantree.new(comp) end
 
 return spantree

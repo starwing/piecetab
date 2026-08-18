@@ -12,6 +12,12 @@ build-lua mod:
     mkdir -p luajit
     {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA_INC }} -DNDEBUG -O2 {{ LDF }} -o {{ mod }}.so {{ mod }}.c
 
+# debug + ASAN build of a binding module: `just lua/dbg spantree` then
+# run with `lua -e 'package.cpath="./?.so;./spantree_asan.so;"..package.cpath'`
+dbg mod:
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA_INC }} -g -O0 -fsanitize=address -fno-omit-frame-pointer {{ LDF }} -o {{ mod }}_asan.so {{ mod }}.c
+    @echo "built {{ mod }}_asan.so (load via ./{{ mod }}_asan.so)"
+
 run t *args='':
     lua tests/{{ t }}.lua {{ args }}
     luajit tests/{{ t }}.lua {{ args }}

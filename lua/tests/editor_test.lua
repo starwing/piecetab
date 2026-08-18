@@ -97,7 +97,13 @@ function TestSkeleton:testUndoSwitchSyncsLsp()
   --- @type any
   e.lsp = {
     on_edit = function() end,
-    on_switch = function(_, changes) switch_edits = changes end,
+    undo_switch = function(_, doc_undo)
+      local changes = {}
+      doc_undo(function(off, del, text)
+        changes[#changes + 1] = { off = off, del = del, text = text }
+      end)
+      switch_edits = changes
+    end,
   }
   e.doc:commit()
   e.doc:seek("set", 0)
@@ -711,15 +717,17 @@ end
 function TestSc:testInternUnsetSkipped()
   local s = Ed.newcompositor()
   lu.assertEquals(s:intern({ bold = true }),
-                  s:intern({ bold = true, underline = false, dim = nil }))
+                  s:intern({ bold = true, dim = nil }))
+  lu.assertNotEquals(s:intern({ bold = true }),
+                     s:intern({ bold = true, underline = false }))
 end
 
 function TestSc:testInverseLookup()
   local s = Ed.newcompositor()
-  local id = s:intern({ fg = 207, bg = { r = 1, g = 2, b = 3 }, bold = true })
+  local id = s:intern({ fg = 207, bg = "#010203", bold = true })
   local a = assert(s:attr(id))
   lu.assertEquals(a.fg, 207)
-  lu.assertEquals(a.bg.r, 1)
+  lu.assertEquals(a.bg, "#010203")
   lu.assertTrue(a.bold)
   lu.assertNil(s:attr(id + 999))
 end
@@ -732,7 +740,7 @@ function TestSc:testCsiGeneration()
   lu.assertEquals(e:csi(e.comp:intern({ fg = 207 })), "\27[0m\27[38;5;207m")
   lu.assertEquals(e:csi(e.comp:intern({ bold = true, bg = 237 })),
                   "\27[0m\27[1;48;5;237m")
-  lu.assertEquals(e:csi(e.comp:intern({ fg = { r = 1, g = 2, b = 3 } })),
+  lu.assertEquals(e:csi(e.comp:intern({ fg = "#010203" })),
                   "\27[0m\27[38;2;1;2;3m")
   lu.assertNil(e:csi(999))
 end
@@ -979,12 +987,12 @@ function TestHint:testSpawnFailSilentAndLoud()
   -- manual :lsp on (loud): reports the failure in msg
   local e = make_ed("x\n")
   e.filename = "foo.lua"
-  lu.assertFalse(e:lsp_start({ "/nonexistent/lsp-server" }, true))
+  lu.assertFalse(e:lsp_start(true, { "/nonexistent/lsp-server" }))
   lu.assertNil(e.lsp)
   lu.assertEquals(e.msg, "", "silent start: no message")
   local e2 = make_ed("x\n")
   e2.filename = "foo.lua"
-  lu.assertFalse(e2:lsp_start({ "/nonexistent/lsp-server" }))
+  lu.assertFalse(e2:lsp_start(false, { "/nonexistent/lsp-server" }))
   lu.assertNil(e2.lsp)
   lu.assertStrContains(e2.msg, "exited", "loud start: reports failure")
 end

@@ -8,7 +8,6 @@ package.path = package.path .. ";./lua/?.lua"
 local pt = require("piecetab")
 local cg = require("cellgrid")
 
-local utf8 = require("lua-utf8")
 local tf = require("termfeed")
 local sp = require("spantree")
 local ok_ts, ts = pcall(require, "treesitter")
@@ -153,17 +152,11 @@ local ATTR_REVERSE  = { reverse = true }
 -- candidates (see notes/design_editor.md); keep them marked.
 -- ================================================================
 
--- Line text at lnum (current state incl. uncommitted edits; doc:read
--- moves the cursor, so save/restore — buffer:read is committed-only).
 ---@param doc piecetab.Doc
 ---@param lnum integer
 ---@return string
 local function line_text(doc, lnum)
-  local saved = doc:offset()
-  doc:seek("line", lnum)
-  local t = doc:read("l") or ""
-  doc:seek("set", saved)
-  return t
+  return doc:readat(doc:lineoffset(lnum), doc:linelen(lnum, true))
 end
 
 ---@param byte integer
@@ -173,35 +166,6 @@ local function word_class(byte)
   if byte >= 97 and byte <= 122 then return 1 end -- lower
   if byte == 95 then return 1 end                 -- underscore
   return 0
-end
-
--- Move cursor by n characters (-1 = left, +1 = right). A successful
--- horizontal motion re-samples the vertical goal column (Neovim curswant).
----@param ed editor.Ed
----@param n integer
-local function cursor_move_char(ed, n)
-  -- TODO(C): promote char motion to C (pt or new module)
-  local doc = ed.doc
-  local off = doc:offset()
-  if n < 0 and off <= 0 then return end
-  local buf = doc:buffer()
-  local saved = off
-  if n < 0 then
-    -- tail window [off-4, off+1): prev char lead + current lead
-    local s0 = math.max(off - 4, 0)
-    local p = utf8.offset(buf:read(s0, off - s0 + 1), -1, off - s0 + 1)
-    doc:seek("set", p - 1 + s0)
-  elseif n > 0 then
-    if off >= #buf then return end
-    -- 5 bytes cover a 4-byte char plus its successor's lead byte
-    local nxt = utf8.next(buf:read(off, 5), 1)
-    doc:seek("set", nxt and off + nxt - 1 or #buf)
-  end
-  -- restore if seek didn't move (boundary clamp)
-  if doc:offset() == saved and n > 0 and off < #buf then
-    doc:seek("set", off + 1)
-  end
-  if doc:offset() ~= saved then ed.goal = nil end
 end
 
 ---@param ed editor.Ed
@@ -244,40 +208,6 @@ end
 
 -- Rendering helpers
 
--- helper: end-of-text column for line (excludes trailing \n)
----@param ed editor.Ed
----@param lnum integer
-local function line_endcol(ed, lnum)
-  local llen = ed.doc:linelen(lnum)
-  if llen > 0 and lnum < ed.doc:breaks() - 1 then llen = llen - 1 end
-  return llen
-end
-
--- display column -> byte offset within given line (clamp to char boundary)
----@param doc piecetab.Doc
----@param lnum integer
----@param dcol integer
----@param grid cellgrid.Grid
-local function dcol_to_byte(doc, lnum, dcol, grid)
-  return grid:byte(line_text(doc, lnum), dcol)
-end
-
--- Truncate text to fit a display width budget (UTF-8 aware, whole chars).
----@param text string
----@param maxw integer
----@return string
-local function text_trunc(text, maxw)
-  if utf8.width(text) <= maxw then return text end
-  local w, i = 0, 1
-  while i <= #text do
-    local nxt = utf8.next(text, i) or #text + 1
-    local cw = utf8.width(text, i, nxt - 1) or 1
-    if w + cw > maxw then break end
-    w, i = w + cw, nxt
-  end
-  return text:sub(1, i - 1)
-end
-
 -- Move cursor vertically by dl lines, preserving the screen column
 -- (injected text counts; Neovim curswant survives the EOL clamp).
 ---@param ed editor.Ed
@@ -290,9 +220,10 @@ local function move_vert(ed, dl)
   local scol = ed.goal or ed:vtext_dcol(lnum, doc:column(),
     ed.mode == "INSERT")
   ed.goal = scol
-  doc:seek("line", nlnum)
-  doc:seek("cur", dcol_to_byte(doc, nlnum,
-    ed:screen_to_text_dcol(nlnum, scol), ed.grid))
+  local line = line_text(doc, nlnum)
+  local bytecol = ed.grid:byte(ed:screen_to_text_dcol(nlnum, scol),
+    line, 1, #line) - 1
+  doc:seek("line", nlnum, bytecol)
 end
 
 -- Open a new line: dir > 0 below (o), dir < 0 above (O); enter INSERT
@@ -301,7 +232,8 @@ end
 local function open_line(self, dir)
   self.doc:seek("line", self.doc:line())
   if dir > 0 then
-    self.doc:seek("cur", line_endcol(self, self.doc:line()))
+    local lnum = self.doc:line()
+    self.doc:seek("line", lnum, self.doc:linelen(lnum, true))
   end
   self:docedit(0, "\n")
   if dir < 0 then self.doc:seek("cur", -1) end
@@ -313,33 +245,6 @@ end
 -- ================================================================
 
 local hl = {}
-
--- file extension -> language name (nil = no highlighting)
----@param filename string?
----@return string?
-local function ext_lang(filename)
-  if not filename then return nil end
-  local ext = filename:match("%.([%w_]+)$")
-  if ext == "c" or ext == "h" then return "c" end
-  if ext == "lua" then return "lua" end
-  return nil
-end
-
--- LSP server command for a file (nil = no server available). PT_LSP_CMD
--- overrides the built-in mapping (space-split argv).
----@param filename string?
----@return string[]?
-local function lsp_cmd(filename)
-  local over = os.getenv("PT_LSP_CMD")
-  if over and #over > 0 then
-    local argv = {}
-    for w in over:gmatch("%S+") do argv[#argv + 1] = w end
-    return argv
-  end
-  if ext_lang(filename) == "c" then return { "clangd" } end
-  if ext_lang(filename) == "lua" then return { "lua-language-server" } end
-  return nil
-end
 
 -- Minimal highlights subsets (keyword/string/comment/function).
 -- NB: primitive types (int/char/void) are internal tokens of primitive_type,
@@ -518,9 +423,8 @@ local function sel_range(doc, sel, cur)
   if not sel then return cur, cur end
   local s, e = sel, cur
   if sel > cur then s, e = cur, sel end
-  local tail = doc:buffer():read(e, 4)
-  local nxt = #tail > 0 and utf8.next(tail, 1)
-  return s, nxt and e + nxt - 1 or e
+  local n = doc:charlen(e)
+  return s, e + n
 end
 
 --- @param spans table array of {offset, length, style}
@@ -630,7 +534,7 @@ end
 -- Overlay a quick layer (piece bg, visual reverse) onto tree segments:
 -- split at the overlay boundary, patch the covered part's attr (copy +
 -- merge + re-intern); adjacent same-style segments merge back.
---- @param comp spantree.Tree
+--- @param comp spantree.Compositor
 --- @param segs table  array of {offset, length, style}
 --- @param lo integer  overlay start (byte offset)
 --- @param hi integer  overlay end (exclusive)
@@ -687,7 +591,8 @@ end
 ---@field grid cellgrid.Grid
 ---@field keymaps table<string, table<string, editor.KeymapFn>>
 ---@field commands table<string, editor.CommandFn>
----@field comp spantree.Tree  span tree (attr -> handle intern)
+---@field comp spantree.Compositor  style compositor (attr -> handle intern)
+---@field tree spantree.Tree  span tree bound to comp (extmark/identity layer)
 ---@field styles table<string, integer>  pre-interned style handles
 ---@field show_pieces boolean  piece-boundary visualization layer
 ---@field sel_start integer?  visual-mode selection anchor
@@ -716,8 +621,12 @@ end
 -- built-in normal keymaps (per-instance, called from Ed.new)
 local function install_normal_keys(self)
   local n = self.keymaps.normal
-  n.h = function(ed) cursor_move_char(ed, -1) end
-  n.l = function(ed) cursor_move_char(ed, 1) end
+  n.h = function(ed)
+    if ed.doc:offset() > 0 then ed.goal = nil; ed.doc:advancechars(-1) end
+  end
+  n.l = function(ed)
+    if ed.doc:offset() < #ed.doc then ed.goal = nil; ed.doc:advancechars(1) end
+  end
   n.j = function(ed) move_vert(ed, 1) end
   n.k = function(ed) move_vert(ed, -1) end
   n.w = function(ed) move_word_forward(ed) end
@@ -725,11 +634,9 @@ local function install_normal_keys(self)
   n["0"] = function(ed) ed.goal = nil; ed.doc:seek("line", ed.doc:line()) end
   n["$"] = function(ed)
     ed.goal = nil
-    local text = line_text(ed.doc, ed.doc:line())
-    if #text > 0 then
-      -- vim: stop on the last char, not after it (multi-byte aware)
-      ed.doc:seek("cur", utf8.offset(text, 0, #text) - 1) -- last char start
-    end
+    local lnum = ed.doc:line()
+    ed.doc:seek("line", lnum, ed.doc:linelen(lnum, true))
+    if ed.doc:column() > 0 then ed.doc:advancechars(-1) end
   end
   n.gg = function(ed) ed.goal = nil; ed.doc:seek("line", 0) end
   n.G = function(ed)
@@ -744,22 +651,17 @@ local function install_normal_keys(self)
   end
   n.i = function(ed) ed.mode = "INSERT" end
   n.a = function(ed)
-    cursor_move_char(ed, 1); ed.mode = "INSERT"
+    if ed.doc:offset() < #ed.doc then ed.goal = nil; ed.doc:advancechars(1) end
+    ed.mode = "INSERT"
   end
   n.o = function(ed) open_line(ed, 1) end
   n.O = function(ed) open_line(ed, -1) end
   -- jump doc versions (undo/redo), feed the change hunks to the LSP
   -- as sequential edits (incremental sync)
   local function switch_sync(ed, name)
-    local changes = ed.lsp and {} or nil
-    local function apply(off, del, text)
-      if changes then
-        changes[#changes + 1] = { off = off, del = del, text = text }
-      end
-    end
-    ed.doc[name](ed.doc, apply)
     if ed.hl then ed.hl:reset() end
-    if ed.lsp then ed.lsp:on_switch(changes) end
+    local undo = function(f) ed.doc[name](ed.doc, f) end
+    if ed.lsp then ed.lsp:undo_switch(undo) else undo() end
   end
   n.u = function(ed) switch_sync(ed, "undo") end
   n["<C-r>"] = function(ed) switch_sync(ed, "redo") end
@@ -777,9 +679,9 @@ end
 local function ins_escape(self)
   self.mode = "NORMAL"
   self.doc:commit()
-  local off = self.doc:offset()
-  if off > 0 and self.doc:buffer():read(off - 1, 1) ~= "\n" then
-    cursor_move_char(self, -1)
+  if self.doc:offset() > 0 and self.doc:column() > 0 then
+    self.goal = nil
+    self.doc:advancechars(-1)
   end
   self.msg = ""
 end
@@ -787,24 +689,14 @@ end
 local function ins_backspace(self)
   local off = self.doc:offset()
   if off > 0 then
-    -- tail window [off-4, off+1): prev char lead + current lead
-    local buf = self.doc:buffer()
-    local s0 = math.max(off - 4, 0)
-    local p = utf8.offset(buf:read(s0, off - s0 + 1), -1, off - s0 + 1)
-    local prev = p - 1 + s0
-    self.doc:seek("set", prev)
-    self:docedit(off - prev, "")
+    self.doc:advancechars(-1)
+    self:docedit(off - self.doc:offset(), "")
   end
 end
 
 local function ins_delete(self)
-  local off = self.doc:offset()
-  local buf = self.doc:buffer()
-  if off < #buf then
-    -- 5 bytes cover a 4-byte char plus its successor's lead byte
-    local nxt = utf8.next(buf:read(off, 5), 1)
-    self:docedit(nxt and nxt - 1 or #buf - off, "")
-  end
+  local n = self.doc:charlen()
+  if n > 0 then self:docedit(n, "") end
 end
 
 -- built-in insert keymaps (per-instance, called from Ed.new)
@@ -826,8 +718,7 @@ local function install_insert_keys(self)
   i["<End>"] = function(ed)
     ed.goal = nil
     local lnum = ed.doc:line()
-    ed.doc:seek("line", lnum)
-    ed.doc:seek("cur", line_endcol(ed, lnum))
+    ed.doc:seek("line", lnum, ed.doc:linelen(lnum, true))
   end
   local function page(ed, dl)
     local rows = ed.term:size()
@@ -890,9 +781,7 @@ local function install_builtin_commands(self)
   c.lsp = function(ed, arg, bang)
     if arg == "on" then
       if ed.lsp then ed.msg = "lsp already on"; return end
-      local cmd = lsp_cmd(ed.filename)
-      if not cmd then ed.msg = "lsp: no server for this file"; return end
-      ed:lsp_start(cmd)
+      if not ed:lsp_start() then ed.msg = "lsp: no server for this file" end
     elseif arg == "off" then
       if ed.lsp then ed.lsp:stop(); ed.lsp = nil end
       ed.msg = "lsp off"
@@ -916,9 +805,9 @@ do
     return Term.new(opts)
   end
 
-  --- @return spantree.Tree
+  --- @return spantree.Compositor
   function Ed.newcompositor()
-    return sp.new()
+    return sp.compositor()
   end
 
   --- @param content? string
@@ -941,7 +830,8 @@ do
     self.done = false
     self.term = term or Ed.newterm()
     self.grid = grid or cg.new()
-    self.comp = sp.new()
+    self.comp = sp.compositor()
+    self.tree = sp.new(self.comp)
     self.styles = { dim = self.comp:intern(ATTR_DIM) }
     self.vtexts = {}
     self.show_pieces = true -- piece-boundary visualization (debug aid)
@@ -973,7 +863,7 @@ do
     if f then f:close() end
     self.doc = content ~= "" and pt.doc(content) or pt.doc(nil)
     self.filename = filename
-    self:open_language(ext_lang(filename))
+    self:open_language(lsp.Client.langid(filename))
     self:clear_vtexts()
     self.saved_vid = self.doc:version()
     self.scroll_line = 0
@@ -994,40 +884,26 @@ do
     self.hl = lang and hl.new(self, lang) or nil
   end
 
-  --- Start an LSP server process (document access wired to the live
-  -- doc; edits funnel via docedit -> on_edit). silent: fail quietly
-  -- (automatic start); loud: report via on_status.
-  --- @param argv string[]
+  --- Start an LSP server process for the current file (server command,
+  -- URI and root resolved by lsp.Client:start_file). silent: fail
+  -- quietly (automatic start); loud: report via on_status.
   --- @param silent? boolean
-  --- @return boolean  false when the server could not be started
-  function Ed:lsp_start(argv, silent)
+  --- @param argv? string[]  override the configured server command
+  --- @return boolean  false when no server is configured
+  function Ed:lsp_start(silent, argv)
     if self.lsp then return true end
     local ed = self
-    -- LSP needs absolute file URIs: relative paths (lua editor.lua foo)
-    -- break workspace indexing, so require() types never resolve
-    local fname = self.filename or ""
-    if #fname > 0 and fname:sub(1, 1) ~= "/" then
-      fname = luv.cwd() .. "/" .. fname
-    end
     self.lsp = lsp.Client.new({
       get_text = function() return ed.doc:dump() end,
       get_line = function(lnum) return line_text(ed.doc, lnum) end,
-      offset_pos = function(off)
-        return ed.doc:linecol(off)
+      offset_pos = function(off) return ed.doc:linecol(off) end,
+      dcol_fn = function(line, bytecol)
+        return ed.grid:cols(line_text(ed.doc, line), 1, bytecol)
       end,
       on_status = function(state, why)
-        -- steady states render in the status bar segments; only report
-        -- abnormal exits as a transient message (silent start: no)
         if state == "exited" and not silent then
           ed.msg = "lsp: " .. state .. (why and " (" .. why .. ")" or "")
         end
-      end,
-      dcol_fn = function(line, bytecol)
-        return ed.grid:cols(line_text(ed.doc, line), bytecol)
-      end,
-      viewport_fn = function()
-        local rows = ed.term:size()
-        return { top = ed.scroll_line, rows = rows - 1 }
       end,
       attrmap = LSP_ATTRS,
       vtext = {
@@ -1035,8 +911,7 @@ do
         clear = function() ed:clear_vtexts() end,
       },
     })
-    local ok = self.lsp:start(argv, "file://" .. fname,
-      ext_lang(fname) or "plaintext", "file://" .. (fname:match("^(.*)/") or "."))
+    local ok = self.lsp:start_file(self.filename, argv)
     if not ok then self.lsp = nil end
     return ok
   end
@@ -1063,11 +938,11 @@ do
   --- @return integer
   function Ed:vtext_dcol(line, bytecol, at_start)
     local lst = self.vtexts[line]
-    local dcol = self.grid:cols(line_text(self.doc, line), bytecol)
+    local dcol = self.grid:cols(line_text(self.doc, line), 1, bytecol)
     local w = 0
     for _, h in ipairs(lst or {}) do
       if h.dcol > dcol or at_start and h.dcol == dcol then break end
-      w = w + utf8.width(h.text)
+      w = w + self.grid:cols(h.text)
     end
     return dcol + w
   end
@@ -1083,7 +958,7 @@ do
     for _, h in ipairs(lst or {}) do
       local hs = h.dcol + w
       if scol < hs then break end
-      local hw = utf8.width(h.text)
+      local hw = self.grid:cols(h.text)
       if scol < hs + hw then return h.dcol end
       w = w + hw
     end
@@ -1106,7 +981,7 @@ do
     local lst = self.vtexts[line]
     if not lst then return end
     local base = self.doc:lineoffset(line)
-    local edcol = self.grid:cols(line_text(self.doc, line), off - base)
+    local edcol = self.grid:cols(line_text(self.doc, line), 1, off - base)
     local delta = #s - del
     local out = {}
     for _, h in ipairs(lst) do
@@ -1174,9 +1049,13 @@ do
       if v then
         if k == "fg" or k == "bg" then
           local pre = k == "fg" and "38" or "48"
-          if type(v) == "table" then
-            codes[#codes + 1] = pre .. ";2;" .. v.r .. ";" .. v.g .. ";" .. v.b
-          else
+          if type(v) == "string" then
+            local r, g, b = v:match("^#(%x%x)(%x%x)(%x%x)$")
+            if r then
+              codes[#codes + 1] = pre .. ";2;" .. tonumber(r, 16)
+                .. ";" .. tonumber(g, 16) .. ";" .. tonumber(b, 16)
+            end
+          elseif type(v) == "number" then
             codes[#codes + 1] = pre .. ";5;" .. tostring(v)
           end
         elseif SGR_ATTR[k] then
@@ -1316,7 +1195,7 @@ do
     if self.mode == "COMMAND" then
       self.term:write(Term.REVERSE)
       self.term:write(":" .. self.cmdline)
-      local pad = cols - utf8.width(":" .. self.cmdline) - 1
+      local pad = cols - self.grid:cols(":" .. self.cmdline) - 1
       if pad > 0 then self.term:write(string.rep(" ", pad)) end
       self.term:write(Term.RESET)
     else
@@ -1336,9 +1215,10 @@ do
       -- right: persistent server state, short form
       local right = self.lsp and (self.lsp:status() == "running"
           and " lsp:on" or (" lsp:" .. self.lsp:status())) or ""
-      local avail = cols - utf8.width(left) - utf8.width(right) - 1
-      msg_part = text_trunc(msg_part, math.max(0, avail))
-      local pad = math.max(0, avail - utf8.width(msg_part))
+      local avail = cols - self.grid:cols(left) - self.grid:cols(right) - 1
+      local n = self.grid:byte(math.max(0, avail), msg_part, 1, #msg_part)
+      msg_part = msg_part:sub(1, n - 1)
+      local pad = math.max(0, avail - self.grid:cols(msg_part))
       self.term:write(Term.REVERSE)
       self.term:write(left .. msg_part .. string.rep(" ", pad) .. right .. " ")
       self.term:write(Term.RESET)
@@ -1352,7 +1232,6 @@ do
     if cur_screen_row < 1 then cur_screen_row = 1 end
     if cur_screen_row > rows - 1 then cur_screen_row = rows - 1 end
 
-    local cur_line_text = line_text(self.doc, cur_line)
     local byte_col = self.doc:column()
     -- cursor skips hints on motion; at the byte gap (insert) it may sit
     -- on the hint's first char (append semantics, input lands before it)
@@ -1437,8 +1316,7 @@ local function main(argv)
   e.term:enter()
 
   -- automatic LSP: silently enable when a server exists for the file
-  local cmd = lsp_cmd(e.filename)
-  if cmd then e:lsp_start(cmd, true) end
+  e:lsp_start(true)
 
   -- Catch exit signals (raw mode: no signals, but just in case)
   local ok, err = pcall(function()
