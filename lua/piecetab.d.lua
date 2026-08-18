@@ -140,14 +140,20 @@ function Doc:__gc() end
 ---@return integer
 function Doc:__len() end
 
----Seek to a position and return the new offset.
+---Seek to a position and return the new offset. Whence initials are
+---unique (`set`/`cur`/`end`/`line`, prefix match on the first letter).
+---`"line"` lands at the line start (byte 0 of the line); lnum = breaks()
+---- 1 (the trailing line) lands at the trailing fragment start. The
+---optional `col` lands `col` bytes into the line, clamped to the line
+---text end (the `\n` byte for lc lines, the doc end for the trailing
+---line). Cursor may clamp when past the document end.
 ---@return integer
 ---@overload fun(self: piecetab.Doc): integer
 ---@overload fun(self: piecetab.Doc, off: integer): integer
 ---@overload fun(self: piecetab.Doc, whence: '"set"', off?: integer): integer
 ---@overload fun(self: piecetab.Doc, whence: '"cur"', delta: integer): integer
 ---@overload fun(self: piecetab.Doc, whence: '"end"', off?: integer): integer
----@overload fun(self: piecetab.Doc, whence: '"line"', lnum: integer): integer
+---@overload fun(self: piecetab.Doc, whence: '"line"', lnum: integer, col?: integer): integer
 function Doc:seek() end
 
 ---Read from the current position. Position advances by bytes consumed.
@@ -158,6 +164,14 @@ function Doc:seek() end
 ---@overload fun(self: piecetab.Doc, format: '"L"'|'"*L"'): string?
 ---@overload fun(self: piecetab.Doc, format: '"a"'|'"*a"'): string
 function Doc:read(n) end
+
+---Read bytes at an absolute offset. **Does not move the cursor** and
+---does not sync the linecache. Returns `""` when `off` ≥ `#doc`; `len`
+---defaults to `#doc - off` and is clamped at the document end.
+---@param off integer  0-based byte offset (must be ≥ 0)
+---@param len? integer  bytes to read (must be ≥ 0)
+---@return string
+function Doc:readat(off, len) end
 
 ---Insert text at cursor position. Cursor advances to insertion end.
 ---Alias for `append`. Journals for undo.
@@ -207,10 +221,29 @@ function Doc:column() end
 ---@return integer
 function Doc:line() end
 
----Length of a line, including trailing `\n` if present.
----@param lnum? integer  line number (0-based, default: current line)
+---Length of a line, including trailing `\n` if present; the trailing
+---line (no final `\n`) returns its text length as-is.
+---With `noeol=true` the trailing `\n` is excluded: non-final lines
+---return `len - 1`, the final line (no `\n`) is returned as-is.
+---@param lnum?  integer  line number (0-based, default: current line)
+---@param noeol? boolean  exclude trailing `\n` (default false)
 ---@return integer
-function Doc:linelen(lnum) end
+function Doc:linelen(lnum, noeol) end
+
+---Byte length of the UTF-8 character at `off` (default: current cursor
+---position; no linecache sync, **does not move the cursor**). Returns 0
+---at or past `#doc`. ASCII and continuation bytes are 1; lead bytes
+---clamp to the remaining bytes at the document end.
+---@param off? integer  0-based byte offset (must be ≥ 0)
+---@return integer
+function Doc:charlen(off) end
+
+---Move the cursor by `n` whole UTF-8 characters, relative to the
+---current position (the char-unit sibling of `seek("cur")`, which
+---moves by bytes). Clamped to `[0, #doc]`; no line semantics.
+---@param n integer  signed character count
+---@return integer  new offset
+function Doc:advancechars(n) end
 
 ---Byte offset of the start of a line (0-based). Read-only: does not
 ---move the doc cursor.

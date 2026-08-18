@@ -1727,5 +1727,184 @@ function TestDoc:testSeekLineFragmentTail()
     lu.assertEquals(d:read("l"), "b")
 end
 
+function TestDoc:testReadAt()
+    local d = pt.doc("hello\nworld")
+    lu.assertEquals(d:readat(6), "world")      -- default len = to end
+    lu.assertEquals(d:readat(0, 5), "hello")   -- explicit range
+    lu.assertEquals(d:readat(6, 3), "wor")     -- mid-document range
+    lu.assertEquals(d:readat(8, 0), "")        -- len 0
+    lu.assertEquals(d:readat(0, 999), "hello\nworld") -- len clamped
+    lu.assertEquals(d:readat(11), "")          -- off == #doc
+    lu.assertEquals(d:readat(100), "")         -- off past end
+end
+
+function TestDoc:testReadAtNoCursorMove()
+    local d = pt.doc("hello\nworld")
+    d:seek("set", 3)
+    d:readat(6, 5)
+    lu.assertEquals(d:offset(), 3)
+    d:readat(0)
+    lu.assertEquals(d:offset(), 3)
+    d:readat(100)
+    lu.assertEquals(d:offset(), 3)
+end
+
+function TestDoc:testReadAtErrors()
+    local d = pt.doc("hi")
+    lu.assertError(function() d:readat(-1) end)
+    lu.assertError(function() d:readat(1, -2) end)
+end
+
+function TestDoc:testLineLenNoEol()
+    local d = pt.doc("hello\nworld\n!")
+    lu.assertEquals(d:linelen(0, true), 5)  -- "hello" without \n
+    lu.assertEquals(d:linelen(1, true), 5)  -- "world" without \n
+    lu.assertEquals(d:linelen(2, true), 1)  -- final line has no \n
+    lu.assertEquals(d:linelen(0), 6)        -- noeol=false: unchanged
+    lu.assertEquals(d:linelen(2), 1)
+end
+
+function TestDoc:testLineLenNoEolEmptyLine()
+    local d = pt.doc("a\n\nb")
+    lu.assertEquals(d:linelen(0, true), 1)  -- "a\n" minus \n
+    lu.assertEquals(d:linelen(1), 1)        -- empty line "\n"
+    lu.assertEquals(d:linelen(1, true), 0)  -- empty line without \n
+    lu.assertEquals(d:linelen(2, true), 1)  -- final line as-is
+end
+
+function TestDoc:testLineLenNoEolCurrent()
+    local d = pt.doc("hello\nworld")
+    d:seek("set", 0)
+    lu.assertEquals(d:linelen(nil, true), 5) -- "hello\n" minus \n
+    lu.assertEquals(d:linelen(), 6)          -- noeol=false: with \n
+    d:seek("set", 6)
+    lu.assertEquals(d:linelen(nil, true), 5) -- final line as-is
+    d:seek("set", 11)
+    lu.assertEquals(d:linelen(nil, true), 5)
+end
+
+function TestDoc:testSeekLineCol()
+    local d = pt.doc("hello\nworld\n!")
+    lu.assertEquals(d:seek("line", 0, 2), 2)  -- line 0, col 2
+    lu.assertEquals(d:seek("line", 1, 3), 9)  -- line 1 start 6 + 3
+    lu.assertEquals(d:seek("line", 2, 0), 12) -- trailing line start
+end
+
+function TestDoc:testSeekLineColClamp()
+    local d = pt.doc("hello\nworld")
+    lu.assertEquals(d:seek("line", 0, 999), 5)  -- line text end = \n
+    lu.assertEquals(d:seek("line", 1, 999), 11) -- trailing line: doc end
+    lu.assertEquals(d:seek("line", 0, -5), 0)   -- negative col → 0
+    lu.assertError(function() d:seek("line", 3, 0) end)  -- line out of range
+    lu.assertError(function() d:seek("line", 99, 0) end)
+end
+
+function TestDoc:testSeekLineColFragment()
+    -- "ab\ncd" with line 1 = trailing fragment (no \n): col clamps
+    -- to the doc end, line 2 (br) is the doc-end line
+    local d = pt.doc("ab\ncd")
+    lu.assertEquals(d:seek("line", 1, 1), 4)   -- "cd" col 1 = 'd'
+    lu.assertEquals(d:seek("line", 1, 999), 5) -- fragment text end
+    lu.assertEquals(d:seek("line", 2, 0), 3)   -- doc-end line start
+    lu.assertEquals(d:seek("line", 2, 999), 5) -- doc-end line: doc end
+end
+
+function TestDoc:testSeekChar()
+    local d = pt.doc("héllo") -- é = 2 bytes: h é l l o
+    lu.assertEquals(d:advancechars(1), 1)  -- h
+    lu.assertEquals(d:advancechars(1), 3)  -- é (2 bytes)
+    lu.assertEquals(d:advancechars(1), 4)  -- l
+    lu.assertEquals(d:advancechars(-1), 3) -- back one l
+    lu.assertEquals(d:advancechars(-1), 1) -- back over é
+    lu.assertEquals(d:advancechars(-1), 0) -- back over h
+    lu.assertEquals(d:advancechars(-1), 0) -- clamped at 0
+    lu.assertEquals(d:advancechars(0), 0)  -- delta 0
+end
+
+function TestDoc:testSeekCharMulti()
+    local d = pt.doc("héllo")
+    lu.assertEquals(d:advancechars(3), 4)   -- h é l
+    lu.assertEquals(d:advancechars(2), 6)   -- l o → doc end
+    lu.assertEquals(d:advancechars(5), 6)   -- clamped at end
+    lu.assertEquals(d:advancechars(-9), 0)  -- clamped at 0
+end
+
+function TestDoc:testSeekCharContinuation()
+    local d = pt.doc("héllo")
+    d:seek("set", 2) -- inside é
+    lu.assertEquals(d:advancechars(1), 3)  -- continuation: step 1
+    d:seek("set", 2)
+    lu.assertEquals(d:advancechars(-1), 1) -- back to é start
+end
+
+function TestDoc:testSeekCharWide()
+    local d = pt.doc("a中b") -- 中 = 3 bytes (E4 B8 AD)
+    lu.assertEquals(d:advancechars(1), 1)  -- a
+    lu.assertEquals(d:advancechars(1), 4)  -- 中 (3 bytes)
+    lu.assertEquals(d:advancechars(1), 5)  -- b
+    lu.assertEquals(d:advancechars(-1), 4) -- back one
+    lu.assertEquals(d:advancechars(-1), 1) -- back over 中
+end
+
+function TestDoc:testSeekCharSplitPiece()
+    -- splice (literal path) splits pieces without merging; the split
+    -- lands inside the 3-byte char: text becomes "a\xE4\xB8xb" with
+    -- pieces [0,3) | [3,4) | [4,5). The E4 lead is truncated (broken
+    -- utf8): lead steps count E4 as one char, its continuation byte
+    -- as another.
+    local d = pt.doc("a中b")
+    d:seek("set", 3)
+    d:splice(0, "x")
+    d:splice(1, "")
+    d:seek("set", 0)
+    lu.assertEquals(d:advancechars(2), 3)  -- a, E4(split lead) → x
+    d:seek("set", 0)
+    lu.assertEquals(d:advancechars(3), 4)  -- a, E4, x → b
+    d:seek("set", 1)
+    lu.assertEquals(d:advancechars(1), 3)  -- E4 lead → x
+    d:seek("set", 2)
+    lu.assertEquals(d:advancechars(1), 3)  -- continuation → x
+    d:seek("set", 3)
+    lu.assertEquals(d:advancechars(-1), 1) -- x → E4 lead start
+    d:seek("set", 4)
+    lu.assertEquals(d:advancechars(-1), 3) -- b → x
+    d:seek("set", 1)
+    lu.assertEquals(d:charlen(), 3)        -- split lead still 3 bytes
+    d:seek("set", 2)
+    lu.assertEquals(d:charlen(), 1)        -- continuation byte
+end
+
+function TestDoc:testSeekChar4Byte()
+    local d = pt.doc("a\xF0\x9F\x98\x80b") -- U+1F600 = 4 bytes
+    lu.assertEquals(d:advancechars(1), 1)  -- a
+    lu.assertEquals(d:advancechars(1), 5)  -- emoji (4 bytes)
+    lu.assertEquals(d:advancechars(1), 6)  -- b
+    lu.assertEquals(d:advancechars(-1), 5) -- back one
+    lu.assertEquals(d:advancechars(-1), 1) -- back over emoji
+end
+
+function TestDoc:testCharlen()
+    local d = pt.doc("héllo") -- é = 2 bytes
+    lu.assertEquals(d:charlen(0), 1) -- h
+    lu.assertEquals(d:charlen(1), 2) -- é lead
+    lu.assertEquals(d:charlen(2), 1) -- é continuation byte
+    lu.assertEquals(d:charlen(3), 1) -- l
+    lu.assertEquals(d:charlen(5), 1) -- o
+    lu.assertEquals(d:charlen(6), 0) -- at doc end
+    lu.assertEquals(d:charlen(99), 0) -- past end
+end
+
+function TestDoc:testCharlenDefault()
+    local d = pt.doc("héllo")
+    d:seek("set", 1)
+    lu.assertEquals(d:charlen(), 2) -- default = cursor position
+    lu.assertEquals(d:offset(), 1)  -- no cursor move
+end
+
+function TestDoc:testCharlenError()
+    local d = pt.doc("hi")
+    lu.assertError(function() d:charlen(-1) end)
+end
+
 
 os.exit(lu.LuaUnit.run(), true)

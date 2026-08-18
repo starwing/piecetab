@@ -60,7 +60,8 @@ static int lua53_rawgetp(lua_State *L, int idx, const void *p) {
 #define LPT_STATE_KEY  ((void *)0x91ECE7AB)
 #define LPT_STATE_TYPE "piecetab.State"
 
-#define lpt_checkmem(L, p) ((void)((p) || luaL_error(L, "piecetab: out of memory")))
+#define lpt_checkmem(L, p) \
+    ((void)((p) || luaL_error(L, "piecetab: out of memory")))
 
 /* forward: pt_Buffer payload cleaner for undotree */
 static void lpt_ut_cleaner(void *ud, ut_Payload *p);
@@ -590,6 +591,33 @@ static int Lpt_doc(lua_State *L) {
     return lpt_newdoc(L, b), 1;
 }
 
+static size_t lpt_docbreaks(lua_State *L, lpt_Doc *d, size_t lnum) {
+    size_t br;
+    lpt_checkerror(L, lpt_docsync(d, lnum, -1));
+    br = lc_breaks(d->lc);
+    if (lc_bytes(d->lc) < pt_bytes(pt_buffer(&d->C))) ++br;
+    return luaL_argcheck(L, lnum <= br, 3, "line out of range"), br;
+}
+
+static void lpt_seeklinecol(lua_State *L, lpt_Doc *d, size_t lnum, int col) {
+    size_t    br, base, max;
+    int       r;
+    lc_Cursor C;
+    br = lpt_docbreaks(L, d, lnum);
+    if (lnum == br)
+        base = lc_bytes(d->lc), max = pt_bytes(pt_buffer(&d->C));
+    else {
+        r = lc_seekline(&C, d->lc, lnum), assert(r == LC_OK), (void)r;
+        base = lc_lineoffset(&C);
+        /* -1: the \n byte is not text */
+        max = lnum < lc_breaks(d->lc) ? base + lc_linelen(&C) - 1
+                                      : pt_bytes(pt_buffer(&d->C));
+    }
+    if (col < 0) col = 0;
+    if ((size_t)col > max - base) col = (int)(max - base);
+    pt_locate(&d->C, base + (size_t)col);
+}
+
 static int lpt_seekpos(lua_State *L, lpt_Doc *d, const char *whence) {
     lua_Integer off = luaL_optinteger(L, 3, 0);
     if (whence[0] == 's' && whence[1] == 'e')
@@ -601,20 +629,8 @@ static int lpt_seekpos(lua_State *L, lpt_Doc *d, const char *whence) {
         if (off < 0) n = (size_t)(-off) >= n ? 0 : n - (size_t)(-off);
         if (off > 0) n = (size_t)off;
         pt_locate(&d->C, n);
-    } else if (whence[0] == 'l') {
-        size_t    lnum = (size_t)off, br;
-        lc_Cursor C;
-        lpt_checkerror(L, lpt_docsync(d, lnum, -1));
-        /* doc-line semantics: breaks() = lc_breaks + trailing fragment
-         * line; seek("line", breaks) lands at the fragment start */
-        br = lc_breaks(d->lc);
-        if (lc_bytes(d->lc) < pt_bytes(pt_buffer(&d->C))) ++br;
-        luaL_argcheck(L, lnum <= br, 3, "line out of range");
-        if (lnum == br)
-            pt_locate(&d->C, lc_bytes(d->lc));
-        else
-            lc_seekline(&C, d->lc, lnum), pt_locate(&d->C, lc_lineoffset(&C));
-    }
+    } else if (whence[0] == 'l')
+        lpt_seeklinecol(L, d, (size_t)off, (int)luaL_optinteger(L, 4, 0));
     return lua_pushinteger(L, (lua_Integer)pt_offset(&d->C)), 1;
 }
 
@@ -700,6 +716,19 @@ static int Ldoc_read(lua_State *L) {
     return lpt_read(L, d, 2);
 }
 
+static int Ldoc_readat(lua_State *L) {
+    lpt_Doc    *d = lpt_checkdoc(L, 1);
+    lua_Integer cnt, off = luaL_checkinteger(L, 2);
+    size_t      total = pt_bytes(pt_buffer(&d->C));
+    pt_Cursor   C;
+    luaL_argcheck(L, off >= 0, 2, "offset must be non-negative");
+    if ((size_t)off >= total) return lua_pushliteral(L, ""), 1;
+    cnt = luaL_optinteger(L, 3, (lua_Integer)(total - (size_t)off));
+    luaL_argcheck(L, cnt >= 0, 3, "length must be non-negative");
+    pt_seek(&C, pt_buffer(&d->C), off);
+    return lpt_readstring(L, &C, (size_t)cnt);
+}
+
 static int Ldoc_insert(lua_State *L) {
     lpt_Doc    *d = lpt_checkdoc(L, 1);
     size_t      len, off = pt_offset(&d->C);
@@ -783,22 +812,90 @@ static int Ldoc_line(lua_State *L) {
 static int Ldoc_linelen(lua_State *L) {
     lpt_Doc    *d = lpt_checkdoc(L, 1);
     lua_Integer nu = luaL_optinteger(L, 2, -1);
+    int         noeol = lua_toboolean(L, 3), last;
     lc_Cursor   C;
-    size_t      br, lnum;
+    size_t      br, lnum, llen;
     if (nu >= 0) {
         lpt_checkerror(L, lpt_docsync(d, nu + 1, LPT_UNL));
         br = lc_breaks(d->lc), lnum = (size_t)nu;
         luaL_argcheck(L, lnum <= br, 2, "line number out of range");
         if (lnum < br) lc_seekline(&C, d->lc, lnum);
         if (lnum == br) lc_seek(&C, d->lc, pt_bytes(pt_buffer(&d->C)));
-        return lua_pushinteger(L, (lua_Integer)lc_linelen(&C)), 1;
+        last = lnum == br;
+    } else {
+        lpt_checkerror(L, lpt_docsync(d, LPT_UNL, pt_offset(&d->C)));
+        assert(d->lc), lc_seek(&C, d->lc, pt_offset(&d->C));
+        lpt_checkerror(L, lpt_docsync(d, lc_line(&C) + 1, LPT_UNL));
+        last = lc_line(&C) == lc_breaks(d->lc);
+        if (last) lc_seek(&C, d->lc, pt_bytes(pt_buffer(&d->C)));
     }
-    lpt_checkerror(L, lpt_docsync(d, LPT_UNL, pt_offset(&d->C)));
-    assert(d->lc), lc_seek(&C, d->lc, pt_offset(&d->C));
-    lpt_checkerror(L, lpt_docsync(d, lc_line(&C) + 1, LPT_UNL));
-    if (lc_line(&C) == lc_breaks(d->lc))
-        lc_seek(&C, d->lc, pt_bytes(pt_buffer(&d->C)));
-    return lua_pushinteger(L, (lua_Integer)lc_linelen(&C)), 1;
+    llen = lc_linelen(&C);
+    if (noeol && llen > 0 && !last) --llen;
+    return lua_pushinteger(L, (lua_Integer)llen), 1;
+}
+
+static size_t lpt_utf8len(unsigned char b) {
+    if (b >= 0xF0) return 4;
+    if (b >= 0xE0) return 3;
+    if (b >= 0xC0) return 2;
+    return 1;
+}
+
+static int lpt_forwardchars(pt_Cursor *C, lua_Integer delta) {
+    size_t      i, n, len;
+    const char *s = pt_piece(C, &len);
+    if (s && (*s & 0xC0) == 0x80) --delta;
+    for (; s; s = pt_next(C, &len)) {
+        for (i = 0; i < len; --delta, i += n) {
+            while (i < len && (s[i] & 0xC0) == 0x80) ++i;
+            if (!(i < len)) break;
+            n = lpt_utf8len((unsigned char)s[i]);
+            if (delta == 0) return pt_advance(C, i);
+        }
+    }
+    return PT_OK;
+}
+
+static int lpt_backwardchars(pt_Cursor *C, lua_Integer delta) {
+    const char *s;
+    size_t      len;
+    while ((s = pt_prev(C, &len))) {
+        while (len > 0) {
+            while (len > 0 && (s[len - 1] & 0xC0) == 0x80) --len;
+            if (!(len > 0)) break;
+            if (--len, --delta <= 0) return pt_advance(C, len);
+        }
+    }
+    return PT_OK;
+}
+
+static int Ldoc_advancechars(lua_State *L) {
+    lpt_Doc    *d = lpt_checkdoc(L, 1);
+    lua_Integer delta = luaL_checkinteger(L, 2);
+    pt_Cursor  *C = &d->C;
+    if (delta > 0) lpt_checkerror(L, lpt_forwardchars(C, delta));
+    if (delta < 0) lpt_checkerror(L, lpt_backwardchars(C, -delta));
+    return lua_pushinteger(L, (lua_Integer)pt_offset(&d->C)), 1;
+}
+
+static int Ldoc_charlen(lua_State *L) {
+    lpt_Doc    *d = lpt_checkdoc(L, 1);
+    pt_Cursor   C;
+    const char *s;
+    lua_Integer o;
+    size_t      off, n, total = pt_bytes(pt_buffer(&d->C));
+    if (lua_isnoneornil(L, 2))
+        off = pt_offset(&d->C), s = pt_piece(&d->C, NULL);
+    else {
+        o = luaL_checkinteger(L, 2);
+        luaL_argcheck(L, o >= 0, 2, "offset must be non-negative");
+        off = (size_t)o, pt_seek(&C, pt_buffer(&d->C), off);
+        s = pt_piece(&C, NULL), assert(s);
+    }
+    if (off >= total) return lua_pushinteger(L, 0), 1;
+    n = lpt_utf8len((unsigned char)s[0]);
+    n = total - off < n ? total - off : n;
+    return lua_pushinteger(L, (lua_Integer)n), 1;
 }
 
 static int Ldoc_lineoffset(lua_State *L) {
@@ -997,17 +1094,19 @@ static void lpt_opendoc(lua_State *L) {
             {"__len", Ldoc_len}, {"append", Ldoc_write},
 #define ENTRY(name) {#name, Ldoc_##name}
             ENTRY(seek),         ENTRY(read),
-            ENTRY(write),        ENTRY(insert),
-            ENTRY(edit),         ENTRY(splice),
-            ENTRY(remove),       ENTRY(offset),
-            ENTRY(column),       ENTRY(line),
-            ENTRY(linelen),      ENTRY(breaks),
-            ENTRY(lineoffset),   ENTRY(linecol),
-            ENTRY(lines),        ENTRY(commit),
-            ENTRY(undo),         ENTRY(redo),
-            ENTRY(earlier),      ENTRY(later),
-            ENTRY(buffer),       ENTRY(dump),
-            ENTRY(version),      ENTRY(piece),
+            ENTRY(advancechars), ENTRY(readat),
+            ENTRY(charlen),      ENTRY(write),
+            ENTRY(insert),       ENTRY(edit),
+            ENTRY(splice),       ENTRY(remove),
+            ENTRY(offset),       ENTRY(column),
+            ENTRY(line),         ENTRY(linelen),
+            ENTRY(breaks),       ENTRY(lineoffset),
+            ENTRY(linecol),      ENTRY(lines),
+            ENTRY(commit),       ENTRY(undo),
+            ENTRY(redo),         ENTRY(earlier),
+            ENTRY(later),        ENTRY(buffer),
+            ENTRY(dump),         ENTRY(version),
+            ENTRY(piece),
 #undef ENTRY
             {NULL, NULL}};
     if (luaL_newmetatable(L, LPT_DOC_TYPE)) {
