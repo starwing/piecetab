@@ -92,36 +92,50 @@ function Grid:ncols() end
 function Grid:top() end
 
 ---Set tab expansion width used by cols/byte/next (and putslice's
----tab handling).
----@param ts integer  tab width (>1 expands, <=1 = single space)
-function Grid:settabstop(ts) end
-
----Current tab expansion width.
+---tab handling), or get current tabstop if ts is nil.
+---@overload fun(self: cellgrid.Grid, ts: integer): integer
 ---@return integer
 function Grid:tabstop() end
 
----Display column at byte off of text (tab expanded, wcwidth from
----unidata). Text starts at column c.
----@param text string  UTF-8 text
----@param off? integer 0-based byte offset (default #text = full width)
----@param c?   integer starting column (default 0)
+---Display width of s[i..j] rendered from starting column c (tab
+---expanded via grid tabstop, wcwidth from unidata). Two call forms,
+---split on the first argument: `cols(s, i?, j?)` (c = 0) or
+---`cols(c, s, i?, j?)`. A prefix width is `cols(s, 1, off)`; an empty
+---range yields 0. i/j accept negative indices (string.sub style,
+---counted from the end).
+---@param s string  UTF-8 text
+---@param i? integer 1-based start byte (default 1)
+---@param j? integer 1-based end byte, inclusive (default #text)
 ---@return integer  display column
-function Grid:cols(text, off, c) end
+---@overload fun(self: cellgrid.Grid, c: integer, s: string, i?: integer, j?: integer): integer
+function Grid:cols(s, i, j) end
 
----Byte offset (0..#text) of column c+col, clamped to char start.
----@param text string  UTF-8 text
----@param col  integer display column (relative to c)
----@param c?   integer starting column (default 0)
----@return integer  0-based byte offset
-function Grid:byte(text, col, c) end
+---Byte position (1-based, string.sub view — offsets are relative to
+---the sub `s[i..j]`, not the full text) of the character whose display
+---range contains column c+col: scans chars within the slice, clamps
+---back to the char start when the column lands inside a tab or wide
+---char; col < 0 and empty ranges clamp to the slice start (1). Two
+---call forms, split on the SECOND argument:
+---`byte(col, s, i?, j?)` (c = 0) or `byte(c, col, s, i?, j?)`.
+---@param s   string  UTF-8 text
+---@param col integer target display column (relative to c)
+---@param i?  integer 1-based start byte (default 1)
+---@param j?  integer 1-based end byte, inclusive (default #s)
+---@return integer?  1-based byte position within the slice
+---@overload fun(self: cellgrid.Grid, c: integer, col: integer, s: string, i?: integer, j?: integer): integer
+function Grid:byte(col, s, i, j) end
 
----Cluster iterator: for byte, col in g:next(text) — yields each
----character's 1-based byte offset and starting display column
----(tab expanded; continuation bytes yield width 0).
----@param text string  UTF-8 text
----@param c?   integer starting column (default 0)
+---Cluster iterator: for byte, col in g:next(s) — yields each
+---character's 1-based byte offset and starting display column within
+---s[i..j] (tab expanded; continuation bytes yield width 0). Two call
+---forms, split on the first argument: `next(s, i?, j?)` (c = 0) or
+---`next(c, s, i?, j?)`.
+---@param s string  UTF-8 text
+---@param i? integer 1-based start byte (default 1)
+---@param j? integer 1-based end byte, inclusive (default #s)
 ---@return fun(): integer?, integer?  iterator
-function Grid:next(text, c) end
+---@overload fun(self: cellgrid.Grid, c: integer, s: string, i?: integer, j?: integer): fun(): integer?, integer?
+function Grid:next(s, i, j) end
 
 ---Write a span of s[i..j] at (r, c) with style. Tabs expand to
 ---spaces (grid tabstop, render-column base); wide chars handled.

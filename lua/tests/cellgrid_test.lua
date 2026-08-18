@@ -732,23 +732,23 @@ end
 -- grid with tabstop ts (width via lcgW_width, as in Lgrid_new)
 local function mg(ts)
     local g = cg.new()
-    g:settabstop(ts)
+    g:tabstop(ts)
     return g
 end
 
 function TestCols:testDcolBasic()
     local g = mg(4)
-    lu.assertEquals(g:cols("abc", 2), 2)
-    lu.assertEquals(g:cols("abc", 99), 3)
+    lu.assertEquals(g:cols("abc", 1, 2), 2)
+    lu.assertEquals(g:cols("abc", 1, 99), 3)
     lu.assertEquals(g:cols(""), 0)
 end
 
 function TestCols:testDcolTab()
     local g = mg(4)
-    lu.assertEquals(g:cols("\ta", 1), 4)
-    lu.assertEquals(g:cols("a\tb", 2), 4)
-    lu.assertEquals(g:cols("ab\tc", 3), 4)
-    lu.assertEquals(mg(2):cols("a\tb", 2), 2)
+    lu.assertEquals(g:cols("\ta", 1, 1), 4)
+    lu.assertEquals(g:cols("a\tb", 1, 2), 4)
+    lu.assertEquals(g:cols("ab\tc", 1, 3), 4)
+    lu.assertEquals(mg(2):cols("a\tb", 1, 2), 2)
 end
 
 function TestCols:testDcolWide()
@@ -756,31 +756,31 @@ function TestCols:testDcolWide()
     -- 中 = U+4E2D (width 2 via lcgW_width)
     local zh = utf8.char(0x4e2d)
     local g = mg(4)
-    lu.assertEquals(g:cols(zh .. "a", 3), 2)
-    lu.assertEquals(g:cols(zh .. "a", 4), 3)
+    lu.assertEquals(g:cols(zh .. "a", 1, 3), 2)
+    lu.assertEquals(g:cols(zh .. "a", 1, 4), 3)
 end
 
 function TestCols:testByteBasic()
     local g = mg(4)
-    lu.assertEquals(g:byte("abc", 0), 0)
-    lu.assertEquals(g:byte("abc", 2), 2)
-    lu.assertEquals(g:byte("abc", 9), 3)
+    lu.assertEquals(g:byte(0, "abc", 1, 3), 1)
+    lu.assertEquals(g:byte(2, "abc", 1, 3), 3)
+    lu.assertEquals(g:byte(9, "abc", 1, 3), 4) -- past end: #sub + 1
 end
 
 function TestCols:testByteTab()
     local g = mg(4)
-    lu.assertEquals(g:byte("a\tb", 3), 1) -- inside tab
-    lu.assertEquals(g:byte("a\tb", 4), 2)
-    lu.assertEquals(g:byte("\ta", 2), 0)
+    lu.assertEquals(g:byte(3, "a\tb", 1, 3), 2) -- inside tab: its start
+    lu.assertEquals(g:byte(4, "a\tb", 1, 3), 3)
+    lu.assertEquals(g:byte(2, "\ta", 1, 2), 1)
 end
 
 function TestCols:testByteWide()
     if not ok_utf8 then return end
     local zh = utf8.char(0x4e2d)
     local g = mg(4)
-    lu.assertEquals(g:byte(zh .. "a", 1), 0) -- inside wide
-    lu.assertEquals(g:byte(zh .. "a", 2), 3)
-    lu.assertEquals(g:byte(zh .. "a", 3), 4)
+    lu.assertEquals(g:byte(1, zh .. "a", 1, 4), 1) -- inside wide
+    lu.assertEquals(g:byte(2, zh .. "a", 1, 4), 4)
+    lu.assertEquals(g:byte(3, zh .. "a", 1, 4), 5)
 end
 
 function TestCols:testDcols()
@@ -798,11 +798,51 @@ function TestCols:testDcolsEmpty()
     lu.assertEquals(mg(4):cols(""), 0)
 end
 
+function TestCols:testRange()
+    local g = mg(4)
+    -- prefix via [1, off]
+    lu.assertEquals(g:cols("abc", 1, 2), 2)
+    lu.assertEquals(g:cols("abc", 1, 99), 3)
+    lu.assertEquals(g:cols("abc", 1, 0), 0) -- empty range
+    -- clamp: i < 1 -> 1, j > len -> len
+    lu.assertEquals(g:cols("abc", 0, 2), 2)
+    -- middle ranges are independent: tab expands from the range start
+    lu.assertEquals(g:cols("a\tb", 1, 1), 1)
+    lu.assertEquals(g:cols("a\tb", 3, 3), 1)
+    lu.assertEquals(g:cols("a\tb", 2, 3), 5) -- \t (4) + b (1)
+    -- byte offsets are within the slice (string.sub view)
+    lu.assertEquals(g:byte(4, "a\tb", 1, 3), 3) -- b at col 4
+    lu.assertEquals(g:byte(3, "a\tb", 2, 3), 1) -- inside tab: its start
+    lu.assertEquals(g:byte(1, "a\tb", 2, 3), 1) -- before tab: start
+    lu.assertEquals(g:byte(9, "a\tb", 3, 3), 2) -- past end: slice end
+    -- empty range: slice start (1)
+    lu.assertEquals(g:byte(5, "abc", 3, 2), 1)
+    lu.assertEquals(g:cols("abc", 3, 2), 0)
+    -- iterator over a middle range (1-based bytes within the slice)
+    local out = {}
+    for byte, col in g:next("a\tb", 2, 3) do out[byte] = col end
+    lu.assertEquals(out, { [1] = 0, [2] = 4 })
+    -- negative i/j are string.sub style (from the end)
+    lu.assertEquals(g:cols("a\tb", -2, -1), 5)  -- [2..3] = "\tb": 4 + 1
+    lu.assertEquals(g:byte(3, "a\tb", -2, -1), 1) -- tab inside: slice start
+    -- dispatch: (c, s, ...) form equals (s, ...) with c = 0
+    lu.assertEquals(g:cols(0, "abc", 1, 2), g:cols("abc", 1, 2))
+    lu.assertEquals(g:byte(0, 4, "a\tb", 1, 3), g:byte(4, "a\tb", 1, 3))
+    lu.assertEquals(g:next(0, "a\tb", 2, 3) ~= nil, true)
+    -- wrong types error out (check* functions, no silent fallback)
+    ---@diagnostic disable-next-line: param-type-mismatch
+    lu.assertError(function() g:byte("abc", 4) end)   -- col form, c = "abc"
+    ---@diagnostic disable-next-line: param-type-mismatch
+    lu.assertError(function() g:cols("abc", "x") end) -- i = "x"
+    ---@diagnostic disable-next-line: param-type-mismatch
+    lu.assertError(function() g:next("abc", "x") end)
+end
+
 function TestCols:testPutlineTab()
     -- putslice expands tabs itself (editor no longer pre-expands)
     local g = cg.new()
     g:begin(0, 1, 10)
-    g:settabstop(4)
+    g:tabstop(4)
     local c = g:putslice(0, 0, 0, "a\tb")
     lu.assertEquals(c, 5)
     lu.assertEquals(g:cell(0, 1), 32) -- spaces
@@ -828,7 +868,7 @@ end
 function TestCols:testTabstopGetter()
     local g = cg.new()
     lu.assertEquals(g:tabstop(), 4) -- Lgrid_new default
-    g:settabstop(8)
+    g:tabstop(8)
     lu.assertEquals(g:tabstop(), 8)
 end
 
@@ -860,16 +900,17 @@ function TestCols:testRandomFuzz()
     for _ = 1, 500 do
         local text = rand_text(math.random(0, 24))
         local ts = math.random(1, 8)
-        g:settabstop(ts)
+        g:tabstop(ts)
         -- char-boundary offsets only (len must sit on a char start)
         local bounds = { 0 }
         for byte, _ in g:next(text) do bounds[#bounds + 1] = byte - 1 end
         bounds[#bounds + 1] = #text + 1 -- past end: clamped to line width
         for _, byte in ipairs(bounds) do
-            lu.assertEquals(g:cols(text, byte), ref_dcol(text, byte, ts))
+            lu.assertEquals(g:cols(text, 1, byte), ref_dcol(text, byte, ts))
         end
         for dcol = 0, #text + 4 do
-            lu.assertEquals(g:byte(text, dcol), ref_byte(text, dcol, ts))
+            lu.assertEquals(g:byte(dcol, text, 1, #text),
+                    ref_byte(text, dcol, ts) + 1)
         end
         -- iterator (byte 1-based, start col) matches the sparse reference
         for byte, col in g:next(text) do
@@ -886,10 +927,10 @@ function TestCols:testAmbiwidth()
     local a1 = utf8.char(0x00a1)
     local e9 = utf8.char(0x00e9)
     local g = mg(4)
-    lu.assertEquals(g:cols(a1 .. "x", 2), 2)
-    lu.assertEquals(g:cols(a1 .. "x", 3), 3)
-    lu.assertEquals(g:cols(e9 .. "x", 2), 2)
-    lu.assertEquals(g:byte(a1 .. "x", 1), 0) -- inside: char start
+    lu.assertEquals(g:cols(a1 .. "x", 1, 2), 2)
+    lu.assertEquals(g:cols(a1 .. "x", 1, 3), 3)
+    lu.assertEquals(g:cols(e9 .. "x", 1, 2), 2)
+    lu.assertEquals(g:byte(1, a1 .. "x", 1, 2), 1) -- inside: char start
 end
 
 -- ======== Scroll branches coverage ========
