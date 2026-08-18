@@ -824,18 +824,56 @@ local function diag_update(self, p)
   self.diag = { version = v or cur, spans = spans }
 end
 
--- Client factory. opts adds to the Protocol contract:
---   dcol_fn(line, bytecol) -> display column (tabstop-aware)
---   viewport_fn() -> {top, rows} of the visible text area
---   now_fn() -> wall-clock seconds (default: luv.hrtime()/1e9)
---   attrmap -> semantic tokenType name -> attr table (+ optional diag)
---   vtext = { set(line, list), clear() }  injected Ed vtext slot access
+-- file extension -> LSP language id (nil: unsupported)
+local EXT_LANG = { c = "c", h = "c", lua = "lua" }
+
+-- file extension -> default server argv; PT_LSP_CMD overrides (space-split)
+local EXT_CMD = { c = { "clangd" }, lua = { "lua-language-server" } }
+
+---Server argv for a file, or nil when unsupported. PT_LSP_CMD wins.
+---@param filename string?
+---@return string[]?
+function Client.command_for(filename)
+  local over = os.getenv("PT_LSP_CMD")
+  if over and #over > 0 then
+    local argv = {}
+    for w in over:gmatch("%S+") do argv[#argv + 1] = w end
+    return argv
+  end
+  local ext = filename and filename:match("%.([%w_]+)$")
+  return ext and EXT_CMD[ext] or nil
+end
+
+---LSP language id for a file ("plaintext" when unknown).
+---@param filename string?
+---@return string
+function Client.langid(filename)
+  local ext = filename and filename:match("%.([%w_]+)$")
+  return ext and EXT_LANG[ext] or "plaintext"
+end
+
+-- Client factory. opts adds to the Protocol contract; everything but
+-- the accessors (get_text/get_line/offset_pos) has a default:
+--   get_text() -> full document text            [required]
+--   get_line(line) -> line text (no \n)         [required]
+--   offset_pos(off) -> line, UTF-16 unit col    [required]
+--   dcol_fn(line, bytecol) -> display column    (default: bytecol)
+--   viewport_fn() -> {top, rows}                (default: whole doc)
+--   now_fn() -> wall-clock seconds              (default: luv.hrtime)
+--   attrmap -> tokenType name -> attr table     (default: none)
+--   vtext = { set(line, list), clear() }        (default: no-op)
 --   hint_idle? -> seconds of no typing before a hint refresh
 --   proto? -> pre-built Protocol (tests inject fakes)
 --- @param opts table
 --- @return lsp.Client
 function Client.new(opts)
   opts.now_fn = opts.now_fn or function() return luv.hrtime() / 1e9 end
+  opts.on_status = opts.on_status or function() end
+  opts.viewport_fn = opts.viewport_fn
+    or function() return { top = 0, rows = 1e9 } end
+  opts.dcol_fn = opts.dcol_fn or function(_, bcol) return bcol end
+  opts.attrmap = opts.attrmap or {}
+  opts.vtext = opts.vtext or { set = function() end, clear = function() end }
   local self = h_state(opts)
   self.proto = opts.proto or nil
   self.sem = { spans = {}, dirty = true, pending = false }
@@ -902,6 +940,32 @@ function Client:on_switch(changes)
   if self.sem then self.sem.dirty = true end
   self.hint_dirty = true
   self.opts.vtext.clear()
+end
+
+-- Undo/redo sync for doc objects: run doc_undo(f) collecting the
+-- change hunks, then deliver one didChange (caches + vtext reset).
+--- @param doc_undo fun(f: fun(off: integer, del: integer, text: string))  e.g. doc.undo / doc.redo
+function Client:undo_switch(doc_undo)
+  local changes = {}
+  doc_undo(function(off, del, text)
+    changes[#changes + 1] = { off = off, del = del, text = text }
+  end)
+  self:on_switch(changes)
+end
+
+-- Start a server for a file path: resolves the server command (or uses
+-- argv when given), absolute file URI and workspace root internally.
+-- Returns false when no server is configured for the extension.
+--- @param path string
+--- @param argv? string[]  override Client.command_for(path)
+--- @return boolean
+function Client:start_file(path, argv)
+  argv = argv or Client.command_for(path)
+  if not argv then return false end
+  if path:sub(1, 1) ~= "/" then path = luv.cwd() .. "/" .. path end
+  local root = path:match("^(.*)/") or "."
+  return self:start(argv, "file://" .. path, Client.langid(path),
+    "file://" .. root)
 end
 
 -- Idle work (main-loop timeouts): refresh inlay hints once typing has

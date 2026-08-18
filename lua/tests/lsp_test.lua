@@ -698,6 +698,19 @@ function TestClient:testOnSwitchClears()
   lu.assertTrue(c.hint_dirty)
 end
 
+function TestClient:testUndoSwitchCollectsHunks()
+  local c, proto, got = mk_client()
+  c:undo_switch(function(f)
+    f(5, 2, "ab")
+    f(0, 0, "X")
+  end)
+  lu.assertEquals(proto.switch_edits,
+    { { off = 5, del = 2, text = "ab" }, { off = 0, del = 0, text = "X" } })
+  lu.assertEquals(#got, 1)
+  lu.assertEquals(got[1][1], "clear")
+  lu.assertTrue(c.sem.dirty)
+end
+
 function TestClient:testQuerySpansClip()
   local c = mk_client()
   c.sem.spans = {
