@@ -52,6 +52,8 @@ typedef struct ut_Payload ut_Payload;
 typedef struct ut_Node    ut_Node;
 typedef struct ut_Hunk    ut_Hunk;
 
+typedef const ut_Hunk *ut_HunkCV; /* read-only hunk vec */
+
 typedef void *ut_Alloc(void *ud, void *p, size_t osize, size_t nsize);
 typedef void  ut_Cleaner(void *ud, ut_Payload *p);
 
@@ -101,7 +103,7 @@ UT_API int ut_switch(ut_Tree *T, ut_Vid v);
 UT_API int ut_diff(ut_Tree *T, ut_Vid from, ut_Vid to);
 UT_API int ut_freshdiff(ut_Tree *T, int i, int j);
 
-UT_API const ut_Hunk *ut_hunks(ut_Tree *T, size_t *pn);
+UT_API ut_HunkCV ut_hunks(ut_Tree *T, size_t *pn);
 
 UT_API size_t ut_mapoffset(ut_Tree *T, size_t offset);
 
@@ -345,7 +347,7 @@ UT_API void ut_deltree(ut_State *S, ut_Tree *T) {
     utV_free(S, T->root.h), S->allocf(S->ud, T, sizeof(ut_Tree), 0);
 }
 
-UT_API const ut_Hunk *ut_hunks(ut_Tree *T, size_t *pn) {
+UT_API ut_HunkCV ut_hunks(ut_Tree *T, size_t *pn) {
     if (T == NULL) return (void)(pn && (*pn = 0)), NULL;
     if (T->diffhn < 0) {
         if (T->current == NULL) return (void)(pn && (*pn = 0)), NULL;
@@ -372,15 +374,13 @@ UT_API void ut_unrecord(ut_Tree *T, unsigned n) {
 /* hunk algebra helpers */
 
 typedef struct ut_Merge {
-    ut_State      *S;    /* alloc state                          */
-    ut_Hunk      **out;  /* output hunk vec (X→Z)                */
-    const ut_Hunk *x2y;  /* A: X→Y changeset                     */
-    const ut_Hunk *y2z;  /* B: Y→Z changeset                     */
-    ptrdiff_t      xoff; /* Σ(cins-pdel) over processed A hunks  */
-    ptrdiff_t      zoff; /* Σ(cins-pdel) over processed B hunks  */
+    ut_State *S;    /* alloc state                          */
+    ut_Hunk **out;  /* output hunk vec (X→Z)                */
+    ut_HunkCV x2y;  /* A: X→Y changeset                     */
+    ut_HunkCV y2z;  /* B: Y→Z changeset                     */
+    ptrdiff_t xoff; /* Σ(cins-pdel) over processed A hunks  */
+    ptrdiff_t zoff; /* Σ(cins-pdel) over processed B hunks  */
 } ut_Merge;
-
-typedef const ut_Hunk *ut_HunkCV; /* read-only hunk vec */
 
 /*
  * Compose: X → Y → Z, output X → Z.
@@ -406,14 +406,14 @@ typedef const ut_Hunk *ut_HunkCV; /* read-only hunk vec */
  *   pa   = min(A.pa, B.pa−xoff)      ca  = min(A.ca+zoff, B.ca)
  */
 
-static int utH_emitX2Y(ut_Merge *M, const ut_Hunk *h) {
+static int utH_emitX2Y(ut_Merge *M, ut_HunkCV h) {
     ut_Hunk hk = *h;
     assert(hk.pdel || hk.cins);
     hk.ca += M->zoff, M->xoff += (ptrdiff_t)h->cins - (ptrdiff_t)h->pdel;
     return utV_push(M->S, *M->out, hk);
 }
 
-static int utH_emitY2Z(ut_Merge *M, const ut_Hunk *h) {
+static int utH_emitY2Z(ut_Merge *M, ut_HunkCV h) {
     ut_Hunk hk = *h;
     assert(hk.pdel || hk.cins);
     hk.pa -= M->xoff, M->zoff += (ptrdiff_t)h->cins - (ptrdiff_t)h->pdel;
@@ -421,9 +421,9 @@ static int utH_emitY2Z(ut_Merge *M, const ut_Hunk *h) {
 }
 
 static int utH_emitcross(ut_Merge *M, int i, int j) {
-    const ut_Hunk *a = &M->x2y[i], *b = &M->y2z[j];
-    ptrdiff_t      surv = (ptrdiff_t)a->cins - (ptrdiff_t)b->pdel;
-    ut_Hunk        m;
+    ut_HunkCV a = &M->x2y[i], b = &M->y2z[j];
+    ptrdiff_t surv = (ptrdiff_t)a->cins - (ptrdiff_t)b->pdel;
+    ut_Hunk   m;
     m.pa = ut_min(a->pa, b->pa - M->xoff);     /* X start: from A or B */
     m.pdel = a->pdel + (surv < 0 ? -surv : 0); /* A del + B overflow */
     m.ca = ut_min(a->ca + M->zoff, b->ca);     /* Z start: from A or B */
@@ -468,7 +468,7 @@ static int utH_compose(ut_State *S, ut_HunkCV a, ut_HunkCV b, ut_Hunk **out) {
     return (void)(r != UT_OK && utV_free(S, *out)), r;
 }
 
-static int utH_invert(ut_State *S, const ut_Hunk *h, ut_Hunk **out) {
+static int utH_invert(ut_State *S, ut_HunkCV h, ut_Hunk **out) {
     ut_Hunk  inv;
     unsigned i, len;
     assert(S != NULL && out != NULL);
@@ -633,9 +633,9 @@ UT_API int ut_freshdiff(ut_Tree *T, int i, int j) {
 }
 
 UT_API size_t ut_mapoffset(ut_Tree *T, size_t offset) {
-    size_t         hn, i;
-    const ut_Hunk *h = ut_hunks(T, &hn);
-    ptrdiff_t      shift = 0;
+    size_t    hn, i;
+    ut_HunkCV h = ut_hunks(T, &hn);
+    ptrdiff_t shift = 0;
     for (i = 0; i < hn && offset >= h[i].pa; ++i) {
         if (offset == h[i].pa || offset < h[i].pa + h[i].pdel) return h[i].ca;
         shift += (ptrdiff_t)h[i].cins - (ptrdiff_t)h[i].pdel;

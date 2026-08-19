@@ -357,13 +357,13 @@ static int ptM_ishole(const pt_Node *n, int i)
 
 static int ptM_iterhole(pt_Mask *m, int *pi, int cc)
 { return *m ? (*pi = ptM_ctz(*m), *m &= *m - 1, *pi < cc) : 0; }
+
+PT_API unsigned pt_retain(pt_Buffer b)
+{ return b && b != &b->S->empty ? ++((pt_Tree *)b)->refc : 0; }
 /* clang-format on */
 
-PT_API unsigned pt_version(pt_Buffer b) { return b ? b->root.version : 0; }
-PT_API size_t   pt_bytes(pt_Buffer b) { return b ? b->bytes : 0; }
-PT_API unsigned pt_retain(pt_Buffer b) {
-    return b ? ++((pt_Tree *)b)->refc : 0;
-}
+PT_API unsigned  pt_version(pt_Buffer b) { return b ? b->root.version : 0; }
+PT_API size_t    pt_bytes(pt_Buffer b) { return b ? b->bytes : 0; }
 PT_API pt_Buffer pt_empty(pt_State *S) { return S ? &S->empty : NULL; }
 static void      ptM_clamp(pt_Node *p) { p->mask &= ptM_mask(ptN_cc(p)); }
 

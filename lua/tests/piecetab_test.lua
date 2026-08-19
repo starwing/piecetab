@@ -700,6 +700,23 @@ function TestDoc:testUndoCallbackVidStillWorks()
   lu.assertEquals(d:dump(), "hello")
 end
 
+function TestDoc:testUndoCallbackVid()
+  -- undo(vid, f) must feed the version hunks to f, not only jump.
+  local d = pt.doc("abcdef")
+  d:commit()
+  d:seek("set", 1); d:write("XY"); local v1 = d:commit() -- "aXYbcdef"
+  d:seek("set", 4); d:write("Z"); local v2 = d:commit()  -- "aXYbZcdef"
+  local before = d:dump()
+  local edits = {}
+  local ret = d:undo(v1, function(off, del, text)
+    edits[#edits + 1] = { off = off, del = del, text = text }
+  end)
+  lu.assertEquals(ret, v1)
+  lu.assertEquals(d:dump(), "aXYbcdef")
+  lu.assertEquals(#edits, 1)
+  lu.assertEquals(apply_edits(before, edits), "aXYbcdef")
+end
+
 function TestDoc:testBufferExport()
     local d = pt.doc("hello")
     d:seek("end")
