@@ -35,8 +35,6 @@ jobs:
         run: just sp
       - name: spantree tests (FANOUT=8)
         run: just sp8
-      - name: spantree lua tests
-        run: just lua/build-lua spantree && cd lua && lua tests/spantree_test.lua
 
   lua-tmux:
     if: "! contains(toJSON(github.event.commits.*.message), '[skip ci]')"
@@ -94,6 +92,13 @@ jobs:
           luarocks install luautf8 && luarocks install luv
       - name: tmux display tests
         run: just lua/ed-tmux
+      - name: lua binding tests
+        run: |
+          cd lua
+          for t in piecetab cellgrid spantree termfeed json lsp editor; do
+            echo "=== $t ==="
+            lua tests/${t}_test.lua || exit 1
+          done
 
   test-windows:
     if: "! contains(toJSON(github.event.commits.*.message), '[skip ci]')"
