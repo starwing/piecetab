@@ -17,7 +17,10 @@ if not defined VS (
 call "%VS%\VC\Auxiliary\Build\vcvars64.bat" >nul
 if errorlevel 1 exit /b 1
 
-set "TESTS=tests\linecache_test_fanout4 tests\linecache_test_fanout8 tests\piecetab_test_fanout4 tests\undotree_test tests\cellgrid_test tests\termfeed_test"
+set "TESTS=tests\linecache_test_fanout4 tests\linecache_test_fanout8"
+set "TESTS=%TESTS% tests\spantree_test_fanout4 tests\spantree_test_fanout8"
+set "TESTS=%TESTS% tests\piecetab_test_fanout4"
+set "TESTS=%TESTS% tests\undotree_test tests\cellgrid_test tests\termfeed_test"
 
 for %%t in (%TESTS%) do (
     echo === %%t ===

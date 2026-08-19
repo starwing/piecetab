@@ -87,6 +87,34 @@ end
 -- open editor sessions: killed in tearDown even when a test fails
 local sessions = {}
 
+local function dump_screen(s, label)
+  io.stderr:write(label, "\n")
+  local rows = s:capture()
+  if #rows == 0 then io.stderr:write("  (no captured rows)\n") end
+  for i, row in ipairs(rows) do
+    io.stderr:write(string.format("  %2d: %q\n", i, row))
+  end
+  local cur = s:cursor()
+  io.stderr:write(string.format("  cursor: %s,%s\n",
+    tostring(cur.x), tostring(cur.y)))
+  if s.codefile then
+    local f = io.open(s.codefile, "r")
+    if f then
+      local code = f:read("*a")
+      f:close()
+      if code ~= "" then io.stderr:write("  exit code: ", code, "\n") end
+    end
+  end
+  if s.errfile then
+    local f = io.open(s.errfile, "r")
+    if f then
+      local err = f:read("*a")
+      f:close()
+      if err ~= "" then io.stderr:write("  stderr: ", err, "\n") end
+    end
+  end
+end
+
 -- Spawn the editor on a temp file with fakelsp behind PT_LSP_CMD.
 -- Waits for "lsp:on" in the status bar (handshake round trip).
 --- @param content string
@@ -97,20 +125,28 @@ local function spawn_ed(content, hints, opts)
   opts = opts or {}
   local f = tmpfile()
   local fs = tmpfile()
+  local errf = tmpfile()
+  local codef = tmpfile()
   local lua_bin = _G["jit"] and "luajit" or "lua"
   local s = tmux.new({
-    cmd = string.format("PT_LSP_CMD='%s %s' PT_HINT_IDLE=0 %s %s %s",
-      lua_bin, fs, lua_bin, root .. "/editor.lua", f),
+    cmd = string.format(
+      "PT_LSP_CMD='%s %s' PT_HINT_IDLE=0 %s %s %s 2>%s; echo \\$? > %s",
+      lua_bin, fs, lua_bin, root .. "/editor.lua", f, errf, codef),
     files = { { path = f, content = content },
-              { path = fs, content = fakelsp_src(hints, opts.diag) } },
+              { path = fs, content = fakelsp_src(hints, opts.diag) },
+              { path = errf, content = "" },
+              { path = codef, content = "" } },
   })
+  s.errfile = errf
+  s.codefile = codef
   sessions[#sessions + 1] = s
-  s:wait(function()
+  local ok = s:wait(function()
     for _, row in ipairs(s:capture()) do
       if row:find("lsp:on", 1, true) then return true end
     end
     return false
   end)
+  if not ok then dump_screen(s, "spawn_ed timeout waiting for lsp:on") end
   return s
 end
 
@@ -125,13 +161,16 @@ end
 -- Poll the screen until a row contains text (plain substring)
 --- @param s tmux
 --- @param text string
+--- @return boolean
 local function wait_screen(s, text)
-  s:wait(function()
+  local ok = s:wait(function()
     for _, row in ipairs(s:capture()) do
       if row:find(text, 1, true) then return true end
     end
     return false
   end)
+  if not ok then dump_screen(s, "wait_screen timeout for " .. string.format("%q", text)) end
+  return ok
 end
 
 TestDisplay = {}

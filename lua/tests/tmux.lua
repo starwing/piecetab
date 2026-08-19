@@ -17,6 +17,11 @@ local function run(args)
   return out
 end
 
+local function server_down(out)
+  return out:find("no server running", 1, true) ~= nil
+      or out:find("can't find pane", 1, true) ~= nil
+end
+
 local nextid = 0
 
 -- opts: {cmd=string, rows=integer, cols=integer, files={{path=, content=}}}
@@ -38,8 +43,14 @@ function tmux.new(opts)
   end
   local cmd = string.format("new-session -d -s %s -x %d -y %d \"%s\"",
     self.name, opts.cols or 80, opts.rows or 24, opts.cmd)
-  assert(run(cmd):find("^$"), "tmux spawn failed: " .. cmd)
-  self:wait(function() return #self:capture() > 0 end, 200)
+  local ok = false
+  for _ = 1, 5 do
+    if run(cmd):find("^$") then ok = true break end
+    os.execute("sleep 0.1")
+  end
+  assert(ok, "tmux spawn failed: " .. cmd)
+  assert(self:wait(function() return #self:capture() > 0 end, 500),
+    "tmux server not ready for " .. self.name)
   return self
 end
 
@@ -64,6 +75,7 @@ end
 --- @return string[]
 function tmux:capture()
   local out = run("capture-pane -t " .. self.name .. " -p")
+  if server_down(out) then return {} end
   local rows = {}
   for line in (out .. "\n"):gmatch("(.-)\n") do
     rows[#rows + 1] = line:gsub("%s+$", "")
@@ -76,7 +88,9 @@ end
 --- @return {x: integer, y: integer}
 function tmux:cursor()
   local out = run("display -p -t " .. self.name .. " '#{cursor_x} #{cursor_y}'")
+  if server_down(out) then return { x = -1, y = -1 } end
   local x, y = out:match("(%d+) (%d+)")
+  if not x or not y then return { x = -1, y = -1 } end
   return { x = tonumber(x), y = tonumber(y) }
 end
 

@@ -31,6 +31,12 @@ jobs:
         run: just cg
       - name: termfeed tests
         run: just tf
+      - name: spantree tests (FANOUT=4)
+        run: just sp
+      - name: spantree tests (FANOUT=8)
+        run: just sp8
+      - name: spantree lua tests
+        run: just lua/build-lua spantree && cd lua && lua tests/spantree_test.lua
 
   lua-tmux:
     if: "! contains(toJSON(github.event.commits.*.message), '[skip ci]')"
@@ -40,6 +46,40 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@main
+      - name: Prepare apt cache directories
+        if: runner.os == 'Linux'
+        run: |
+          sudo mkdir -p /var/cache/apt/archives /var/lib/apt/lists
+          sudo chmod -R a+rwX /var/cache/apt/archives /var/lib/apt/lists
+      - name: Cache apt packages
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: |
+            /var/cache/apt/archives
+            /var/lib/apt/lists
+          key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/test.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-apt-
+      - name: Cache Homebrew
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/Homebrew
+          key: ${{ runner.os }}-brew-${{ hashFiles('.github/workflows/test.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-brew-
+      - name: Prepare LuaRocks cache directories
+        run: mkdir -p ~/.luarocks ~/.cache/luarocks
+      - name: Cache LuaRocks
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.luarocks
+            ~/.cache/luarocks
+          key: ${{ runner.os }}-luarocks-${{ hashFiles('.github/workflows/test.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-luarocks-
       - uses: extractions/setup-just@v4
       - uses: leafo/gh-actions-lua@v13
         with:
