@@ -363,13 +363,17 @@ TEST(clearrow_range) {
 }
 
 TEST(clearrow_params) {
-    cg_Grid g;
+    cg_Grid g, *gp = NULL;
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 2, 3);
     cg_clearrow(&g, -1, 0, 1);
     cg_clearrow(&g, 2, 0, 1);
     cg_clearrow(&g, 0, 1, 1);
     cg_clearrow(&g, 0, 2, 1);
+    cg_clearrow(&g, 0, -1, 2);
+    cg_clearrow(&g, 0, 2, -1);
+    cg_clearrow(&g, 0, 2, 10);
+    cg_clearrow(gp, 0, 0, 1);
     cg_free(&g);
 }
 
@@ -390,7 +394,7 @@ TEST(fill_set) {
 }
 
 TEST(fill_params) {
-    cg_Grid g;
+    cg_Grid g, *gp = NULL;
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 2, 4);
     cg_fill(&g, -1, 0, 2, '.');
@@ -398,6 +402,9 @@ TEST(fill_params) {
     cg_fill(&g, 0, -1, 2, '.');
     cg_fill(&g, 0, 5, 10, '.');
     cg_fill(&g, 0, 2, 2, '.');
+    cg_fill(&g, 0, 2, -1, '.');
+    cg_fill(&g, 0, 3, 2, '.');
+    cg_fill(gp, 0, 0, 1, '.');
     cg_free(&g);
 }
 
@@ -421,7 +428,7 @@ TEST(span_set) {
 }
 
 TEST(span_params) {
-    cg_Grid g;
+    cg_Grid g, *gp = NULL;
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 2, 4);
     cg_span(&g, -1, 0, 2, 1);
@@ -429,6 +436,9 @@ TEST(span_params) {
     cg_span(&g, 0, -1, 2, 1);
     cg_span(&g, 0, 0, 0, 1);
     cg_span(&g, 0, 3, 6, 7);
+    cg_span(&g, 0, 2, -1, 1);
+    cg_span(&g, 0, 3, 2, 1);
+    cg_span(gp, 0, 0, 1, 1);
     cg_free(&g);
 }
 
@@ -482,6 +492,8 @@ TEST(putline_params) {
     cg_setwcwidth(&g, cw_double, NULL);
     asserteq(cg_putslice(&g, 0, 0, es, 1), 0);
     asserteq(cg_putslice(&g, -1, 0, SL("a"), 1), 0);
+    asserteq(cg_putslice(&g, 2, 0, SL("a"), 1), 0);
+    asserteq(cg_putslice(&g, 0, -1, SL("a"), 1), -1);
     asserteq(cg_putslice(&g, 0, 4, SL("a"), 1), 4);
     asserteq(cg_putslice(gp, 0, 0, SL("a"), 1), 0);
     buf[0] = test_byte(0x80);
@@ -592,7 +604,8 @@ TEST(getter_back) {
 }
 
 TEST(getter_params) {
-    cg_Grid g, *gp = NULL;
+    unsigned st;
+    cg_Grid  g, *gp = NULL;
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 2, 3);
     asserteq(cg_cell(&g, -1, 0, NULL), 0);
@@ -600,9 +613,20 @@ TEST(getter_params) {
     asserteq(cg_cell(&g, 0, -1, NULL), 0);
     asserteq(cg_cell(&g, 0, 3, NULL), 0);
     asserteq(cg_cell(gp, 0, 0, NULL), 0);
+    st = 9;
+    asserteq(cg_cell(&g, -1, 0, &st), 0);
+    asserteq(st, 0);
     asserteq(cg_back(&g, -1, 0, NULL), 0);
+    asserteq(cg_back(&g, 2, 0, NULL), 0);
+    asserteq(cg_back(&g, 0, -1, NULL), 0);
+    asserteq(cg_back(&g, 0, 3, NULL), 0);
     asserteq(cg_back(gp, 0, 0, NULL), 0);
+    st = 9;
+    asserteq(cg_back(&g, -1, 0, &st), 0);
+    asserteq(st, 0);
     asserteq(cg_isdirty(&g, -1, 0), 0);
+    asserteq(cg_isdirty(&g, 2, 0), 0);
+    asserteq(cg_isdirty(&g, 0, -1), 0);
     asserteq(cg_isdirty(&g, 0, 3), 0);
     asserteq(cg_isdirty(gp, 0, 0), 0);
     cg_free(&g);
@@ -755,6 +779,17 @@ TEST(diff_emptygrid) {
     cg_free(&g);
 }
 
+TEST(diff_null_grid) {
+    cg_Diff d;
+    cg_Grid g;
+    memset(&d, 0, sizeof(d));
+    cg_init(&g, test_alloc, NULL);
+    cg_begin(&g, 0, 1, 1);
+    asserteq(cg_diff(NULL, &d), CG_ERRPARAM);
+    asserteq(cg_diff(&g, NULL), CG_ERRPARAM);
+    cg_free(&g);
+}
+
 TEST(diff_all_dirty) {
     cg_Grid g;
     cg_init(&g, test_alloc, NULL);
@@ -766,6 +801,19 @@ TEST(diff_all_dirty) {
             &g,
             "[M 0 0][P 'a'][M 0 1][P 0x20][P 0x20]"
             "[M 1 0][P 0x20][M 1 1][T 1][P 'b'][M 1 2][T 0][P 0x20][F]");
+    cg_free(&g);
+}
+
+TEST(diff_rep_style) {
+    cg_Grid g;
+    cg_init(&g, test_alloc, NULL);
+    cg_begin(&g, 0, 1, 3);
+    cg_put(&g, 0, 0, 'a', 1);
+    cg_put(&g, 0, 1, 'a', 2);
+    assert_diff(
+            &g,
+            "[M 0 0][T 1][P 'a'][M 0 1][T 2][P 'a']"
+            "[M 0 2][T 0][P 0x20][F]");
     cg_free(&g);
 }
 
@@ -954,6 +1002,18 @@ TEST(diff_cb_scroll_err) {
     cg_free(&g);
 }
 
+TEST(diff_cb_scroll_null) {
+    cg_Diff d;
+    cg_Grid g;
+    cg_init(&g, test_alloc, NULL);
+    cg_begin(&g, 0, 2, 3);
+    cg_freeze(&g);
+    cg_begin(&g, 1, 2, 3);
+    memset(&d, 0, sizeof(d));
+    asserteq(cg_diff(&g, &d), CG_OK);
+    cg_free(&g);
+}
+
 TEST(diff_cb_move_err) {
     cg_Diff d;
     cg_Grid g;
@@ -979,6 +1039,17 @@ TEST(diff_cb_style_err) {
     memset(&d, 0, sizeof(d));
     d.style = err_cb_st;
     asserteq(cg_diff(&g, &d), CG_ERRPARAM);
+    cg_free(&g);
+}
+
+TEST(diff_cb_style_null) {
+    cg_Diff d;
+    cg_Grid g;
+    cg_init(&g, test_alloc, NULL);
+    cg_begin(&g, 0, 1, 1);
+    cg_put(&g, 0, 0, 'x', 7);
+    memset(&d, 0, sizeof(d));
+    asserteq(cg_diff(&g, &d), CG_OK);
     cg_free(&g);
 }
 
