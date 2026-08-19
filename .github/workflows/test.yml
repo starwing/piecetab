@@ -95,10 +95,19 @@ jobs:
       - name: lua binding tests
         run: |
           cd lua
-          for t in piecetab cellgrid spantree termfeed json lsp editor; do
+          for t in piecetab cellgrid spantree termfeed json lsp; do
             echo "=== $t ==="
             lua tests/${t}_test.lua || exit 1
           done
+      - name: editor tests with tree-sitter (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install tree-sitter
+          cd lua
+          sh ../misc/fetch_grammars.sh c lua
+          LUA_INC=$(just --evaluate LUA_INC)
+          gcc -Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -std=gnu99 -Wno-variadic-macros -Wno-array-bounds -I. -I.. $LUA_INC -I/opt/homebrew/include -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o treesitter.so treesitter.c -L/opt/homebrew/lib -ltree-sitter
+          lua tests/editor_test.lua
 
   test-windows:
     if: "! contains(toJSON(github.event.commits.*.message), '[skip ci]')"
@@ -118,6 +127,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@main
+      - name: Prepare apt cache directories
+        run: |
+          sudo mkdir -p /var/cache/apt/archives /var/lib/apt/lists
+          sudo chmod -R a+rwX /var/cache/apt/archives /var/lib/apt/lists
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            /var/cache/apt/archives
+            /var/lib/apt/lists
+          key: ${{ runner.os }}-apt-lcov-${{ hashFiles('.github/workflows/test.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-apt-lcov-
+            ${{ runner.os }}-apt-
       - uses: extractions/setup-just@v4
       - uses: leafo/gh-actions-lua@v13
         with:
