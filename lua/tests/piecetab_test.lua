@@ -709,6 +709,16 @@ function TestDoc:testBufferExport()
     lu.assertEquals(b:read(0), "hello world")
 end
 
+function TestDoc:testBufferLiveUncommitted()
+    local d = pt.doc("hello")
+    d:seek("end")
+    d:write(" world")
+    local b = d:buffer()
+    lu.assertEquals(b:read(0), "hello world")
+    lu.assertEquals(b:read(0, 5), "hello")
+    lu.assertEquals(b:read(5), " world")
+end
+
 function TestDoc:testBufferExportVid()
     local d = pt.doc("hello")
     d:seek("end")

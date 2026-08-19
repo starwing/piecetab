@@ -11,10 +11,10 @@
 >   绑定（必传，绑定后不可改）。同一 Compositor 内 id 互通；
 >   用户可自由创建多套互不连通的 Compositor + 其关联 Tree 组
 >   （多文件/多渲染窗场景各自成组）。
-> - **接口归属**：Compositor = 样式服务面（setfields/intern/
->   attr/namespace——ns 注册于 cp，与 setfields 同组）；Tree =
+> - **接口归属**：Compositor = 样式服务面（fields/intern/
+>   attr/namespace——ns 注册于 cp，与 fields 同组）；Tree =
 >   染色/编辑/读面（mark/clear/span/styled/...），**不提供
->   setfields/id↔attr 转换/ns 注册**。Cursor = 游标面（独立
+>   fields/id↔attr 转换/ns 注册**。Cursor = 游标面（独立
 >   metatable）。
 > - **模块表 = Tree metatable**：`require "spantree"` 返回的
 >   `sp` 表同时是 Tree 的 metatable（同表同引用）——`sp.new` /
@@ -141,8 +141,17 @@ local t = sp.new(comp)          -- 创建 Tree 并**绑定 comp（必传，
 
 -- Compositor: 样式接口（cp 面；Tree 不提供——editor 现用
 --   comp:intern/attr 直移，零语义变化）
-comp:setfields(fields)          -- 字段白名单（乱序可，C 侧排序一次）；
-                                --   默认 SGR 全集；未列字段忽略
+comp:fields() → array        -- **读当前白名单**（按用户给定顺序，canon
+                             --   序；每调用新表）
+comp:fields(fields)          -- **设全量白名单**（= 原 setfields；保持
+                             --   用户给定顺序——canon 序列化依此序，顺序
+                             --   稳定即 intern 幂等，用户自定序；默认
+                             --   SGR 全集 + vtext/vstyle；未列字段忽略；
+                             --   空表 = 清空）
+comp:fields("add", fields)   -- **追加**：与当前白名单 union 去重（已在
+                             --   名单内跳过），新字段按给定顺序 append；
+                             --   空追加 no-op；支持"当前基础上新增字段"
+                             --   场景
 comp:intern(attr) → id          -- attr id（**用户唯一 id 面**）；canon
                                 --   + hash 复用；0 = 空 attr 预置；
                                 --   __hash 元方法短路（返回值须字符
@@ -210,7 +219,11 @@ t:span(ns?, off, len) → iter  -- **标记流**：for off, len, table, id in
                               --   优先级序）；ns 过滤 = 只出该 ns 的
                               --   槽（eph ns = sv_ 列表步进，无拆
                               --   解）；未知名报错；2 参 = (off, len)；
-                              --   **get_marks 功能** = 本接口
+                              --   **get_marks 功能** = 本接口；off 处
+                              --   段含于窗口（**inclusive 起始**——
+                              --   段头命中，与 styled/无参 span 一致；
+                              --   cursor next/prev 的 exclusive 游标语
+                              --   义是另一回事，不受影响）
 t:styled(off, len) → iter   -- **渲染合成流**：for off, len, table, id
                               --   in ...（四元组）；table = 合成 attr
                               --   表、id = 合成结果（树段 id / 平铺
@@ -405,6 +418,8 @@ lst_Cur userdata（v3 沿革，前缀 lst）
 
 ```
 arb(ud, in, old, mask):                    /* 三态合一 */
+    in 为 CLEAR/REORDER 且 old == 0 → 返 0（空槽上无操作，不建
+    段——fill 到空区不产生幽灵段；2026-08-19 修，详见下）
     ret = in && old ? pcall(merge)(in, old) : (in ? in : 0)
     if (ret != 0) refcnt[ret] += 1          /* 出口无条件双向计数
                                                （先加后减，ret==old
@@ -412,6 +427,15 @@ arb(ud, in, old, mask):                    /* 三态合一 */
     if (old != 0) refcnt[old] -= 1
     return ret
 ```
+
+- **birth 拦截（2026-08-19）**：fill(CLEAR)/fill(REORDER) 到空
+  槽（old == 0）时 arb 直返 0——CLEAR/REORDER 是删除/重排操作
+  符，空槽上无操作可做。此前 fill 把操作符当普通值写入，在树里
+  留下 mask 含该 ns 的幽灵段：span(ns) 拆解输出空 attr 表（vtext
+  行首 hint 读回 nil 即此因），styled 多出覆盖层。拦截判别：in
+  是 op 且 kind != WRITE（attr/composite id 直收）。
+- fill(CLEAR) 到已有段走 merge 路径（cp_apply 删槽），不受影响；
+  sp_clear（全树剪枝）走死亡路径 arb(0, id)，也不受影响。
 
 - merge 仅当 in != 0 && old != 0 时调：展开 old 链（≤64）→
   kind(in) 槽操作（WRITE 同 ns 覆盖后写胜 / CLEAR 删槽 / REORDER
@@ -514,8 +538,10 @@ fold = attr 黑盒覆盖：空表 → 按层序合并 p>=0 eph attr
 ns 过滤：构成里该 ns 的槽单出；无该 ns → 段跳过
 ```
 
-- span 迭代器 = 段游标（sp_next 步进）+ 段内标记索引；同段多
-  标记重叠多出（同 off/len，不同 attr id，按优先级序）。
+- span 迭代器 = 段游标（首轮 sp_style 含 seek 段 = **inclusive 起
+  始**，随后 sp_next 步进）+ 段内标记索引；同段多标记重叠多出
+  （同 off/len，不同 attr id，按优先级序）。ns 过滤同款：sp_style
+  起步检查槽，无该 ns 槽则 sp_next 到下一含槽段。
 - cursor 增 `midx`（段内标记索引）状态：style = 当前位置当前
   标记；next = 同段 midx+1 或下一段首标记（inclusive 语义沿
   v3）；prev 对称。普通 ns 过滤 = sp_next(ns) 剪枝 + 拆解取该
@@ -577,7 +603,8 @@ cp_/sv_ 是 **stb-style 单头文件库**（先写在 spantree.c，理论上可
 **公共 API 全集**（被 lst 绑定层调用）：
 
 ```
-cp: cp_init / cp_free / cp_setfields / cp_internattr / cp_attr /
+cp: cp_init / cp_free / cp_resetfields / cp_addfield / cp_internattr /
+    cp_attr /
     cp_op / cp_apply / cp_sort / cp_expand / cp_foldattr /
     cp_composite / cp_refup / cp_refdown / cp_nsget /
     cp_nsregister / cp_nsunregister
@@ -606,7 +633,7 @@ lst_foldmake 调用。`cp_refup/refdown` 为 arb 三态契约出口计数。
 - **无泄露保证**：内存全在 State（cp_State/sv_List/lst_Tree），
   `cp_free`/`Ltree_gc` 逐字段 Vec free——不依赖 Lua allocf 回调。
 
-**函数头注释**：cp/sv/lst 公共与内部函数一律无函数头注释（§24）；
+**函数头注释**：cp/sv/lst 公共与内部函数一律无函数头注释（§27）；
 契约（输入/输出/in/out 参数）写函数体内 return 附近或 design 文档；
 调用方前提用 assert。
 
@@ -620,7 +647,7 @@ lst_foldmake 调用。`cp_refup/refdown` 为 arb 三态契约出口计数。
 | arb(0,0) pad 语义回调 | 同 v1：in == 0 分支返回 0，返回值与 mask 弃用 | §3.2 |
 | sp_next/sp_prev/sp_style 值返回 | 绑定迁移值接收 + ns 透传（v1 编译已断，必迁） | §9.2 |
 | **id 生命周期（v4 新依赖）** | arb 三态契约（design_spantree §9.7）：树保证新生 arb(id,0)/死亡 arb(0,id)/合并 arb(id,old) 出口无条件双向计数 + filterleaf 保护/cancel | §3.2 |
-| 按 ns 查区间 | span(ns)/next(ns)/prev(ns) = 拆解取该 ns 槽（attr id 输出）；eph ns 走 sv_ 二分 | §9.2/§3.4 |
+| 按 ns 查区间 | span(ns) = 拆解取该 ns 槽（attr id 输出；**inclusive 起始**——off 段命中）；next(ns)/prev(ns) = 游标推进（exclusive 段跳）；eph ns 走 sv_ 二分 | §9.2/§3.4 |
 | 按 ns 全树清 | comp:namespace(name, nil) = 各绑定树 sp_clear(T, nsn, CLEAR(ns))；eph = 各绑定树 sv_ 清空；ns 注册表移除 | §9.4 |
 | 编辑自动清 eph | 树 4 + 游标 4 编辑动词先 sv_resetall；普通 ns fill/clear 不清 | §3.4 |
 | 游标编辑后悬垂 | epoch 守卫（沿 v1）；eph fill 零 epoch（树未动） | design_luabind #17 |
@@ -635,7 +662,7 @@ lst_foldmake 调用。`cp_refup/refdown` 为 arb 三态契约出口计数。
 > visual 直叠合成）。**v5 迁移**：`Ed.newcompositor()` → `sp.compositor()`
 > （返回 Compositor，非 Tree）；`Ed.new()` 建
 > `self.comp = sp.compositor()` + `self.tree = sp.new(self.comp)`
-> ——comp:intern/attr/setfields 调用点零改动（Compositor 保留同
+> ——comp:intern/attr/fields 调用点零改动（Compositor 保留同
 > 名接口）；Tree 持 comp 供真消费者（身份层/extmark）接入。
 > **渲染读改 styled 四元组**（Ed:csi 走 t:styled(s, e)，table
 > 直用免查）。
@@ -647,12 +674,39 @@ lst_foldmake 调用。`cp_refup/refdown` 为 arb 三态契约出口计数。
 > §五）：lsp sem/diag 进树（普通 ns 快照 fill）、hl 进 eph
 > （comp:namespace("hl", 1, "e") + 每帧 t:clear("hl") + 逐 span
 > t:mark("hl", attr, off, len) + t:styled(s, e) 样式流读）。
+>
+> **2026-08-19 落地（vtext 服务 + 渲染树化）**：
+>
+> - **层清单**（Ed.new 注册，单一 Compositor）：`vtext`（普通，prio
+>   0——注入文本载荷）、`hl`（eph，prio 1——每帧重建的视口纯函数）、
+>   `sem`（普通，prio 2）、`diag`（普通，prio 3，attr 含 severity，
+>   `fields("add", {"severity"})`）。
+> - **vtext = spantree 服务**：hint 绑"后一字符"（mark 区间 =
+>   绑定字符字节长，charlen）；行尾 hint 绑换行符；attr =
+>   `{vtext = label, vstyle? = style attr id}`（非 SGR 字段名，
+>   styled 折叠时 csi 忽略，绑定字符不被污染）；set_vtext 收行内
+>   字节 off（LSP hint_decode 的 bcol 直通，dcol_fn 退役）；编辑
+>   位移 = tree:splice（shift_vtexts 删除）；undo/redo = hunk 序列
+>   splice（doc:undo 的 f 回调内，正向应用）；渲染/光标数学 =
+>   `span("vtext", lo, ll+1)` 行查询 + grid:cols 换算。
+> - **渲染 = styled 流**：spans 从 `t:styled(s_off, e_off)` 构造
+>   （树段 id 直用，Ed:csi 查合成），piece/visual 快层仍 Lua
+>   overlay_spans 直叠；LSP sem/diag 响应直接写树
+>   （opts.sem.set/diag.set → Ed:set_sem/set_diag = clear+mark
+>   全文件快照），query_spans/span_clip 退役；diag 消息留 LSP
+>   缓存（diag_at 用，msg 长文本不入 intern）。
+> - **树长对齐**：Ed.new/load_file 后 `tree:splice(0, 0, #doc)`
+>   （树字节数 = 文档字节数，styled 有基底；换文件先 tree:clear()）。
+> - **延迟空窗语义**（LSP 异步）：普通 ns 的 splice 位移让旧
+>   sem/diag/vtext 段随文本走，重推覆盖——无错位窗口；eph hl 由
+>   splice 自动清空、下帧重染（同步无延迟）。
 
 ## 六、测试与验收
 
 - `lua/tests/spantree_test.lua` **按 v5 全量重写**（luaunit，双
   运行时）：TestStyle（cp 面经 Compositor：intern 复用/顺序无关/
-  nil 跳过/逆查两区/__hash 短路/__hash 非字符串报错/setfields——
+  nil 跳过/逆查两区/__hash 短路/__hash 非字符串报错/fields
+  （读/set/add 三形态 + 空追加 no-op + 非法 mode 报错）——
   沿 TestCompositor 用例，入口改 comp:）、TestNs（沿 v3 + **per-
   Comp 隔离**：两 Compositor 的 ns 注册互不可见/同 Comp 多 Tree
   互见/注销清绑定树）、TestEph 沿 v3 语义改 styled 四元组断言
@@ -660,8 +714,10 @@ lst_foldmake 调用。`cp_refup/refdown` 为 arb 三态契约出口计数。
   （sp.compositor() 每次全新态：两 Comp intern id 互异/ns 注册隔
   离/绑定 Tree 各自成组；sp.new(comp) 必传——缺参/非 Comp 报错；
   绑定不可改）、**TestSpan 新增**（拆解输出 attr id/table 四元
-  组、多标记重叠多出、优先级序、ns 过滤单槽、eph ns 步进、cursor
-  标记索引状态（同段多标记 next/prev 逐个出）、style 当前标记）、
+  组、多标记重叠多出、优先级序、ns 过滤单槽（inclusive 起始——
+  off 段命中）、eph ns 步进、cursor 标记索引状态（同段多标记
+  next/prev 逐个出）、style 当前标记、**clear 空槽不建幽灵段**
+  （2026-08-19 补，配合 arb birth 拦截））、
   **TestIds 新增**（分区判定：平铺/op/合成三类段 id 的 mask 解码、
   单槽 op 直存零合成、refcnt 随 arb 增减、合成 id 回收复用（段清
   空后同构成重 fill 拿回同 id）、链展开压缩不变量（行为断言：重

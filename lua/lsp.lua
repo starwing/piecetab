@@ -559,11 +559,11 @@ end
 lsp.Protocol = Protocol
 
 -- lspclient: LSP integration layer — the editor's only contact surface.
--- Owns protocol orchestration (hint scheduling, semantic/diag caching)
--- and writes decoded data into injected Ed vtext slots; it never holds
--- injected text itself (data lives on Ed, shifting is Ed's job) — only
--- scheduling state. The protocol object is injected via opts (tests use
--- fakes) or built from the same accessor quad.
+-- Owns protocol orchestration (hint scheduling, semantic/diag refetch)
+-- and writes decoded data into the spantree layers via injected
+-- vtext/sem/diag writers; it holds only scheduling state plus diag
+-- metadata (severity/msg for diag_at). The protocol object is injected
+-- via opts (tests use fakes) or built from the same accessor quad.
 
 --- @class lsp.Client
 --- @field proto lsp.Protocol?
@@ -571,8 +571,8 @@ lsp.Protocol = Protocol
 --- @field state string  proxy -> proto.state
 --- @field uri string  proxy -> proto.uri
 --- @field version integer  proxy -> proto.version
---- @field sem table  semantic cache {spans, dirty, pending}
---- @field diag table?  diagnostic cache {version, spans}
+--- @field sem table  semantic refetch state {dirty, pending}
+--- @field diag table?  diagnostic metadata {version, spans} (diag_at)
 --- @field hint_dirty boolean
 --- @field hint_pending boolean
 --- @field hint_view integer?
@@ -672,41 +672,10 @@ local function span_decode(tokens, legend, attrmap, posfn)
   return out
 end
 
--- Slice spans (sorted by offset) to those touching [start, endoff).
---- @param spans table
---- @param start integer
---- @param endoff integer
---- @return table
-local function span_clip(spans, start, endoff)
-  local n = #spans
-  if n == 0 or endoff <= start then return {} end
-  local lo, hi = 1, n
-  while lo <= hi do
-    local mid = math.floor((lo + hi) / 2)
-    if spans[mid].offset + spans[mid].length <= start then
-      lo = mid + 1
-    else
-      hi = mid - 1
-    end
-  end
-  local from = lo
-  hi = n
-  while lo <= hi do
-    local mid = math.floor((lo + hi) / 2)
-    if spans[mid].offset < endoff then
-      lo = mid + 1
-    else
-      hi = mid - 1
-    end
-  end
-  local out = {}
-  for i = from, hi do out[#out + 1] = spans[i] end
-  return out
-end
-
--- Decode inlayHint items into per-line hint lists sorted by display
--- column. Position is the insertion point (UTF-16); label is a string
--- or an array of parts.
+-- Decode inlayHint items into per-line hint lists sorted by byte
+-- offset. Position is the insertion point (UTF-16); the byte offset of
+-- the char after it (the vtext anchor) is passed through to the tree.
+-- Label is a string or an array of parts.
 --- @param self lsp.Client
 --- @param hints table?
 --- @return table
@@ -725,13 +694,12 @@ local function hint_decode(self, hints)
         local bcol = utf16_to_byte(self.opts.get_line(pos.line), pos.character)
         local lst = out[pos.line]
         if not lst then lst = {}; out[pos.line] = lst end
-        lst[#lst + 1] = { dcol = self.opts.dcol_fn(pos.line, bcol),
-          text = label }
+        lst[#lst + 1] = { off = bcol, text = label }
       end
     end
   end
   for _, lst in pairs(out) do
-    table.sort(lst, function(a, b) return a.dcol < b.dcol end)
+    table.sort(lst, function(a, b) return a.off < b.off end)
   end
   return out
 end
@@ -799,7 +767,9 @@ local function h_response(self, result, err, now)
 end
 
 -- publishDiagnostics: drop stale snapshots (out-of-order pushes), decode
--- UTF-16 ranges to byte spans via line starts + get_line.
+-- UTF-16 ranges to byte spans via line starts + get_line. Renders into
+-- the tree (opts.diag.set) and keeps the severity/msg metadata for
+-- diag_at (messages are not tree payload).
 --- @param self lsp.Client
 --- @param p table
 local function diag_update(self, p)
@@ -814,14 +784,16 @@ local function diag_update(self, p)
     local s = lsp_pos(self, starts, r.start.line, r.start.character)
     local e = lsp_pos(self, starts, r["end"].line, r["end"].character)
     if e > s then
+      local attr = { underline = true, severity = d.severity or 2 }
+      for k, v in pairs(self.opts.attrmap.diag or {}) do attr[k] = v end
       spans[#spans + 1] = {
-        offset = s, length = e - s,
-        attr = self.opts.attrmap.diag or { underline = true },
+        offset = s, length = e - s, attr = attr,
         msg = d.message, severity = d.severity or 2,
       }
     end
   end
   self.diag = { version = v or cur, spans = spans }
+  self.opts.diag.set(spans)
 end
 
 -- file extension -> LSP language id (nil: unsupported)
@@ -857,11 +829,12 @@ end
 --   get_text() -> full document text            [required]
 --   get_line(line) -> line text (no \n)         [required]
 --   offset_pos(off) -> line, UTF-16 unit col    [required]
---   dcol_fn(line, bytecol) -> display column    (default: bytecol)
 --   viewport_fn() -> {top, rows}                (default: whole doc)
 --   now_fn() -> wall-clock seconds              (default: luv.hrtime)
 --   attrmap -> tokenType name -> attr table     (default: none)
 --   vtext = { set(line, list), clear() }        (default: no-op)
+-- hint list elements are {off = byte, text = string} (byte offset of
+-- the char after the insertion point, the vtext anchor)
 --   hint_idle? -> seconds of no typing before a hint refresh
 --   proto? -> pre-built Protocol (tests inject fakes)
 --- @param opts table
@@ -871,12 +844,13 @@ function Client.new(opts)
   opts.on_status = opts.on_status or function() end
   opts.viewport_fn = opts.viewport_fn
     or function() return { top = 0, rows = 1e9 } end
-  opts.dcol_fn = opts.dcol_fn or function(_, bcol) return bcol end
   opts.attrmap = opts.attrmap or {}
   opts.vtext = opts.vtext or { set = function() end, clear = function() end }
+  opts.sem = opts.sem or { set = function() end, clear = function() end }
+  opts.diag = opts.diag or { set = function() end, clear = function() end }
   local self = h_state(opts)
   self.proto = opts.proto or nil
-  self.sem = { spans = {}, dirty = true, pending = false }
+  self.sem = { dirty = true, pending = false }
   self.diag = nil
   self.opts = opts
   return setmetatable(self, CM) --[[@as lsp.Client]]
@@ -902,20 +876,24 @@ function Client:start(argv, uri, langid, root)
   end)
   -- restart: fresh caches and hint scheduling (no stale slots/retries)
   for k, v in pairs(h_state(self.opts)) do self[k] = v end
-  self.sem = { spans = {}, dirty = true, pending = false }
+  self.sem = { dirty = true, pending = false }
   self.diag, self.hint_lines = nil, nil
   if not p:start(argv, uri, langid, root) then
     self.proto, self.diag = nil, nil
+    self.opts.sem.clear()
+    self.opts.diag.clear()
     self.opts.vtext.clear()
     return false
   end
   return true
 end
 
--- Shut the server down and clear all caches + vtext slots.
+-- Shut the server down and clear all caches + tree layers.
 function Client:stop()
   if self.proto then self.proto:stop() end
   self.sem, self.diag = nil, nil
+  self.opts.sem.clear()
+  self.opts.diag.clear()
   self.opts.vtext.clear()
 end
 
@@ -933,13 +911,13 @@ function Client:on_edit(off, del, s)
 end
 
 -- Incremental sync after undo/redo: sequential edits in one didChange,
--- then mark caches dirty and clear the vtext slots (hints refetch).
+-- then mark caches dirty. The vtext layer shifts with the tree splice
+-- (no clear); hints refetch on idle, covering any the LSP would change.
 --- @param changes lsp.edit[]
 function Client:on_switch(changes)
   if self.proto then self.proto:notify_edits(changes) end
   if self.sem then self.sem.dirty = true end
   self.hint_dirty = true
-  self.opts.vtext.clear()
 end
 
 -- Undo/redo sync for doc objects: run doc_undo(f) collecting the
@@ -1013,22 +991,12 @@ function Client:post_render()
         sem.dirty = false
       elseif result and result.data then
         local starts = line_offsets(self.opts.get_text())
-        sem.spans = span_decode(result.data, cap.legend, self.opts.attrmap,
-          function(line, unit) return lsp_pos(self, starts, line, unit) end)
+        self.opts.sem.set(span_decode(result.data, cap.legend,
+          self.opts.attrmap,
+          function(line, unit) return lsp_pos(self, starts, line, unit) end))
         sem.dirty = false
       end
     end)
-end
-
--- Slice the semantic/diag caches to [s, e) for the render merge.
---- @param s integer
---- @param e integer
---- @return table
-function Client:query_spans(s, e)
-  local out = { sem = {}, diag = {} }
-  if self.sem then out.sem = span_clip(self.sem.spans, s, e) end
-  if self.diag then out.diag = span_clip(self.diag.spans, s, e) end
-  return out
 end
 
 -- Diag span containing byte offset `off`; lowest severity number wins

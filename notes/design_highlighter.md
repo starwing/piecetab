@@ -318,8 +318,8 @@ Parser：`parse/parse_with_options(progress)/set_included_ranges/set_language`
   第二返回值（真实 capture id，1-based）取
 - **`"int"` 等 primitive_type 关键字无法字符串匹配**（grammar 内部 token
   折叠进父节点，query 编译报 node_type 错）——须匹配 `(primitive_type)`
-- **`doc:buffer()` 是 committed 版本**（undotree 语义）——uncommitted
-  编辑读不到；editor.lua 用 `doc:dump()`（含 fresh）替代 TSInput 回调
+- **`doc:buffer()` 默认返回 live buffer（含 uncommitted fresh 编辑）**；
+  `doc:buffer(vid)` 才返回 committed 版本快照
 
 **编辑通知接线痛点**：
 - point 换算需 `doc:seek`（移动光标）——notify_edit 内要保存/恢复

@@ -99,45 +99,53 @@ state / uri / version / capabilities   -- 公开只读字段
 ```lua
 Client.new(opts)
   -- opts: 协议四件套 get_text/get_line/offset_pos/on_status（转发 Protocol）
-  --      + dcol_fn(line, bytecol)（UTF-16 位置→显示列，editor 配 tabstop）
   --      + viewport_fn() → {top, rows}（editor: scroll_line + term:size）
   --      + now_fn() → 墙钟秒（默认已实现: luv.hrtime()/1e9；测试: 假钟）
   --      + attrmap（semantic tokenType 名 → attr 表，editor 的 LSP_ATTRS；
   --        含可选 diag 键——回更：diag 底色 attr 由 editor 注入）
   --      + vtext（Ed 注入接口，见 §3.3）: { set = fn(line, list),
   --        clear = fn() } —— editor 传 ed 绑定闭包，Client 不直接碰 Ed
+  --      + sem/diag（树写出口，2026-08-19）: { set = fn(spans),
+  --        clear = fn() } —— spans = {offset, length, attr} 数组；
+  --        diag 的 spans 另含 msg/severity（元数据，供 diag_at）
   --      + hint_idle?（秒，默认 tonumber(os.getenv("PT_HINT_IDLE")) or 1.0）
   --      + proto?（预建 Protocol，测试注入 fake）——回更：原设计由 Client
   --        自建 proto，实现补了注入点，TestClient 全用假注入
 :start(argv, uri, langid, root)  -- 无 silent 参数（回更：silent 走 on_status 闭包）
-:stop()                          -- 联动清场：清 hint/semantic/diag + vtext 槽
-:on_edit(off, del, s)            -- Protocol.notify_edit + dirty 标记（位移归 Ed）
-:resync()                        -- undo/redo：sync_full + 缓存全清 + vtext 槽全清
+:stop()                          -- 联动清场：清调度 + sem/diag/vtext 树层
+:on_edit(off, del, s)            -- Protocol.notify_edit + dirty 标记（位移归树）
+:resync()                        -- undo/redo：sync_full + dirty 标记
+:on_switch(changes)              -- undo/redo hunks 交付（notify_edits；不清 vtext
+                                 --   层——树 splice 位移，2026-08-19）
 :tick()                          -- 主循环空闲：idle/视口变更/null 重试 → 重拉
 :post_render()                   -- render 末尾：semantic dirty 且非 pending → 重拉
-:query_spans(s, e) → {sem=…, diag=…}   -- 拉模式裁剪（editor 喂 merge_layers）
-:diag_at(off) → span?            -- 状态栏 diag 消息
+                                 --   （响应直接 opts.sem.set 写树）
+:diag_at(off) → span?            -- 状态栏 diag 消息（LSP 元数据缓存）
 :status() → string               -- 状态栏右段（"running"/"starting"/…）
 ```
 
 - **hint 业务（调度 + 解析）在 Client**：idle/重试/版本守卫/视口变更 →
   `proto:request(inlayHint)` → 响应解码 → `opts.vtext.set(line, list)`
-  写入 Ed vtext 槽。**Client 不持有注入文本数据**（数据归属 Ed，位移归 Ed）——
-  只持调度状态（dirty/pending/retry 预算）。
-- **hint 编辑位移不在此**：Ed 核心职责（§3.3），docedit 漏斗自动执行。
-- semantic/diag 缓存本类私有，editor 只读查询。
-- C 化候选：span 解码/裁剪（lsp_span 平移）；调度状态机（pending/重试）。
+  写入树 vtext 层（list 元素 = {off = 行内字节, text}）。**Client 不持有
+  注入文本数据**（数据在树，位移归 splice）——只持调度状态。
+- **sem/diag 渲染数据进树**（普通 ns，2026-08-19）：响应/publishDiagnostics
+  解码 → `opts.sem.set/diag.set`（Ed 侧 clear+mark 全文件快照）——树位移
+  撑异步延迟空窗；渲染走 styled 流，`query_spans`/`span_clip` 退役。
+  diag 的 msg/severity 元数据留 Client 缓存（diag_at 用，msg 长文本不入
+  intern）。
+- C 化候选：span 解码（lsp_span 平移）；调度状态机（pending/重试）。
 
 **（实现回更）实现细节**：
 - 调度字段经 `h_state(opts)` helper 初始化（`Client.new` 与 `Client:start`
   共用；重启时复位，不带 stale 行/重试预算）。`last_edit_t` 初值 -1e6
   ——启动即视为 idle，首帧即刷新。
 - diag 解析（publishDiagnostics → UTF-16 范围解码 → 字节 span）handler 注册
-  在 `Client:start`（经 `proto:on`），版本守卫丢乱序旧快照；attr 取
-  `attrmap.diag or {underline=true}` 兜底。
-- 缓存形态：`self.sem = {spans={}, dirty=true, pending=false}`、
-  `self.diag = nil`（{version, spans}）。decode/clip 为 lsp.lua 模块私有函数
-  `span_decode`/`span_clip`（原 lsp_span.lua 并入，文件已删）。
+  在 `Client:start`（经 `proto:on`），版本守卫丢乱序旧快照；attr =
+  `{underline=true, severity=n}` 并 merge `attrmap.diag` 兜底字段；同写
+  `opts.diag.set` + `self.diag` 元数据缓存。
+- 缓存形态：`self.sem = {dirty=true, pending=false}`（无 spans——树即
+  缓存）、`self.diag = nil`（{version, spans}，spans 含 msg/severity 元
+  数据）。decode 为 lsp.lua 模块私有函数 `span_decode`（span_clip 已删）。
 - `status()` 返回 `proto.state`（无 proto → "exited"）；editor 拼
   `"lsp:on"`（running）/ `"lsp:" .. status` / `"lsp: off"`。
 - `tick` 视口 end 行 = `top + rows - 1`，**未 clamp 到 doc breaks**（Client
@@ -153,13 +161,14 @@ Client.new(opts)
 **随摩擦演进**（用户裁定：从具体业务摩擦中提炼，不预设计）。
 
 ```lua
--- 数据：ed.vtexts = { [line] = { {dcol=, text=, style=}, ... } }（升序）
---   nil/空 = 无注入。dcol 为显示列（tabstop 展开后），注入不占文本字节。
-Ed:set_vtext(line, list)       -- 整行原子替换（LSP 响应到达 / 清行）
+-- 数据：spantree "vtext" 层（服务化，2026-08-19 落地）——
+--   hint 绑"后一字符"（mark 区间 = 绑定字符字节长），attr =
+--   {vtext = label, vstyle? = style attr id}；行尾 hint 绑换行符。
+Ed:set_vtext(line, list)       -- 整行替换（清行区间 + 逐 hint mark）
 Ed:clear_vtexts()               -- 全清（lsp off / 换文件）
--- docedit 漏斗内部自动执行（核心职责，C 化候选）：
-Ed:shift_vtexts(off, del, s)    -- 编辑位移：同线位移/删区丢弃/跨线全清
--- 光标/渲染查询（唯一权威，替代现分散补偿）：
+-- 编辑位移 = tree:splice（docedit 漏斗自动；undo/redo = hunk 序列
+--   splice 正向应用）——shift_vtexts 已删除
+-- 光标/渲染查询（行查询 span("vtext", lo, ll+1) + grid:cols 换算）：
 Ed:vtext_dcol(line, bytecol, at_start)  -- 显示列（含注入偏移；at_start=true
                                          --   插入间隙语义，同现 hint_offset）
 Ed:screen_to_text_dcol(line, scol)      -- 文本列（减该行注入偏移；scol 落在
@@ -167,26 +176,26 @@ Ed:screen_to_text_dcol(line, scol)      -- 文本列（减该行注入偏移；s
                                          --   Neovim coladvance）
 ```
 
-**（实现回更）行为细节**：
-- `set_vtext(line, list)`：list 为 nil 或空表 → 该行置 nil（实现：
-  `if list and #list > 0 then 存 else nil end`）——"空即清"与设计同义。
-- `vtext_dcol(line, bytecol, at_start)`：bytecol 为**行内字节列**（非 doc
-  光标偏移）——实现读行文本 + `text_byte_to_dcol(text, bytecol, tabstop)`
-  算出文本 dcol，再叠加"dcol 之前"的注入宽度（at_start 时 `>=` 即停，
-  即 hint 首字符处插入落于 hint 前）。
-- `shift_vtexts`：**跨线（off 与 off+del 不同行）或插入串含 `\n` → 全清**
-  `self.vtexts = {}`；同线时用 `text_byte_to_dcol` 算编辑点 edcol，hint
-  dcol < edcol 保留、落在删区 [edcol, edcol+del) 丢弃、其后整体平移 delta；
-  结果空表存 nil。**插入语义：先 seek 到 off+del 读文本再还原 offset**，
-  与 doc:edit 之前的状态一致。
-- **条目含 `style` 字段**：render_line 前置设 `h.style = self.styles.dim`
-  （render 时写入，非 Client 写入）。
-
-- **渲染**：render_line 的 hints 参数来自 `ed.vtexts[line]`（render_line 保
-  持纯函数，参数传入，不依赖 ed）。
+**（树化后）行为细节**：
+- `set_vtext(line, list)`：list 元素 = `{off = 行内字节, text = label}`（LSP
+  hint_decode 的 bcol 直通，dcol_fn 退役）。实现 = 清该行区间
+  （`clear("vtext", lo, ll + 有换行符 ? 1 : 0)`）→ 逐 hint
+  `mark("vtext", {vtext=, vstyle?=}, lo+off, charlen(lo+off))`；行尾 hint
+  （off = ll）绑换行符；文件末尾（charlen == 0）退化跳过。vstyle 缺省 =
+  渲染层统一 styles.dim（editor 渲染策略，非 Client 写入）。
+- `vtext_dcol(line, bytecol, at_start)`：行内字节 → grid:cols 正查文本 dcol，
+  叠加"绑定字符 dcol 之前"的注入宽度（at_start 时 `==` 即停，hint 首字符处
+  插入落于 hint 前）。span 迭代器按字节序，dcol 单调安全。
+- **编辑位移**：docedit 漏斗 `tree:splice(off, del, #s)`（继承左段——
+  hint 前插入不移动 hint、绑定字符增长段滑移、删除随段死亡）；undo/redo =
+  doc:undo(f) 回调内 splice hunk 序列（hunk 方向 = 从当前态到 undo 后态的
+  正向编辑，piecetab.d.lua 契约"replaying on pre-undo reproduces post-undo"）。
+- **渲染**：render_line 的 hints 参数每行从 `span("vtext", cur_off,
+  #line_text + 1)` 构造（dcol = g:cols 换算，style = attr.vstyle or
+  styles.dim）；render_line 保持纯函数。
 - **光标**：render_cursor / move_vert 全走 `vtext_dcol` + `screen_to_text_dcol`。
-- **C 化候选**：注入点表（per-line 排序数组）+ 位移（编辑漏斗）+ 列换算
-  （显示列族，与 text_byte_to_dcol 同族）。
+- **载荷字段**：vtext/vstyle 非 SGR 字段名（cp_defaults 收录）——styled 折叠
+  时绑定字符段合成 attr 含它们但 Ed:csi 忽略，绑定字符不被 vtext 样式污染。
 
 ## 四、坐标模型（当前 bug 根因修复）
 
@@ -222,26 +231,29 @@ Ed:screen_to_text_dcol(line, scol)      -- 文本列（减该行注入偏移；s
 
 ```
 编辑：docedit(off,del,s)
-  → Ed:shift_vtexts(off,del,s)（vtext 槽位移，核心职责）
   → self.lsp:on_edit → Protocol.notify_edit（即时 didChange，编辑前状态）
                     → Client 内部 dirty 标记（semantic/hint 重拉）
+  → doc:edit + tree:splice(off, del, #s)（vtext/sem/diag 层位移，核心职责）
 主循环空闲：self.lsp:tick()
   → Client 内部：idle（now_fn 墙钟）/视口变更/null 重试 → proto:request(inlayHint)
   → 响应回调：版本守卫（proto.version 对比）→ 解码 → ed:set_vtext(line, list)
-渲染：self.lsp:query_spans(s,e)（sem/diag 层，editor 合并自己的 hl/piece/visual）
-     + ed.vtexts[line]（render_line 注入）
+渲染：self.tree:styled(s_off, e_off)（hl/sem/diag 层折叠，spans 构造）
+     + span("vtext", cur_off, ...)（render_line 注入）
      + ed:vtext_dcol（render_cursor）
-  render 末尾：self.lsp:post_render()（semantic 重拉）
-状态栏：self.lsp:status()（右段）+ self.lsp:diag_at(cur_off)（中间段）
-undo/redo：self.lsp:resync()（sync_full + Client 缓存全清 + vtext.clear() 清 vtext 槽）
+  render 末尾：self.lsp:post_render()（semantic 重拉，响应 → set_sem 写树）
+状态栏：self.lsp:status()（右段）+ self.lsp:diag_at(cur_off)（中间段，
+        LSP 元数据缓存）
+undo/redo：self.lsp:undo_switch(undo)（hunk 序列：tree:splice + notify_edits；
+        不清 vtext 层——树 splice 位移）
 ```
 
 **（实现回更）**：数据流与设计一致。确认细节：
-- docedit 漏斗 = `shift_vtexts`（先于 `doc:edit`）+ `lsp:on_edit` +
-  `hl:notify_edit`（editor.lua docedit，单漏斗）。
-- undo/redo（u / <C-r>）均调 `lsp:resync()`；resync 内 `vtext.clear()` 经
-  `opts.vtext` 注入闭包调 `Ed:clear_vtexts`。
-- tick → `lsp:tick` 转发；render 末尾 → `lsp:post_render()`。
+- docedit 漏斗 = `lsp:on_edit`（先于 `doc:edit`）+ `doc:edit` +
+  `tree:splice` + `hl:notify_edit`（editor.lua docedit，单漏斗）。
+- undo/redo（u / <C-r>）调 `switch_sync`：doc:undo(f) 回调内
+  `tree:splice(off, del, #text)`（正向应用 hunk）+ 透传 lsp:undo_switch。
+- LSP 响应经注入闭包写树：`vtext.set` → `Ed:set_vtext`；`sem.set` →
+  `Ed:set_sem`；`diag.set` → `Ed:set_diag`（clear+mark 全文件快照）。
 - 状态栏拼接：`"lsp:on"`（running）/ `"lsp:" .. status` / `"lsp: off"`；
   非静默启动的异常退出（exited）以瞬态 msg 报出（on_status 闭包）。
 
@@ -263,16 +275,15 @@ undo/redo：self.lsp:resync()（sync_full + Client 缓存全清 + vtext.clear() 
 **改**：
 - `require "lsp"` → `self.lsp = lsp.Client.new(...)`（lsp_start 装配）+ 注入
   接口闭包（§3.3）
-- **新增**：`self.vtexts = {}`（Ed vtext 槽）+ `Ed:set_vtext` /
-  `Ed:clear_vtexts` / `Ed:shift_vtexts` / `Ed:vtext_dcol` /
-  `Ed:screen_to_text_dcol`（§3.3，Shift/查询为内部或公开按摩擦定）
-- docedit：`self:shift_vtexts(off, del, s)`（核心职责，先于 doc:edit）+
-  `if self.lsp then self.lsp:on_edit(...) end`（单漏斗）
-- u / <C-r>：`self.lsp:resync()`（替换 resync_lsp；vtext 槽清理由 Client 经
-  vtext.clear 或 editor 直接 clear——按摩擦定）
+- **新增**（2026-08-19 树化后）：`Ed:set_vtext` / `Ed:clear_vtexts` /
+  `Ed:set_sem` / `Ed:set_diag` / `Ed:vtext_dcol` / `Ed:screen_to_text_dcol`
+  ——数据全在 spantree 层（vtext 绑后一字符、sem/diag 全文件快照），
+  `shift_vtexts`/`vtexts` 表/`query_spans`/`dcol_fn` 已删除
+- docedit：`lsp:on_edit` + `doc:edit` + `tree:splice(off, del, #s)`（单漏斗）
+- u / <C-r>：`switch_sync`（doc:undo(f) 回调内 tree:splice + lsp:undo_switch）
 - tick：`self.lsp:tick()`（替换现 tick 主体）
-- render：层列表 sem/diag 来自 `self.lsp:query_spans`；hints 来自
-  `self.vtexts[ld.line]`；末尾 `self.lsp:post_render()`
+- render：spans 从 `self.tree:styled(s_off, e_off)` 构造（hl/sem/diag 层）；
+  hints 从 `span("vtext", ...)`；末尾 `self.lsp:post_render()`
 - render_cursor：`self:vtext_dcol(...)` 替换本地 display_col 计算
 - move_vert：屏幕列语义（§四）
 - render_status：`self.lsp:status()` / `self.lsp:diag_at(cur_off)`

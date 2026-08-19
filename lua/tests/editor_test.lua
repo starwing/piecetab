@@ -71,10 +71,12 @@ function TestSkeleton:testEscTimeoutFinite()
   -- bare ESC must return after esc_timeout (regression: waitkey(-1)
   -- blocks forever after ESC in real tty, breaking :mode exit).
   -- Real-tty behavior verified manually; here we lock the config.
-  local t = Ed.newterm()
-  lu.assertTrue(t.esc_timeout > 0 and t.esc_timeout <= 1000)
-  local t2 = Ed.newterm({ esc_timeout = 7 })
-  lu.assertEquals(t2.esc_timeout, 7)
+  local e = Ed.new()
+  lu.assertTrue(e.esc_timeout > 0 and e.esc_timeout <= 1000)
+  local e2 = Ed.new(nil, { esc_timeout = 7, write = function() end,
+                           flush = function() end,
+                           size = function() return 24, 80 end })
+  lu.assertEquals(e2.esc_timeout, 7)
 end
 
 function TestSkeleton:testConstruct()
@@ -763,13 +765,12 @@ end
 function TestLayers:testPiecesAlternate()
   local e = make_pieces("aaaa bbbb\n")
   frame(e)
-  local bg = e.comp:intern(Ed.ATTR_GRAY_BG)
   local _, st = e.grid:cell(0, 4) -- 'a' (piece 1, plain)
   lu.assertEquals(st, 0)
   local _, st2 = e.grid:cell(0, 8) -- 'X' (piece 2, gray)
-  lu.assertEquals(st2, bg)
+  assert_style(e, st2, Ed.ATTR_GRAY_BG)
   local _, st3 = e.grid:cell(0, 12) -- 'Z' (piece 4, gray)
-  lu.assertEquals(st3, bg)
+  assert_style(e, st3, Ed.ATTR_GRAY_BG)
   local _, st4 = e.grid:cell(0, 13) -- 'b' (piece 5, plain)
   lu.assertEquals(st4, 0)
 end
@@ -787,7 +788,7 @@ function TestLayers:testPieceGrayOnlyOnEvenPieces()
   local e = make_pieces("aaaa bbbb\n")
   frame(e)
   local _, st = e.grid:cell(0, 9) -- 'Y' (piece 2, gray)
-  lu.assertEquals(st, e.comp:intern(Ed.ATTR_GRAY_BG))
+  assert_style(e, st, Ed.ATTR_GRAY_BG)
   local _, st2 = e.grid:cell(0, 4) -- 'a' (piece 1, plain)
   lu.assertEquals(st2, 0)
 end
@@ -805,7 +806,7 @@ function TestLayers:testLayeredCompose()
   local _, st = e.grid:cell(0, 4) -- 'i' (piece 1, plain): keyword only
   assert_style(e, st, Ed.ATTR_KEYWORD)
   local _, st2 = e.grid:cell(0, 8) -- 'Q' (piece 2, gray): no syntax
-  lu.assertEquals(st2, bg)
+  assert_style(e, st2, Ed.ATTR_GRAY_BG)
   local _, st3 = e.grid:cell(0, 9) -- 'x' (piece 3, plain): nothing
   lu.assertEquals(st3, 0)
   lu.assertNotEquals(bg, 0)
@@ -822,7 +823,7 @@ function TestLayers:testPieceAcrossLineBoundary()
   local _, st = e.grid:cell(0, 4) -- 'a' col 0 (piece 1, plain)
   lu.assertEquals(st, 0)
   local _, st2 = e.grid:cell(0, 8) -- 'Y' col 4 (piece 2, gray, same row)
-  lu.assertEquals(st2, e.comp:intern(Ed.ATTR_GRAY_BG))
+  assert_style(e, st2, Ed.ATTR_GRAY_BG)
   local _, st3 = e.grid:cell(1, 4) -- row 1 col 0 (piece 3, plain)
   lu.assertEquals(st3, 0)
 end
@@ -854,14 +855,13 @@ function TestVisual:testEnterAndExtend()
   lu.assertEquals(e.sel_start, 0)
   local s = frame(e)
   lu.assertStrContains(s, "VISUAL") -- status bar mode
-  local rev = e.comp:intern(Ed.ATTR_REVERSE)
   -- cursor char is inside the selection immediately (vim charwise)
   local _, st = e.grid:cell(0, 4) -- 'a'
-  lu.assertEquals(st, rev)
+  assert_style(e, st, Ed.ATTR_REVERSE)
   e:dispatch("l") -- cursor 1, selection [0,2) = "ab"
   frame(e)
   local _, st2 = e.grid:cell(0, 5) -- 'b'
-  lu.assertEquals(st2, rev)
+  assert_style(e, st2, Ed.ATTR_REVERSE)
   local _, st3 = e.grid:cell(0, 6) -- 'c' (outside selection)
   lu.assertEquals(st3, 0)
 end
@@ -874,9 +874,8 @@ function TestVisual:testReverseSelectionExtendsBackward()
   e:dispatch("l") -- cursor 2, selection [0,3) = "abc"
   e:dispatch("h") -- cursor 1, selection [0,2) = "ab"
   frame(e)
-  local rev = e.comp:intern(Ed.ATTR_REVERSE)
   local _, st = e.grid:cell(0, 5) -- 'b' (cursor char)
-  lu.assertEquals(st, rev)
+  assert_style(e, st, Ed.ATTR_REVERSE)
   local _, st2 = e.grid:cell(0, 6) -- 'c' (outside selection)
   lu.assertEquals(st2, 0)
 end
@@ -951,13 +950,12 @@ function TestVisual:testMultilineSelection()
   e:dispatch("v") -- sel_start 0
   e:dispatch("j") -- cursor line 1 col 0, selection "ab\nc"
   frame(e)
-  local rev = e.comp:intern(Ed.ATTR_REVERSE)
   local _, st = e.grid:cell(0, 4) -- 'a'
-  lu.assertEquals(st, rev)
+  assert_style(e, st, Ed.ATTR_REVERSE)
   local _, st2 = e.grid:cell(0, 5) -- 'b'
-  lu.assertEquals(st2, rev)
+  assert_style(e, st2, Ed.ATTR_REVERSE)
   local _, st3 = e.grid:cell(1, 4) -- 'c' (cursor char, selected)
-  lu.assertEquals(st3, rev)
+  assert_style(e, st3, Ed.ATTR_REVERSE)
   local _, st4 = e.grid:cell(1, 5) -- 'd' (outside selection)
   lu.assertEquals(st4, 0)
   e:dispatch("d") -- deletes "ab\nc"
@@ -1006,21 +1004,33 @@ function TestHint:testNoServerMsg()
   lu.assertNil(e.lsp)
 end
 
--- vtext: injected display text on the Ed core (no LSP involved)
+-- vtext: injected display text on the Ed core, stored in the spantree
+-- "vtext" layer (no LSP involved)
 TestVtext = {}
+
+-- Collect the tree's vtext spans for a line (offsets relative to it).
+local function vtext_spans(e, line)
+  local lo = e.doc:lineoffset(line)
+  local ll = e.doc:linelen(line, true)
+  local out = {}
+  for off, len, attr in e.tree:span("vtext", lo, ll + 1) do
+    out[#out + 1] = { off = off - lo, len = len, text = attr.vtext }
+  end
+  return out
+end
 
 function TestVtext:setUp()
   self.e = make_ed("hello\nworld\n")
-  self.e:set_vtext(0, { { dcol = 0, text = "int:" } })
+  self.e:set_vtext(0, { { off = 0, text = "int:" } })
 end
 
 function TestVtext:testSetAndClear()
-  lu.assertEquals(#self.e.vtexts[0], 1)
+  lu.assertEquals(#vtext_spans(self.e, 0), 1)
   self.e:set_vtext(0, nil)
-  lu.assertNil(self.e.vtexts[0])
-  self.e:set_vtext(0, { { dcol = 1, text = "a" } })
+  lu.assertEquals(#vtext_spans(self.e, 0), 0)
+  self.e:set_vtext(0, { { off = 1, text = "a" } })
   self.e:clear_vtexts()
-  lu.assertEquals(next(self.e.vtexts), nil)
+  lu.assertEquals(#vtext_spans(self.e, 0), 0)
 end
 
 function TestVtext:testVtextDcolNormalSkipsHint()
@@ -1046,7 +1056,7 @@ function TestVtext:testScreenToTextDcolSkipsHint()
   -- a screen col inside a hint maps to the first text col after it
   -- (Neovim coladvance: the cursor skips over injected text), so j never
   -- lands on a cell the hint covers
-  self.e:set_vtext(0, { { dcol = 2, text = "ZZ" } })
+  self.e:set_vtext(0, { { off = 2, text = "ZZ" } })
   lu.assertEquals(self.e:screen_to_text_dcol(0, 1), 1) -- before hint
   lu.assertEquals(self.e:screen_to_text_dcol(0, 2), 2) -- hint start: past it
   lu.assertEquals(self.e:screen_to_text_dcol(0, 3), 2) -- inside the hint
@@ -1056,7 +1066,7 @@ end
 
 function TestVtext:testJKKeepsScreenCol()
   -- line 0 injected, line 1 not: j keeps screen col 4 (Neovim semantics)
-  self.e:set_vtext(0, { { dcol = 0, text = "int:" } })
+  self.e:set_vtext(0, { { off = 0, text = "int:" } })
   self.e.doc:seek("set", 0)
   self.e:dispatch("j")
   lu.assertEquals(self.e.doc:column(), 4) -- line 1 text col 4 = screen col 4
@@ -1073,23 +1083,72 @@ function TestVtext:testInsertDownKeepsGapColumn()
   lu.assertEquals(self.e.doc:column(), 0) -- line 1 byte 0 = screen col 0
 end
 
-function TestVtext:testShiftVtextsSameLine()
-  -- edit before the hint: hint shifts right by the byte delta
+function TestVtext:testEditShiftsHints()
+  -- edits through the docedit funnel splice the tree: the hint stays
+  -- bound to its char and shifts with it
   self.e.doc:seek("set", 0)
-  self.e:shift_vtexts(0, 0, "x")
-  lu.assertEquals(self.e.vtexts[0][1].dcol, 1)
-  -- delete it back: hint shifts left
-  self.e:shift_vtexts(0, 1, "")
-  lu.assertEquals(self.e.vtexts[0][1].dcol, 0)
-  -- hint inside the deleted range: dropped, slot goes nil
+  self.e:docedit(0, "x") -- insert before 'h': hint stays on 'h'
+  lu.assertEquals(vtext_spans(self.e, 0)[1].off, 1)
   self.e.doc:seek("set", 0)
-  self.e:shift_vtexts(0, 1, "") -- delete 'h', range [0,1) covers dcol 0
-  lu.assertNil(self.e.vtexts[0])
+  self.e:docedit(1, "") -- delete 'x' back
+  lu.assertEquals(vtext_spans(self.e, 0)[1].off, 0)
 end
 
-function TestVtext:testShiftVtextsCrossLineClears()
-  self.e:shift_vtexts(0, 0, "a\nb")
-  lu.assertEquals(next(self.e.vtexts), nil)
+function TestVtext:testDeleteBoundCharDrops()
+  -- deleting the bound char removes the hint (the segment dies with it)
+  self.e.doc:seek("set", 0)
+  self.e:docedit(1, "") -- delete 'h', range [0,1) covers the bound char
+  lu.assertEquals(#vtext_spans(self.e, 0), 0)
+end
+
+function TestVtext:testCrossLineEditShifts()
+  -- a cross-line edit splices the tree: the vtext layer survives (the
+  -- old implementation cleared every slot; the tree shifts segments)
+  self.e.doc:seek("set", 0)
+  self.e:docedit(0, "a\nb")
+  local spans = vtext_spans(self.e, 1)
+  lu.assertEquals(#spans, 1)
+  lu.assertEquals(spans[1].off, 1) -- still bound to 'h' on line 1
+end
+
+function TestVtext:testUndoShifts()
+  -- undo splices the change hunks into the tree: the hint shifts back
+  self.e.doc:seek("set", 0)
+  self.e:docedit(0, "x")
+  self.e.doc:commit()
+  self.e:dispatch("u")
+  lu.assertEquals(vtext_spans(self.e, 0)[1].off, 0)
+end
+
+-- sem/diag full-snapshot layers: rendered through the tree's styled
+-- stream (priority fold: sem 2 < diag 3, severity is csi-invisible)
+TestTreeLayers = {}
+
+function TestTreeLayers:testSemDiagStyled()
+  local e = make_ed("int x;\n")
+  e:set_sem({ { offset = 0, length = 3, attr = { fg = 207 } } })
+  e:set_diag({ { offset = 1, length = 2,
+    attr = { underline = true, severity = 1 } } })
+  e:render()
+  local _, st = e.grid:cell(0, 4) -- content col 0 ('i'): sem only
+  assert_style(e, st, { fg = 207 })
+  local _, st2 = e.grid:cell(0, 5) -- content col 1 ('n'): both fold
+  assert_style(e, st2, { fg = 207, underline = true })
+end
+
+function TestTreeLayers:testSemEditShift()
+  -- a splice shifts the sem layer (async gap coverage until refetch)
+  local e = make_ed("int x;\n")
+  e:set_sem({ { offset = 0, length = 3, attr = { fg = 207 } } })
+  e.doc:seek("set", 0)
+  e:docedit(0, "ab")
+  local spans = {}
+  for off, len, _, id in e.tree:styled(0, e.tree:bytes()) do
+    spans[#spans + 1] = { off, len, id }
+  end
+  lu.assertEquals(spans[1][1], 0) -- id0 first
+  lu.assertEquals(spans[2][1], 2) -- sem segment shifted to byte 2
+  lu.assertEquals(spans[2][2], 3)
 end
 
 -- goal column (Neovim curswant): j/k keep the theoretical screen column;

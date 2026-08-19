@@ -30,7 +30,8 @@ function Buffer:len() end
 ---@return string
 function Buffer:read(off, len) end
 
----Iterate over all pieces in the buffer.
+---Iterate over all pieces in the buffer. Read-only: no cursor exists on a
+---Buffer, so iteration never moves or disturbs any editor cursor.
 ---@return fun(): integer, integer, string
 ---@usage
 ---```lua
@@ -263,6 +264,9 @@ function Doc:breaks() end
 
 ---Return an iterator that repeatedly calls `read(fmt, ...)` until nil.
 ---No args = `read()` (line without `\n`), like `file:lines()`.
+---Cursor-based: iteration consumes from the current position and advances the
+---doc cursor, exactly like repeated `Doc:read`. For read-only line traversal
+---that does not move the cursor, use `lineoffset` + `linelen` + `readat`.
 ---@return fun(): string?         -- no args
 ---@overload fun(fmt: '"l"'|'"*l"'): fun(): string?
 ---@overload fun(fmt: '"L"'|'"*L"'): fun(): string?
@@ -321,8 +325,9 @@ function Doc:earlier(f) end
 ---@return integer  vid of the version after navigation
 function Doc:later(f) end
 
----Export a snapshot of a specific version as a new buffer.
----@param vid? integer  version id (default: current version)
+---Export the current visible buffer (including uncommitted edits), or a
+---snapshot of a specific committed version when `vid` is given.
+---@param vid? integer  version id (optional; omitted/0 returns live buffer)
 ---@return piecetab.Buffer
 function Doc:buffer(vid) end
 
@@ -332,7 +337,10 @@ function Doc:buffer(vid) end
 function Doc:dump() end
 
 ---Return the length of the current piece, or the next/previous piece length.
----The cursor *IS* moved if called with "next" or "prev".
+---This is a cursor-based, stateful piece probe, not a read-only iterator:
+---`"len"` reads the current piece without moving; `"next"` / `"prev"` move the
+---doc cursor to the adjacent piece and return that piece's length. To iterate
+---all pieces without moving the doc cursor, use `doc:buffer():pieces()`.
 --- @param opt "len"|"next"|"prev"
 --- @return integer
 function Doc:piece(opt) end

@@ -119,6 +119,23 @@ function TestStyle:testInternFloat()
     lu.assertNotEquals(comp:intern({ fg = 1.5 }), comp:intern({ fg = 1 }))
 end
 
+function TestStyle:testInternVtext()
+    local comp = newcomp()
+    -- "vtext"/"vstyle" are default canon fields (vtext payload): the
+    -- label string and the style attr id, order-independent
+    lu.assertEquals(comp:intern({ vtext = "int:", vstyle = 3 }),
+        comp:intern({ vstyle = 3, vtext = "int:" }))
+    -- distinct payloads intern to distinct ids (render needs per-text)
+    lu.assertNotEquals(comp:intern({ vtext = "int:" }),
+        comp:intern({ vtext = "int" }))
+    -- same payload + style: reuse
+    lu.assertEquals(comp:intern({ vtext = "int:", vstyle = 3 }),
+        comp:intern({ vtext = "int:", vstyle = 3 }))
+    -- style attr id participates in the canon key
+    lu.assertNotEquals(comp:intern({ vtext = "int:", vstyle = 3 }),
+        comp:intern({ vtext = "int:", vstyle = 4 }))
+end
+
 function TestStyle:testAttr()
     local comp = newcomp()
     lu.assertEquals(comp:attr(0), {})
@@ -171,9 +188,9 @@ function TestStyle:testWhitelistIgnore()
         comp:intern({ fg = 1 }))
 end
 
-function TestStyle:testSetfieldsCustom()
+function TestStyle:testFieldsCustom()
     local comp = newcomp()
-    comp:setfields({ "foo", "fg" })
+    comp:fields({ "foo", "fg" })
     -- custom string-valued field canon
     lu.assertEquals(comp:intern({ foo = "bar" }), comp:intern({ foo = "bar" }))
     lu.assertNotEquals(comp:intern({ foo = "bar" }), comp:intern({ foo = "baz" }))
@@ -187,29 +204,69 @@ function TestStyle:testSetfieldsCustom()
     lu.assertEquals(comp:intern({ bold = true }), 0)
 end
 
-function TestStyle:testSetfieldsOrder()
-    -- declaration order does not matter: fields are sorted once
+function TestStyle:testFieldsOrder()
+    -- the caller's order is preserved (canon follows it): no implicit
+    -- sorting, the caller sorts if they care
     local comp = newcomp()
-    comp:setfields({ "zebra", "alpha" }) -- unsorted input
+    comp:fields({ "zebra", "alpha" })
+    lu.assertEquals(comp:fields(), { "zebra", "alpha" })
+    -- canon is stable as long as the order is: any attr interned under
+    -- this whitelist serializes in that order, so equal tables collide
     lu.assertEquals(comp:intern({ alpha = 1, zebra = 2 }),
         comp:intern({ zebra = 2, alpha = 1 }))
 end
 
-function TestStyle:testSetfieldsEmpty()
+function TestStyle:testFieldsRead()
     local comp = newcomp()
-    comp:setfields({})
+    -- default SGR set + vtext payload
+    lu.assertEquals(comp:fields(),
+        { "bg", "bold", "dim", "fg", "italic", "reverse", "underline",
+          "vstyle", "vtext" })
+    comp:fields({ "fg", "bg" })
+    lu.assertEquals(comp:fields(), { "fg", "bg" })
+    comp:fields({})
+    lu.assertEquals(comp:fields(), {})
+end
+
+function TestStyle:testFieldsAdd()
+    local comp = newcomp()
+    comp:fields({ "fg", "bg" })
+    -- append with dedup: bg already present, italic appended (caller
+    -- order preserved)
+    comp:fields("add", { "bg", "italic" })
+    lu.assertEquals(comp:fields(), { "fg", "bg", "italic" })
+    -- the added field takes part in canon
+    lu.assertEquals(comp:intern({ fg = 1, italic = true }),
+        comp:intern({ italic = true, fg = 1 }))
+    -- empty append is a no-op
+    comp:fields("add", {})
+    lu.assertEquals(comp:fields(), { "fg", "bg", "italic" })
+    -- canon order stays stable across appends
+    lu.assertEquals(comp:intern({ fg = 1, italic = true, bg = 2 }),
+        comp:intern({ bg = 2, italic = true, fg = 1 }))
+end
+
+function TestStyle:testFieldsEmpty()
+    local comp = newcomp()
+    comp:fields({})
     lu.assertEquals(comp:intern({ fg = 1 }), 0) -- no fields: id 0
     lu.assertEquals(comp:intern({ foo = "x" }), 0)
 end
 
-function TestStyle:testSetfieldsInvalid()
+function TestStyle:testFieldsInvalid()
     local comp = newcomp()
+    ---@type any
+    local not_a_list = 123
     lu.assertErrorMsgContains("table expected",
-        function() comp:setfields(ANY) end)
+        function() comp:fields("add", not_a_list) end)
+    ---@diagnostic disable: param-type-mismatch
+    lu.assertErrorMsgContains("unknown fields mode",
+        function() comp:fields("bogus", { "fg" }) end)
+    ---@diagnostic enable: param-type-mismatch
     ---@type any
     local bad_fields = { "a", 1 }
     lu.assertErrorMsgContains("string expected",
-        function() comp:setfields(bad_fields) end)
+        function() comp:fields(bad_fields) end)
 end
 
 function TestStyle:testReload()
@@ -226,12 +283,12 @@ function TestStyle:testSharedComp()
     -- trees bound to one compositor share intern ids; a fresh
     -- compositor owns a separate whitelist
     local comp = newcomp()
-    comp:setfields({ "bg", "bold", "dim", "fg", "italic", "reverse", "underline" })
+    comp:fields({ "bg", "bold", "dim", "fg", "italic", "reverse", "underline" })
     local t1, t2 = newtree(comp), newtree(comp)
     lu.assertEquals(comp:intern({ fg = 1 }), comp:intern({ fg = 1 }))
     lu.assertEquals(comp:attr(comp:intern({ fg = 2 })).fg, 2)
     local comp2 = newcomp()
-    comp2:setfields({ "fg" })
+    comp2:fields({ "fg" })
     lu.assertNotNil(comp2:attr(comp2:intern({ fg = 1 })).fg)
     lu.assertNil(comp2:attr(comp2:intern({ bg = 1 })).bg) -- bg ignored in comp2
     lu.assertEquals(comp:attr(comp:intern({ bg = 1 })).bg, 1) -- still set in comp
@@ -749,12 +806,21 @@ function TestTree:testSpanNsFilter()
     lu.assertEquals(s2[1][2], 4)
     assert_attr(cur_comp, s2[2][1], { bg = 2 })
     lu.assertEquals(s2[2][2], 2)
-    -- exclusive semantics: the segment stepped at off is skipped
+    -- inclusive start: the segment at off is part of the query window
     local s3 = collect(t, "span", "a", 3, 5)
-    lu.assertEquals(#s3, 1)
+    lu.assertEquals(#s3, 2)
     assert_attr(cur_comp, s3[1][1], { fg = 1 })
-    lu.assertEquals(s3[1][2], 4)
-    -- truncation inside the first (stepped) matching segment
+    lu.assertEquals(s3[1][2], 2)
+    assert_attr(cur_comp, s3[2][1], { fg = 1 })
+    lu.assertEquals(s3[2][2], 4)
+    -- a segment starting exactly at off is hit (row-head hint case)
+    local s5 = collect(t, "span", "a", 2, 8)
+    lu.assertEquals(#s5, 2)
+    assert_attr(cur_comp, s5[1][1], { fg = 1 })
+    lu.assertEquals(s5[1][2], 2)
+    assert_attr(cur_comp, s5[2][1], { fg = 1 })
+    lu.assertEquals(s5[2][2], 4)
+    -- truncation inside the first matching segment
     local s4 = collect(t, "span", "a", 0, 3)
     lu.assertEquals(#s4, 1)
     assert_attr(cur_comp, s4[1][1], { fg = 1 })
@@ -1939,8 +2005,24 @@ function TestSpan:testNsFilter()
     lu.assertEquals(collect(t, "span", "nf3", 0, 12), { { bl, 2 } })
     -- segments without the layer drop out
     lu.assertEquals(collect(t, "span", "nf3", 6, 6), {})
-    -- the segment stepped at off is skipped (exclusive start)
-    lu.assertEquals(collect(t, "span", "nf1", 3, 9), { { f1, 2 }, { f1, 2 } })
+    -- inclusive start: the segment at off is in the query window
+    lu.assertEquals(collect(t, "span", "nf1", 3, 9),
+        { { f1, 2 }, { f1, 2 }, { f1, 2 } })
+end
+
+function TestSpan:testClearNoGhostSeg()
+    -- clear on an empty slot must not build a CLEAR segment (the
+    -- exclusive-start skip used to hide such ghosts; the query flow
+    -- reads them back as empty attrs)
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("cg1", 1)
+    t:splice(0, 0, 10)
+    t:clear("cg1", 2, 4)
+    lu.assertEquals(collect(t, "span", "cg1", 0, 10), {})
+    t:mark("cg1", { fg = 1 }, 2, 4)
+    lu.assertEquals(#collect(t, "span", "cg1", 0, 10), 1)
+    t:clear("cg1", 2, 4)
+    lu.assertEquals(collect(t, "span", "cg1", 0, 10), {})
 end
 
 function TestSpan:testEphWalk()
@@ -2444,8 +2526,8 @@ function TestComp:testCompositorIsolation()
     -- every compositor() call owns a fresh state: intern ids and the
     -- ns registry never leak across compositors
     local c1, c2 = newcomp(), newcomp()
-    c1:setfields({ "fg", "bg" })
-    c2:setfields({ "fg" })
+    c1:fields({ "fg", "bg" })
+    c2:fields({ "fg" })
     lu.assertNotNil(c1:attr(c1:intern({ bg = 1 })).bg)
     lu.assertNil(c2:attr(c2:intern({ bg = 1 })).bg)
     c1:namespace("iso", 1)
@@ -2459,13 +2541,13 @@ function TestComp:testTreeNoStyleFace()
     ---@diagnostic disable: undefined-field
     lu.assertNil(t.intern)
     lu.assertNil(t.attr)
-    lu.assertNil(t.setfields)
+    lu.assertNil(t.fields)
     lu.assertNil(t.namespace)
     ---@diagnostic enable: undefined-field
     -- the compositor keeps them
     lu.assertNotNil(comp.intern)
     lu.assertNotNil(comp.attr)
-    lu.assertNotNil(comp.setfields)
+    lu.assertNotNil(comp.fields)
     lu.assertNotNil(comp.namespace)
 end
 

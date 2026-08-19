@@ -3,6 +3,11 @@
 --------------------------------------------------------------------------------
 ---@class cellgrid.Grid
 ---Terminal cell grid with dual-buffer diff rendering.
+---
+---Coordinate convention: grid rows/cols are 0-based. The string-slice
+---arguments to `cols`/`byte`/`next`/`putslice` use Lua's 1-based
+---`string.sub` view, so converting between a 0-based byte offset from
+---piecetab/spantree and a 1-based slice offset is the caller's glue.
 local Grid
 
 ---Release grid memory. Idempotent.

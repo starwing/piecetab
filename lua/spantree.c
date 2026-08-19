@@ -299,24 +299,26 @@ static int lst_checkerror(lua_State *L, int r) {
 /* userdata; vecs are stV_ (malloc, zero Lua allocf).             */
 /* ================================================================== */
 
-/* default canon whitelist: SGR field set, sorted */
+/* default canon whitelist: SGR field set + vtext payload, sorted */
 static const char *cp_defaults[] = {
-        "bg", "bold", "dim", "fg", "italic", "reverse", "underline",
+        "bg",      "bold",      "dim",    "fg",    "italic",
+        "reverse", "underline", "vstyle", "vtext",
 };
 
-static int      cp_setfields(cp_State *S, const char **fs, int n);
+static void     cp_resetfields(cp_State *S);
+static int      cp_addfield(cp_State *S, const char *name);
 static unsigned cp_internattr(lua_State *L, cp_State *S, int attr);
 
 static void cp_init(lua_State *L, cp_State *S) {
-    int nf;
+    int i, nf = (int)(sizeof(cp_defaults) / sizeof(cp_defaults[0]));
     lua_newtable(L), S->ref_byattr = luaL_ref(L, LUA_REGISTRYINDEX);
     lua_newtable(L), S->ref_nsb = luaL_ref(L, LUA_REGISTRYINDEX);
     lua_newtable(L), S->ref_byop = luaL_ref(L, LUA_REGISTRYINDEX);
     lua_newtable(L), S->ref_chainhash = luaL_ref(L, LUA_REGISTRYINDEX);
     S->nsnext = 1, S->ephnext = SP_MASK_BITS + 1;
-    nf = (int)(sizeof(cp_defaults) / sizeof(cp_defaults[0]));
-    if (cp_setfields(S, cp_defaults, nf) != 0)
-        luaL_error(L, "spantree: out of memory");
+    for (i = 0; i < nf; ++i)
+        if (cp_addfield(S, cp_defaults[i]) != 0)
+            luaL_error(L, "spantree: out of memory");
     lua_newtable(L);
     cp_internattr(L, S, lua_gettop(L));
     lua_pop(L, 1);
@@ -339,25 +341,23 @@ static void cp_free(lua_State *L, cp_State *S) {
 
 /* ---- cp style service ---- */
 
-static int cpC_strcmp(const void *a, const void *b) {
-    return strcmp(*(const char *const *)a, *(const char *const *)b);
+static void cp_resetfields(cp_State *S) {
+    free(S->fields), S->fields = NULL, S->nfields = 0;
 }
 
-static int cp_setfields(cp_State *S, const char **fs, int n) {
-    size_t i, total = 0, off = 0, l;
-    char  *buf;
-    if (n > 1) qsort(fs, (size_t)n, sizeof(char *), cpC_strcmp);
-    for (i = 0; i < (size_t)n; ++i) total += strlen(fs[i]) + 1;
-    free(S->fields), S->fields = NULL, S->nfields = 0;
-    if (total == 0) return 0;
-    buf = (char *)malloc(total);
-    if (buf == NULL) return -1;
-    for (i = 0; i < (size_t)n; ++i) {
-        l = strlen(fs[i]);
-        memcpy(buf + off, fs[i], l), off += l;
-        buf[off++] = '\0';
+static int cp_addfield(cp_State *S, const char *name) {
+    const char *p = S->fields;
+    size_t      n = S->nfields, i, cur = 0, nl = strlen(name);
+    char       *buf;
+    for (i = 0; i < n; ++i, p += strlen(p) + 1) {
+        if (strcmp(p, name) == 0) return 0; /* duplicate: no-op */
+        cur += strlen(p) + 1;
     }
-    S->fields = buf, S->nfields = (unsigned)n;
+    buf = (char *)malloc(cur + nl + 1);
+    if (buf == NULL) return -1;
+    if (cur > 0) memcpy(buf, S->fields, cur);
+    memcpy(buf + cur, name, nl + 1);
+    free(S->fields), S->fields = buf, S->nfields = (unsigned)n + 1;
     return 0;
 }
 
@@ -1046,7 +1046,10 @@ static sp_Id lst_arb(void *ud, sp_Id in, sp_Id old, sp_Mask *mask) {
         cp_refdown(L, t->cp, old);
         return *mask = 0, 0;
     }
-    if (old == 0) { /* birth */
+    if (old == 0) { /* birth: CLEAR/REORDER on an empty slot is a no-op */
+        if (in < (sp_Id)stV_len(t->cp->ops)
+            && t->cp->ops[in].kind != CP_K_WRITE)
+            return *mask = 0, 0;
         cp_refup(t->cp, in);
         return *mask = lst_segmask(t->cp, in), in;
     }
@@ -1220,30 +1223,37 @@ static int Lcomp_attr(lua_State *L) {
     return 1;
 }
 
-static int Lcomp_setfields(lua_State *L) {
-    lst_Comp    *comp = lcomp_check(L, 1);
-    int          n, i;
-    const char **fs;
-    luaL_checktype(L, 2, LUA_TTABLE);
-    n = (int)lua_rawlen(L, 2);
+static int lst_fieldswrite(lua_State *L, cp_State *cp, int idx, int add) {
+    int n, i;
+    luaL_checktype(L, idx, LUA_TTABLE);
+    n = (int)lua_rawlen(L, idx);
+    if (!add) cp_resetfields(cp);
     for (i = 0; i < n; ++i) {
-        lsp_rawgeti(L, 2, i + 1);
+        lsp_rawgeti(L, idx, i + 1);
         luaL_checktype(L, -1, LUA_TSTRING); /* element must be a string */
-        /* names stay on the stack: fs pointers need them alive */
-    }
-    if (n > 0) {
-        fs = (const char **)malloc((size_t)n * sizeof(char *));
-        if (fs == NULL) return luaL_error(L, "spantree: out of memory"), 0;
-        for (i = 0; i < n; ++i) fs[i] = lua_tostring(L, 3 + i);
-        if (cp_setfields(&comp->cp, fs, n) != 0) {
-            free(fs);
+        if (cp_addfield(cp, lua_tostring(L, -1)) != 0)
             return luaL_error(L, "spantree: out of memory"), 0;
-        }
-        free(fs);
-        lua_pop(L, n);
-    } else
-        cp_setfields(&comp->cp, NULL, 0);
+    }
+    lua_pop(L, n);
     return lua_settop(L, 1), 1;
+}
+
+static int Lcomp_fields(lua_State *L) {
+    lst_Comp *comp = lcomp_check(L, 1);
+    int       t = lua_type(L, 2);
+    if (t == LUA_TNIL || t == LUA_TNONE) {
+        const char *p = comp->cp.fields;
+        unsigned    i;
+        lua_createtable(L, comp->cp.nfields, 0);
+        for (i = 0; i < comp->cp.nfields; ++i, p += strlen(p) + 1)
+            lua_pushstring(L, p), lsp_rawseti(L, -2, i + 1);
+        return 1;
+    }
+    if (t == LUA_TTABLE) return lst_fieldswrite(L, &comp->cp, 2, 0);
+    luaL_argcheck(
+            L, *luaL_checkstring(L, 2) == 'a', 2,
+            "spantree: unknown fields mode");
+    return lst_fieldswrite(L, &comp->cp, 3, 1);
 }
 
 static int Ltree_mark(lua_State *L) {
@@ -1587,18 +1597,20 @@ static int lst_iterns(lua_State *L, lst_Cur *c) {
     sp_Id     id;
     int       i, n;
     for (;;) {
-        id = sp_next(&c->C, c->nsid, &len);
-        if (id == 0) return 0;
+        id = sp_style(&c->C, &len, NULL); /* first call: the seek segment
+                                           * is included (query semantics) */
+        if (id == 0 && len == 0) return 0;
         n = cp_expand(t->cp, id, ps);
-        for (i = 0; i < n; ++i)
-            if ((int)ps[i].ns == c->nsid) break;
+        for (i = 0; i < n && (int)ps[i].ns != c->nsid; ++i) continue;
         if (i < n) break;
+        if (sp_next(&c->C, c->nsid, &len) == 0) return 0;
     }
-    start = sp_offset(&c->C); /* sp_next lands at the segment start */
+    start = sp_offset(&c->C) - c->C.poff; /* segment start */
     if (start >= c->endoff) return 0;
-    len2 = len;
+    len2 = c->C.poff + len; /* full segment length (style gives the rest) */
     if (len2 > c->endoff - start) len2 = c->endoff - start;
     lst_pushspan(L, t, lst_span(start, len2, ps[i].attr));
+    sp_next(&c->C, c->nsid, NULL); /* step past the emitted segment */
     return 4;
 }
 
@@ -1995,7 +2007,7 @@ void lst_opentree(lua_State *L) {
 static void lst_opencomp(lua_State *L) {
     static const luaL_Reg comp_libs[] = {{"__gc", Lcomp_gc},
 #define ENTRY(name) {#name, Lcomp_##name}
-                                         ENTRY(setfields),   ENTRY(intern),
+                                         ENTRY(fields),      ENTRY(intern),
                                          ENTRY(attr),        ENTRY(namespace),
 #undef ENTRY
                                          {NULL, NULL}};

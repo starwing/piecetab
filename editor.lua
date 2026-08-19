@@ -13,11 +13,8 @@ local sp = require("spantree")
 local ok_ts, ts = pcall(require, "treesitter")
 if not ok_ts then ts = nil end -- absent: hl off (pcall err msg is a string, not nil)
 local lsp = require("lsp")
-local luv = require("luv")
 
--- ================================================================
 -- Section 0: Logging (writes to editor.log for debugging)
--- ================================================================
 
 local logfile = nil
 ---@param fmt string
@@ -32,108 +29,16 @@ local function edlog(fmt, ...)
   if logfile then logfile:write(string.format(fmt, ...) .. "\n") end
 end
 
--- ================================================================
--- Section 1: Term class (terminal I/O via termfeed, not exported)
--- ================================================================
+-- Section 1: Terminal I/O (termfeed + output sink; no Term class)
 
 ---@alias editor.Mode "normal"|"insert"|"command"|"visual"
 ---@alias editor.Key string
 ---@alias editor.KeymapFn fun(self: editor.Ed, key: editor.Key)
 ---@alias editor.CommandFn fun(self: editor.Ed, arg?: string, bang?: boolean)
 
---- @class editor.Term
----@field out {write: fun(o: table, s: string), flush: fun(o: table)}
----@field size_fn fun(): integer, integer
----@field tf termfeed.State
----@field esc_timeout integer
----@field s? string  captured output (fake term in tests)
-local Term = {}
-
--- method-style wrapper so Term:write and duck-typed outs (fake terms)
--- both work via self.out.write(self.out, s)
-local IO = {
-  write = function(_, s) io.write(s) end,
-  flush = function() io.flush() end
-}
-
-do
-  Term.__index = Term
-
-  --- @param opts? table  {out?, size?}
-  --- @return editor.Term
-  function Term.new(opts)
-    opts = opts or {}
-    local self = setmetatable({}, Term)
-    --- @type termfeed.State
-    self.tf = assert(tf.new())
-    self.tf:setflag(tf.FLAG_DELBS)
-    self.out = opts.out or IO
-    -- bare ESC: waitkey polls esc_timeout ms for a prefix before flushing
-    -- it as a standalone key (vim timeoutlen; -1 blocks forever)
-    self.esc_timeout = opts.esc_timeout or 50
-    self.size_fn = opts.size or function()
-      local r, c = cg.winsize(1)
-      if r and c then return r, c end
-      return 24, 80
-    end
-    return self
-  end
-
-  --- @param s string
-  function Term:write(s)
-    self.out.write(self.out, s)
-  end
-
-  function Term:flush()
-    self.out.flush(self.out)
-  end
-
-  --- @return integer rows, integer cols
-  function Term:size()
-    return self.size_fn()
-  end
-
-  --- @param row integer
-  --- @param col integer
-  function Term:move(row, col)
-    self:write(string.format("\27[%d;%dH", row, col))
-  end
-
-  --- Read one key, waiting up to `timeout` ms (nil = timed out, caller
-  --- runs idle work). Defaults to the ESC prefix window.
-  --- @return string?
-  function Term:getkey(timeout)
-    if self.tf:waitkey(0, timeout or self.esc_timeout) ~= "KEY" then
-      return nil
-    end
-    return self.tf:format()
-  end
-
-  --- Enter alt screen + raw mode (main only; tests use fake term).
-  function Term:enter()
-    self:write("\27[?1049h\27[?25l")
-    self:flush()
-    self.tf:raw(0)
-  end
-
-  --- Leave raw mode, restore terminal.
-  function Term:leave()
-    self.tf:cooked()
-    self.tf:delete()
-    self:write("\27[?25h\27[2J\27[?1049l")
-    self:flush()
-  end
-end
-
--- style codes
-Term.REVERSE         = "\27[7m"
-Term.DIM             = "\27[2m"
-Term.RESET           = "\27[0m"
-
 -- SGR attribute codes (booleans -> code; csi generation lives here,
 -- the spantree tree has zero format knowledge)
-local SGR_ATTR = { bold = 1, dim = 2, italic = 3, underline = 4,
-                   reverse = 7 }
+local SGR_ATTR      = { bold = 1, dim = 2, italic = 3, underline = 4, reverse = 7 }
 
 -- attribute field tables (interned into grid style handles by sc)
 local ATTR_DIM      = { dim = true }
@@ -146,11 +51,9 @@ local ATTR_NUMBER   = { fg = 215 }
 local ATTR_DIAG     = { underline = true }
 local ATTR_REVERSE  = { reverse = true }
 
--- ================================================================
 -- Section 2: Text/cursor pure functions
 -- Char motion and column math here are C-module incubation
 -- candidates (see notes/design_editor.md); keep them marked.
--- ================================================================
 
 ---@param doc piecetab.Doc
 ---@param lnum integer
@@ -176,12 +79,10 @@ local function move_word_forward(ed)
   local line = line_text(doc, lnum)
   local col = doc:column()
   local len = #line
-  local i = col + 0
-  -- skip current word or space
+  local i = col
   if i < len then
     local cls = word_class(line:byte(i + 1))
     while i < len and word_class(line:byte(i + 1)) == cls do i = i + 1 end
-    -- skip whitespace
     while i < len and word_class(line:byte(i + 1)) == 0 and line:byte(i + 1) == 32 do i = i + 1 end
   end
   doc:seek("cur", i - col)
@@ -196,7 +97,6 @@ local function move_word_backward(ed)
   local line = line_text(doc, lnum)
   local col = doc:column()
   local i = col - 1
-  -- skip whitespace
   while i > 0 and line:byte(i + 1) == 32 do i = i - 1 end
   if i >= 0 then
     local cls = word_class(line:byte(i + 1))
@@ -226,7 +126,6 @@ local function move_vert(ed, dl)
   doc:seek("line", nlnum, bytecol)
 end
 
--- Open a new line: dir > 0 below (o), dir < 0 above (O); enter INSERT
 ---@param self editor.Ed
 ---@param dir integer
 local function open_line(self, dir)
@@ -240,9 +139,7 @@ local function open_line(self, dir)
   self.mode = "INSERT"
 end
 
--- ================================================================
 -- Section 3: Highlight module (tree-sitter highlighter)
--- ================================================================
 
 local hl = {}
 
@@ -254,44 +151,21 @@ local HL_QUERIES = {
     (comment) @comment
     (string_literal) @string
     (primitive_type) @keyword
-    "break" @keyword
-    "case" @keyword
-    "const" @keyword
-    "continue" @keyword
-    "default" @keyword
-    "do" @keyword
-    "else" @keyword
-    "enum" @keyword
-    "extern" @keyword
-    "for" @keyword
-    "goto" @keyword
-    "if" @keyword
-    "inline" @keyword
-    "register" @keyword
-    "restrict" @keyword
-    "return" @keyword
-    "sizeof" @keyword
-    "static" @keyword
-    "struct" @keyword
-    "switch" @keyword
-    "typedef" @keyword
-    "union" @keyword
-    "volatile" @keyword
-    "while" @keyword
-    (function_definition
-      declarator: (function_declarator
-        declarator: (identifier) @function))
+    "break" @keyword "case" @keyword "const" @keyword "continue" @keyword
+    "default" @keyword "do" @keyword "else" @keyword "enum" @keyword
+    "extern" @keyword "for" @keyword "goto" @keyword "if" @keyword
+    "inline" @keyword "register" @keyword "restrict" @keyword "return" @keyword
+    "sizeof" @keyword "static" @keyword "struct" @keyword "switch" @keyword
+    "typedef" @keyword "union" @keyword "volatile" @keyword "while" @keyword
+    (function_definition declarator: (function_declarator
+      declarator: (identifier) @function))
   ]],
   lua = [[
     (comment) @comment
     (string) @string
-    "if" @keyword
-    "end" @keyword
-    "function" @keyword
-    "local" @keyword
+    "if" @keyword "end" @keyword "function" @keyword "local" @keyword
     "return" @keyword
-    (function_call
-      name: (identifier) @function)
+    (function_call name: (identifier) @function)
   ]],
 }
 
@@ -342,9 +216,8 @@ end
 --- Notify an edit: translate the tree, defer parse to next request.
 function hl:notify_edit(start, old_len, new_len)
   if self.tree then
-    local doc = self.ed.doc
     local function pos(off)
-      local line, col = doc:linecol(off)
+      local line, col = self.ed.doc:linecol(off)
       return line + 1, col + 1 -- 1-based
     end
     local srow, scol = pos(start)
@@ -356,8 +229,7 @@ function hl:notify_edit(start, old_len, new_len)
   self.dirty = true
 end
 
---- Parse if dirty. Content via doc:dump() (uncommitted edits incl.;
--- doc:buffer() is committed-version only).
+--- Parse if dirty. Content via doc:dump() (live buffer incl. uncommitted).
 function hl:ensure()
   if not self.dirty then return end
   self.tree = self.parser:parse(self.tree, self.ed.doc:dump())
@@ -396,10 +268,7 @@ end
 --- @return table
 local function piece_spans(doc, start, endoff)
   local spans, odd = {}, false
-  doc:seek("set", 0)
-  local len = doc:piece("len")
-  while len > 0 do
-    local off = doc:offset()
+  for off, len, _ in doc:buffer():pieces() do
     if odd and off + len > start and off < endoff then
       spans[#spans + 1] = {
         offset = math.max(off, start),
@@ -408,7 +277,6 @@ local function piece_spans(doc, start, endoff)
       }
     end
     odd = not odd
-    len = doc:piece("next")
   end
   return spans
 end
@@ -531,47 +399,7 @@ local function render_line(g, row, col, text, segs, hints)
   return col + dc
 end
 
--- Overlay a quick layer (piece bg, visual reverse) onto tree segments:
--- split at the overlay boundary, patch the covered part's attr (copy +
--- merge + re-intern); adjacent same-style segments merge back.
---- @param comp spantree.Compositor
---- @param segs table  array of {offset, length, style}
---- @param lo integer  overlay start (byte offset)
---- @param hi integer  overlay end (exclusive)
---- @param patch_fn fun(attr: table)
---- @return table
-local function overlay_spans(comp, segs, lo, hi, patch_fn)
-  local out = {}
-  local function push(seg)
-    local last = out[#out]
-    if last and last.style == seg.style
-        and last.offset + last.length == seg.offset then
-      last.length = last.length + seg.length
-    else
-      out[#out + 1] = seg
-    end
-  end
-  for _, s in ipairs(segs) do
-    local off, e = s.offset, s.offset + s.length
-    local a = math.max(off, lo)
-    local b = math.min(e, hi)
-    if b <= a then
-      push(s)
-    else
-      if a > off then push({ offset = off, length = a - off, style = s.style }) end
-      local attr = {}
-      for k, v in pairs(comp:attr(s.style) or {}) do attr[k] = v end
-      patch_fn(attr)
-      push({ offset = a, length = b - a, style = comp:intern(attr) })
-      if b < e then push({ offset = b, length = e - b, style = s.style }) end
-    end
-  end
-  return out
-end
-
--- ================================================================
 -- Section 4: Ed class
--- ================================================================
 
 --- @class editor.Ed
 ---@field doc piecetab.Doc  document buffer (undo history + linecache)
@@ -587,7 +415,9 @@ end
 ---@field log fun(fmt: string, ...: any)
 ---@field done boolean
 ---@field lsp lsp.Client?  LSP client (nil = off)
----@field term editor.Term
+---@field term table  {write, flush, size}
+---@field tf termfeed.State
+---@field esc_timeout integer
 ---@field grid cellgrid.Grid
 ---@field keymaps table<string, table<string, editor.KeymapFn>>
 ---@field commands table<string, editor.CommandFn>
@@ -597,7 +427,6 @@ end
 ---@field show_pieces boolean  piece-boundary visualization layer
 ---@field sel_start integer?  visual-mode selection anchor
 ---@field clip string?  unnamed register (yank buffer)
----@field vtexts table<integer, table<integer, {dcol: integer, text: string, style?: integer}>?>  injected display text per line
 local Ed = {}
 
 -- forward declaration: filled in Section 5 (dispatch reads it via upvalue)
@@ -656,15 +485,8 @@ local function install_normal_keys(self)
   end
   n.o = function(ed) open_line(ed, 1) end
   n.O = function(ed) open_line(ed, -1) end
-  -- jump doc versions (undo/redo), feed the change hunks to the LSP
-  -- as sequential edits (incremental sync)
-  local function switch_sync(ed, name)
-    if ed.hl then ed.hl:reset() end
-    local undo = function(f) ed.doc[name](ed.doc, f) end
-    if ed.lsp then ed.lsp:undo_switch(undo) else undo() end
-  end
-  n.u = function(ed) switch_sync(ed, "undo") end
-  n["<C-r>"] = function(ed) switch_sync(ed, "redo") end
+  n.u = function(ed) ed:switch_version("undo") end
+  n["<C-r>"] = function(ed) ed:switch_version("redo") end
   n.p = function(ed)
     if not ed.clip then return end
     ed:onedit(0, ed.clip)
@@ -713,15 +535,17 @@ local function install_insert_keys(self)
   end
   -- arrows share normal handlers (motion only, no mode change)
   i["<Up>"], i["<Down>"], i["<Left>"], i["<Right>"] = n.k, n.j, n.h, n.l
-  i["<Home>"] = function(ed) ed.goal = nil
-    ed.doc:seek("line", ed.doc:line()) end
+  i["<Home>"] = function(ed)
+    ed.goal = nil
+    ed.doc:seek("line", ed.doc:line())
+  end
   i["<End>"] = function(ed)
     ed.goal = nil
     local lnum = ed.doc:line()
     ed.doc:seek("line", lnum, ed.doc:linelen(lnum, true))
   end
   local function page(ed, dl)
-    local rows = ed.term:size()
+    local rows = ed:size()
     for _ = 1, rows - 2 do move_vert(ed, dl) end
   end
   i["<PageUp>"] = function(ed) page(ed, -1) end
@@ -733,7 +557,7 @@ local function install_visual_keys(self)
   local n, v = self.keymaps.normal, self.keymaps.visual
   -- motions reuse normal handlers; cursor moves extend the selection
   for _, k in ipairs({ "h", "l", "j", "k", "w", "b", "0", "$",
-                       "<Up>", "<Down>", "<Left>", "<Right>" }) do
+    "<Up>", "<Down>", "<Left>", "<Right>" }) do
     v[k] = n[k]
   end
   v.y = function(ed)
@@ -748,7 +572,9 @@ local function install_visual_keys(self)
     ed:onedit(e - s, "")
     ed.mode = "NORMAL"; ed.sel_start = nil
   end
-  v["<Escape>"] = function(ed) ed.mode = "NORMAL"; ed.sel_start = nil end
+  v["<Escape>"] = function(ed)
+    ed.mode = "NORMAL"; ed.sel_start = nil
+  end
   v["<C-c>"] = v["<Escape>"]
 end
 
@@ -768,22 +594,32 @@ end
 local function install_builtin_commands(self)
   local c = self.commands
   c.w = function(ed, arg, bang)
-    if not ed.filename then ed.msg = "No filename"; return end
+    if not ed.filename then
+      ed.msg = "No filename"; return
+    end
     local f = io.open(ed.filename, "w")
-    if not f then ed.msg = "Cannot write: " .. ed.filename; return end
+    if not f then
+      ed.msg = "Cannot write: " .. ed.filename; return
+    end
     f:write(ed.doc:dump()); f:close()
     ed.saved_vid = ed.doc:version()
     ed.msg = '"' .. ed.filename .. '" written'
   end
   c.q = function(ed, arg, bang) ed:quit() end
-  c.wq = function(ed, arg, bang) c.w(ed); c.q(ed) end
+  c.wq = function(ed, arg, bang)
+    c.w(ed); c.q(ed)
+  end
   c.pieces = function(ed, arg, bang) ed.show_pieces = not ed.show_pieces end
   c.lsp = function(ed, arg, bang)
     if arg == "on" then
-      if ed.lsp then ed.msg = "lsp already on"; return end
+      if ed.lsp then
+        ed.msg = "lsp already on"; return
+      end
       if not ed:lsp_start() then ed.msg = "lsp: no server for this file" end
     elseif arg == "off" then
-      if ed.lsp then ed.lsp:stop(); ed.lsp = nil end
+      if ed.lsp then
+        ed.lsp:stop(); ed.lsp = nil
+      end
       ed.msg = "lsp off"
     elseif arg == "status" then
       ed.msg = ed.lsp and ("lsp: " .. ed.lsp:status()) or "lsp: off"
@@ -792,7 +628,9 @@ local function install_builtin_commands(self)
     end
   end
   c.e = function(ed, arg, bang)
-    if not arg or arg == "" then ed.msg = "No filename"; return end
+    if not arg or arg == "" then
+      ed.msg = "No filename"; return
+    end
     ed:load_file(arg)
   end
 end
@@ -800,23 +638,18 @@ end
 do
   Ed.__index = Ed
 
-  --- @return editor.Term
-  function Ed.newterm(opts)
-    return Term.new(opts)
-  end
-
   --- @return spantree.Compositor
   function Ed.newcompositor()
     return sp.compositor()
   end
 
   --- @param content? string
-  --- @param term? editor.Term  duck-typed, default Ed.newterm()
+  --- @param term? table  duck-typed {write, flush, size}
   --- @param grid? cellgrid.Grid
   --- @return editor.Ed
   function Ed.new(content, term, grid)
     local self = setmetatable({}, Ed)
-    self.doc = content and content ~= "" and pt.doc(content) or pt.doc(nil)
+    self.doc = pt.doc(content ~= "" and content or nil)
     self.filename = nil
     self.hl = nil
     self.mode = "NORMAL"
@@ -828,12 +661,30 @@ do
     self.scroll_line = 0
     self.log = edlog
     self.done = false
-    self.term = term or Ed.newterm()
+    self.tf = assert(tf.new())
+    self.tf:setflag(tf.FLAG_DELBS)
+    self.esc_timeout = (term and term.esc_timeout) or 50
+    self.term = term or {
+      write = function(_, s) io.write(s) end,
+      flush = function() io.flush() end,
+      size = function()
+        local r, c = cg.winsize(1)
+        if r and c then return r, c end
+        return 24, 80
+      end,
+    }
     self.grid = grid or cg.new()
     self.comp = sp.compositor()
     self.tree = sp.new(self.comp)
     self.styles = { dim = self.comp:intern(ATTR_DIM) }
-    self.vtexts = {}
+    self.comp:namespace("vtext", 0)
+    self.comp:namespace("hl", 1, "e")
+    self.comp:namespace("sem", 2)
+    self.comp:namespace("diag", 3)
+    self.comp:namespace("piece", 4)
+    self.comp:namespace("visual", 5)
+    self.comp:fields("add", { "severity" })
+    self.tree:splice(0, 0, #self.doc)
     self.show_pieces = true -- piece-boundary visualization (debug aid)
     self.keymaps = { normal = {}, insert = {}, command = {}, visual = {} }
     self.commands = {}
@@ -846,7 +697,7 @@ do
   end
 
   --- @param filename string
-  --- @param term? editor.Term
+  --- @param term? table  {write, flush, size}
   --- @param grid? cellgrid.Grid
   --- @return editor.Ed
   function Ed.open(filename, term, grid)
@@ -861,10 +712,11 @@ do
     local f = io.open(filename, "r")
     local content = f and f:read("*a") or ""
     if f then f:close() end
-    self.doc = content ~= "" and pt.doc(content) or pt.doc(nil)
+    self.doc = pt.doc(content ~= "" and content or nil)
     self.filename = filename
+    self.tree:clear()
+    self.tree:splice(0, 0, #self.doc)
     self:open_language(lsp.Client.langid(filename))
-    self:clear_vtexts()
     self.saved_vid = self.doc:version()
     self.scroll_line = 0
     self.msg = '"' .. filename .. '" loaded, ' .. self.doc:breaks() .. " lines"
@@ -881,7 +733,7 @@ do
 
   --- Enable syntax highlighting for a language ("c"/"lua"/nil to disable).
   function Ed:open_language(lang)
-    self.hl = lang and hl.new(self, lang) or nil
+    self.hl = lang and hl.new(self, lang)
   end
 
   --- Start an LSP server process for the current file (server command,
@@ -897,9 +749,6 @@ do
       get_text = function() return ed.doc:dump() end,
       get_line = function(lnum) return line_text(ed.doc, lnum) end,
       offset_pos = function(off) return ed.doc:linecol(off) end,
-      dcol_fn = function(line, bytecol)
-        return ed.grid:cols(line_text(ed.doc, line), 1, bytecol)
-      end,
       on_status = function(state, why)
         if state == "exited" and not silent then
           ed.msg = "lsp: " .. state .. (why and " (" .. why .. ")" or "")
@@ -910,42 +759,82 @@ do
         set = function(line, list) ed:set_vtext(line, list) end,
         clear = function() ed:clear_vtexts() end,
       },
+      sem = {
+        set = function(spans) ed:set_sem(spans) end,
+        clear = function() ed.tree:clear("sem") end,
+      },
+      diag = {
+        set = function(spans) ed:set_diag(spans) end,
+        clear = function() ed.tree:clear("diag") end,
+      },
     })
     local ok = self.lsp:start_file(self.filename, argv)
     if not ok then self.lsp = nil end
     return ok
   end
 
-  -- vtext: injected display text (virt text). Data lives on Ed: rendering,
-  -- cursor columns and edit shifting are core responsibilities; consumers
-  -- (LSP inlay hints today) write via set_vtext/clear_vtexts.
+  -- vtext: injected display text (virt text). Data lives in the spantree
+  -- "vtext" layer (a service on top of the span tree); consumers (LSP
+  -- inlay hints) write per-line lists, edit shifting is the tree's splice.
   --- @param line integer
-  --- @param list table<integer, {dcol: integer, text: string, style?: integer}>?  nil/empty clears
+  --- @param list table<integer, {off: integer, text: string, style?: integer}>?  nil/empty clears
   function Ed:set_vtext(line, list)
-    if list and #list > 0 then self.vtexts[line] = list
-    else self.vtexts[line] = nil end
+    local lo = self.doc:lineoffset(line)
+    local ll = self.doc:linelen(line, true)
+    self.tree:clear("vtext", lo, ll + (line < self.doc:breaks() and 1 or 0))
+    for _, h in ipairs(list or {}) do
+      local n = self.doc:charlen(lo + h.off)
+      if n > 0 then
+        local attr = { vtext = h.text }
+        if h.style then attr.vstyle = h.style end
+        self.tree:mark("vtext", attr, lo + h.off, n)
+      end
+    end
   end
 
   function Ed:clear_vtexts()
-    self.vtexts = {}
+    self.tree:clear("vtext")
+  end
+
+  -- Full-snapshot layers (LSP semantic tokens / diagnostics): replace
+  -- the layer wholesale, the tree shifts it across edits until the LSP
+  -- refetches (async gap coverage).
+  --- @param spans table  array of {offset, length, attr}
+  function Ed:set_sem(spans)
+    self.tree:clear("sem")
+    for _, s in ipairs(spans) do
+      self.tree:mark("sem", s.attr, s.offset, s.length)
+    end
+  end
+
+  --- @param spans table  array of {offset, length, attr}
+  function Ed:set_diag(spans)
+    self.tree:clear("diag")
+    for _, s in ipairs(spans) do
+      self.tree:mark("diag", s.attr, s.offset, s.length)
+    end
   end
 
   -- Display column at (line, bytecol) shifted past injected text; at_start
   -- = insert-gap: the hint-start byte maps onto the hint's first char.
+  -- Hints live in the tree's "vtext" layer, bound to the char after them.
   --- @param line integer
   --- @param bytecol integer  byte offset within the line
   --- @param at_start boolean
   --- @return integer
   function Ed:vtext_dcol(line, bytecol, at_start)
-    local lst = self.vtexts[line]
-    local dcol = self.grid:cols(line_text(self.doc, line), 1, bytecol)
+    local lo = self.doc:lineoffset(line)
+    local text = line_text(self.doc, line)
+    local dcol = self.grid:cols(text, 1, bytecol)
     local w = 0
-    for _, h in ipairs(lst or {}) do
-      if h.dcol > dcol or at_start and h.dcol == dcol then break end
-      w = w + self.grid:cols(h.text)
+    for off, _, attr in self.tree:span("vtext", lo, #text + 1) do
+      local hdcol = self.grid:cols(text, 1, off - lo)
+      if hdcol > dcol or at_start and hdcol == dcol then break end
+      w = w + self.grid:cols(attr.vtext)
     end
     return dcol + w
   end
+
   -- Text column for a screen column: subtract every vtext block wholly
   -- before it; a screen col inside a hint maps to the hint's first text
   -- col after it (Neovim coladvance: cursor skips the hint).
@@ -953,55 +842,40 @@ do
   --- @param scol integer  display column
   --- @return integer
   function Ed:screen_to_text_dcol(line, scol)
-    local lst = self.vtexts[line]
+    local lo = self.doc:lineoffset(line)
+    local text = line_text(self.doc, line)
     local w = 0
-    for _, h in ipairs(lst or {}) do
-      local hs = h.dcol + w
+    for off, _, attr in self.tree:span("vtext", lo, #text + 1) do
+      local hs = self.grid:cols(text, 1, off - lo) + w
       if scol < hs then break end
-      local hw = self.grid:cols(h.text)
-      if scol < hs + hw then return h.dcol end
+      local hw = self.grid:cols(attr.vtext)
+      if scol < hs + hw then return self.grid:cols(text, 1, off - lo) end
       w = w + hw
     end
     return scol - w
   end
 
-  -- Shift vtext entries after an edit: same-line hints past the edit
-  -- point shift by the byte delta; hints in the deleted range drop;
-  -- multi-line edits clear the slot.
-  --- @param off integer
-  --- @param del integer
-  --- @param s string
-  function Ed:shift_vtexts(off, del, s)
-    local line = self.doc:linecol(off)
-    local eline = self.doc:linecol(off + del)
-    if line ~= eline or s:find("\n", 1, true) then
-      self.vtexts = {}
-      return
+  -- Jump doc versions (undo/redo): splice change hunks into the span
+  -- tree and feed them to the LSP as sequential edits.
+  function Ed:switch_version(name)
+    if self.hl then self.hl:reset() end
+    local function sync(f)
+      self.doc[name](self.doc, function(off, del, text)
+        self.tree:splice(off, del, #text)
+        if f then f(off, del, text) end
+      end)
     end
-    local lst = self.vtexts[line]
-    if not lst then return end
-    local base = self.doc:lineoffset(line)
-    local edcol = self.grid:cols(line_text(self.doc, line), 1, off - base)
-    local delta = #s - del
-    local out = {}
-    for _, h in ipairs(lst) do
-      if h.dcol < edcol then
-        out[#out + 1] = h
-      elseif h.dcol >= edcol + del then
-        h.dcol = h.dcol + delta
-        out[#out + 1] = h
-      end
-    end
-    self.vtexts[line] = #out > 0 and out or nil
+    if self.lsp then self.lsp:undo_switch(sync) else sync() end
   end
 
   --- Edit at cursor with highlight notification (single edit funnel):
-  -- shift vtexts, notify the LSP, then the doc.
+  -- notify the LSP, edit the doc, sync the span tree (the vtext layer
+  -- shifts with the splice), then the highlighter.
   function Ed:docedit(del, s)
     local off = self.doc:offset()
-    self:shift_vtexts(off, del, s)
     if self.lsp then self.lsp:on_edit(off, del, s) end
     self.doc:edit(del, s)
+    self.tree:splice(off, del, #s)
     if self.hl then self.hl:notify_edit(off, del, #s) end
   end
 
@@ -1029,6 +903,42 @@ do
     self.done = true
   end
 
+  function Ed:write(s)
+    self.term.write(self.term, s)
+  end
+
+  function Ed:flush()
+    self.term.flush(self.term)
+  end
+
+  function Ed:size()
+    return self.term.size()
+  end
+
+  function Ed:move(row, col)
+    self:write(string.format("\27[%d;%dH", row, col)) -- CUP
+  end
+
+  function Ed:getkey(timeout)
+    if self.tf:waitkey(0, timeout or self.esc_timeout) ~= "KEY" then
+      return nil
+    end
+    return self.tf:format()
+  end
+
+  function Ed:enter()
+    self:write("\27[?1049h\27[?25l") -- enter alt screen + hide cursor
+    self:flush()
+    self.tf:raw(0)
+  end
+
+  function Ed:leave()
+    self.tf:cooked()
+    self.tf:delete()
+    self:write("\27[?25h\27[2J\27[?1049l") -- show cursor, clear, leave alt screen
+    self:flush()
+  end
+
   function Ed:dispatch(key)
     if not key then return end
     local fn = mode_dispatch[self.mode:lower()]
@@ -1046,31 +956,29 @@ do
     if not attr then return nil end
     local codes = {}
     for k, v in pairs(attr) do
-      if v then
-        if k == "fg" or k == "bg" then
-          local pre = k == "fg" and "38" or "48"
-          if type(v) == "string" then
-            local r, g, b = v:match("^#(%x%x)(%x%x)(%x%x)$")
-            if r then
-              codes[#codes + 1] = pre .. ";2;" .. tonumber(r, 16)
+      if v and (k == "fg" or k == "bg") then
+        local pre = k == "fg" and "38" or "48"
+        if type(v) == "string" then
+          local r, g, b = v:match("^#(%x%x)(%x%x)(%x%x)$")
+          if r then
+            codes[#codes + 1] = pre .. ";2;" .. tonumber(r, 16)
                 .. ";" .. tonumber(g, 16) .. ";" .. tonumber(b, 16)
-            end
-          elseif type(v) == "number" then
-            codes[#codes + 1] = pre .. ";5;" .. tostring(v)
           end
-        elseif SGR_ATTR[k] then
-          codes[#codes + 1] = tostring(SGR_ATTR[k])
+        elseif type(v) == "number" then
+          codes[#codes + 1] = pre .. ";5;" .. tostring(v)
         end
+      elseif v and SGR_ATTR[k] then
+        codes[#codes + 1] = tostring(SGR_ATTR[k])
       end
     end
     table.sort(codes)
-    if #codes == 0 then return "\27[0m" end
-    return "\27[0m\27[" .. table.concat(codes, ";") .. "m"
+    if #codes == 0 then return "\27[0m" end -- RESET
+    return "\27[0m\27[" .. table.concat(codes, ";") .. "m" -- SGR
   end
 
   function Ed:render()
-    self.term:write("\27[?25l")
-    local rows, cols = self.term:size()
+    self:write("\27[?25l") -- hide cursor
+    local rows, cols = self:size()
     local visrows = rows - 1
     local total_lines = self.doc:breaks()
     local cur_line = self.doc:line()
@@ -1078,7 +986,6 @@ do
     local lnum_width = math.max(3, tostring(total_lines):len())
     local text_width = cols - lnum_width - 2
 
-    -- clamp scroll
     if cur_line < self.scroll_line then
       self.scroll_line = cur_line
     elseif cur_line >= self.scroll_line + visrows then
@@ -1089,51 +996,39 @@ do
     self.log("render: size=%dx%d scroll=%d cur=%d,%d total=%d",
       rows, cols, self.scroll_line, cur_line, cur_col, total_lines)
 
-    local saved_off = self.doc:offset()
+    local cur_off = self.doc:offset()
     local s_off = self.doc:lineoffset(self.scroll_line)
     local e_off = self.doc:lineoffset(
       math.min(self.scroll_line + visrows, total_lines))
-    -- assemble spans bottom-up: plain base, then hl < lsp-sem < lsp-diag
-    -- (overlay patch covers lower-layer keys), then quick layers
-    local spans = { { offset = s_off, length = e_off - s_off, style = 0 } }
-    local function overlay(attr)
-      return function(a)
-        for k, v in pairs(attr) do a[k] = v end
-      end
-    end
+    -- tree-sitter spans into the tree's "hl" eph layer (below the
+    -- persistent ns layers): every tree edit clears it, the next frame
+    -- refills from a fresh query
     if self.hl then
+      self.tree:clear("hl", s_off, e_off - s_off)
       for _, s in ipairs(self.hl:query_region(s_off, e_off)) do
-        spans = overlay_spans(self.comp, spans, s.offset, s.offset + s.length,
-          overlay(s.attr))
+        self.tree:mark("hl", s.attr, s.offset, s.length)
       end
     end
-    if self.lsp then
-      local q = self.lsp:query_spans(s_off, e_off)
-      for _, s in ipairs(q.sem) do
-        spans = overlay_spans(self.comp, spans, s.offset, s.offset + s.length,
-          overlay(s.attr))
-      end
-      for _, s in ipairs(q.diag) do
-        spans = overlay_spans(self.comp, spans, s.offset, s.offset + s.length,
-          overlay(s.attr))
-      end
-    end
-    -- quick layers: piece bg, then visual reverse
+    -- quick layers: piece bg, then visual reverse (tree folds them
+    -- above hl/sem/diag)
+    self.tree:clear("piece")
+    self.tree:clear("visual")
     if self.show_pieces then
       for _, s in ipairs(piece_spans(self.doc, s_off, e_off)) do
-        spans = overlay_spans(self.comp, spans, s.offset, s.offset + s.length,
-          function(a) a.bg = ATTR_GRAY_BG.bg end)
+        self.tree:mark("piece", ATTR_GRAY_BG, s.offset, s.length)
       end
     end
     if self.sel_start then
-      local lo, hi = sel_range(self.doc, self.sel_start, saved_off)
-      spans = overlay_spans(self.comp, spans, lo, hi,
-        function(a) a.reverse = true end)
+      local lo, hi = sel_range(self.doc, self.sel_start, cur_off)
+      self.tree:mark("visual", ATTR_REVERSE, lo, hi - lo)
+    end
+    local spans = {}
+    for off, len, _, id in self.tree:styled(s_off, e_off) do
+      spans[#spans + 1] = { offset = off, length = len, style = id }
     end
     local g = self.grid
     g:begin(self.scroll_line, visrows, cols)
 
-    -- Pass 1: line numbers from breaks()
     local lnum_fmt = "%" .. lnum_width .. "d "
     for row = 1, visrows do
       local r0 = row - 1
@@ -1148,27 +1043,28 @@ do
       end
     end
 
-    -- content + highlights (single pass over lines(), highlight-driven)
+    -- content + highlights (read-only line iteration; doc cursor stays put)
     local col_start = lnum_width + 2
     local col_pad = col_start + text_width
-    self.doc:seek("line", self.scroll_line)
-    local cur_off = self.doc:offset()
-    local line_idx = self.scroll_line - 1
-
-    for line_text in self.doc:lines() do
-      line_idx = line_idx + 1
-      if line_idx >= self.scroll_line + visrows then break end
+    local last_line = math.min(self.scroll_line + visrows, total_lines) - 1
+    for line_idx = self.scroll_line, last_line do
+      local line_start = self.doc:lineoffset(line_idx)
+      local line_text = self.doc:readat(line_start,
+        self.doc:linelen(line_idx, true))
       local row = line_idx - self.scroll_line
-      local segs = hl.line_segments(spans or {}, cur_off, cur_off + #line_text)
-      local hints = self.vtexts[line_idx]
-      if hints then
-        for _, h in ipairs(hints) do h.style = self.styles.dim end
+      local segs = hl.line_segments(spans, line_start, line_start + #line_text)
+      local hints = {}
+      for off, _, attr in self.tree:span("vtext", line_start, #line_text + 1) do
+        hints[#hints + 1] = {
+          dcol = g:cols(line_text, 1, off - line_start),
+          text = attr.vtext,
+          style = attr.vstyle or self.styles.dim
+        }
       end
       local endcol = render_line(g, row, col_start - 1, line_text, segs, hints)
       if endcol < col_pad - 1 then
         g:clearrow(row, endcol, col_pad - 1)
       end
-      cur_off = cur_off + #line_text + 1
     end
 
     -- flush grid diff (diff queries option keys by string first, so
@@ -1179,11 +1075,11 @@ do
       end,
     }))
     self.log("  diff: csi_len=%d", #csi)
-    self.term:write(csi)
+    self:write(csi)
 
-    self:render_status(rows, cols, cur_line, cur_col, saved_off)
-    self:render_cursor(saved_off, lnum_width, rows, cols)
-    self.term:flush()
+    self:render_status(rows, cols, cur_line, cur_col, cur_off)
+    self:render_cursor(lnum_width, rows, cols)
+    self:flush()
     g:freeze()
 
     -- after render: delegate refresh work (semantic tokens) to the client
@@ -1191,13 +1087,13 @@ do
   end
 
   function Ed:render_status(rows, cols, cur_line, cur_col, cur_off)
-    self.term:move(rows, 1)
+    self:move(rows, 1)
     if self.mode == "COMMAND" then
-      self.term:write(Term.REVERSE)
-      self.term:write(":" .. self.cmdline)
+      self:write("\27[7m") -- REVERSE
+      self:write(":" .. self.cmdline)
       local pad = cols - self.grid:cols(":" .. self.cmdline) - 1
-      if pad > 0 then self.term:write(string.rep(" ", pad)) end
-      self.term:write(Term.RESET)
+      if pad > 0 then self:write(string.rep(" ", pad)) end
+      self:write("\27[0m") -- RESET
     else
       local dirty_mark = (self.doc:version() ~= self.saved_vid) and "[+] " or ""
       local linestr = string.format("L%d,%d", cur_line + 1, cur_col + 1)
@@ -1214,19 +1110,18 @@ do
       end
       -- right: persistent server state, short form
       local right = self.lsp and (self.lsp:status() == "running"
-          and " lsp:on" or (" lsp:" .. self.lsp:status())) or ""
+        and " lsp:on" or (" lsp:" .. self.lsp:status())) or ""
       local avail = cols - self.grid:cols(left) - self.grid:cols(right) - 1
       local n = self.grid:byte(math.max(0, avail), msg_part, 1, #msg_part)
       msg_part = msg_part:sub(1, n - 1)
       local pad = math.max(0, avail - self.grid:cols(msg_part))
-      self.term:write(Term.REVERSE)
-      self.term:write(left .. msg_part .. string.rep(" ", pad) .. right .. " ")
-      self.term:write(Term.RESET)
+      self:write("\27[7m") -- REVERSE
+      self:write(left .. msg_part .. string.rep(" ", pad) .. right .. " ")
+      self:write("\27[0m") -- RESET
     end
   end
 
-  function Ed:render_cursor(saved_off, lnum_width, rows, cols)
-    self.doc:seek("set", saved_off)
+  function Ed:render_cursor(lnum_width, rows, cols)
     local cur_line = self.doc:line()
     local cur_screen_row = cur_line - self.scroll_line + 1
     if cur_screen_row < 1 then cur_screen_row = 1 end
@@ -1241,14 +1136,12 @@ do
     local cur_screen_col = display_col + lnum_width + 2
     if cur_screen_col > cols then cur_screen_col = cols end
 
-    self.term:move(cur_screen_row, cur_screen_col)
-    self.term:write("\27[?25h")
+    self:move(cur_screen_row, cur_screen_col)
+    self:write("\27[?25h") -- show cursor
   end
 end
 
--- ================================================================
 -- Section 5: mode_dispatch skeleton (filled by Tasks 2/3/4)
--- ================================================================
 
 mode_dispatch.normal = function(ed, key)
   if ed.pending_key then
@@ -1263,7 +1156,9 @@ mode_dispatch.normal = function(ed, key)
   if fn then
     fn(ed, key); ed.msg = ""; return
   end
-  if key == "<Escape>" or key == "<C-c>" then ed.msg = ""; return end
+  if key == "<Escape>" or key == "<C-c>" then
+    ed.msg = ""; return
+  end
   for combo in pairs(ed.keymaps.normal) do
     if #combo > 1 and combo:sub(1, 1) == key then
       ed.pending_key = key
@@ -1302,18 +1197,18 @@ end
 -- visual dispatch: keymap hit -> fn, else ignore (motions live in keymap)
 local function visual_key(self, key)
   local fn = self.keymaps.visual[key]
-  if fn then fn(self, key); self.msg = "" end
+  if fn then
+    fn(self, key); self.msg = ""
+  end
 end
 mode_dispatch.visual = visual_key
 mode_dispatch.command = command_key
 
--- ================================================================
 -- Section 6: Main
--- ================================================================
 
 local function main(argv)
   local e = argv[1] and Ed.open(argv[1]) or Ed.new()
-  e.term:enter()
+  e:enter()
 
   -- automatic LSP: silently enable when a server exists for the file
   e:lsp_start(true)
@@ -1323,15 +1218,15 @@ local function main(argv)
     while not e.done do
       if e.lsp then e.lsp:poll() end
       e:render()
-      local key = e.term:getkey(100) -- 100ms idle slice for tick()
+      local key = e:getkey(100) -- 100ms idle slice for tick()
       if key then e:dispatch(key) end
       e:tick()
     end
   end)
 
-  e.term:leave()
+  e:leave()
   if not ok and err then
-    io.write(Term.RESET)
+    io.write("\27[0m") -- RESET
     io.stderr:write("Error: " .. tostring(err) .. "\n")
     os.exit(1)
   end

@@ -9,11 +9,21 @@
 ---compositors are isolated.
 local Compositor
 
----Set the canon field whitelist: only listed field names take part in
----intern canon (sorted once; unlisted fields are ignored). Default is
----the SGR set fg/bg/bold/dim/italic/underline/reverse.
----@param fields string[]  field names, any order
-function Compositor:setfields(fields) end
+---Canon field whitelist: only listed field names take part in intern
+---canon (the caller's order is preserved — canon serializes in it, so
+---sort the list if order matters to you; unlisted fields are ignored).
+---Default is the SGR set fg/bg/bold/dim/italic/underline/reverse +
+---vtext payload.
+---
+---1 arg: read — returns the current whitelist in caller order.
+---1 table arg: set — replaces the whole whitelist.
+---"add" mode: appends the array to the current whitelist (dedup).
+---@param fields?  string[]  field names (omitted = read)
+---@return string[]?  current whitelist (read form only)
+---@overload fun(self: spantree.Compositor): string[]
+---@overload fun(self: spantree.Compositor, fields: string[]): self
+---@overload fun(self: spantree.Compositor, mode: '"add"', fields: string[]): self
+function Compositor:fields(fields) end
 
 ---Intern an attr table to a style id. Identical attrs intern to the
 ---same id; 0 is the pre-interned empty attr. A table with a __hash
@@ -54,7 +64,7 @@ function Compositor:namespace(name) end
 ---Span storage bound to one compositor (set at sp.new(comp), never
 ---rebindable): namespace layers fold by priority, edits shift spans.
 ---The tree consumes the compositor's services; it does not expose
----style functions (setfields/intern/attr/namespace live on the
+---style functions (fields/intern/attr/namespace live on the
 ---compositor). Edits invalidate previously created cursors and
 ---span/styled iterators.
 local Tree
@@ -110,10 +120,11 @@ function Tree:remove(off, len) end
 
 ---Mark-flow iterator over [off, off+len): yields (off, len, attr, id)
 ---per mark — attr = the mark's attr table, id = its attr id (both
----stable). A merged segment holding several marks yields each mark
----separately (overlapping, priority order). With ns, only that
----layer's slots; nil = any mark. Editing the tree inside the loop
----raises.
+---stable). The segment at off is included (inclusive start: a mark
+---whose span begins exactly at off is yielded). A merged segment
+---holding several marks yields each mark separately (overlapping,
+---priority order). With ns, only that layer's slots; nil = any mark.
+---Editing the tree inside the loop raises.
 ---@param ns?  string?  namespace filter (nil = any mark)
 ---@param off  integer  0-based start offset
 ---@param len  integer  range length
@@ -131,6 +142,10 @@ function Tree:span(ns, off, len) end
 ---per folded run — attr = the folded attr table, id = the synthetic
 ---style id (resolves via comp:attr). Do not cache styled ids across
 ---edits (composite ids may be recycled); attr ids are stable.
+---The returned `id` is a synthetic composite id: it is not necessarily
+---equal to any `Compositor:intern` id, even when the folded attr matches a
+---single interned attr. Compare styles through `comp:attr(id)` / attr
+---fields, not by raw id equality.
 ---@param off integer  0-based start offset
 ---@param len integer  range length
 ---@return fun(): integer, integer, table, integer  iterator (off, len, attr, id)

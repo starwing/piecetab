@@ -552,13 +552,20 @@ local function mk_client(over)
       return #lines - 1, 0
     end,
     on_status = function() end,
-    dcol_fn = function(line, bcol) return bcol end, -- ASCII: dcol == bytecol
     viewport_fn = function() return { top = over.top or 0, rows = over.rows or 5 } end,
     now_fn = over.nonow and nil or function() return clock end,
-    attrmap = { comment = "c", diag = "d" },
+    attrmap = { comment = "c", diag = { underline = true } },
     vtext = {
       set = function(line, list) got[#got + 1] = { line, list } end,
       clear = function() got[#got + 1] = { "clear" } end,
+    },
+    sem = {
+      set = function(spans) got[#got + 1] = { "sem", spans } end,
+      clear = function() got[#got + 1] = { "sem-clear" } end,
+    },
+    diag = {
+      set = function(spans) got[#got + 1] = { "diag", spans } end,
+      clear = function() got[#got + 1] = { "diag-clear" } end,
     },
     proto = proto,
   })
@@ -617,7 +624,7 @@ function TestClient:testResponseWritesVtext()
   proto.cbs[1]({ { position = { line = 0, character = 3 }, label = "int" } })
   lu.assertEquals(#got, 1)
   lu.assertEquals(got[1][1], 0)
-  lu.assertEquals(got[1][2][1].dcol, 3)
+  lu.assertEquals(got[1][2][1].off, 3)
   lu.assertEquals(got[1][2][1].text, "int")
   -- next response on another line clears the stale slot
   c.hint_dirty = true
@@ -640,19 +647,21 @@ function TestClient:testPostRenderSemanticPull()
 end
 
 function TestClient:testSemanticDecodeAscii()
-  local c, proto = mk_client()
+  local c, proto, got = mk_client()
   proto.capabilities.semanticTokensProvider = { full = true,
     legend = { tokenTypes = { "comment" } } }
   c:post_render()
   -- tokens (5 ints each: dline/dunit/len/ttype/mod): line 0 unit 3
   -- len 2; line 1 unit 0 len 1; unknown ttype idx 1 must be skipped
   proto.cbs[1]({ data = { 0, 3, 2, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 1, 0 } })
-  lu.assertEquals(#c.sem.spans, 2)
-  lu.assertEquals(c.sem.spans[1].offset, 3)
-  lu.assertEquals(c.sem.spans[1].length, 2)
-  lu.assertEquals(c.sem.spans[1].attr, "c")
-  lu.assertEquals(c.sem.spans[2].offset, 6) -- line 1 starts at byte 6
-  lu.assertEquals(c.sem.spans[2].length, 1)
+  lu.assertEquals(got[1][1], "sem") -- decoded into the tree layer
+  local spans = got[1][2]
+  lu.assertEquals(#spans, 2)
+  lu.assertEquals(spans[1].offset, 3)
+  lu.assertEquals(spans[1].length, 2)
+  lu.assertEquals(spans[1].attr, "c")
+  lu.assertEquals(spans[2].offset, 6) -- line 1 starts at byte 6
+  lu.assertEquals(spans[2].length, 1)
   lu.assertFalse(c.sem.dirty, "decode clears dirty")
   c:post_render() -- not dirty: no new request
   lu.assertEquals(#proto.reqs, 1)
@@ -660,20 +669,21 @@ end
 
 function TestClient:testSemanticDecodeCjkUtf16()
   -- "你好a😀": CJK = 1 unit / 3 bytes, emoji = 2 units / 4 bytes
-  local c, proto = mk_client({ lines = { "你好a😀", "x" } })
+  local c, proto, got = mk_client({ lines = { "你好a😀", "x" } })
   proto.capabilities.semanticTokensProvider = { full = true,
     legend = { tokenTypes = { "comment" } } }
   c:post_render()
   -- tokens (5 ints each): unit 2 len 1 ("a", bytes 6-7); unit 3 len 2
   -- (emoji, bytes 7-11); line 1 unit 0 len 1
   proto.cbs[1]({ data = { 0, 2, 1, 0, 0, 0, 1, 2, 0, 0, 1, 0, 1, 0, 0 } })
-  lu.assertEquals(#c.sem.spans, 3)
-  lu.assertEquals(c.sem.spans[1].offset, 6)
-  lu.assertEquals(c.sem.spans[1].length, 1)
-  lu.assertEquals(c.sem.spans[2].offset, 7)
-  lu.assertEquals(c.sem.spans[2].length, 4)
-  lu.assertEquals(c.sem.spans[3].offset, 12) -- line 1 starts at byte 12
-  lu.assertEquals(c.sem.spans[3].length, 1)
+  local spans = got[1][2]
+  lu.assertEquals(#spans, 3)
+  lu.assertEquals(spans[1].offset, 6)
+  lu.assertEquals(spans[1].length, 1)
+  lu.assertEquals(spans[2].offset, 7)
+  lu.assertEquals(spans[2].length, 4)
+  lu.assertEquals(spans[3].offset, 12) -- line 1 starts at byte 12
+  lu.assertEquals(spans[3].length, 1)
 end
 
 function TestClient:testOnEditMarksDirty()
@@ -687,13 +697,12 @@ function TestClient:testOnEditMarksDirty()
   lu.assertTrue(c.hint_dirty)
 end
 
-function TestClient:testOnSwitchClears()
+function TestClient:testOnSwitchNoClear()
   local c, proto, got = mk_client()
   local changes = { { off = 1, del = 0, text = "x" } }
   c:on_switch(changes)
   lu.assertEquals(proto.switch_edits, changes)
-  lu.assertEquals(#got, 1)
-  lu.assertEquals(got[1][1], "clear")
+  lu.assertEquals(#got, 0) -- no vtext clear: the tree splice shifts it
   lu.assertTrue(c.sem.dirty)
   lu.assertTrue(c.hint_dirty)
 end
@@ -706,27 +715,8 @@ function TestClient:testUndoSwitchCollectsHunks()
   end)
   lu.assertEquals(proto.switch_edits,
     { { off = 5, del = 2, text = "ab" }, { off = 0, del = 0, text = "X" } })
-  lu.assertEquals(#got, 1)
-  lu.assertEquals(got[1][1], "clear")
+  lu.assertEquals(#got, 0) -- no vtext clear: the tree splice shifts it
   lu.assertTrue(c.sem.dirty)
-end
-
-function TestClient:testQuerySpansClip()
-  local c = mk_client()
-  c.sem.spans = {
-    { offset = 0, length = 5, attr = "a" },
-    { offset = 10, length = 5, attr = "b" },
-  }
-  c.diag = { version = 1, spans = { { offset = 2, length = 3, attr = "d" } } }
-  local q = c:query_spans(1, 6)
-  lu.assertEquals(#q.sem, 1)
-  lu.assertEquals(q.sem[1].offset, 0)
-  lu.assertEquals(#q.diag, 1)
-  lu.assertEquals(q.diag[1].offset, 2)
-  local q2 = c:query_spans(7, 20)
-  lu.assertEquals(#q2.sem, 1)
-  lu.assertEquals(q2.sem[1].offset, 10)
-  lu.assertEquals(#q2.diag, 0)
 end
 
 function TestClient:testDiagAt()
@@ -742,7 +732,7 @@ function TestClient:testDiagAt()
 end
 
 function TestClient:testDiagDecodeCjkAndVersionGuard()
-  local c, proto = mk_client({ lines = { "你好", "x" } })
+  local c, proto, got = mk_client({ lines = { "你好", "x" } })
   lu.assertTrue(c:start({ "lua" }, "file:///t.lua", "lua"))
   local handler = proto.handlers["textDocument/publishDiagnostics"]
   lu.assertNotNil(handler)
@@ -761,6 +751,8 @@ function TestClient:testDiagDecodeCjkAndVersionGuard()
   lu.assertEquals(c.diag.spans[1].length, 6)
   lu.assertEquals(c.diag.spans[1].msg, "boom")
   lu.assertEquals(c.diag.spans[2].offset, 7) -- line 1 starts at byte 7
+  lu.assertEquals(got[1][1], "diag") -- rendered into the tree layer
+  lu.assertEquals(got[1][2][1].attr.severity, 1)
   -- stale snapshot (older version) dropped
   handler({ uri = "file:///t.lua", version = 1,
     diagnostics = { { range = { start = { line = 0, character = 0 },
@@ -775,8 +767,10 @@ function TestClient:testStartFailureClears()
   local ok = c:start({ "lua" }, "file:///t.lua", "lua")
   lu.assertFalse(ok)
   lu.assertNil(c.proto)
-  lu.assertEquals(#got, 1)
-  lu.assertEquals(got[1][1], "clear")
+  lu.assertEquals(#got, 3) -- sem/diag/vtext tree layers all cleared
+  lu.assertEquals(got[1][1], "sem-clear")
+  lu.assertEquals(got[2][1], "diag-clear")
+  lu.assertEquals(got[3][1], "clear")
 end
 
 function TestClient:testTickWithoutNowFn()
@@ -792,15 +786,15 @@ function TestClient:testRestartResetsHints()
   proto.cbs[1]({ { position = { line = 0, character = 3 }, label = "int" } })
   lu.assertEquals(#got, 1)
   c:stop()
-  lu.assertEquals(#got, 2)
-  lu.assertEquals(got[2][1], "clear")
+  lu.assertEquals(#got, 4) -- sem/diag/vtext tree layers cleared
+  lu.assertEquals(got[4][1], "clear")
   lu.assertTrue(c:start({ "lua" }, "file:///t.lua", "lua"))
   c:tick()
   -- response on a different line: no stale clear of line 0 from the old run
   proto.cbs[#proto.cbs]({ { position = { line = 1, character = 2 }, label = "x" } })
-  lu.assertEquals(#got, 3, "restart resets hint scheduling")
-  lu.assertEquals(got[3][1], 1)
-  lu.assertEquals(got[3][2][1].text, "x")
+  lu.assertEquals(#got, 5, "restart resets hint scheduling")
+  lu.assertEquals(got[5][1], 1)
+  lu.assertEquals(got[5][2][1].text, "x")
 end
 
 os.exit(lu.LuaUnit.run(), true)

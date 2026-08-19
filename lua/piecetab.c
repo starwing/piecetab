@@ -1058,8 +1058,14 @@ static int Ldoc_later(lua_State *L) {
 
 static int Ldoc_buffer(lua_State *L) {
     lpt_Doc  *d = lpt_checkdoc(L, 1);
-    ut_Vid    cur = ut_current(d->ut);
-    pt_Buffer b = (pt_Buffer)ut_payload(lpt_checkvid(L, 2, 1, cur));
+    pt_Buffer b;
+    if (lua_gettop(L) < 2 || lua_isnil(L, 2)
+        || (lua_type(L, 2) == LUA_TNUMBER && lua_tointeger(L, 2) == 0)) {
+        b = pt_buffer(&d->C);
+        pt_retain(b);
+        return *lpt_newbuffer(L) = b, 1;
+    }
+    b = (pt_Buffer)ut_payload(lpt_checkvid(L, 2, 1, ut_current(d->ut)));
     return pt_retain(b), *lpt_newbuffer(L) = b, 1;
 }
 
