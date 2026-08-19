@@ -188,17 +188,17 @@ SP_STATIC sp_Node *leafV_(sp_State *S, ...) {
     va_list  ap;
     sp_Node *n;
     unsigned cc = 0, i;
-    size_t   id, len;
+    int      id, len;
     va_start(ap, S);
-    while (va_arg(ap, size_t), (len = va_arg(ap, size_t)) != 0) cc++;
+    while (va_arg(ap, int), (len = va_arg(ap, int)) != 0) cc++;
     va_end(ap);
     n = (sp_Node *)spP_alloc(S, &S->nodes);
     assertok(n && cc <= SP_FANOUT);
     spN_setcc(n, cc);
     va_start(ap, S);
     for (i = 0; i < cc; i++) {
-        id = va_arg(ap, size_t), len = va_arg(ap, size_t);
-        spL_setid(n, i, id), n->bytes[i] = len, n->mask[i] = 0;
+        id = va_arg(ap, int), len = va_arg(ap, int);
+        spL_setid(n, i, (sp_Id)id), n->bytes[i] = (size_t)len, n->mask[i] = 0;
     }
     va_end(ap);
     return n;
@@ -321,6 +321,10 @@ SP_STATIC int sp_comparetree(const sp_Tree *a, const sp_Tree *b) {
  * comparison against a naive model. Adjacent same-id segments merge in
  * the output (in-leaf merges are mandatory, seam neighbors are allowed
  * to stay apart, so only the user-level stream is comparable). */
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
 SP_STATIC void sp_serialtree(sp_Tree *t, char *buf) {
     sp_Cursor C;
     sp_Id     id, lid = 0;
@@ -342,6 +346,9 @@ SP_STATIC void sp_serialtree(sp_Tree *t, char *buf) {
     }
     if (run) r += sprintf(buf + r, "[%lu:%lu]", test_lu(lid), test_lu(run));
 }
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
 /* ---- id lifecycle (three-shape arbiter) utilities ---- */
 

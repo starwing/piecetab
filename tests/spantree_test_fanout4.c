@@ -179,8 +179,8 @@ TEST(traverse) {
     size_t    len;
     S = sp_open(NULL, NULL);
     t = sp_newtree(S);
-    leaf0 = (sp_Node *)S->allocf(S->alloc_ud, NULL, 0, sizeof(sp_Node));
-    leaf1 = (sp_Node *)S->allocf(S->alloc_ud, NULL, 0, sizeof(sp_Node));
+    leaf0 = (sp_Node *)spP_alloc(S, &S->nodes);
+    leaf1 = (sp_Node *)spP_alloc(S, &S->nodes);
     memset(leaf0, 0, sizeof(sp_Node)), memset(leaf1, 0, sizeof(sp_Node));
     spL_setid(leaf0, 0, 10), leaf0->bytes[0] = 2;
     spL_setid(leaf0, 1, 11), leaf0->bytes[1] = 3;
@@ -567,7 +567,7 @@ TEST(splice) {
 /* fill fully inside one segment: A->ABA / A->AB / A->BA splits */
 TEST(fill_leaf) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_newtree(S);
+    sp_Tree  *t;
     sp_Cursor C;
     sp_Id     ids[16];
     size_t    lens[16];
@@ -872,18 +872,18 @@ TEST(fill_virtual) {
 static void mk2level(
         sp_State *S, sp_Tree *t, sp_Node **l0, sp_Node **l1, sp_Node **l2) {
     sp_Node *n0, *lf;
-    n0 = (sp_Node *)S->allocf(S->alloc_ud, NULL, 0, sizeof(sp_Node));
-    *l0 = lf = (sp_Node *)S->allocf(S->alloc_ud, NULL, 0, sizeof(sp_Node));
+    n0 = (sp_Node *)spP_alloc(S, &S->nodes);
+    *l0 = lf = (sp_Node *)spP_alloc(S, &S->nodes);
     memset(lf, 0, sizeof(sp_Node));
     spL_setid(lf, 0, 1), lf->bytes[0] = 2;
     spL_setid(lf, 1, 2), lf->bytes[1] = 3;
     spN_setcc(lf, 2);
-    *l1 = lf = (sp_Node *)S->allocf(S->alloc_ud, NULL, 0, sizeof(sp_Node));
+    *l1 = lf = (sp_Node *)spP_alloc(S, &S->nodes);
     memset(lf, 0, sizeof(sp_Node));
     spL_setid(lf, 0, 3), lf->bytes[0] = 1;
     spL_setid(lf, 1, 4), lf->bytes[1] = 4;
     spN_setcc(lf, 2);
-    *l2 = lf = (sp_Node *)S->allocf(S->alloc_ud, NULL, 0, sizeof(sp_Node));
+    *l2 = lf = (sp_Node *)spP_alloc(S, &S->nodes);
     memset(lf, 0, sizeof(sp_Node));
     spL_setid(lf, 0, 5), lf->bytes[0] = 2;
     spL_setid(lf, 1, 6), lf->bytes[1] = 1;
@@ -2152,6 +2152,10 @@ static void mkfilltree(sp_State *S, sp_Tree *t) {
     spP_free(&S->nodes, root), t->bytes = 144;
 }
 
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
 static void mserial(char *buf) {
     int i, r = 0;
     buf[0] = '\0';
@@ -2160,6 +2164,9 @@ static void mserial(char *buf) {
                 buf + r, "[%lu:%lu]", test_lu(msegs[i].id),
                 test_lu(msegs[i].len));
 }
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
 /* every (pos, len) from a virtual pad through the tree tail, under a
  * fully-merging and a never-merging arbiter, must yield the model's
