@@ -477,16 +477,20 @@ static cp_Op cp_opmake(cp_Kind k, cp_NS ns, cp_Attr a) {
 }
 
 static sp_Id cpO_opkey(lua_State *L, cp_State *S, cp_Op op) {
-    sp_Id id;
-    int   isnew, tab;
+    sp_Id   id;
+    int     isnew, tab;
+    unsigned old;
     lua_rawgeti(L, LUA_REGISTRYINDEX, S->ref_byop);
     lua_insert(L, -2);
     tab = lua_gettop(L) - 1;
     id = cpL_lookup(L, tab, &S->next, &isnew);
     lua_pop(L, 1);
     if (!isnew) return id;
+    old = (unsigned)stV_len(S->ops);
     if (stV_keep(S->ops, (unsigned)id + 1) != 0)
         luaL_error(L, "spantree: out of memory");
+    if (old < (unsigned)id)
+        memset(S->ops + old, 0, (size_t)(id - old) * sizeof(cp_Op));
     S->ops[id] = op;
     return id;
 }
