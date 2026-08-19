@@ -165,11 +165,16 @@ typedef struct lst_Comp {
     int        ref_trees; /* registry: weak table of bound Tree userdata */
 } lst_Comp;
 
+typedef struct lst_Eph {
+    cp_NS   ns;   /* real ephemeral namespace id */
+    sv_List list; /* sv_Span list for that namespace */
+} lst_Eph;
+
 typedef struct lst_Tree {
     sp_Tree   *T;      /* span storage + arbiter + edit sync */
     lua_State *L;      /* arb pcall context */
     cp_State  *cp;     /* bound Compositor's state (set at sp.new) */
-    sv_List   *ephs;   /* vec: one sv_Span list per ephemeral ns */
+    lst_Eph   *ephs;   /* vec: one eph slot per ephemeral ns id */
     size_t     ephcnt; /* highest eph slot index + 1 */
     size_t     epoch;  /* tree edit counter (cursor invalidation) */
     cp_NSAttr *rtmp;   /* vec: styled fold scratch pairs */
@@ -565,11 +570,34 @@ static int cpP_hashkey(const cp_NSAttr *ps, int n, char *buf, size_t cap) {
     return (int)off;
 }
 
-static sp_Id cp_composite(lua_State *L, cp_State *S, cp_NSAttr *p, int n) {
-    char   key[1400];
-    int    i;
-    sp_Id  a, b, id;
+static size_t cpP_slotalloc(lua_State *L, cp_State *S) {
     size_t k;
+    if (S->freehead > 0)
+        k = (size_t)(S->freehead - 1), S->freehead = S->slots[k].idfree + 1;
+    else {
+        k = S->chainnext++;
+        if (stV_keep(S->slots, (unsigned)k + 1) != 0)
+            luaL_error(L, "spantree: out of memory");
+    }
+    return k;
+}
+
+static sp_Id cpP_chain(lua_State *L, cp_State *S, const cp_NSAttr *p, int n,
+                       sp_Id a) {
+    int i;
+    for (i = 0; i < n - 1; ++i) {
+        sp_Id  b = cp_op(L, S, cp_opmake(CP_K_WRITE, p[i + 1].ns, p[i + 1].attr));
+        size_t k = cpP_slotalloc(L, S);
+        S->slots[k].a = a, S->slots[k].b = b, S->slots[k].refcnt = 0;
+        a = (sp_Id)(k + CP_COMP_START);
+        if (i < n - 2) cp_refup(S, a);
+    }
+    return a;
+}
+
+static sp_Id cp_composite(lua_State *L, cp_State *S, cp_NSAttr *p, int n) {
+    char  key[1400];
+    sp_Id a, id;
     cpP_hashkey(p, n, key, sizeof(key));
     lua_rawgeti(L, LUA_REGISTRYINDEX, S->ref_chainhash);
     lua_pushstring(L, key);
@@ -586,19 +614,7 @@ static sp_Id cp_composite(lua_State *L, cp_State *S, cp_NSAttr *p, int n) {
         a = p[0].attr;
     else
         a = cp_op(L, S, cp_opmake(CP_K_WRITE, p[0].ns, p[0].attr));
-    for (i = 0; i < n - 1; ++i) {
-        b = cp_op(L, S, cp_opmake(CP_K_WRITE, p[i + 1].ns, p[i + 1].attr));
-        if (S->freehead > 0)
-            k = (size_t)(S->freehead - 1), S->freehead = S->slots[k].idfree + 1;
-        else {
-            k = S->chainnext++;
-            if (stV_keep(S->slots, (unsigned)k + 1) != 0)
-                luaL_error(L, "spantree: out of memory");
-        }
-        S->slots[k].a = a, S->slots[k].b = b, S->slots[k].refcnt = 0;
-        a = (sp_Id)(k + CP_COMP_START);
-        if (i < n - 2) cp_refup(S, a);
-    }
+    a = cpP_chain(L, S, p, n, a);
     lua_pushstring(L, key), lua_pushinteger(L, (lua_Integer)a);
     lua_rawset(L, -3);
     lua_pop(L, 1);
@@ -777,6 +793,58 @@ static size_t cp_split(const cp_State *S, cp_NSAttr *rt, size_t n) {
     return nb;
 }
 
+static sp_Mask cp_segmask(const cp_State *S, sp_Id id) {
+    cp_NSAttr ps[SP_MASK_BITS + 1];
+    sp_Mask   m = 0;
+    int       n, i;
+    if (id >= CP_COMP_START) {
+        n = cp_expand(S, id, ps);
+        for (i = 0; i < n; ++i)
+            if (ps[i].ns > 0) sp_addns(&m, (int)ps[i].ns);
+    } else if (id < (sp_Id)stV_len(S->ops) && S->ops[id].kind != 0) {
+        if (S->ops[id].ns > 0) sp_addns(&m, (int)S->ops[id].ns);
+    }
+    return m;
+}
+
+static sp_Id cp_merge(lua_State *L, cp_State *S, sp_Id in, sp_Id old, int *pn,
+                      cp_NS *ns) {
+    cp_NSAttr ps[SP_MASK_BITS + 1];
+    sp_Id     ret;
+    int       n, k = 0, i;
+    n = cp_expand(S, old, ps);
+    cp_apply(S, in, ps, &n);
+    if (n == 0) return *pn = 0, 0;
+    cp_sort(S, ps, n);
+    if (n == 1 && ps[0].ns == 0)
+        ret = ps[0].attr;
+    else if (n == 1)
+        ret = cp_op(L, S, cp_opmake(CP_K_WRITE, ps[0].ns, ps[0].attr));
+    else
+        ret = cp_composite(L, S, ps, n);
+    for (i = 0; i < n; ++i)
+        if (ps[i].ns > 0) ns[k++] = ps[i].ns;
+    *pn = k;
+    return ret;
+}
+
+static cp_Attr cp_foldattr(lua_State *L, cp_State *S, cp_NSAttr *rt, size_t b,
+                           size_t a, sp_Id id) {
+    int      fold;
+    size_t   k;
+    cp_Attr  rid;
+    lua_newtable(L);
+    fold = lua_gettop(L);
+    cp_sort(S, rt, (int)b);
+    for (k = 0; k < b; ++k) cp_foldover(L, S, rt[k].attr, fold);
+    cp_foldover(L, S, id, fold);
+    cp_sort(S, rt + b, (int)a);
+    for (k = 0; k < a; ++k) cp_foldover(L, S, rt[b + k].attr, fold);
+    rid = cp_internattr(L, S, fold);
+    lua_pop(L, 1);
+    return rid;
+}
+
 /* ================================================================== */
 /* sv_ block: minispan library — flat segment vec per ephemeral ns    */
 /* (ordered, disjoint, adjacent ids differ; no mask, no B+ structure).*/
@@ -826,6 +894,22 @@ static void svN_norm(sv_Span *S, size_t j) {
     stV_hdr(S)->len = (unsigned)n;
 }
 
+static void svN_place(sv_Span *p, size_t s, size_t n, size_t off, size_t len,
+                      cp_Attr id, int right, size_t ohlen, cp_Attr ohid) {
+    if (right) {
+        memmove(p + s + 2, p + s, (n - s) * sizeof(sv_Span));
+        p[s].off = off, p[s].len = len, p[s].id = id;
+        p[s + 1].off = off + len, p[s + 1].len = ohlen, p[s + 1].id = ohid;
+        n += 2;
+    } else {
+        memmove(p + s + 1, p + s, (n - s) * sizeof(sv_Span));
+        p[s].off = off, p[s].len = len, p[s].id = id;
+        n += 1;
+    }
+    stV_hdr(p)->len = (unsigned)n;
+    svN_norm(p, s);
+}
+
 static int sv_fill(sv_List *S, size_t off, size_t len, cp_Attr id) {
     sv_Span *p = *S;
     size_t   s, t, ohlen, n;
@@ -844,18 +928,7 @@ static int sv_fill(sv_List *S, size_t off, size_t len, cp_Attr id) {
     s += left;
     memmove(p + s, p + t, (n - t) * sizeof(sv_Span));
     n = s + (n - t);
-    if (right) {
-        memmove(p + s + 2, p + s, (n - s) * sizeof(sv_Span));
-        p[s].off = off, p[s].len = len, p[s].id = id;
-        p[s + 1].off = off + len, p[s + 1].len = ohlen, p[s + 1].id = ohid;
-        n += 2;
-    } else {
-        memmove(p + s + 1, p + s, (n - s) * sizeof(sv_Span));
-        p[s].off = off, p[s].len = len, p[s].id = id;
-        n += 1;
-    }
-    stV_hdr(p)->len = (unsigned)n;
-    svN_norm(p, s);
+    svN_place(p, s, n, off, len, id, right, ohlen, ohid);
     return 0;
 }
 
@@ -915,21 +988,6 @@ static void sv_clamp(const sv_Span *ph, size_t x, size_t *ps, size_t *pe) {
     }
 }
 
-static size_t sv_coverpairs(sv_List *e, size_t n, size_t x, cp_NSAttr *rt) {
-    size_t i, c = 0;
-    for (i = 0; i < n; ++i) {
-        const sv_Span *ph = e[i];
-        sv_Span        cv;
-        if (stV_len(ph) == 0) continue;
-        sv_cover(ph, x, &cv);
-        if (cv.id == 0) continue;
-        rt[c].ns = (cp_NS)(SP_MASK_BITS + 1 + i);
-        rt[c].attr = cv.id;
-        c += 1;
-    }
-    return c;
-}
-
 static void sv_reset(sv_Span *S) {
     if (S) stV_hdr(S)->len = 0;
 }
@@ -981,13 +1039,61 @@ static sv_List *lst_ephslot(lua_State *L, lst_Tree *t, cp_NS ns) {
     if (idx + 1 > t->ephcnt) t->ephcnt = idx + 1;
     if (stV_keep(t->ephs, (unsigned)idx + 1) != 0)
         luaL_error(L, "spantree: out of memory");
-    while (old < idx + 1) t->ephs[old++] = NULL;
-    return &t->ephs[idx];
+    while (old < idx + 1) {
+        t->ephs[old].ns = 0;
+        t->ephs[old].list = NULL;
+        old += 1;
+    }
+    t->ephs[idx].ns = ns;
+    return &t->ephs[idx].list;
+}
+
+static sv_List *lst_ephget(lst_Tree *t, cp_NS ns) {
+    size_t idx = lst_ephidx(ns);
+    if (idx >= t->ephcnt || t->ephs[idx].list == NULL) return NULL;
+    return &t->ephs[idx].list;
 }
 
 static void lst_ephresetall(lst_Tree *t) {
     size_t i;
-    for (i = 0; i < t->ephcnt; ++i) sv_reset(t->ephs[i]);
+    for (i = 0; i < t->ephcnt; ++i) sv_reset(t->ephs[i].list);
+}
+
+static size_t lst_ephpairs(lst_Eph *e, size_t n, size_t x, cp_NSAttr *rt) {
+    size_t i, c = 0;
+    for (i = 0; i < n; ++i) {
+        const sv_Span *ph = e[i].list;
+        sv_Span        cv;
+        if (stV_len(ph) == 0) continue;
+        sv_cover(ph, x, &cv);
+        if (cv.id == 0) continue;
+        rt[c].ns = e[i].ns;
+        rt[c].attr = cv.id;
+        c += 1;
+    }
+    return c;
+}
+
+static void lst_curinit(lst_Cur *c, lst_Tree *t, size_t off, size_t endoff,
+                        int nsid, int mode) {
+    sp_seek(&c->C, t->T, off);
+    c->tree = t;
+    c->epoch = t->epoch;
+    c->endoff = endoff;
+    c->nsid = nsid;
+    c->mcur = off;
+    c->mode = mode;
+    c->midx = 0;
+    c->mbase = 0;
+    c->mlen = 0;
+}
+
+static unsigned lst_attrid(lua_State *L, lst_Tree *t, int idx) {
+    unsigned a;
+    if (lua_type(L, idx) == LUA_TTABLE) return cp_internattr(L, t->cp, idx);
+    a = (unsigned)luaL_checkinteger(L, idx);
+    luaL_argcheck(L, a < t->cp->next, idx, "spantree: unknown style id");
+    return a;
 }
 
 /* ---- merge core ---- */
@@ -996,66 +1102,36 @@ static int lst_merge(lua_State *L) {
     lst_Tree *t = (lst_Tree *)lua_touserdata(L, 1);
     sp_Id     in = (sp_Id)luaL_checkinteger(L, 2);
     sp_Id     old = (sp_Id)luaL_checkinteger(L, 3);
-    cp_NSAttr ps[SP_MASK_BITS + 1];
+    cp_NS     ns[SP_MASK_BITS + 1];
     sp_Id     ret;
-    int       n, k = 0, i;
-    n = cp_expand(t->cp, old, ps);
-    cp_apply(t->cp, in, ps, &n);
-    if (n == 0) {
-        lua_pushinteger(L, 0);
-        lua_pushinteger(L, 0);
-        return 2;
-    }
-    cp_sort(t->cp, ps, n);
-    if (n == 1 && ps[0].ns == 0)
-        ret = ps[0].attr;
-    else if (n == 1)
-        ret = cp_op(L, t->cp, cp_opmake(CP_K_WRITE, ps[0].ns, ps[0].attr));
-    else
-        ret = cp_composite(L, t->cp, ps, n);
-    lua_pushinteger(L, (lua_Integer)ret);
-    for (i = 0; i < n; ++i)
-        if (ps[i].ns > 0) k += 1;
-    lua_pushinteger(L, k);
-    for (i = 0; i < n; ++i)
-        if (ps[i].ns > 0) lua_pushinteger(L, ps[i].ns);
-    return k + 2;
-}
-
-static sp_Mask lst_segmask(cp_State *S, sp_Id id) {
-    cp_NSAttr ps[SP_MASK_BITS + 1];
-    sp_Mask   m = 0;
     int       n, i;
-    if (id >= CP_COMP_START) {
-        n = cp_expand(S, id, ps);
-        for (i = 0; i < n; ++i)
-            if (ps[i].ns > 0) sp_addns(&m, (int)ps[i].ns);
-    } else if (id < (sp_Id)stV_len(S->ops) && S->ops[id].kind != 0) {
-        if (S->ops[id].ns > 0) sp_addns(&m, (int)S->ops[id].ns);
-    }
-    return m;
+    ret = cp_merge(L, t->cp, in, old, &n, ns);
+    lua_pushinteger(L, (lua_Integer)ret);
+    lua_pushinteger(L, n);
+    for (i = 0; i < n; ++i) lua_pushinteger(L, ns[i]);
+    return n + 2;
 }
 
-static sp_Id lst_arb(void *ud, sp_Id in, sp_Id old, sp_Mask *mask) {
-    lst_Tree  *t = (lst_Tree *)ud;
-    lua_State *L = t->L;
-    sp_Id      ret;
-    int        n, i, base;
-    if (in == 0) { /* pad (old == 0) / death (old != 0) */
-        if (old == 0) return *mask = 0, 0;
-        cp_refdown(L, t->cp, old);
+static sp_Id lst_arb_death(lua_State *L, lst_Tree *t, sp_Id old, sp_Mask *mask) {
+    if (old == 0) return *mask = 0, 0;
+    cp_refdown(L, t->cp, old);
+    return *mask = 0, 0;
+}
+
+static sp_Id lst_arb_birth(lst_Tree *t, sp_Id in, sp_Mask *mask) {
+    if (in < (sp_Id)stV_len(t->cp->ops) && t->cp->ops[in].kind != CP_K_WRITE)
         return *mask = 0, 0;
-    }
-    if (old == 0) { /* birth: CLEAR/REORDER on an empty slot is a no-op */
-        if (in < (sp_Id)stV_len(t->cp->ops)
-            && t->cp->ops[in].kind != CP_K_WRITE)
-            return *mask = 0, 0;
-        cp_refup(t->cp, in);
-        return *mask = lst_segmask(t->cp, in), in;
-    }
+    cp_refup(t->cp, in);
+    return *mask = cp_segmask(t->cp, in), in;
+}
+
+static sp_Id lst_arb_merge(lua_State *L, lst_Tree *t, sp_Id in, sp_Id old,
+                           sp_Mask *mask) {
+    sp_Id ret;
+    int   n, i, base;
     base = lua_gettop(L);
     lua_pushcfunction(L, lst_merge);
-    lua_pushlightuserdata(L, ud);
+    lua_pushlightuserdata(L, t);
     lua_pushinteger(L, (lua_Integer)in);
     lua_pushinteger(L, (lua_Integer)old);
     if (lua_pcall(L, 3, LUA_MULTRET, 0) != 0)
@@ -1070,24 +1146,14 @@ static sp_Id lst_arb(void *ud, sp_Id in, sp_Id old, sp_Mask *mask) {
     return lua_settop(L, base), ret;
 }
 
-/* ---- styled flow ---- */
-
-static sp_Id lst_fold(lua_State *L, lst_Tree *t, sp_Id id, size_t b, size_t a) {
-    cp_NSAttr *rt = t->rtmp;
-    int        fold;
-    size_t     k;
-    sp_Id      rid;
-    lua_newtable(L);
-    fold = lua_gettop(L);
-    cp_sort(t->cp, rt, (int)b);
-    for (k = 0; k < b; ++k) cp_foldover(L, t->cp, rt[k].attr, fold);
-    cp_foldover(L, t->cp, id, fold);
-    cp_sort(t->cp, rt + b, (int)a);
-    for (k = 0; k < a; ++k) cp_foldover(L, t->cp, rt[b + k].attr, fold);
-    rid = cp_internattr(L, t->cp, fold);
-    lua_pop(L, 1);
-    return rid;
+static sp_Id lst_arb(void *ud, sp_Id in, sp_Id old, sp_Mask *mask) {
+    lst_Tree *t = (lst_Tree *)ud;
+    if (in == 0) return lst_arb_death(t->L, t, old, mask);
+    if (old == 0) return lst_arb_birth(t, in, mask);
+    return lst_arb_merge(t->L, t, in, old, mask);
 }
+
+/* ---- styled flow ---- */
 
 static sp_Id lst_sty(lua_State *L, lst_Cur *c, size_t *pe) {
     lst_Tree  *t = c->tree;
@@ -1102,16 +1168,16 @@ static sp_Id lst_sty(lua_State *L, lst_Cur *c, size_t *pe) {
         sp_next(C, 0, &rem);
     }
     ts = C->off;
-    for (i = 0; i < t->ephcnt; ++i) sv_clamp(t->ephs[i], x, &ts, &te);
+    for (i = 0; i < t->ephcnt; ++i) sv_clamp(t->ephs[i].list, x, &ts, &te);
     *pe = te;
     need = t->ephcnt + 1;
     if (stV_keep(t->rtmp, (unsigned)need) != 0)
         luaL_error(L, "spantree: out of memory");
-    tot = sv_coverpairs(t->ephs, t->ephcnt, x, t->rtmp);
+    tot = lst_ephpairs(t->ephs, t->ephcnt, x, t->rtmp);
     nb = cp_split(t->cp, t->rtmp, tot);
     na = tot - nb;
     if (nb + na == 0) return treeid;
-    return lst_fold(L, t, treeid, nb, na);
+    return cp_foldattr(L, t->cp, t->rtmp, nb, na, treeid);
 }
 
 /* ---- mark flow ---- */
@@ -1173,8 +1239,9 @@ static void lst_compprunens(lua_State *L, lst_Tree *t, void *ctx) {
 
 static void lst_compfreeeph(lua_State *L, lst_Tree *t, void *ctx) {
     cp_NS    ns = *(cp_NS *)ctx;
-    sv_List *e = lst_ephslot(L, t, ns);
+    sv_List *e = lst_ephget(t, ns);
     (void)L;
+    if (e == NULL) return;
     stV_free(*e);
     if (lst_ephidx(ns) + 1 == t->ephcnt) t->ephcnt = lst_ephidx(ns);
 }
@@ -1195,11 +1262,22 @@ static lua_Number lst_compnsunreg(lua_State *L, lst_Comp *c, const char *name) {
 
 static int Lcur_iter(lua_State *L);
 
+static int lst_makeiter(lua_State *L, lst_Tree *t, size_t off, size_t len,
+                        int nsid, int mode) {
+    lst_Cur *c = (lst_Cur *)lua_newuserdata(L, sizeof(lst_Cur));
+    lst_curinit(c, t, off, off + len, nsid, mode);
+    lst_setuv(L, "tree");
+    luaL_setmetatable(L, LSP_CUR_TYPE);
+    lua_pushcfunction(L, Lcur_iter);
+    lua_pushvalue(L, -2);
+    return 2;
+}
+
 static int Ltree_gc(lua_State *L) {
     lst_Tree *t = ltree_check(L, 1);
     size_t    i;
     (void)L;
-    for (i = 0; i < stV_len(t->ephs); ++i) stV_free(t->ephs[i]);
+    for (i = 0; i < stV_len(t->ephs); ++i) stV_free(t->ephs[i].list);
     stV_free(t->ephs);
     stV_free(t->rtmp);
     if (t->T) sp_freetree(t->T), t->T = NULL;
@@ -1266,12 +1344,7 @@ static int Ltree_mark(lua_State *L) {
     unsigned    a;
     luaL_argcheck(L, off >= 0, 4, "spantree: invalid offset");
     luaL_argcheck(L, len >= 0, 5, "spantree: invalid length");
-    if (lua_type(L, 3) == LUA_TTABLE)
-        a = cp_internattr(L, t->cp, 3);
-    else {
-        a = (unsigned)luaL_checkinteger(L, 3);
-        luaL_argcheck(L, a < t->cp->next, 3, "spantree: unknown style id");
-    }
+    a = lst_attrid(L, t, 3);
     if (lst_iseph(nsid)) {
         if (sv_fill(lst_ephslot(L, t, nsid), (size_t)off, (size_t)len, a) != 0)
             luaL_error(L, "spantree: out of memory");
@@ -1289,7 +1362,42 @@ static int lst_cleartree(lua_State *L, lst_Tree *t, size_t off, size_t len) {
     size_t    i;
     sp_seek(&C, t->T, off);
     lst_checkerror(L, sp_fill(&C, 0, len));
-    for (i = 0; i < t->ephcnt; ++i) sv_clear(t->ephs[i], off, len);
+    for (i = 0; i < t->ephcnt; ++i) sv_clear(t->ephs[i].list, off, len);
+    return lua_settop(L, 1), t->epoch += 1, 1;
+}
+
+static int lst_clearfull(lua_State *L, lst_Tree *t) {
+    sp_Cursor C;
+    sp_seek(&C, t->T, 0);
+    lst_checkerror(L, sp_fill(&C, 0, sp_bytes(t->T)));
+    lst_ephresetall(t);
+    return lua_settop(L, 1), t->epoch += 1, 1;
+}
+
+static int lst_clearns_full(lua_State *L, lst_Tree *t, int nsid) {
+    sp_Id op;
+    if (lst_iseph(nsid)) {
+        sv_List *e = lst_ephget(t, nsid);
+        if (e) sv_reset(*e);
+        return lua_settop(L, 1), 1;
+    }
+    op = cp_op(L, t->cp, cp_opmake(CP_K_CLEAR, nsid, 0));
+    lst_checkerror(L, sp_clear(t->T, nsid, op));
+    return lua_settop(L, 1), t->epoch += 1, 1;
+}
+
+static int lst_clearns_range(lua_State *L, lst_Tree *t, int nsid, size_t off,
+                             size_t len) {
+    sp_Cursor C;
+    sp_Id     op;
+    if (lst_iseph(nsid)) {
+        sv_List *e = lst_ephget(t, nsid);
+        if (e) sv_clear(*e, off, len);
+        return lua_settop(L, 1), 1;
+    }
+    op = cp_op(L, t->cp, cp_opmake(CP_K_CLEAR, nsid, 0));
+    sp_seek(&C, t->T, off);
+    lst_checkerror(L, sp_fill(&C, op, len));
     return lua_settop(L, 1), t->epoch += 1, 1;
 }
 
@@ -1297,38 +1405,20 @@ static int Ltree_clear(lua_State *L) {
     lst_Tree   *t = ltree_check(L, 1);
     lua_Integer off = 0, len = 0;
     int         n = lua_gettop(L), nsid = 0;
-    sp_Id       op = 0;
-    sp_Cursor   C;
     if (n == 2) {
         nsid = lst_nsid(L, t, 2);
-        if (lst_iseph(nsid))
-            return sv_reset(*lst_ephslot(L, t, nsid)), lua_settop(L, 1), 1;
-        op = cp_op(L, t->cp, cp_opmake(CP_K_CLEAR, nsid, 0));
-        lst_checkerror(L, sp_clear(t->T, nsid, op));
-        return lua_settop(L, 1), t->epoch += 1, 1;
+        return lst_clearns_full(L, t, nsid);
     }
     if (n > 2) {
         nsid = lst_nsid(L, t, 2);
         off = luaL_checkinteger(L, 3), len = luaL_checkinteger(L, 4);
         luaL_argcheck(L, off >= 0, 3, "spantree: invalid offset");
         luaL_argcheck(L, len >= 0, 4, "spantree: invalid length");
-        if (lst_iseph(nsid)) {
-            sv_clear(*lst_ephslot(L, t, nsid), (size_t)off, (size_t)len);
-            return lua_settop(L, 1), 1;
-        }
-        if (nsid > 0) op = cp_op(L, t->cp, cp_opmake(CP_K_CLEAR, nsid, 0));
-    } else
-        len = (lua_Integer)sp_bytes(t->T);
-    if (nsid > 0) {
-        sp_seek(&C, t->T, (size_t)off);
-        lst_checkerror(L, sp_fill(&C, op, (size_t)len));
-        return lua_settop(L, 1), t->epoch += 1, 1;
+        if (nsid > 0)
+            return lst_clearns_range(L, t, nsid, (size_t)off, (size_t)len);
+        return lst_cleartree(L, t, (size_t)off, (size_t)len);
     }
-    if (n > 2) return lst_cleartree(L, t, (size_t)off, (size_t)len);
-    sp_seek(&C, t->T, (size_t)off);
-    lst_checkerror(L, sp_fill(&C, 0, (size_t)len));
-    lst_ephresetall(t);
-    return lua_settop(L, 1), t->epoch += 1, 1;
+    return lst_clearfull(L, t);
 }
 
 static int Ltree_splice(lua_State *L) {
@@ -1390,16 +1480,13 @@ static int Ltree_remove(lua_State *L) {
     return lua_settop(L, 1), 1;
 }
 
-static int Ltree_unmark(lua_State *L) {
-    lst_Tree   *t = ltree_check(L, 1);
-    cp_NSAttr   ps[SP_MASK_BITS + 1];
-    sp_Cursor   C;
-    lua_Integer id = luaL_checkinteger(L, 2);
-    size_t      count = 0, len;
-    sp_Id       op;
-    int         n, i;
+static size_t lst_unmark_count(lst_Tree *t, lua_Integer id) {
+    cp_NSAttr ps[SP_MASK_BITS + 1];
+    sp_Cursor C;
+    size_t    count = 0, len;
+    int       n, i;
     sp_seek(&C, t->T, 0);
-    for (;;) { /* pass 1: count matching segments */
+    for (;;) {
         sp_Id sid = sp_style(&C, &len, NULL);
         if (sid == 0 && len == 0) break;
         n = cp_expand(t->cp, sid, ps);
@@ -1407,10 +1494,19 @@ static int Ltree_unmark(lua_State *L) {
         if (i < n) count += 1;
         sp_next(&C, 0, NULL);
     }
+    return count;
+}
+
+static void lst_unmark_apply(lua_State *L, lst_Tree *t, lua_Integer id) {
+    cp_NSAttr ps[SP_MASK_BITS + 1];
+    sp_Cursor C;
+    size_t    len;
+    sp_Id     sid, op;
+    int       n, i;
     sp_seek(&C, t->T, 0);
-    for (;;) { /* pass 2: per-seg CLEAR(ns); other marks in the ns live */
-        sp_Id  sid = sp_style(&C, &len, NULL);
+    for (;;) {
         size_t segstart;
+        sid = sp_style(&C, &len, NULL);
         if (sid == 0 && len == 0) break;
         segstart = sp_offset(&C) - C.poff;
         n = cp_expand(t->cp, sid, ps);
@@ -1423,13 +1519,21 @@ static int Ltree_unmark(lua_State *L) {
         sp_seek(&C, t->T, segstart + len); /* fills move the cursor; seek
                                             * to the next seg explicitly */
     }
-    if (count > 0) t->epoch += 1;
+}
+
+static int Ltree_unmark(lua_State *L) {
+    lst_Tree   *t = ltree_check(L, 1);
+    lua_Integer id = luaL_checkinteger(L, 2);
+    size_t      count = lst_unmark_count(t, id);
+    if (count > 0) {
+        lst_unmark_apply(L, t, id);
+        t->epoch += 1;
+    }
     return lua_pushinteger(L, (lua_Integer)count), 1;
 }
 
 static int Ltree_span(lua_State *L) {
     lst_Tree   *t = ltree_check(L, 1);
-    lst_Cur    *c;
     lua_Integer off, len;
     int         nsid = 0, top = lua_gettop(L), aoff = 2, alen = 3;
     if (top == 3) {
@@ -1443,44 +1547,22 @@ static int Ltree_span(lua_State *L) {
     }
     luaL_argcheck(L, off >= 0, aoff, "spantree: invalid offset");
     luaL_argcheck(L, len >= 0, alen, "spantree: invalid length");
-    c = (lst_Cur *)lua_newuserdata(L, sizeof(lst_Cur));
-    sp_seek(&c->C, t->T, (size_t)off);
-    c->tree = t, c->epoch = t->epoch;
-    c->endoff = (size_t)(off + len), c->nsid = nsid, c->mcur = (size_t)off;
-    c->mode = LSP_ITER_SPAN, c->midx = 0, c->mbase = 0, c->mlen = 0;
-    lst_setuv(L, "tree");
-    luaL_setmetatable(L, LSP_CUR_TYPE);
-    lua_pushcfunction(L, Lcur_iter);
-    lua_pushvalue(L, -2);
-    return 2;
+    return lst_makeiter(L, t, (size_t)off, (size_t)len, nsid, LSP_ITER_SPAN);
 }
 
 static int Ltree_styled(lua_State *L) {
     lst_Tree   *t = ltree_check(L, 1);
-    lst_Cur    *c;
     lua_Integer off = luaL_checkinteger(L, 2);
     lua_Integer len = luaL_checkinteger(L, 3);
     luaL_argcheck(L, off >= 0, 2, "spantree: invalid offset");
     luaL_argcheck(L, len >= 0, 3, "spantree: invalid length");
-    c = (lst_Cur *)lua_newuserdata(L, sizeof(lst_Cur));
-    sp_seek(&c->C, t->T, (size_t)off);
-    c->tree = t, c->epoch = t->epoch;
-    c->endoff = (size_t)(off + len), c->nsid = 0, c->mcur = (size_t)off;
-    c->mode = LSP_ITER_STYLED, c->midx = 0, c->mbase = 0, c->mlen = 0;
-    lst_setuv(L, "tree");
-    luaL_setmetatable(L, LSP_CUR_TYPE);
-    lua_pushcfunction(L, Lcur_iter);
-    lua_pushvalue(L, -2);
-    return 2;
+    return lst_makeiter(L, t, (size_t)off, (size_t)len, 0, LSP_ITER_STYLED);
 }
 
 static int Ltree_cursor(lua_State *L) {
     lst_Tree *t = ltree_check(L, 1);
     lst_Cur  *c = (lst_Cur *)lua_newuserdata(L, sizeof(lst_Cur));
-    sp_seek(&c->C, t->T, 0);
-    c->tree = t, c->epoch = t->epoch;
-    c->endoff = 0, c->nsid = 0, c->mcur = 0, c->mode = 0;
-    c->midx = 0, c->mbase = 0, c->mlen = 0;
+    lst_curinit(c, t, 0, 0, 0, 0);
     lst_setuv(L, "tree");
     luaL_setmetatable(L, LSP_CUR_TYPE);
     return 1;
@@ -1498,10 +1580,7 @@ static int Ltree_seek(lua_State *L) {
         lst_setuv(L, "tree");
         luaL_setmetatable(L, LSP_CUR_TYPE);
     }
-    sp_seek(&c->C, t->T, (size_t)off);
-    c->tree = t, c->epoch = t->epoch;
-    c->endoff = 0, c->nsid = 0, c->mcur = 0, c->mode = 0;
-    c->midx = 0, c->mbase = 0, c->mlen = 0;
+    lst_curinit(c, t, (size_t)off, 0, 0, 0);
     lua_getuservalue(L, -1);
     lua_pushvalue(L, 1);
     lua_setfield(L, -2, "tree");
@@ -1523,27 +1602,22 @@ static int lst_flags(lua_State *L, int idx, int *peph) {
     return strict;
 }
 
-static int Lcomp_namespace(lua_State *L) {
-    lst_Comp   *comp = lcomp_check(L, 1);
-    cp_State   *cp = &comp->cp;
-    int         top = lua_gettop(L), ns, eph = 0, strict = 0, existed;
-    const char *name = luaL_checklstring(L, 2, NULL);
-    lua_Number  p, old;
-    cp_NsArg    a;
-    luaL_argcheck(
-            L, lua_rawlen(L, 2) > 0, 2, "spantree: invalid namespace name");
-    if (top == 2) { /* query */
-        ns = cp_nsget(L, cp, name);
-        if (ns == 0) return lua_pushnil(L), 1;
-        lua_pushnumber(L, cp_prio(cp, ns));
-        if (lst_iseph(ns))
-            lua_pushliteral(L, "ephemeral");
-        else
-            lua_pushnil(L);
-        return 2;
-    }
-    if (lua_isnil(L, 3)) /* unregister */
-        return lua_pushnumber(L, lst_compnsunreg(L, comp, name)), 1;
+static int lst_nsquery(lua_State *L, cp_State *cp, const char *name) {
+    cp_NS ns = cp_nsget(L, cp, name);
+    if (ns == 0) return lua_pushnil(L), 1;
+    lua_pushnumber(L, cp_prio(cp, ns));
+    if (lst_iseph(ns))
+        lua_pushliteral(L, "ephemeral");
+    else
+        lua_pushnil(L);
+    return 2;
+}
+
+static int lst_nsregister(lua_State *L, lst_Comp *comp, const char *name) {
+    cp_State  *cp = &comp->cp;
+    int        top = lua_gettop(L), ns, eph = 0, strict = 0, existed;
+    lua_Number p, old = 0;
+    cp_NsArg   a;
     p = luaL_checknumber(L, 3);
     if (top >= 4) strict = lst_flags(L, 4, &eph);
     ns = cp_nsget(L, cp, name);
@@ -1563,6 +1637,17 @@ static int Lcomp_namespace(lua_State *L) {
     return lua_pushnil(L), 1;
 }
 
+static int Lcomp_namespace(lua_State *L) {
+    lst_Comp   *comp = lcomp_check(L, 1);
+    const char *name = luaL_checklstring(L, 2, NULL);
+    luaL_argcheck(
+            L, lua_rawlen(L, 2) > 0, 2, "spantree: invalid namespace name");
+    if (lua_gettop(L) == 2) return lst_nsquery(L, &comp->cp, name);
+    if (lua_isnil(L, 3)) /* unregister */
+        return lua_pushnumber(L, lst_compnsunreg(L, comp, name)), 1;
+    return lst_nsregister(L, comp, name);
+}
+
 /* ---- iterator body ---- */
 
 static int lst_iterstyled(lua_State *L, lst_Cur *c) {
@@ -1578,15 +1663,19 @@ static int lst_iterstyled(lua_State *L, lst_Cur *c) {
 
 static int lst_itereph(lua_State *L, lst_Cur *c) {
     lst_Tree *t = c->tree;
-    sv_Span  *p = *lst_ephslot(L, t, c->nsid);
-    size_t    x = c->mcur, s = sv_upper(p, x), e, start;
+    sv_List  *e = lst_ephget(t, c->nsid);
+    sv_Span  *p;
+    size_t    x = c->mcur, s, e2, start;
+    if (e == NULL) return 0;
+    p = *e;
+    s = sv_upper(p, x);
     if (s >= stV_len(p)) return 0;
     if (p[s].off >= c->endoff) return 0;
-    e = p[s].off + p[s].len;
-    if (e > c->endoff) e = c->endoff;
+    e2 = p[s].off + p[s].len;
+    if (e2 > c->endoff) e2 = c->endoff;
     start = p[s].off > x ? p[s].off : x;
-    lst_pushspan(L, t, lst_span(start, e - start, p[s].id));
-    c->mcur = e;
+    lst_pushspan(L, t, lst_span(start, e2 - start, p[s].id));
+    c->mcur = e2;
     return 4;
 }
 
@@ -1614,12 +1703,10 @@ static int lst_iterns(lua_State *L, lst_Cur *c) {
     return 4;
 }
 
-static int lst_iterany(lua_State *L, lst_Cur *c) {
+static int lst_iterany_seg(lst_Cur *c, cp_NSAttr *ps, int *pn) {
     lst_Tree *t = c->tree;
-    cp_NSAttr ps[SP_MASK_BITS + 1];
-    size_t    len, len2;
     sp_Id     id;
-    int       n;
+    size_t    len;
     for (;;) {
         if (c->mlen == 0) {
             id = sp_style(&c->C, &len, NULL);
@@ -1632,14 +1719,22 @@ static int lst_iterany(lua_State *L, lst_Cur *c) {
             sp_locate(&c->C, c->mbase);
             id = sp_style(&c->C, &len, NULL);
         }
-        n = cp_expand(t->cp, id, ps);
-        if (c->midx < (size_t)n) {
+        *pn = cp_expand(t->cp, id, ps);
+        if (c->midx < (size_t)*pn) {
             if (c->mbase >= c->endoff) return 0; /* seg starts past window */
-            break;
+            return 1;
         }
         c->mlen = 0;
         sp_next(&c->C, 0, NULL); /* hole segs read id 0: style-based stop */
     }
+}
+
+static int lst_iterany(lua_State *L, lst_Cur *c) {
+    lst_Tree *t = c->tree;
+    cp_NSAttr ps[SP_MASK_BITS + 1];
+    size_t    len2;
+    int       n;
+    if (!lst_iterany_seg(c, ps, &n)) return 0;
     len2 = c->mlen;
     if (len2 > c->endoff - c->mbase) len2 = c->endoff - c->mbase;
     lst_pushspan(L, t, lst_span(c->mbase, len2, ps[c->midx].attr));
@@ -1668,9 +1763,7 @@ static int Lcur_seek(lua_State *L) {
     lst_Tree   *t = ltree_check(L, 2);
     lua_Integer off = luaL_checkinteger(L, 3);
     luaL_argcheck(L, off >= 0, 3, "spantree: invalid offset");
-    sp_seek(&c->C, t->T, (size_t)off);
-    c->tree = t, c->epoch = t->epoch, c->endoff = 0, c->nsid = 0;
-    c->mode = 0, c->midx = 0, c->mbase = 0, c->mlen = 0;
+    lst_curinit(c, t, (size_t)off, 0, 0, 0);
     lua_getuservalue(L, 1);
     lua_pushvalue(L, 2);
     lua_setfield(L, -2, "tree");
@@ -1718,13 +1811,17 @@ static int Lcur_style(lua_State *L) {
 
 static int lst_nexteph(lua_State *L, lst_Cur *c, int nsid) {
     lst_Tree *t = c->tree;
-    sv_Span  *p = *lst_ephslot(L, t, nsid);
-    size_t    e, start, x = sp_offset(&c->C), s = sv_upper(p, x);
+    sv_List  *e = lst_ephget(t, nsid);
+    sv_Span  *p;
+    size_t    e2, start, x = sp_offset(&c->C), s;
+    if (e == NULL) return 0;
+    p = *e;
+    s = sv_upper(p, x);
     if (s >= stV_len(p)) return 0;
-    e = p[s].off + p[s].len;
+    e2 = p[s].off + p[s].len;
     start = p[s].off > x ? p[s].off : x;
-    lst_pushspan(L, t, lst_span(start, e - start, p[s].id));
-    sp_advance(&c->C, (sp_Delta)(e - x));
+    lst_pushspan(L, t, lst_span(start, e2 - start, p[s].id));
+    sp_advance(&c->C, (sp_Delta)(e2 - x));
     return 4;
 }
 
@@ -1782,9 +1879,13 @@ static int Lcur_next(lua_State *L) {
 
 static int lst_preveph(lua_State *L, lst_Cur *c, int nsid) {
     lst_Tree *t = c->tree;
-    sv_Span  *p = *lst_ephslot(L, t, nsid);
-    size_t    j, x = sp_offset(&c->C), s = sv_upper(p, x);
+    sv_List  *e = lst_ephget(t, nsid);
+    sv_Span  *p;
+    size_t    j, x = sp_offset(&c->C), s;
+    if (e == NULL) return 0;
+    p = *e;
     if (stV_len(p) == 0) return 0;
+    s = sv_upper(p, x);
     j = (s < stV_len(p) && p[s].off < x) ? s : s - 1;
     if (j >= stV_len(p)) return 0;
     sp_locate(&c->C, p[j].off);
@@ -1849,15 +1950,9 @@ static int Lcur_mark(lua_State *L) {
     int         nsid = lst_nsid(L, c->tree, 2);
     lua_Integer len = luaL_checkinteger(L, 4);
     sp_Id       op;
-    unsigned    a, max;
+    unsigned    a;
     luaL_argcheck(L, len >= 0, 4, "spantree: invalid length");
-    if (lua_type(L, 3) == LUA_TTABLE)
-        a = cp_internattr(L, c->tree->cp, 3);
-    else {
-        a = (unsigned)luaL_checkinteger(L, 3);
-        max = c->tree->cp->next;
-        luaL_argcheck(L, a < max, 3, "spantree: unknown style id");
-    }
+    a = lst_attrid(L, c->tree, 3);
     if (lst_iseph(nsid)) {
         sv_List *sl = lst_ephslot(L, c->tree, nsid);
         if (sv_fill(sl, sp_offset(&c->C), (size_t)len, a) != 0)
@@ -1870,34 +1965,46 @@ static int Lcur_mark(lua_State *L) {
     return lua_pushinteger(L, (lua_Integer)a), 1;
 }
 
-static int Lcur_clear(lua_State *L) {
-    lst_Cur    *c = lcur_check(L, 1);
-    lua_Integer len;
-    size_t      i;
-    sp_Id       op = 0;
-    int         nsid;
-    if (lua_gettop(L) == 2) { /* all layers */
-        len = luaL_checkinteger(L, 2);
-        for (i = 0; i < c->tree->ephcnt; ++i)
-            sv_clear(c->tree->ephs[i], sp_offset(&c->C), (size_t)len);
-    } else {
-        nsid = lst_nsid(L, c->tree, 2);
-        len = luaL_checkinteger(L, 3);
-        if (lst_iseph(nsid)) {
-            sv_List *sl = lst_ephslot(L, c->tree, nsid);
-            sv_clear(*sl, sp_offset(&c->C), (size_t)len);
-            return lua_settop(L, 1), 1;
-        }
-        if (nsid > 0)
-            op = cp_op(L, c->tree->cp, cp_opmake(CP_K_CLEAR, nsid, 0));
-        if (nsid == 0)
-            for (i = 0; i < c->tree->ephcnt; ++i)
-                sv_clear(c->tree->ephs[i], sp_offset(&c->C), (size_t)len);
+static int lst_cur_clearall(lua_State *L, lst_Cur *c, lua_Integer len) {
+    size_t i;
+    for (i = 0; i < c->tree->ephcnt; ++i)
+        sv_clear(c->tree->ephs[i].list, sp_offset(&c->C), (size_t)len);
+    lst_checkerror(L, sp_fill(&c->C, 0, (size_t)len));
+    lst_edit(L, c);
+    return lua_settop(L, 1), 1;
+}
+
+static int lst_cur_clearns(lua_State *L, lst_Cur *c, int nsid, lua_Integer len) {
+    size_t i;
+    sp_Id  op = 0;
+    if (lst_iseph(nsid)) {
+        sv_List *sl = lst_ephget(c->tree, nsid);
+        if (sl) sv_clear(*sl, sp_offset(&c->C), (size_t)len);
+        return lua_settop(L, 1), 1;
     }
-    luaL_argcheck(L, len >= 0, 2, "spantree: invalid length");
+    if (nsid > 0) op = cp_op(L, c->tree->cp, cp_opmake(CP_K_CLEAR, nsid, 0));
+    if (nsid == 0)
+        for (i = 0; i < c->tree->ephcnt; ++i)
+            sv_clear(c->tree->ephs[i].list, sp_offset(&c->C), (size_t)len);
     lst_checkerror(L, sp_fill(&c->C, op, (size_t)len));
     lst_edit(L, c);
     return lua_settop(L, 1), 1;
+}
+
+static int Lcur_clear(lua_State *L) {
+    lst_Cur    *c = lcur_check(L, 1);
+    lua_Integer len;
+    int         nsid = 0, top = lua_gettop(L);
+    if (top == 2) {
+        len = luaL_checkinteger(L, 2);
+        luaL_argcheck(L, len >= 0, 2, "spantree: invalid length");
+    } else {
+        nsid = lst_nsid(L, c->tree, 2);
+        len = luaL_checkinteger(L, 3);
+        luaL_argcheck(L, len >= 0, 3, "spantree: invalid length");
+    }
+    if (top == 2) return lst_cur_clearall(L, c, len);
+    return lst_cur_clearns(L, c, nsid, len);
 }
 
 static int Lcur_splice(lua_State *L) {

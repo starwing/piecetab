@@ -1819,8 +1819,38 @@ function TestEph:testArbError()
     assert_attr(cur_comp, s[1][1], { fg = 1 })
 end
 
+function TestEph:testUnregisterNonlastKeepsNsMapping()
+    -- unregistering a non-last ephemeral ns leaves a hole in the eph
+    -- slot array; styled folding must still use each slot's real ns id.
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("a", 1, "e")
+    comp:namespace("b", 2, "e")
+    comp:namespace("c", 3, "e")
+    t:splice(0, 0, 20)
+    t:mark("b", { fg = 2 }, 0, 20)
+    t:mark("c", { fg = 3 }, 0, 20)
+    comp:namespace("a", nil)
+    local s = collect(t, "styled", 0, 20)
+    lu.assertEquals(#s, 1)
+    assert_attr(cur_comp, s[1][1], { fg = 3 })
+end
+
+function TestEph:testMissingEphReadsAreNoop()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("h", 1, "e")
+    t:splice(0, 0, 20)
+    lu.assertEquals(collect(t, "span", "h", 0, 20), {})
+    t:clear("h")
+    t:clear("h", 0, 5)
+    local c = t:cursor()
+    c:clear("h", 5)
+    lu.assertNil(c:next("h"))
+    lu.assertNil(c:prev("h"))
+    comp:namespace("h", nil)
+end
+
 function TestEph:tearDown()
-    unregister_names(newcomp(), { "a", "h", "h2", "hi", "lo", "sem" })
+    unregister_names(newcomp(), { "a", "b", "c", "h", "h2", "hi", "lo", "sem" })
 end
 
 TestMerge = {}

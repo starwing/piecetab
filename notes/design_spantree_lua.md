@@ -351,8 +351,9 @@ Compositor 的态，不可改绑）
 ├── cp：cp_State *（绑定 Compositor 的态——sp.new(comp) 写入，
 │     绑定后不可改）
 ├── T：sp_Tree *（段存储 + arbiter + 编辑同步 + mask 剪枝）
-├── sv：sv_List 数组（每 eph ns 一个；索引 = nsid -
-│      SP_MASK_BITS - 1）
+├── ephs：lst_Eph 数组（每 eph ns 一个槽；索引 = nsid -
+│      SP_MASK_BITS - 1；每槽存真实 ns id + sv_List，注销非末尾
+│      eph 后槽位空洞不影响 ns 映射）
 └── epoch / refs
 ```
 
@@ -567,10 +568,17 @@ sv_clear(L, off, len)      -- 区间裁剪（单段双裁剪一拆二、先右�
                               左、清除恒留洞）
 sv_upper(L, x) / sv_lower(L, x)   -- 二分定位
 sv_cover(L, x, &id, &ps, &pe)     -- 覆盖查询
+sv_clamp(ph, x, &ps, &pe)         -- styled 边界扫描：eph 层裁剪区间
 ```
 
-- lst_Tree 持 sv_List 数组（每 eph ns 一个）；eph fill/clear/
-  读 = sv_ 调用。v3 的 lsp_eph* 内嵌逻辑整体迁移（§一复用清单）。
+- sv 层不感知 cp 的 ns/attr 对；跨 sv + cp 的 eph 覆盖收集由绑定层
+  `lst_ephpairs` 完成（遍历 `lst_Eph[]`，用槽内真实 ns id 构造
+  `cp_NSAttr`）。`lst_Tree.ephs` 每槽存 `{ ns, list }`，因此注销非
+  末尾 eph ns 留下的空洞不会导致后续槽被映射成错误的 ns id。
+
+- lst_Tree 持 lst_Eph 数组（每 eph ns 一个槽，槽内 `{ ns, list }`）；
+  eph fill/clear/读 = sv_ 调用。v3 的 lsp_eph* 内嵌逻辑整体迁移
+  （§一复用清单）。
 - 文件组织：lua/spantree.c 分三块——cp_ 段（compositor）、sv_
   段（minispan）、lst 段（绑定统合）；拆多文件与否实施时定
   （先 section，拆分是纯机械搬迁）。
@@ -600,22 +608,27 @@ cp_/sv_ 是 **stb-style 单头文件库**（先写在 spantree.c，理论上可
 | sv | G | 数组增长 | svG_segrow |
 | sv | N | 规范形合并 | svN_norm |
 
+> 实施注：当前文件内共用 `stV_` 向量宏，`cpG_*`/`svG_*` 增长宏未
+> 单独成族；表中分类码保留为未来拆独立头文件时的命名约定。
+
 **公共 API 全集**（被 lst 绑定层调用）：
 
 ```
 cp: cp_init / cp_free / cp_resetfields / cp_addfield / cp_internattr /
-    cp_attr /
-    cp_op / cp_apply / cp_sort / cp_expand / cp_foldattr /
-    cp_composite / cp_refup / cp_refdown / cp_nsget /
-    cp_nsregister / cp_nsunregister
-sv: sv_fill / sv_clear / sv_cover / sv_upper / sv_lower / sv_reset
+    cp_attr / cp_op / cp_opmake / cp_apply / cp_sort / cp_expand /
+    cp_foldattr / cp_composite / cp_refup / cp_refdown / cp_nsget /
+    cp_nsreg / cp_nsunreg / cp_prio / cp_split / cp_segmask / cp_merge
+sv: sv_fill / sv_clear / sv_cover / sv_upper / sv_lower / sv_clamp /
+    sv_reset
 ```
 
 `cp_init` 建新态（ref 表 + 默认 whitelist + 空 attr id 0）、`cp_free`
 释放（全 C 数组 free + registry unref）——从 lst_compnew/Lcomp_gc
-提取，保证 Compositor 生命周期与 cp 态解耦。`cp_apply`（op→pair
-list）与 `cp_sort`（按 (prio, regseq) 排序）是折叠原语，lst_merge/
-lst_foldmake 调用。`cp_refup/refdown` 为 arb 三态契约出口计数。
+提取，保证 Compositor 生命周期与 cp 态解耦。`cp_merge` 是 arb 合并
+原语（展开 + 应用 op + 排序 + 单槽/合成决策），`cp_foldattr` 是
+styled 折叠原语（below eph -> tree -> above eph），`cp_segmask` 是
+id 到 ns mask 的解码；绑定层 `lst_merge` / `lst_sty` 只做薄转发。
+`cp_refup/refdown` 为 arb 三态契约出口计数。
 
 **内存契约（v6 核心）**：
 
@@ -623,13 +636,13 @@ lst_foldmake 调用。`cp_refup/refdown` 为 arb 三态契约出口计数。
   后端（移植 undotree.h 的 utV_ 数组，见下）；哈希表（attr intern/
   op 空间/链复用/ns 注册表）继续用 Lua 表（ref 于 registry，随
   Compositor __gc unref）。
-- **数组一律 Vec**（`cpV_`/`svV_` 系列，移植 utV_）：`cpV_Header
-  { unsigned len, cap; }` 前置，`cpV_len/cpV_init/cpV_end/cpV_push/
-  cpV_reserve/cpV_free`；OOM 由调用方经 L luaL_error（cp/sv 公共
-  API 保留 L 参数）。
-- 数组字段：cp_State 的 prio/regseq/opkind/opns/opattr/chain/idfree/
-  refcnt（cpV_）；sv_List 的 off/len/id（svV_）；lst_Tree 的 ephs
-  （sv_List[]，svV_）与 rtmp（lst_Pair[]，cpV_）。
+- **数组一律 Vec**：当前实现共用一份 `stV_`（移植 undotree.h utV_，
+  Header `{ unsigned len, cap; }` 前置，malloc/realloc/free）。cp/sv/
+  lst 共用同一宏族，保持零 Lua allocf；若未来拆独立头文件再按库拆
+  `cpV_`/`svV_`。
+- 数组字段：cp_State 的 attrs/ensreg/ops/slots（stV_）；sv_List 即
+  stV_ 管理的 sv_Span 数组；lst_Tree 的 ephs（lst_Eph[]，stV_）与
+  rtmp（cp_NSAttr[]，stV_）。
 - **无泄露保证**：内存全在 State（cp_State/sv_List/lst_Tree），
   `cp_free`/`Ltree_gc` 逐字段 Vec free——不依赖 Lua allocf 回调。
 
