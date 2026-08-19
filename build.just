@@ -6,7 +6,10 @@ CFLAGS := "-Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic -st
 LUAFLAGS := "-Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -std=gnu99 -Wno-variadic-macros -Wno-array-bounds"
 LDF := `if [ "$(uname)" = "Darwin" ]; then echo "-bundle -undefined dynamic_lookup"; else echo "-shared -fPIC"; fi`
 LUA_INC := `
-    for d in ../.lua/include .lua/include /opt/homebrew/include/lua5.5 \
+    for d in "$HOME/.lua/include" "$HOME/.lua/include/lua5.5" \
+        "$HOME/.lua/include/lua5.4" ../.lua/include .lua/include \
+        /usr/local/include /usr/local/include/lua5.5 \
+        /usr/local/include/lua5.4 /opt/homebrew/include/lua5.5 \
         /opt/homebrew/include/lua5.4 /usr/include/lua5.4; do
         [ -d "$d" ] && { echo "-I$d"; exit 0; }
     done

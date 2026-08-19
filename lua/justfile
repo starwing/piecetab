@@ -15,8 +15,7 @@ build-lua mod:
 # debug + ASAN build of a binding module: `just lua/dbg spantree` then
 # run with `lua -e 'package.cpath="./?.so;./spantree_asan.so;"..package.cpath'`
 dbg mod:
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA_INC }} -g -O0 -fsanitize=address -fno-omit-frame-pointer {{ LDF }} -o {{ mod }}_asan.so {{ mod }}.c
-    @echo "built {{ mod }}_asan.so (load via ./{{ mod }}_asan.so)"
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA_INC }} -g -O0 -fno-omit-frame-pointer {{ LDF }} -o {{ mod }}.so {{ mod }}.c
 
 run t *args='':
     lua tests/{{ t }}.lua {{ args }}
@@ -40,14 +39,14 @@ TS_INC := "-I/opt/homebrew/include"
 TS_LIB := "-L/opt/homebrew/lib -ltree-sitter"
 
 ts-grammars *langs='c lua':
-    ../misc/fetch_grammars.sh {{langs}}
+    ../misc/fetch_grammars.sh {{ langs }}
 
 build-ts: ts-grammars
     mkdir -p luajit
     {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA_INC }} {{ TS_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o treesitter.so treesitter.c {{ TS_LIB }}
     {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} {{ TS_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o luajit/treesitter.so treesitter.c {{ TS_LIB }}
 
-ts *args='': (build-ts) (run "treesitter_test" args)
+ts *args='': build-ts (run "treesitter_test" args)
 
 # run every test suite (needs lua-utf8 rock, tmux, tree-sitter grammars)
 test: pt cg tf json lsp ed ed-tmux ts sp
