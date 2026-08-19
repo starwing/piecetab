@@ -44,21 +44,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@main
-      - name: Prepare apt cache directories
-        if: runner.os == 'Linux'
-        run: |
-          sudo mkdir -p /var/cache/apt/archives /var/lib/apt/lists
-          sudo chmod -R a+rwX /var/cache/apt/archives /var/lib/apt/lists
-      - name: Cache apt packages
-        if: runner.os == 'Linux'
-        uses: actions/cache@v4
-        with:
-          path: |
-            /var/cache/apt/archives
-            /var/lib/apt/lists
-          key: ${{ runner.os }}-apt-${{ hashFiles('.github/workflows/test.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-apt-
       - name: Cache Homebrew
         if: runner.os == 'macOS'
         uses: actions/cache@v4
@@ -67,29 +52,33 @@ jobs:
           key: ${{ runner.os }}-brew-${{ hashFiles('.github/workflows/test.yml') }}
           restore-keys: |
             ${{ runner.os }}-brew-
-      - name: Prepare LuaRocks cache directories
-        run: mkdir -p ~/.luarocks ~/.cache/luarocks
-      - name: Cache LuaRocks
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.luarocks
-            ~/.cache/luarocks
-          key: ${{ runner.os }}-luarocks-${{ hashFiles('.github/workflows/test.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-luarocks-
       - uses: extractions/setup-just@v4
       - uses: leafo/gh-actions-lua@v13
         with:
           luaVersion: "5.5"
       - uses: leafo/gh-actions-luarocks@v6
+      - name: Cache LuaRocks dependencies
+        uses: actions/cache@v4
+        id: luarocks-cache
+        with:
+          path: .luarocks
+          key: ${{ runner.os }}-luarocks-${{ hashFiles('.github/luarocks-deps.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-luarocks-
+      - name: Configure Fast APT Mirror
+        if: runner.os == 'Linux'
+        uses: vegardit/fast-apt-mirror.sh@v1
       - name: install tmux
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then brew install tmux; else sudo apt-get update && sudo apt-get install -y tmux; fi
-      - name: install rocks
+      - name: install system deps
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then brew install libuv; else sudo apt-get install -y libuv1-dev; fi
-          luarocks install luautf8 && luarocks install luv
+      - name: Install LuaRocks dependencies
+        if: steps.luarocks-cache.outputs.cache-hit != 'true'
+        run: |
+          luarocks install luautf8
+          luarocks install luv
       - name: tmux display tests
         run: just lua/ed-tmux
       - name: lua binding tests
@@ -127,26 +116,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@main
-      - name: Prepare apt cache directories
-        run: |
-          sudo mkdir -p /var/cache/apt/archives /var/lib/apt/lists
-          sudo chmod -R a+rwX /var/cache/apt/archives /var/lib/apt/lists
-      - name: Cache apt packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            /var/cache/apt/archives
-            /var/lib/apt/lists
-          key: ${{ runner.os }}-apt-lcov-${{ hashFiles('.github/workflows/test.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-apt-lcov-
-            ${{ runner.os }}-apt-
       - uses: extractions/setup-just@v4
       - uses: leafo/gh-actions-lua@v13
         with:
           luaVersion: "5.5"
-      - name: install lcov
-        run: sudo apt-get update && sudo apt-get install -y lcov
+      - name: Configure Fast APT Mirror
+        if: runner.os == 'Linux'
+        uses: vegardit/fast-apt-mirror.sh@v1
+      - name: Setup LCOV
+        uses: hrishikesh-kadam/setup-lcov@v1
       - name: coverage
         run: just cov
       - name: Coveralls
