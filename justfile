@@ -6,14 +6,16 @@ INCS := "-I. -Itests"
 
 test t *args='': (dbg-run t INCS args)
 
-lc *args='': (test "tests/linecache_test_fanout4" args)
+lc4 *args='': (test "tests/linecache_test_fanout4" args)
 lc8 *args='': (test "tests/linecache_test_fanout8" args)
+lc *args='': (test "tests/linecache_test_fanout4" "?" + args) (test "tests/linecache_test_fanout8" "?" + args)
 pt *args='': (test "tests/piecetab_test_fanout4" args)
 ut *args='': (test "tests/undotree_test" args)
 cg *args='': (test "tests/cellgrid_test" args)
 tf *args='': (test "tests/termfeed_test" args)
-sp *args='': (test "tests/spantree_test_fanout4" args)
+sp4 *args='': (test "tests/spantree_test_fanout4" args)
 sp8 *args='': (test "tests/spantree_test_fanout8" args)
+sp *args='': (test "tests/spantree_test_fanout4" "?" + args) (test "tests/spantree_test_fanout8" "?" + args)
 
 # fuzz: seeded random-op stress with per-op invariant checks
 sp-fuzz seed='1': (fuzz-run "sp" seed)

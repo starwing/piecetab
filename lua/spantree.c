@@ -1492,7 +1492,7 @@ static size_t lst_unmark_count(lst_Tree *t, lua_Integer id) {
     sp_seek(&C, t->T, 0);
     for (;;) {
         sp_Id sid = sp_style(&C, &len, NULL);
-        if (sid == 0 && len == 0) break;
+        if (len == 0) break;
         n = cp_expand(t->cp, sid, ps);
         for (i = 0; i < n && (lua_Integer)ps[i].attr != id; ++i) continue;
         if (i < n) count += 1;
@@ -1511,7 +1511,7 @@ static void lst_unmark_apply(lua_State *L, lst_Tree *t, lua_Integer id) {
     for (;;) {
         size_t segstart;
         sid = sp_style(&C, &len, NULL);
-        if (sid == 0 && len == 0) break;
+        if (len == 0) break;
         segstart = sp_offset(&C) - C.poff;
         n = cp_expand(t->cp, sid, ps);
         for (i = 0; i < n; ++i) {
@@ -1692,11 +1692,11 @@ static int lst_iterns(lua_State *L, lst_Cur *c) {
     for (;;) {
         id = sp_style(&c->C, &len, NULL); /* first call: the seek segment
                                            * is included (query semantics) */
-        if (id == 0 && len == 0) return 0;
+        if (len == 0) return 0;
         n = cp_expand(t->cp, id, ps);
         for (i = 0; i < n && (int)ps[i].ns != c->nsid; ++i) continue;
         if (i < n) break;
-        if (sp_next(&c->C, c->nsid, &len) == 0) return 0;
+        if (sp_next(&c->C, c->nsid, &len) == SP_NONE) return 0;
     }
     start = sp_offset(&c->C) - c->C.poff; /* segment start */
     if (start >= c->endoff) return 0;
@@ -1714,7 +1714,7 @@ static int lst_iterany_seg(lst_Cur *c, cp_NSAttr *ps, int *pn) {
     for (;;) {
         if (c->mlen == 0) {
             id = sp_style(&c->C, &len, NULL);
-            if (id == 0 && len == 0) return 0;
+            if (len == 0) return 0;
             c->mbase = sp_offset(&c->C) - c->C.poff;
             c->mlen = c->C.poff + len;
             c->mcur = c->mbase;
@@ -1803,7 +1803,7 @@ static int Lcur_style(lua_State *L) {
     int       n;
     if (x >= sp_bytes(c->tree->T)) return 0;
     id = sp_style(&c->C, &rem, NULL);
-    if (id == 0 || rem == 0) return 0;
+    if (rem == 0) return 0;
     base = c->C.off, len = c->C.poff + rem;
     n = cp_expand(c->tree->cp, id, ps);
     if (c->mlen == 0 || c->mbase != base || c->mlen != len)
@@ -1837,7 +1837,7 @@ static int lst_nextns(lua_State *L, lst_Cur *c, int nsid) {
     int       i, n;
     for (;;) {
         id = sp_next(&c->C, nsid, &len);
-        if (id == 0) return 0;
+        if (id == SP_NONE) return 0;
         n = cp_expand(t->cp, id, ps);
         for (i = 0; i < n; ++i)
             if ((int)ps[i].ns == nsid) break;
@@ -1866,7 +1866,7 @@ static int lst_nextany(lua_State *L, lst_Cur *c) {
     }
     sp_next(&c->C, 0, &rem);
     id = sp_style(&c->C, &rem, NULL);
-    if (id == 0 && rem == 0) return 0;
+    if (rem == 0) return 0;
     n = cp_expand(t->cp, id, ps);
     c->mbase = c->C.off, c->mlen = c->C.poff + rem, c->midx = 0;
     lst_pushspan(L, t, lst_span(c->mbase, c->mlen, ps[0].attr));
@@ -1905,10 +1905,10 @@ static int lst_prevns(lua_State *L, lst_Cur *c, int nsid) {
     int       i, n;
     for (;;) {
         id = sp_prev(&c->C, nsid, &len);
-        if (id == 0) return 0;
+        if (id == SP_NONE) return 0;
         id = sp_style(&c->C, &len, NULL); /* full seg len: sp_prev gives a
                                            * partial len mid-segment */
-        if (id == 0) return 0;
+        if (len == 0) return 0;
         n = cp_expand(t->cp, id, ps);
         for (i = 0; i < n; ++i)
             if ((int)ps[i].ns == nsid) break;

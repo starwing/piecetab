@@ -1410,6 +1410,74 @@ TEST(remove_foldroot) {
     lc_close(S);
 }
 
+/* OOM before mutation: lc_remove must reserve nodes up front.  Cross-leaf
+ * remove with the nodes pool drained makes lcD_stitch's reserve fail; the
+ * old code hit that reserve only after trim/cutrange had already mutated
+ * the tree, so the assert in lcD_stitch aborted on a half-deleted tree. */
+TEST(remove_oom_prereserve) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newcache(S);
+    lc_Cursor C, R;
+    void     *pn;
+    int       oom = 0, r;
+    size_t    bytes, breaks, snb;
+
+    lc_rscanV(c, 8, 10); /* two leaves, cross-leaf remove frees no nodes */
+    assertok(lc_checktree(c));
+    bytes = lc_bytes(c), breaks = lc_breaks(c), snb = S->nodes.live_obj;
+    (void)lc_drainpool(&S->nodes);
+    pn = S->nodes.pages;
+    S->nodes.pages = NULL;
+    lc_seek(&C, c, 5);
+    R = C, lc_advance(&R, 40);
+    S->allocf = oom_alloc;
+    S->alloc_ud = &oom;
+    r = lc_remove(&C, &R);
+    S->allocf = test_alloc;
+    S->alloc_ud = NULL;
+    asserteq(r, LC_ERRMEM);
+    asserteq(lc_bytes(c), bytes);
+    asserteq(lc_breaks(c), breaks);
+    asserteq(S->nodes.live_obj, snb);
+    assertok(lc_checktree(c));
+    assertok(lc_checkcursor(&C, 5));
+    lc_restorepages(&S->nodes, pn);
+    lc_delcache(S, c);
+    lc_close(S);
+}
+
+/* lc_splice must propagate the remove OOM instead of asserting after a
+ * partially-deleted tree. */
+TEST(splice_oom_remove) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c = lc_newcache(S);
+    lc_Cursor C;
+    void     *pn;
+    int       oom = 0, r;
+    size_t    bytes, breaks;
+
+    lc_rscanV(c, 8, 10);
+    assertok(lc_checktree(c));
+    bytes = lc_bytes(c), breaks = lc_breaks(c);
+    (void)lc_drainpool(&S->nodes);
+    pn = S->nodes.pages;
+    S->nodes.pages = NULL;
+    lc_seek(&C, c, 5);
+    S->allocf = oom_alloc;
+    S->alloc_ud = &oom;
+    r = lc_splice(&C, 40, 0);
+    S->allocf = test_alloc;
+    S->alloc_ud = NULL;
+    asserteq(r, LC_ERRMEM);
+    asserteq(lc_bytes(c), bytes);
+    asserteq(lc_breaks(c), breaks);
+    assertok(lc_checktree(c));
+    assertok(lc_checkcursor(&C, 5));
+    lc_restorepages(&S->nodes, pn);
+    lc_delcache(S, c);
+    lc_close(S);
+}
+
 TEST(splice_params) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);

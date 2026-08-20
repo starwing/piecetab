@@ -258,7 +258,7 @@ TEST(ns8_differ) {
                 assertok(n2 < 256);
                 ids2[n2] = s, lens2[n2] = len, n2 += 1;
             }
-            if (sp_next(&C, k, &len) == 0) break;
+            if (sp_next(&C, k, &len) == SP_NONE) break;
         }
         asserteq(n1, n2);
         for (i = 0; i < n1; ++i) {

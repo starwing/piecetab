@@ -143,7 +143,8 @@ typedef struct {
     void (*fn)(void);
 } test_entry;
 
-/* test_run — no args: run all; args: prefix match, '@' = first only */
+/* test_run — no args: run all; args: prefix match, '@' = first only,
+ * '?' = optional (not found is not an error) */
 int test_run(
         const char *banner, const test_entry *entries, int argc, char *argv[]) {
     int i, j;
@@ -162,8 +163,9 @@ int test_run(
     for (i = 1; i < argc; ++i) {
         const char *name = argv[i];
         size_t      len = strlen(name);
-        int         found = 0, only = *name == '@';
-        if (only) name++, len--;
+        int         found = 0, only = 0, optional = 0;
+        if (*name == '?') optional = 1, name++, len--;
+        if (*name == '@') only = 1, name++, len--;
         for (j = 0; entries[j].name; ++j) {
             if (strlen(entries[j].name) >= len
                 && strncmp(name, entries[j].name, len) == 0) {
@@ -174,7 +176,7 @@ int test_run(
                 if (only) break;
             }
         }
-        if (!found) {
+        if (!found && !optional) {
             test_log("Unknown test: %s\n", name);
             return 1;
         }

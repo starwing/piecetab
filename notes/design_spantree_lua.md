@@ -281,7 +281,7 @@ c:remove(len)               -- 内部第二游标 seek+advance(len)，
                             --   剪枝（t:clear(ns) / t:clear()）
 ```
 
-- 返回 nil 对齐 C 值返回 0（sp_style/sp_next/sp_prev 段尾/越尾）。
+- 返回 nil 对齐 C 值返回 SP_NONE（sp_style/sp_next/sp_prev 段尾/越尾；id 0 是合法段值，不再兼作哨兵）。
 - **读路径双接口语义**（v4）：span/next/prev/style = 标记流——
   **拆解输出 attr id**（cons 链展开取槽；一个 merged 段多标记 =
   重叠多出，按优先级序）；styled = 渲染流——树段 id 直出 + eph

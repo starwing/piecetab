@@ -73,32 +73,34 @@ static void runop(sp_Cursor *C, fz_Op *o, FILE *lf) {
     }
     case FZ_NEXT: {
         size_t n, k = o->extra % 5 + 1;
-        while (k && sp_next(C, 0, &n) != 0) --k;
+        while (k && sp_next(C, 0, &n) != SP_NONE) --k;
         exp = sp_offset(C);
         break;
     }
     case FZ_PREV: {
         size_t n, k = o->extra % 5 + 1;
-        while (k && sp_prev(C, 0, &n) != 0) --k;
+        while (k && sp_prev(C, 0, &n) != SP_NONE) --k;
         exp = sp_offset(C);
         break;
     }
     case FZ_NEXTNS: {
         size_t n, k = o->extra % 5 + 1, ns = o->extra % 8 + 1;
-        while (k && sp_next(C, (int)ns, &n) != 0) --k;
+        while (k && sp_next(C, (int)ns, &n) != SP_NONE) --k;
         exp = sp_offset(C);
         break;
     }
     case FZ_PREVNS: {
         size_t n, k = o->extra % 5 + 1, ns = o->extra % 8 + 1;
-        while (k && sp_prev(C, (int)ns, &n) != 0) --k;
+        while (k && sp_prev(C, (int)ns, &n) != SP_NONE) --k;
         exp = sp_offset(C);
         break;
     }
     case FZ_STYLE: {
         size_t  n, len;
         sp_Mask m;
-        while (sp_style(C, &len, &m) && len > 0) {
+        for (;;) {
+            sp_style(C, &len, &m);
+            if (len == 0) break;
             if (m) sp_hasns(&m, 1), sp_delns(&m, 1);
             sp_next(C, 0, &n);
         }

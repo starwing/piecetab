@@ -19,15 +19,20 @@
 
 | 命令 | 库 |
 |---|---|
-| `just lc` / `just lc8` | linecache（FANOUT=4 / 8） |
+| `just lc` | linecache（FANOUT=4 + 8 全跑） |
+| `just lc4` / `just lc8` | linecache（FANOUT=4 / 8） |
 | `just pt` | piecetab |
-| `just sp` / `just sp8` | spantree（FANOUT=4 / 8） |
+| `just sp` | spantree（FANOUT=4 + 8 全跑） |
+| `just sp4` / `just sp8` | spantree（FANOUT=4 / 8） |
 | `just ut` | undotree |
 | `just cg` | cellgrid |
 | `just tf` | termfeed |
 
-- 无参数：运行全部；`just lc splice`：前缀匹配所有 `splice*`
-- `just lc @splice_trailing`：`@` 仅运行首个匹配
+- 无参数：运行全部
+- 前缀匹配：`just lc4 splice` 匹配所有 `splice*`
+- `@` 前缀：仅运行首个匹配，如 `just lc4 @splice_trailing`
+- `?` 前缀：找不到测试不报错、静默退出（exit 0），如 `just lc4 ?no_such_test`
+- `just lc` / `just sp` 会自动给两个 runner 都加 `?` 前缀，所以某个测试只存在于 fanout4 时，fanout8 侧不会因 Unknown test 报错
 - 覆盖率：`just <xx>-cov`（生成 lcov.info）、`just <xx>-lines`（未覆盖行源码）、`just <xx>-unbranched`（未覆盖分支）、`just cov`（全量）、`just clean`
 - **Lua 绑定测试在 `lua/justfile`**，命名与根 justfile 对齐：`just lua/pt`、`just lua/ts`、`just lua/ts-cov`、`just lua/ts-lines`、`just lua/clean`（`just lua/<recipe>` 自动执行该目录下 justfile）。根 justfile 不设其他位置 justfile 的入口
 
@@ -63,6 +68,11 @@
 - **调试**：独立脚本（/tmp/*.lua）+ fake term + `io.write` 复现渲染，
     对应 C 侧 `test_log`（AGENTS.md 调试节）；渲染断言用 cell() 逐格
     打印；「单跑对、测试环境错」先查 os.exit 位置与全局状态污染
+- **调试时不要往库头文件（比如spantree.h）加 `#include <stdio.h>`**：
+  测试文件（比如`spantree_test_fanout*.c`） 里的 `stdio.h` 都是在头文件之前引入的
+  （如果某个测试文件没有，修测试文件而不是改头文件）。
+  需要在 spantree.h 内临时打印时，依赖测试已先包含 stdio；
+  若 standalone 编译也要在包含头文件前先 `#include <stdio.h>`。
 - 断言 API：`assertEquals` / `assertTrue` / `assertNotEquals` /
   `assertNil` / `assertStrContains`（luaunit 内建）
 
