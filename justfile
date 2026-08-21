@@ -55,6 +55,23 @@ sp-unbranched: (cov-unbranched "spantree.h")
 
 # lua bindings & tests live in lua/justfile — run with: just lua/<recipe>
 
+# capture an SVG screenshot of the editor demo (needs tmux + ansisvg;
+# assumes the Lua modules are already built)
+# example: just svg                    -> misc/demo.svg of `lua editor.lua editor.lua`
+#          just svg README.md          -> misc/demo.svg of `lua editor.lua README.md`
+# customize: just SVG_OUT=foo.svg SVG_COLS=120 SVG_ROWS=36 SVG_WAIT=5 svg README.md
+SVG_OUT := 'misc/demo.svg'
+SVG_COLS := '90'
+SVG_ROWS := '24'
+SVG_WAIT := '5'
+svg *args='editor.lua':
+    tmux kill-session -t shot 2>/dev/null || true
+    tmux new-session -d -s shot -x {{ SVG_COLS }} -y {{ SVG_ROWS }} 'lua editor.lua {{ args }}'
+    sleep {{ SVG_WAIT }}
+    tmux capture-pane -t shot -e -p > /tmp/piecetab-editor.ansi
+    tmux kill-session -t shot
+    ansisvg --width {{ SVG_COLS }} < /tmp/piecetab-editor.ansi > {{ SVG_OUT }}
+
 clean: clean-gcda
     rm -f tests/linecache_test_fanout4 tests/linecache_test_fanout8 tests/piecetab_test_fanout4 tests/undotree_test tests/cellgrid_test tests/termfeed_test tests/spantree_test_fanout4 tests/spantree_test_fanout8
     rm -fr tests/*.dSYM

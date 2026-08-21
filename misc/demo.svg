@@ -1,0 +1,56 @@
+<svg width="90ch" height="24em" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve">
+    <style>
+        * {
+            font-family: Courier, monospace;
+            font-size: 14px;
+        }
+        tspan, text {
+            font-variant-ligatures: none;
+            dominant-baseline: central;
+            white-space: pre;
+            fill: #bbbbbb;
+        }
+        .bg {
+            stroke-width: "0.5px";
+        }
+        .dim {
+            opacity: 0.5;
+        }
+        <!-- Background custom colors -->
+        .bc0 { stroke: #bbbbbb; fill: #bbbbbb; }
+        <!-- Foreground custom colors -->
+        .fc0 { fill: #909090; }
+        .fc1 { fill: #87d787; }
+        .fc2 { fill: #ff5fff; }
+        .fc3 { fill: #5fd7ff; }
+        .fc4 { fill: #000000; }
+    </style>
+    <rect width="100%" height="100%" x="0" y="0" style="fill: #000000"/>
+<g class="bg">
+<rect x="0ch" y="23em" width="89ch" height="1em" class="bc0"/>
+</g>
+<text x="0ch" y="0.5em"><tspan>   </tspan><tspan class="dim">1 </tspan><tspan>#!/usr/bin/env lua</tspan></text>
+<text x="0ch" y="1.5em"><tspan>   </tspan><tspan class="dim">2 </tspan><tspan class="fc0">-- editor.lua -- piecetab-based terminal text editor (class skeleton)</tspan></text>
+<text x="0ch" y="2.5em"><tspan>   </tspan><tspan class="dim">3 </tspan><tspan class="fc0">-- usage: lua editor.lua [file]</tspan></text>
+<text x="0ch" y="3.5em"><tspan>   </tspan><tspan class="dim">4 </tspan></text>
+<text x="0ch" y="4.5em"><tspan>   </tspan><tspan class="dim">5 </tspan><tspan>package.cpath</tspan><tspan class="dim">: string </tspan><tspan>= package.cpath ..</tspan></text>
+<text x="0ch" y="5.5em"><tspan>   </tspan><tspan class="dim">6     </tspan><tspan class="fc1">&#34;;./lua/?.so;./lua/luajit/?.so;/opt/homebrew/lib/lua/5.5/?.so;/opt/homebrew/lib/l</tspan></text>
+<text x="0ch" y="6.5em"><tspan>   </tspan><tspan class="dim">7 </tspan><tspan>package.path</tspan><tspan class="dim">: string </tspan><tspan>= package.path .. </tspan><tspan class="fc1">&#34;;./lua/?.lua&#34;</tspan></text>
+<text x="0ch" y="7.5em"><tspan>   </tspan><tspan class="dim">8 </tspan><tspan class="fc2">local </tspan><tspan>pt</tspan><tspan class="dim">: table </tspan><tspan>= </tspan><tspan class="fc3">require</tspan><tspan>(</tspan><tspan class="dim">modname:</tspan><tspan class="fc1">&#34;piecetab&#34;</tspan><tspan>)</tspan></text>
+<text x="0ch" y="8.5em"><tspan>   </tspan><tspan class="dim">9 </tspan><tspan class="fc2">local </tspan><tspan>cg</tspan><tspan class="dim">: table </tspan><tspan>= </tspan><tspan class="fc3">require</tspan><tspan>(</tspan><tspan class="dim">modname:</tspan><tspan class="fc1">&#34;cellgrid&#34;</tspan><tspan>)</tspan></text>
+<text x="0ch" y="9.5em"><tspan>  </tspan><tspan class="dim">10 </tspan></text>
+<text x="0ch" y="10.5em"><tspan>  </tspan><tspan class="dim">11 </tspan><tspan class="fc2">local </tspan><tspan>tf</tspan><tspan class="dim">: table </tspan><tspan>= </tspan><tspan class="fc3">require</tspan><tspan>(</tspan><tspan class="dim">modname:</tspan><tspan class="fc1">&#34;termfeed&#34;</tspan><tspan>)</tspan></text>
+<text x="0ch" y="11.5em"><tspan>  </tspan><tspan class="dim">12 </tspan><tspan class="fc2">local </tspan><tspan>sp</tspan><tspan class="dim">: table </tspan><tspan>= </tspan><tspan class="fc3">require</tspan><tspan>(</tspan><tspan class="dim">modname:</tspan><tspan class="fc1">&#34;spantree&#34;</tspan><tspan>)</tspan></text>
+<text x="0ch" y="12.5em"><tspan>  </tspan><tspan class="dim">13 </tspan><tspan class="fc2">local </tspan><tspan>ok_ts</tspan><tspan class="dim">: boolean</tspan><tspan>, ts</tspan><tspan class="dim">: table </tspan><tspan>= </tspan><tspan class="fc3">pcall</tspan><tspan>(</tspan><tspan class="dim">f:</tspan><tspan class="fc3">require</tspan><tspan>, </tspan><tspan class="dim">arg1:</tspan><tspan class="fc1">&#34;treesitter&#34;</tspan><tspan>)</tspan></text>
+<text x="0ch" y="13.5em"><tspan>  </tspan><tspan class="dim">14 </tspan><tspan class="fc2">if </tspan><tspan>not ok_ts then ts = nil </tspan><tspan class="fc2">end </tspan><tspan class="fc0">-- absent: hl off (pcall err msg is a string, not nil)</tspan></text>
+<text x="0ch" y="14.5em"><tspan>  </tspan><tspan class="dim">15 </tspan><tspan class="fc2">local </tspan><tspan>lsp</tspan><tspan class="dim">: table </tspan><tspan>= </tspan><tspan class="fc3">require</tspan><tspan>(</tspan><tspan class="dim">modname:</tspan><tspan class="fc1">&#34;lsp&#34;</tspan><tspan>)</tspan></text>
+<text x="0ch" y="15.5em"><tspan>  </tspan><tspan class="dim">16 </tspan></text>
+<text x="0ch" y="16.5em"><tspan>  </tspan><tspan class="dim">17 </tspan><tspan class="fc0">-- Section 0: Logging (writes to editor.log for debugging)</tspan></text>
+<text x="0ch" y="17.5em"><tspan>  </tspan><tspan class="dim">18 </tspan></text>
+<text x="0ch" y="18.5em"><tspan>  </tspan><tspan class="dim">19 </tspan><tspan class="fc2">local </tspan><tspan>logfile = nil</tspan></text>
+<text x="0ch" y="19.5em"><tspan>  </tspan><tspan class="dim">20 </tspan><tspan class="fc0">---</tspan><tspan class="fc2">@param </tspan><tspan class="fc0">fmt string</tspan></text>
+<text x="0ch" y="20.5em"><tspan>  </tspan><tspan class="dim">21 </tspan><tspan class="fc2">local function </tspan><tspan class="fc3">edlog</tspan><tspan>(fmt</tspan><tspan class="dim">: string</tspan><tspan>, ...)</tspan></text>
+<text x="0ch" y="21.5em"><tspan>  </tspan><tspan class="dim">22   </tspan><tspan class="fc2">if </tspan><tspan>not logfile then</tspan></text>
+<text x="0ch" y="22.5em"><tspan>  </tspan><tspan class="dim">23     </tspan><tspan class="fc2">local </tspan><tspan>f</tspan><tspan class="dim">: file*? </tspan><tspan>= io.</tspan><tspan class="fc3">open</tspan><tspan>(</tspan><tspan class="dim">filename:</tspan><tspan class="fc1">&#34;editor.log&#34;</tspan><tspan>, </tspan><tspan class="dim">mode:</tspan><tspan class="fc1">&#34;w&#34;</tspan><tspan>)</tspan></text>
+<text x="0ch" y="23.5em"><tspan> </tspan><tspan class="fc4">editor.lua NORMAL  L1,1  &#34;editor.lua&#34; loaded, 1251 lines                          lsp:on</tspan></text>
+</svg>

@@ -13,12 +13,17 @@ high-performance text editor buffers:
   numbers, maintaining a line-number cache under heavy edits.
 - **`undotree.h`** — a version tree + edit journal + diff service based on
   interval algebra, riding on top of `pt_Buffer` COW snapshots.
+- **`spantree.h`** — a span tree for byte-attribute coloring: a B+ tree
+  storing full-coverage `(len, id)` runs for final rendered styles, with
+  namespace masks, an arbiter callback, and edit-sync operations.
 
 These libraries are independent and composable: piecetab stores bytes
 ("clean octets" — no line or encoding awareness), linecache tracks line
 breaks, undotree manages the version graph and computes diffs between any
-two versions. Combine them to get a full editor buffer with O(log n)
-offset ↔ line navigation and undo/redo.
+two versions, and spantree stores final rendered color spans (full-coverage
+byte-attribute runs). Combine the first three to get a full editor buffer
+with O(log n) offset ↔ line navigation and undo/redo; spantree layers on
+top for syntax highlighting, diagnostics, and other byte-attribute styling.
 
 Peripheral libraries extend the core toward a full editor:
 
@@ -92,6 +97,20 @@ complex content:
   uncommitted state; `ut_diff(from, to)` handles any combination of
   committed versions + fresh endpoints via four-phase compose
 
+### spantree.h
+
+- **Full-coverage span model**: stores final rendered coloring as
+  `(len > 0, attr id)` runs, so the renderer does zero style composition
+- **Arbiter single layer**: writes go through `sp_Arbiterf`, giving an
+  external blending/namespace policy while the tree stays format-agnostic
+- **Namespace masks**: per-node `sp_Mask` aggregation enables pruned
+  `sp_next`/`sp_prev`/`sp_clear` by namespace (`sp_addns`/`sp_delns`)
+- **Edit-sync operations**: `sp_splice`/`sp_append`/`sp_insert`/`sp_remove`
+  keep spans aligned with text edits, with deterministic gravity
+  (append inherits left, insert inherits right)
+- **Sparse coloring for free**: uncolored bytes are a single large id-0
+  span; no special tree-level offset mechanism needed
+
 ## Quick Start
 
 All headers are stb-style: include the header anywhere, define the
@@ -159,20 +178,104 @@ int main(void) {
 }
 ```
 
+### spantree.h
+
+```c
+#define SP_IMPLEMENTATION
+#include "spantree.h"
+
+/* arbiter: external blending policy; here, keep the new id */
+static sp_Id keep_new(void *ud, sp_Id id, sp_Id old, sp_Mask *mask) {
+    (void)ud; (void)old; (void)mask;
+    return id;
+}
+
+int main(void) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *T = sp_newtree(S);
+    sp_Cursor C;
+
+    sp_setarbiter(T, keep_new, NULL);
+    sp_seek(&C, T, 0);
+    sp_fill(&C, 1, 3);            /* bytes 0..3 get attr id 1 */
+    sp_append(&C, 2);             /* insert 2 bytes at cursor  */
+    /* sp_bytes(T) == 5 */
+
+    sp_freetree(T);
+    sp_close(S);
+    return 0;
+}
+```
+
 ### editor.lua
+
+![editor.lua demo](misc/demo.svg)
+
+#### Intro
 
 `editor.lua` is an AI-written modal editor demo that wires the libraries
 together: a piecetab/linecache buffer (`pt.doc`), a cellgrid screen
-buffer, and termfeed terminal input. `Ed.new(content?, term?, grid?)`
-builds an editor from a string; `Ed.open(filename, term?, grid?)` loads
-a file; both accept injected term/grid objects (tests use fakes). It
-also serves as a C-module incubation ground — helpers marked `TODO(C)`
-(char motion, column math) are candidates for promotion into C.
+buffer, termfeed terminal input, and spantree-styled coloring. `Ed.new(content?,
+term?, grid?)` builds an editor from a string; `Ed.open(filename, term?,
+grid?)` loads a file; both accept injected term/grid objects (tests use
+fakes). It also serves as a C-module incubation ground — helpers marked
+`TODO(C)` (char motion, column math) are candidates for promotion into C.
 
 Syntax highlighting: files opened with a `.c`/`.h`/`.lua` extension get
 tree-sitter highlighting (keyword/string/comment/function styles) via the
 `treesitter` Lua binding (see `lua/treesitter.c`). `Ed:open_language(lang)`
 enables it manually. Editing updates highlights incrementally.
+
+#### Prerequisites / modules
+
+- **Lua**: Lua 5.5 is the primary runtime; LuaJIT is also supported for
+  compatibility. The demo finds modules relative to the repo root:
+  `./lua/?.so`, `./lua/luajit/?.so`, and `./lua/?.lua`.
+- **Required C modules**: `piecetab`, `cellgrid`, `termfeed`, `spantree`,
+  and `json` (yyjson binding). `json` is required by `lsp.lua`, which
+  `editor.lua` loads unconditionally.
+- **Optional `treesitter`**: `pcall(require, "treesitter")` is used, so the
+  demo runs without it (highlighting is disabled). Full highlighting needs
+  `libtree-sitter` and compiled grammars in `lua/grammar`.
+- **`lsp.lua`**: pure-Lua LSP client; requires the `json` binding and `luv`.
+  LSP is started automatically when a server is configured for the file.
+- **Tests only**: `luaunit` for the Lua test harness; the `lua-utf8` rock
+  (PUC Lua only) and `tmux` for some editor/cellgrid/display tests.
+
+#### Install / build
+
+From the repo root:
+
+```sh
+just lua/ed   # builds required C modules and runs the editor unit tests
+```
+
+The `ed` recipe compiles `piecetab`, `cellgrid`, `termfeed`, `json`, and
+`spantree` into `lua/*.so` (PUC Lua). For interactive use you only need
+those `.so` files present; you can build them individually with
+`just lua/json`, `just lua/sp`, etc. LuaJIT variants are produced by the
+generic `just lua/build <name>` recipes.
+
+#### Just commands
+
+- `just lua/ed` — build required modules and run `lua/tests/editor_test.lua`
+- `just lua/ed-tmux` — display integration tests in a real tmux terminal
+- `just lua/json` — build/test the yyjson binding (`json`)
+- `just lua/sp` — build/test the spantree binding
+- `just lua/ts` / `just lua/ts-grammars` — build/test the tree-sitter
+  binding / fetch and compile grammars
+- `just lua/test` — run every Lua suite (needs lua-utf8, tmux, tree-sitter
+  grammars)
+
+#### Run method
+
+```sh
+lua editor.lua [file]
+```
+
+Run from the repo root after building the modules. Omit `[file]` to start
+with an empty buffer; pass a path to edit that file. The script enters a
+raw-mode terminal session; use `:q` or `:wq` to exit.
 
 ```lua
 local Ed = require("editor")
@@ -191,8 +294,34 @@ Custom keys/commands hook into the per-mode registries (`mode` is
 `0/$`, `gg/G`, `x`, `dd`, `i/a/o/O`, `u`/`<C-r>`, `:`; commands:
 `:w`, `:q`, `:wq`, `:e`.
 
-Run the tests with `just lua/ed`; smoke-test interactively with
+Run the unit tests with `just lua/ed`; smoke-test interactively with
 `lua editor.lua [file]`.
+
+#### Syntax highlighting troubleshooting
+
+The demo treats `treesitter` as optional, so missing highlighting is a
+silent fallback rather than an error. If keywords such as `local`, `if`,
+and `return` are not colored, tree-sitter did not load. On macOS the
+native modules must be Mach-O binaries built for this machine;
+`lua/treesitter.so`, `lua/luajit/treesitter.so`, and `lua/grammar/*.so`
+copied from Linux/CI will be ELF binaries and Lua cannot load them.
+
+Rebuild the host-native modules from the repo root (`just lua/ts` also
+fetches and compiles the grammars):
+
+```sh
+just lua/ts   # fetch/compile lua/grammar/*.so, build treesitter.so + luajit/treesitter.so, test
+```
+
+Verify the binaries are usable on macOS:
+
+```sh
+file lua/treesitter.so lua/luajit/treesitter.so lua/grammar/lua.so lua/grammar/c.so
+```
+
+They should report `Mach-O` (arm64/x86_64), not `ELF`. `just lua/ed` does
+not build tree-sitter, so run `just lua/ts` once after cloning or after
+copying the repo to a new machine.
 
 ## API Overview
 
@@ -238,31 +367,67 @@ the caller must keep the memory alive while any buffer references it.
 | Navigate  | `ut_ancestor`                                                           |
 | Diff      | `ut_freshvid`, `ut_diff`, `ut_freshdiff`, `ut_hunks`, `ut_mapoffset`    |
 
+### spantree.h
+
+| Category  | Functions                                           |
+| --------- | --------------------------------------------------- |
+| Lifecycle | `sp_open`, `sp_close`                               |
+| Tree      | `sp_newtree`, `sp_freetree`, `sp_bytes`             |
+| Blending  | `sp_setarbiter`, `sp_addns`, `sp_delns`, `sp_hasns` |
+| Cursor    | `sp_seek`, `sp_locate`, `sp_advance`, `sp_offset`   |
+| Marking   | `sp_fill`, `sp_clear`                               |
+| Reading   | `sp_next`, `sp_prev`, `sp_style`                    |
+| Edit      | `sp_splice`, `sp_append`, `sp_insert`, `sp_remove`  |
+
 See [`docs/piecetab.md`](docs/piecetab.md),
-[`docs/linecache.md`](docs/linecache.md), and
-[`docs/undotree.md`](docs/undotree.md) for the full API references.
+[`docs/linecache.md`](docs/linecache.md),
+[`docs/undotree.md`](docs/undotree.md), and
+[`docs/spantree.md`](docs/spantree.md) for the full API references.
+
+## Lua Bindings
+
+Each C library has a Lua binding in `lua/` (`name.c` plus `name.d.lua`
+type declarations). There are also two pure-Lua / meta-only modules and a
+vendored JSON binding:
+
+| Module       | Source / files                                | Description                                                                            |
+| ------------ | --------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `piecetab`   | `lua/piecetab.c`, `lua/piecetab.d.lua`        | C binding for `piecetab.h` (buffers, cursors, documents)                               |
+| `cellgrid`   | `lua/cellgrid.c`, `lua/cellgrid.d.lua`        | C binding for `cellgrid.h` (screen grid + diff)                                        |
+| `termfeed`   | `lua/termfeed.c`, `lua/termfeed.d.lua`        | C binding for `termfeed.h` (terminal input)                                            |
+| `spantree`   | `lua/spantree.c`, `lua/spantree.d.lua`        | C binding for `spantree.h` (Compositor/Tree/Cursor span coloring)                      |
+| `json`       | `lua/json.c`, `lua/json.d.lua`, `lua/yyjson/` | Pure C binding over vendored yyjson (`decode`/`encode`/`array`/`object`/`null`/`type`) |
+| `treesitter` | `lua/treesitter.c`, `lua/treesitter.d.lua`    | C binding over `libtree-sitter` (parser/tree/query APIs)                               |
+| `lsp`        | `lua/lsp.lua`                                 | Pure-Lua LSP client building blocks; requires `json` and `luv`                         |
+| `lua-utf8`   | `lua/lua-utf8.d.lua`                          | Type declarations only (meta) for the `lua-utf8` rock                                  |
+
+Build/test recipes live in `lua/justfile` and are run as `just lua/<name>`
+(e.g. `just lua/json`, `just lua/sp`, `just lua/ts`). See the
+[`editor.lua`](#editorlua) section for the demo's module requirements.
 
 ## Configuration
 
 Override before including the implementation:
 
-| Macro                                            | Default | Meaning                              |
-| ------------------------------------------------ | ------- | ------------------------------------ |
-| `PT_FANOUT` / `LC_FANOUT`                        | 62      | max children per node                |
-| `LC_LEAF_FANOUT`                                 | 62      | max lines per leaf                   |
-| `PT_MAX_HOLESIZE`                                | 64      | hole piece capacity                  |
-| `PT_MAX_LEVEL` / `LC_MAX_LEVEL`                  | 16      | max tree depth                       |
-| `PT_PAGE_SIZE` / `LC_PAGE_SIZE` / `UT_PAGE_SIZE` | 65536   | pool allocator page size             |
-| `PT_ARENA_SIZE`                                  | 1024    | arena block minimum size             |
-| `PT_COMPACT_RANGES`                              | 64      | compact range array initial capacity |
+| Macro                                                             | Default | Meaning                                            |
+| ----------------------------------------------------------------- | ------- | -------------------------------------------------- |
+| `PT_FANOUT` / `LC_FANOUT` / `SP_FANOUT`                           | 62      | max children per node                              |
+| `LC_LEAF_FANOUT`                                                  | 62      | max lines per leaf                                 |
+| `PT_MAX_HOLESIZE`                                                 | 64      | hole piece capacity                                |
+| `PT_MAX_LEVEL` / `LC_MAX_LEVEL` / `SP_MAX_LEVEL`                  | 16      | max tree depth / cursor path size                  |
+| `PT_PAGE_SIZE` / `LC_PAGE_SIZE` / `UT_PAGE_SIZE` / `SP_PAGE_SIZE` | 65536   | pool allocator page size                           |
+| `PT_ARENA_SIZE`                                                   | 1024    | arena block minimum size                           |
+| `PT_COMPACT_RANGES`                                               | 64      | compact range array initial capacity               |
+| `SP_STATIC_API`                                                   | —       | when defined, all spantree functions become static |
 
 All libraries accept a custom allocator (`lc_Alloc` / `pt_Alloc`
-/ `ut_Alloc`, Lua-style realloc signature) at `*_open`.
+/ `ut_Alloc` / `sp_Alloc`, Lua-style realloc signature) at `*_open`.
 
 ## Repository Layout
 
 - `*.h` — stb-style single-header libraries (pure C89, self-contained):
-  `piecetab.h`, `linecache.h`, `undotree.h`, `cellgrid.h`, `termfeed.h`
+  `piecetab.h`, `linecache.h`, `undotree.h`, `spantree.h`, `cellgrid.h`,
+  `termfeed.h`
 - `lua/` — Lua side: one binding `name.c` + API declaration `name.d.lua`
   per library, the `editor.lua` demo, and `tests/` with Lua tests.
   Bindings build to `lua/*.so` (Lua 5.5, primary) and `lua/luajit/*.so`
@@ -281,6 +446,8 @@ All libraries accept a custom allocator (`lc_Alloc` / `pt_Alloc`
   implementation notes ([中文](docs/linecache.zh.md))
 - [`docs/undotree.md`](docs/undotree.md) — undotree API reference &
   integration guide ([中文](docs/undotree.zh.md))
+- [`docs/spantree.md`](docs/spantree.md) — spantree API reference &
+  implementation notes ([中文](docs/spantree.zh.md))
 
 Peripheral libraries (`cellgrid.h`, `termfeed.h`) have no API docs yet —
 see their `lua/*.d.lua` declarations and `notes/design_cellgrid.md`,
@@ -300,12 +467,21 @@ coverage** and ~90% branch coverage.
 just lc     # linecache tests
 just pt     # piecetab tests
 just ut     # undotree tests
+just sp     # spantree tests
 just cg     # cellgrid tests
 just tf     # termfeed tests
 just cov    # coverage report
+just sp-cov # spantree coverage report
+just sp-lines  # spantree uncovered lines
+just sp-unbranched  # spantree uncovered branches
 
 # Lua binding tests — just lua/<recipe> runs lua/justfile
-just lua/pt  # piecetab binding (also lua/cg, lua/tf, lua/ed)
+just lua/pt  # piecetab binding (also lua/cg, lua/tf)
+just lua/sp  # spantree binding
+just lua/json  # yyjson binding
+just lua/lsp  # pure-Lua LSP client tests (builds json)
+just lua/ed  # editor.lua unit tests
+just lua/ed-tmux  # editor display tests (needs tmux)
 just lua/ts  # treesitter binding tests
 just lua/ts-cov  # treesitter binding coverage
 just lua/ts-lines  # treesitter uncovered lines

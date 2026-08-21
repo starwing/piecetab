@@ -27,8 +27,9 @@ tf *args='': (build "termfeed") (run "termfeed_test" args)
 json *args='': (build "json") (run "json_test" args)
 lsp *args='': (build "json") (run "lsp_test" args)
 sp *args='': (build "spantree") (run "spantree_test" args)
-# editor demo needs lua-utf8 rock (PUC Lua only)
-ed *args='': (build-lua "piecetab") (build-lua "cellgrid") (build-lua "termfeed") (build-lua "spantree")
+# editor demo needs lua-utf8 rock (PUC Lua only); json.so is required
+# by lsp.lua, which editor.lua loads
+ed *args='': (build-lua "piecetab") (build-lua "cellgrid") (build-lua "termfeed") (build-lua "json") (build-lua "spantree")
     lua tests/editor_test.lua {{ args }}
 # display integration tests: real terminal via tmux helper
 # (needs tmux in PATH; json.so is required by lsp.lua in the session)

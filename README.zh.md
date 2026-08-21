@@ -12,10 +12,14 @@
   映射，在高频编辑下保持行号缓存。
 - **`undotree.h`** — 基于区间代数的版本图 + 编辑日志 + 差分服务，骑在
   `pt_Buffer` COW 快照之上。
+- **`spantree.h`** — 字节属性染色 span 树：B+ 树保存全覆盖 `(len, id)`
+  渲染结果段，支持 namespace mask、arbiter 回调与编辑同步操作。
 
 所有库相互独立、可自由组合：piecetab 只存字节（"clean octet"——不管行、
-不管编码），linecache 只管行断点，undotree 管理版本图并为任意两版本计算差分。
-三者组合即得支持 O(log n) 偏移 ↔ 行号双向导航和 undo/redo 的完整编辑器 buffer。
+不管编码），linecache 只管行断点，undotree 管理版本图并为任意两版本计算差分，
+spantree 保存最终渲染染色 span（全覆盖字节属性段）。前三者组合即得支持
+O(log n) 偏移 ↔ 行号双向导航和 undo/redo 的完整编辑器 buffer；spantree
+在其上提供语法高亮、诊断等字节属性样式。
 
 外围库将核心扩展为完整编辑器：
 
@@ -75,6 +79,18 @@
 - **Fresh-vid 协议**：`ut_freshvid(S)` 哨兵表示未提交状态；
   `ut_diff(from, to)` 经四阶段 compose 处理任意 committed 版本 + fresh
   端点的组合
+
+### spantree.h
+
+- **全覆盖 span 模型**：保存最终渲染染色为 `(len > 0, attr id)` 段，
+  渲染端零合成
+- **arbiter 单层**：写入经 `sp_Arbiterf` 回调，外部决定混合/命名空间
+  策略，树本身保持零格式知识
+- **namespace mask**：节点级 `sp_Mask` 聚合支持按 ns 剪枝的
+  `sp_next` / `sp_prev` / `sp_clear`（经 `sp_addns` / `sp_delns`）
+- **编辑同步**：`sp_splice` / `sp_append` / `sp_insert` / `sp_remove`
+  随文本编辑平移 span，重力确定（append 继承左、insert 继承右）
+- **稀疏染色免费**：未染色字节即大段 id 0，无需树级偏移特殊机制
 
 ## 快速上手
 
@@ -143,14 +159,101 @@ int main(void) {
 }
 ```
 
+### spantree.h
+
+```c
+#define SP_IMPLEMENTATION
+#include "spantree.h"
+
+/* arbiter：外部混合策略；这里简单保留新 id */
+static sp_Id keep_new(void *ud, sp_Id id, sp_Id old, sp_Mask *mask) {
+    (void)ud; (void)old; (void)mask;
+    return id;
+}
+
+int main(void) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *T = sp_newtree(S);
+    sp_Cursor C;
+
+    sp_setarbiter(T, keep_new, NULL);
+    sp_seek(&C, T, 0);
+    sp_fill(&C, 1, 3);            /* 字节 0..3 染 attr id 1 */
+    sp_append(&C, 2);             /* 在光标处插入 2 字节      */
+    /* sp_bytes(T) == 5 */
+
+    sp_freetree(T);
+    sp_close(S);
+    return 0;
+}
+```
+
 ### editor.lua
+
+![editor.lua 演示](misc/demo.svg)
+
+#### 简介
 
 `editor.lua` 是 AI 编写的模态编辑器 demo，将各库串联起来：piecetab/
 linecache 文档 buffer（`pt.doc`）、cellgrid 屏幕 buffer、termfeed 终端
-输入。`Ed.new(content?, term?, grid?)` 由字符串构建编辑器，
-`Ed.open(filename, term?, grid?)` 加载文件；两者均接受注入的 term/grid
-对象（测试使用 fake）。它同时充当 C 模块孵化场——标注 `TODO(C)` 的
-辅助函数（字符移动、列计算）是晋升为 C 的候选。
+输入，以及 spantree 样式染色。`Ed.new(content?, term?, grid?)` 由字符串
+构建编辑器，`Ed.open(filename, term?, grid?)` 加载文件；两者均接受注入
+的 term/grid 对象（测试使用 fake）。它同时充当 C 模块孵化场——标注
+`TODO(C)` 的辅助函数（字符移动、列计算）是晋升为 C 的候选。
+
+语法高亮：打开 `.c`/`.h`/`.lua` 扩展名文件时，通过 `treesitter` Lua
+绑定（见 `lua/treesitter.c`）启用 tree-sitter 高亮（keyword/string/
+comment/function 样式）。`Ed:open_language(lang)` 可手动开启；编辑会
+增量更新高亮。
+
+#### 前置依赖 / 模块
+
+- **Lua**：主运行时为 Lua 5.5，同时支持 LuaJIT 兼容验证。demo 按仓库
+  根目录相对路径查找模块：`./lua/?.so`、`./lua/luajit/?.so` 与
+  `./lua/?.lua`。
+- **必需 C 模块**：`piecetab`、`cellgrid`、`termfeed`、`spantree` 与
+  `json`（yyjson 绑定）。`json` 被 `lsp.lua` 依赖，而 `editor.lua`
+  无条件加载 `lsp.lua`。
+- **可选 `treesitter`**：通过 `pcall(require, "treesitter")` 加载，缺失时
+  仅关闭高亮。完整高亮需要 `libtree-sitter` 与 `lua/grammar` 下的编译
+  语法文件。
+- **`lsp.lua`**：纯 Lua LSP 客户端，需要 `json` 绑定与 `luv`。文件配置
+  了对应 server 时会自动启动 LSP。
+- **仅测试需要**：`luaunit` 测试框架；部分编辑器/cellgrid/显示测试还
+  需要 `lua-utf8` rock（仅 PUC Lua）与 `tmux`。
+
+#### 安装 / 构建
+
+在仓库根目录运行：
+
+```sh
+just lua/ed   # 构建所需 C 模块并运行编辑器单元测试
+```
+
+`ed` recipe 会把 `piecetab`、`cellgrid`、`termfeed`、`json`、`spantree`
+编译为 `lua/*.so`（PUC Lua）。交互运行只需这些 `.so` 存在；也可以单独
+构建，如 `just lua/json`、`just lua/sp`。LuaJIT 变体由通用
+`just lua/build <name>` recipe 生成。
+
+#### just 命令
+
+- `just lua/ed` — 构建所需模块并运行 `lua/tests/editor_test.lua`
+- `just lua/ed-tmux` — 在真实 tmux 终端中运行显示集成测试
+- `just lua/json` — 构建/测试 yyjson 绑定（`json`）
+- `just lua/sp` — 构建/测试 spantree 绑定
+- `just lua/ts` / `just lua/ts-grammars` — 构建/测试 tree-sitter 绑定；
+  获取并编译语法
+- `just lua/test` — 运行全部 Lua 测试套件（需要 lua-utf8、tmux、
+  tree-sitter 语法）
+
+#### 运行方法
+
+```sh
+lua editor.lua [file]
+```
+
+在构建好模块后于仓库根目录运行。不传 `[file]` 时以空 buffer 启动；传入
+路径则编辑该文件。脚本进入 raw-mode 终端会话，使用 `:q` 或 `:wq` 退出。
 
 ```lua
 local Ed = require("editor")
@@ -168,7 +271,30 @@ end)
 / `"command"`）。内置按键：`h/j/k/l`、`w/b`、`0/$`、`gg/G`、`x`、
 `dd`、`i/a/o/O`、`u`/`<C-r>`、`:`；命令：`:w`、`:q`、`:wq`、`:e`。
 
-测试：`just lua/ed`；交互 smoke：`lua editor.lua [file]`。
+单元测试：`just lua/ed`；交互 smoke：`lua editor.lua [file]`。
+
+#### 语法高亮排查
+
+demo 将 `treesitter` 视为可选模块，因此高亮缺失是静默降级而不是报错。
+如果 `local`、`if`、`return` 等关键字没有着色，说明 tree-sitter 没有
+成功加载。在 macOS 上，这些原生模块必须是针对本机构建的 Mach-O 文件；
+从 Linux/CI 直接拷来的 `lua/treesitter.so`、`lua/luajit/treesitter.so`
+或 `lua/grammar/*.so` 是 ELF 二进制，Lua 无法加载。
+
+在仓库根目录重新构建本机原生模块（`just lua/ts` 也会获取并编译语法）：
+
+```sh
+just lua/ts   # 获取/编译 lua/grammar/*.so，构建 treesitter.so + luajit/treesitter.so 并测试
+```
+
+在 macOS 上确认二进制可用：
+
+```sh
+file lua/treesitter.so lua/luajit/treesitter.so lua/grammar/lua.so lua/grammar/c.so
+```
+
+输出应为 `Mach-O`（arm64/x86_64），而不是 `ELF`。`just lua/ed` 不会构建
+tree-sitter，因此克隆仓库或把仓库拷到新机器后，请先运行一次 `just lua/ts`。
 
 ## API 总览
 
@@ -214,31 +340,65 @@ end)
 | 导航     | `ut_ancestor`                                                           |
 | Diff     | `ut_freshvid`, `ut_diff`, `ut_freshdiff`, `ut_hunks`, `ut_mapoffset`    |
 
+### spantree.h
+
+| 类别     | 函数                                                |
+| -------- | --------------------------------------------------- |
+| 生命周期 | `sp_open`, `sp_close`                               |
+| 树       | `sp_newtree`, `sp_freetree`, `sp_bytes`             |
+| 混合     | `sp_setarbiter`, `sp_addns`, `sp_delns`, `sp_hasns` |
+| 游标     | `sp_seek`, `sp_locate`, `sp_advance`, `sp_offset`   |
+| 标记     | `sp_fill`, `sp_clear`                               |
+| 读取     | `sp_next`, `sp_prev`, `sp_style`                    |
+| 编辑     | `sp_splice`, `sp_append`, `sp_insert`, `sp_remove`  |
+
 完整 API 参考见 [`docs/piecetab.zh.md`](docs/piecetab.zh.md)、
-[`docs/linecache.zh.md`](docs/linecache.zh.md) 与
-[`docs/undotree.zh.md`](docs/undotree.zh.md)。
+[`docs/linecache.zh.md`](docs/linecache.zh.md)、
+[`docs/undotree.zh.md`](docs/undotree.zh.md) 与
+[`docs/spantree.zh.md`](docs/spantree.zh.md)。
+
+## Lua 绑定
+
+每个 C 库在 `lua/` 下都有 Lua 绑定（`name.c` + `name.d.lua` 类型声明）。
+此外还有纯 Lua / 仅元数据模块和 vendored JSON 绑定：
+
+| 模块         | 源 / 文件                                     | 说明                                                                                 |
+| ------------ | --------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `piecetab`   | `lua/piecetab.c`, `lua/piecetab.d.lua`        | `piecetab.h` 的 C 绑定（buffer、游标、文档）                                         |
+| `cellgrid`   | `lua/cellgrid.c`, `lua/cellgrid.d.lua`        | `cellgrid.h` 的 C 绑定（屏幕网格 + diff）                                            |
+| `termfeed`   | `lua/termfeed.c`, `lua/termfeed.d.lua`        | `termfeed.h` 的 C 绑定（终端输入）                                                   |
+| `spantree`   | `lua/spantree.c`, `lua/spantree.d.lua`        | `spantree.h` 的 C 绑定（Compositor/Tree/Cursor span 染色）                           |
+| `json`       | `lua/json.c`, `lua/json.d.lua`, `lua/yyjson/` | 基于 vendored yyjson 的纯 C 绑定（`decode`/`encode`/`array`/`object`/`null`/`type`） |
+| `treesitter` | `lua/treesitter.c`, `lua/treesitter.d.lua`    | 基于 `libtree-sitter` 的 C 绑定（parser/tree/query API）                             |
+| `lsp`        | `lua/lsp.lua`                                 | 纯 Lua LSP 客户端构建块；需要 `json` 与 `luv`                                        |
+| `lua-utf8`   | `lua/lua-utf8.d.lua`                          | 仅为 `lua-utf8` rock 的类型声明（meta）                                              |
+
+构建/测试 recipe 位于 `lua/justfile`，以 `just lua/<name>` 运行（如
+`just lua/json`、`just lua/sp`、`just lua/ts`）。demo 的模块要求见
+[`editor.lua`](#editorlua) 一节。
 
 ## 配置
 
 在包含实现之前覆盖以下宏：
 
-| 宏                                               | 默认  | 含义                     |
-| ------------------------------------------------ | ----- | ------------------------ |
-| `PT_FANOUT` / `LC_FANOUT`                        | 62    | 节点最大子数             |
-| `LC_LEAF_FANOUT`                                 | 62    | 叶最大行数               |
-| `PT_MAX_HOLESIZE`                                | 64    | hole piece 容量          |
-| `PT_MAX_LEVEL` / `LC_MAX_LEVEL`                  | 16    | 最大树深                 |
-| `PT_PAGE_SIZE` / `LC_PAGE_SIZE` / `UT_PAGE_SIZE` | 65536 | 池分配器页大小           |
-| `PT_ARENA_SIZE`                                  | 1024  | arena 块最小容量         |
-| `PT_COMPACT_RANGES`                              | 64    | compact 区间数组初始容量 |
+| 宏                                                                | 默认  | 含义                                |
+| ----------------------------------------------------------------- | ----- | ----------------------------------- |
+| `PT_FANOUT` / `LC_FANOUT` / `SP_FANOUT`                           | 62    | 节点最大子数                        |
+| `LC_LEAF_FANOUT`                                                  | 62    | 叶最大行数                          |
+| `PT_MAX_HOLESIZE`                                                 | 64    | hole piece 容量                     |
+| `PT_MAX_LEVEL` / `LC_MAX_LEVEL` / `SP_MAX_LEVEL`                  | 16    | 最大树深 / 游标路径容量             |
+| `PT_PAGE_SIZE` / `LC_PAGE_SIZE` / `UT_PAGE_SIZE` / `SP_PAGE_SIZE` | 65536 | 池分配器页大小                      |
+| `PT_ARENA_SIZE`                                                   | 1024  | arena 块最小容量                    |
+| `PT_COMPACT_RANGES`                                               | 64    | compact 区间数组初始容量            |
+| `SP_STATIC_API`                                                   | —     | 定义后 spantree 全部函数变为 static |
 
 所有库均可在 `*_open` 时传入自定义分配器（`lc_Alloc` / `pt_Alloc`
-/ `ut_Alloc`，Lua 风格 realloc 签名）。
+/ `ut_Alloc` / `sp_Alloc`，Lua 风格 realloc 签名）。
 
 ## 目录结构
 
 - `*.h` — stb 风格单头文件库（纯 C89，自包含）：`piecetab.h`、
-  `linecache.h`、`undotree.h`、`cellgrid.h`、`termfeed.h`
+  `linecache.h`、`undotree.h`、`spantree.h`、`cellgrid.h`、`termfeed.h`
 - `lua/` — Lua 侧：每个库一个绑定 `name.c` + API 声明 `name.d.lua`，
   以及 `editor.lua` demo 和 `tests/`（Lua 测试）。绑定构建产物：
   `lua/*.so`（Lua 5.5，主运行时）与 `lua/luajit/*.so`（LuaJIT，兼容验证）
@@ -252,6 +412,7 @@ end)
 - [`docs/piecetab.zh.md`](docs/piecetab.zh.md) — piecetab API 参考与实现笔记
 - [`docs/linecache.zh.md`](docs/linecache.zh.md) — linecache API 参考与实现笔记
 - [`docs/undotree.zh.md`](docs/undotree.zh.md) — undotree API 参考与集成指引
+- [`docs/spantree.zh.md`](docs/spantree.zh.md) — spantree API 参考与实现笔记
 - [`notes/`](notes/) — 设计文档：架构总览（`brief_*.md`）、算法设计
   （`design_*.md`）、区间删除算法演进史
 
@@ -268,12 +429,21 @@ end)
 just lc     # linecache 测试
 just pt     # piecetab 测试
 just ut     # undotree 测试
+just sp     # spantree 测试
 just cg     # cellgrid 测试
 just tf     # termfeed 测试
 just cov    # 覆盖率报告
+just sp-cov # spantree 覆盖率报告
+just sp-lines  # spantree 未覆盖行
+just sp-unbranched  # spantree 未覆盖分支
 
 # Lua 绑定测试 — just lua/<recipe> 执行 lua/justfile
-just lua/pt  # piecetab 绑定（另有 lua/cg、lua/tf、lua/ed）
+just lua/pt  # piecetab 绑定（另有 lua/cg、lua/tf）
+just lua/sp  # spantree 绑定
+just lua/json  # yyjson 绑定
+just lua/lsp  # 纯 Lua LSP 客户端测试（构建 json）
+just lua/ed  # editor.lua 单元测试
+just lua/ed-tmux  # 编辑器显示测试（需要 tmux）
 just lua/ts  # treesitter 绑定测试
 just lua/ts-cov  # treesitter 绑定覆盖率
 just lua/ts-lines  # treesitter 未覆盖行
