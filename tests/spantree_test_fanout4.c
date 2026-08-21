@@ -311,6 +311,170 @@ TEST(advance) {
     sp_freetree(t), sp_close(S);
 }
 
+/* backwardoff must climb from a leaf with no previous sibling to its parent */
+TEST(backwardoff_climb) {
+    sp_State *S;
+    sp_Tree  *t;
+    sp_Node  *leaf0, *leaf1;
+    sp_Cursor C;
+    size_t    len;
+    S = sp_open(NULL, NULL);
+    t = sp_newtree(S);
+    leaf0 = (sp_Node *)spP_alloc(S, &S->nodes);
+    leaf1 = (sp_Node *)spP_alloc(S, &S->nodes);
+    memset(leaf0, 0, sizeof(sp_Node)), memset(leaf1, 0, sizeof(sp_Node));
+    spL_setid(leaf0, 0, 10), leaf0->bytes[0] = 2;
+    spL_setid(leaf0, 1, 11), leaf0->bytes[1] = 3;
+    spN_setcc(leaf0, 2);
+    spL_setid(leaf1, 0, 12), leaf1->bytes[0] = 1;
+    spL_setid(leaf1, 1, 13), leaf1->bytes[1] = 4;
+    spN_setcc(leaf1, 2);
+    t->root.children[0] = leaf0, t->root.children[1] = leaf1;
+    t->root.bytes[0] = 5, t->root.bytes[1] = 5;
+    spN_setcc(&t->root, 2), t->levels = 1, t->bytes = 10;
+    assertok(sp_checktree(t));
+    /* start of leaf1: one byte backward must climb to previous leaf */
+    asserteq(sp_seek(&C, t, 5), SP_OK);
+    asserteq(sp_offset(&C), 5);
+    asserteq(sp_advance(&C, -1), SP_OK);
+    asserteq(sp_offset(&C), 4);
+    asserteq(sp_style(&C, &len, NULL), 11);
+    asserteq(len, 1);
+    assertok(sp_checkcursor(&C, 4));
+    sp_freetree(t), sp_close(S);
+}
+
+static void collect_stream(sp_Cursor *C, sp_Id *ids, size_t *lens, int *n);
+
+/* locate inside an existing tree (non-virtual branch) */
+TEST(locate_in_tree) {
+    sp_State *S;
+    sp_Tree  *t;
+    sp_Cursor C;
+    size_t    len;
+    S = sp_open(NULL, NULL);
+    t = sp_newtree(S);
+    spL_setid(&t->root, 0, 1), t->root.bytes[0] = 3;
+    spL_setid(&t->root, 1, 2), t->root.bytes[1] = 5;
+    spL_setid(&t->root, 2, 3), t->root.bytes[2] = 2;
+    spN_setcc(&t->root, 3), t->bytes = 10;
+    asserteq(sp_seek(&C, t, 0), SP_OK);
+    asserteq(sp_locate(&C, 5), SP_OK);
+    asserteq(sp_offset(&C), 5);
+    asserteq(sp_style(&C, &len, NULL), 2);
+    asserteq(len, 3);
+    assertok(sp_checkcursor(&C, 5));
+    asserteq(sp_locate(&C, 0), SP_OK);
+    asserteq(sp_offset(&C), 0);
+    asserteq(sp_style(&C, &len, NULL), 1);
+    assertok(sp_checkcursor(&C, 0));
+    sp_freetree(t), sp_close(S);
+}
+
+/* rebalance on a leaf-only tree: the root-children fold guard with
+ * levels == 0 is a no-op */
+TEST(rebalance_leaf) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t = sp_newtree(S);
+    sp_Cursor C;
+    spL_setid(&t->root, 0, 1), t->root.bytes[0] = 3;
+    spL_setid(&t->root, 1, 2), t->root.bytes[1] = 5;
+    spN_setcc(&t->root, 2), t->bytes = 8;
+    asserteq(sp_seek(&C, t, 0), SP_OK);
+    spD_rebalance(&C, 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 0));
+    sp_freetree(t), sp_close(S);
+}
+
+/* lochead with a NULL plen: internal head helper null out-param */
+TEST(lochead_null) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t = sp_newtree(S);
+    sp_Cursor C;
+    size_t    len;
+    spL_setid(&t->root, 0, 1), t->root.bytes[0] = 3;
+    spL_setid(&t->root, 1, 2), t->root.bytes[1] = 5;
+    spN_setcc(&t->root, 2), t->bytes = 8;
+    asserteq(sp_seek(&C, t, 0), SP_OK);
+    asserteq(spK_lochead(&C, NULL), 1);
+    asserteq(sp_offset(&C), 0);
+    assertok(sp_checkcursor(&C, 0));
+    asserteq(spK_lochead(&C, &len), 1);
+    asserteq(len, 3);
+    asserteq(sp_offset(&C), 0);
+    assertok(sp_checkcursor(&C, 0));
+    sp_freetree(t), sp_close(S);
+}
+
+/* seamleaf: merge adjacent same-id leaf segments in both cursor
+ * positions (right merge and left merge) */
+TEST(seamleaf_merge) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t = sp_newtree(S);
+    sp_Cursor C;
+    sp_Id     ids[8];
+    size_t    lens[8];
+    int       n;
+    /* merge right into left: cursor on first of two same-id segments */
+    spL_setid(&t->root, 0, 1), t->root.bytes[0] = 2;
+    spL_setid(&t->root, 1, 1), t->root.bytes[1] = 3;
+    spL_setid(&t->root, 2, 2), t->root.bytes[2] = 4;
+    spN_setcc(&t->root, 3), t->bytes = 9;
+    asserteq(sp_seek(&C, t, 0), SP_OK);
+    asserteq(spK_seamleaf(&C, 1), 1);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 0));
+    sp_seek(&C, t, 0);
+    collect_stream(&C, ids, lens, &n);
+    asserteq(n, 2);
+    asserteq(ids[0], 1);
+    asserteq(lens[0], 5);
+    asserteq(ids[1], 2);
+    asserteq(lens[1], 4);
+    sp_freetree(t);
+    /* merge left into current: cursor on second of two same-id segments */
+    t = sp_newtree(S);
+    spL_setid(&t->root, 0, 1), t->root.bytes[0] = 2;
+    spL_setid(&t->root, 1, 1), t->root.bytes[1] = 3;
+    spL_setid(&t->root, 2, 2), t->root.bytes[2] = 4;
+    spN_setcc(&t->root, 3), t->bytes = 9;
+    asserteq(sp_seek(&C, t, 2), SP_OK);
+    asserteq(spK_seamleaf(&C, 0), 1);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 2));
+    sp_seek(&C, t, 0);
+    collect_stream(&C, ids, lens, &n);
+    asserteq(n, 2);
+    asserteq(ids[0], 1);
+    asserteq(lens[0], 5);
+    asserteq(ids[1], 2);
+    asserteq(lens[1], 4);
+    sp_freetree(t), sp_close(S);
+}
+
+/* append at tree head when the first segment is already id 0 grows it */
+TEST(append_head_zero) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t = sp_newtree(S);
+    sp_Cursor C;
+    sp_Id     ids[8];
+    size_t    lens[8];
+    int       n;
+    spL_setid(&t->root, 0, 0), t->root.bytes[0] = 3;
+    spL_setid(&t->root, 1, 1), t->root.bytes[1] = 2;
+    spN_setcc(&t->root, 2), t->bytes = 5;
+    asserteq(sp_seek(&C, t, 0), SP_OK);
+    asserteq(sp_append(&C, 2), SP_OK);
+    asserteq(sp_bytes(t), 7);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 2));
+    sp_seek(&C, t, 0);
+    collect_stream(&C, ids, lens, &n);
+    asserteq(n, 2);
+    asserteq(ids[0], 0);
+    asserteq(lens[0], 5);
+    asserteq(ids[1], 1);
+    asserteq(lens[1], 2);
+    sp_freetree(t), sp_close(S);
+}
+
 /* ---- insertion: append/insert, inheritance, cursor motion ---- */
 
 /* collect segment stream: ids then lens, from cursor to tree end */
@@ -619,6 +783,32 @@ TEST(fill_leaf) {
     asserteq(lens[0], 3);
     asserteq(ids[1], 9);
     asserteq(lens[1], 7);
+    sp_freetree(t), sp_close(S);
+}
+
+/* fill with the same id inside a segment: the early-return path keeps
+ * the tree unchanged and cancels the split-protection refcount */
+TEST(fill_same_inside) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t = sp_newtree(S);
+    sp_Cursor C;
+    SpRef     r;
+    sp_Id     ids[8];
+    size_t    lens[8];
+    int       n;
+    memset(&r, 0, sizeof(r));
+    spL_setid(&t->root, 0, 1), t->root.bytes[0] = 10;
+    spN_setcc(&t->root, 1), t->bytes = 10;
+    sp_setarbiter(t, spA_ref, &r);
+    asserteq(sp_seek(&C, t, 2), SP_OK);
+    asserteq(spF_filterleaf(&C, 3, 1, 1), 0);
+    asserteq(sp_offset(&C), 5);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 5));
+    sp_seek(&C, t, 0);
+    collect_stream(&C, ids, lens, &n);
+    asserteq(n, 1);
+    asserteq(ids[0], 1);
+    asserteq(lens[0], 10);
     sp_freetree(t), sp_close(S);
 }
 
@@ -2713,6 +2903,9 @@ TEST(ns_edges) {
     asserteq(sp_prev(&C, -1, &len), SP_NONE);
     asserteq(len, 0);
     asserteq(sp_prev(&C, -1, NULL), SP_NONE);
+    asserteq(sp_prev(&C, SP_MASK_BITS + 1, &len), SP_NONE);
+    asserteq(len, 0);
+    asserteq(sp_prev(&C, 0, NULL), SP_NONE);
     C.tree = NULL;
     asserteq(sp_next(&C, 1, &len), SP_NONE);
     asserteq(sp_prev(&C, 1, &len), SP_NONE);
