@@ -1,41 +1,90 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 115" width="440" height="115">
-  <!-- shadow: COW immutable snapshot ghost -->
-  <g transform="skewX(3) translate(12, 8)" opacity="0.20">
-    <rect x="20" y="10" width="122" height="16" rx="3" fill="#1d4ed8"/>
-    <rect x="14" y="47" width="74" height="16" rx="3" fill="#2563eb"/>
-    <rect x="96" y="47" width="52" height="16" rx="3" fill="#2563eb"/>
-    <rect x="10" y="84" width="22" height="16" rx="3" fill="#93bbfd"/>
-    <rect x="40" y="84" width="22" height="16" rx="3" fill="#93bbfd"/>
-    <rect x="70" y="84" width="22" height="16" rx="3" fill="#93bbfd"/>
-    <rect x="100" y="84" width="22" height="16" rx="3" fill="#93bbfd"/>
-    <rect x="130" y="84" width="22" height="16" rx="3" fill="#93bbfd"/>
-    <line x1="81" y1="26" x2="51" y2="47" stroke="#1d4ed8" stroke-width="1.5" stroke-linecap="round"/>
-    <line x1="81" y1="26" x2="122" y2="47" stroke="#1d4ed8" stroke-width="1.5" stroke-linecap="round"/>
-    <line x1="51" y1="63" x2="21" y2="84" stroke="#2563eb" stroke-width="1.5" stroke-linecap="round"/>
-    <line x1="51" y1="63" x2="51" y2="84" stroke="#2563eb" stroke-width="1.5" stroke-linecap="round"/>
-    <line x1="51" y1="63" x2="81" y2="84" stroke="#2563eb" stroke-width="1.5" stroke-linecap="round"/>
-    <line x1="122" y1="63" x2="111" y2="84" stroke="#2563eb" stroke-width="1.5" stroke-linecap="round"/>
-    <line x1="122" y1="63" x2="141" y2="84" stroke="#2563eb" stroke-width="1.5" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 120" width="480" height="120" role="img" aria-labelledby="title desc">
+  <title id="title">piecetab</title>
+  <desc id="desc">A B+ tree piece table library for high-performance text editor buffers.</desc>
+
+  <defs>
+    <linearGradient id="bannerBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f172a"/>
+      <stop offset="1" stop-color="#1e3a8a"/>
+    </linearGradient>
+    <linearGradient id="nodeRoot" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e2e8f0"/>
+    </linearGradient>
+    <linearGradient id="nodeInner" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#dbeafe"/>
+      <stop offset="1" stop-color="#bfdbfe"/>
+    </linearGradient>
+    <linearGradient id="nodeLeaf" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#93c5fd"/>
+      <stop offset="1" stop-color="#60a5fa"/>
+    </linearGradient>
+  </defs>
+
+  <style>
+    .wordmark-piece { fill: #f8fafc; }
+    .wordmark-tab { fill: #60a5fa; }
+    .tagline { fill: #94a3b8; }
+  </style>
+
+  <!-- Self-contained dark banner: readable on both light and dark page backgrounds -->
+  <rect x="0" y="0" width="480" height="120" rx="28" fill="url(#bannerBg)"/>
+  <rect x="0" y="0" width="480" height="120" rx="28" fill="none" stroke="#ffffff" stroke-opacity="0.14" stroke-width="1.5"/>
+
+  <!-- Icon: rounded panel with a stylized B+ tree of piece cards -->
+  <g>
+    <rect x="12" y="12" width="96" height="96" rx="24" fill="#ffffff" fill-opacity="0.06"/>
+    <rect x="12" y="12" width="96" height="96" rx="24" fill="none" stroke="#ffffff" stroke-opacity="0.14" stroke-width="1.5"/>
+
+    <g transform="translate(20 20)">
+      <!-- B+ tree: multi-way internal nodes + linked leaf chain -->
+      <g fill="none" stroke="#bfdbfe" stroke-opacity="0.9" stroke-width="2" stroke-linecap="round">
+        <path d="M40 16 C40 21, 11 21, 11 26"/>
+        <path d="M40 16 C40 21, 40 21, 40 26"/>
+        <path d="M40 16 C40 21, 69 21, 69 26"/>
+        <path d="M11 39 C11 46, 7.5 46, 7.5 56"/>
+        <path d="M11 39 C11 46, 20.5 46, 20.5 56"/>
+        <path d="M40 39 C40 46, 33.5 46, 33.5 56"/>
+        <path d="M40 39 C40 46, 46.5 46, 46.5 56"/>
+        <path d="M69 39 C69 46, 59.5 46, 59.5 56"/>
+        <path d="M69 39 C69 46, 72.5 46, 72.5 56"/>
+      </g>
+
+      <!-- linked leaf chain (B+ tree leaves are linked) -->
+      <path d="M4 63 H76" stroke="#bfdbfe" stroke-opacity="0.55" stroke-width="1.5" stroke-linecap="round"/>
+
+      <!-- root / internal nodes -->
+      <rect x="20" y="2" width="40" height="14" rx="5" fill="url(#nodeRoot)"/>
+      <rect x="2"  y="26" width="18" height="13" rx="4.5" fill="url(#nodeInner)"/>
+      <rect x="31" y="26" width="18" height="13" rx="4.5" fill="url(#nodeInner)"/>
+      <rect x="60" y="26" width="18" height="13" rx="4.5" fill="url(#nodeInner)"/>
+
+      <!-- key separators inside internal nodes -->
+      <g stroke="#64748b" stroke-opacity="0.45" stroke-width="1">
+        <line x1="33" y1="5" x2="33" y2="13"/>
+        <line x1="47" y1="5" x2="47" y2="13"/>
+        <line x1="11" y1="29" x2="11" y2="36"/>
+        <line x1="40" y1="29" x2="40" y2="36"/>
+        <line x1="69" y1="29" x2="69" y2="36"/>
+      </g>
+
+      <!-- leaf pieces -->
+      <rect x="2"  y="56" width="11" height="14" rx="4" fill="url(#nodeLeaf)"/>
+      <rect x="15" y="56" width="11" height="14" rx="4" fill="url(#nodeLeaf)"/>
+      <rect x="28" y="56" width="11" height="14" rx="4" fill="url(#nodeLeaf)"/>
+      <rect x="41" y="56" width="11" height="14" rx="4" fill="url(#nodeLeaf)"/>
+      <rect x="54" y="56" width="11" height="14" rx="4" fill="url(#nodeLeaf)"/>
+      <rect x="67" y="56" width="11" height="14" rx="4" fill="url(#nodeLeaf)"/>
+
+      <!-- text-editor caret -->
+      <rect x="77" y="58" width="3" height="14" rx="1.5" fill="#fbbf24"/>
+    </g>
   </g>
 
-  <!-- main tree -->
-  <g transform="skewX(3)">
-    <line x1="81" y1="26" x2="51" y2="47" stroke="#2563eb" stroke-width="1.5" stroke-linecap="round"/>
-    <line x1="81" y1="26" x2="122" y2="47" stroke="#60a5fa" stroke-width="1.5" stroke-linecap="round"/>
-    <line x1="51" y1="63" x2="21" y2="84" stroke="#2563eb" stroke-width="1.5" stroke-linecap="round"/>
-    <line x1="51" y1="63" x2="51" y2="84" stroke="#3b82f6" stroke-width="1.5" stroke-linecap="round"/>
-    <line x1="51" y1="63" x2="81" y2="84" stroke="#60a5fa" stroke-width="1.5" stroke-linecap="round"/>
-    <line x1="122" y1="63" x2="111" y2="84" stroke="#3b82f6" stroke-width="1.5" stroke-linecap="round"/>
-    <line x1="122" y1="63" x2="141" y2="84" stroke="#60a5fa" stroke-width="1.5" stroke-linecap="round"/>
-    <rect x="20" y="10" width="122" height="16" rx="3" fill="#1d4ed8"/>
-    <rect x="14" y="47" width="74" height="16" rx="3" fill="#2563eb"/>
-    <rect x="96" y="47" width="52" height="16" rx="3" fill="#3b82f6"/>
-    <rect x="10" y="84" width="22" height="16" rx="3" fill="#93bbfd"/>
-    <rect x="40" y="84" width="22" height="16" rx="3" fill="#93bbfd"/>
-    <rect x="70" y="84" width="22" height="16" rx="3" fill="#93bbfd"/>
-    <rect x="100" y="84" width="22" height="16" rx="3" fill="#93bbfd"/>
-    <rect x="130" y="84" width="22" height="16" rx="3" fill="#93bbfd"/>
-  </g>
+  <!-- Wordmark -->
+  <text x="128" y="70" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="44" font-weight="700" letter-spacing="-0.5">
+    <tspan class="wordmark-piece">piece</tspan><tspan class="wordmark-tab">tab</tspan>
+  </text>
 
-  <text x="185" y="61" font-size="32" font-weight="600" fill="#1e293b" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">piecetab</text>
+  <text x="131" y="98" class="tagline" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500" letter-spacing="0.2">B+ tree piece table for text editors</text>
 </svg>
