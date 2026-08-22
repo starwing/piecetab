@@ -18,15 +18,15 @@ sp8 *args='': (test "tests/spantree_test_fanout8" args)
 sp *args='': (test "tests/spantree_test_fanout4" "?" + args) (test "tests/spantree_test_fanout8" "?" + args)
 
 # fuzz: seeded random-op stress with per-op invariant checks
-sp-fuzz seed='1': (fuzz-run "sp" seed)
-pt-fuzz seed='1': (fuzz-run "pt" seed)
-lc-fuzz seed='1': (fuzz-run "lc" seed)
+sp-fuzz seed='1': (fuzz-run "sp" INCS seed)
+pt-fuzz seed='1': (fuzz-run "pt" INCS seed)
+lc-fuzz seed='1': (fuzz-run "lc" INCS seed)
 fuzz-replay lib path: (fuzz-run lib "replay" path)
 
 # debug fuzz: ASan/UBSan build, precise fault isolation
-dfz-sp seed='1': (dfz-run "sp" seed)
-dfz-pt seed='1': (dfz-run "pt" seed)
-dfz-lc seed='1': (dfz-run "lc" seed)
+dfz-sp seed='1': (dfz-run "sp" INCS seed)
+dfz-pt seed='1': (dfz-run "pt" INCS seed)
+dfz-lc seed='1': (dfz-run "lc" INCS seed)
 
 # coverage
 
@@ -73,9 +73,12 @@ svg *args='editor.lua':
     ansisvg --width {{ SVG_COLS }} < /tmp/piecetab-editor.ansi > {{ SVG_OUT }}
 
 clean: clean-gcda
-    rm -f tests/linecache_test_fanout4 tests/linecache_test_fanout8 tests/piecetab_test_fanout4 tests/undotree_test tests/cellgrid_test tests/termfeed_test tests/spantree_test_fanout4 tests/spantree_test_fanout8
-    rm -fr tests/*.dSYM
-    rm -fr build
+    rm -fr tests/*.dSYM lua/*.dSYM fuzz/*.dSYM lua/grammar lua/luajit
+    rm -f tests/*_test_fanout4 tests/*_test_fanout8 tests/*_test
+    rm -f tests/*.exe tests/*.exp tests/*.lib tests/*.pdb
+    rm -f fuzz/*_fuzz fuzz/*_fuzz_dbg fuzz/*_replay
+    rm -f lua/editor.log lua/*.info lua/*.so
+    rm -f editor.log
 
 # LuaLS type check on lua sources (target: zero warnings in lsp.lua/editor.lua/tests)
 

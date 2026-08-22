@@ -3,44 +3,16 @@
 
 CC := "gcc"
 CFLAGS := "-Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic -std=c89 -Wno-variadic-macros"
-LUAFLAGS := "-Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -std=gnu99 -Wno-variadic-macros -Wno-array-bounds"
-LDF := `if [ "$(uname)" = "Darwin" ]; then echo "-bundle -undefined dynamic_lookup"; else echo "-shared -fPIC"; fi`
-LUA_INC := `
-    if [ "$(uname)" = "Darwin" ]; then
-        for d in /opt/homebrew/include/lua5.5 /opt/homebrew/include/lua5.4 \
-            "$HOME/.lua/include" "$HOME/.lua/include/lua5.5" \
-            "$HOME/.lua/include/lua5.4" ../.lua/include .lua/include \
-            /usr/local/include /usr/local/include/lua5.5 \
-            /usr/local/include/lua5.4 /usr/include/lua5.4; do
-            [ -d "$d" ] && { echo "-I$d"; exit 0; }
-        done
-    else
-        for d in ../.lua/include .lua/include "$HOME/.lua/include" \
-            "$HOME/.lua/include/lua5.5" "$HOME/.lua/include/lua5.4" \
-            /usr/local/include /usr/local/include/lua5.5 \
-            /usr/local/include/lua5.4 /usr/include/lua5.4; do
-            [ -d "$d" ] && { echo "-I$d"; exit 0; }
-        done
-    fi
-    exit 0
-`
-LUAJIT_INC := `
-    for d in ../.lua/include/luajit-2.1 .lua/include/luajit-2.1 \
-        /opt/homebrew/include/luajit-2.1 /usr/include/luajit-2.1; do
-        [ -d "$d" ] && { echo "-I$d"; exit 0; }
-    done
-    exit 0
-`
 
 # fuzz tools: fuzz writes the op log to /tmp/<lib>_oplog.txt before each
 # op, so a crash leaves a replayable log (just fuzz-replay <lib> <path>)
 # fast daily run (-O2, no sanitizers); dfz-* is the sanitized variant
-fuzz-run lib mode arg='':
-    {{ CC }} {{ CFLAGS }} {{ INCS }} -Ifuzz -g -O2 -o fuzz/{{ lib }}_fuzz fuzz/{{ lib }}_fuzz.c && ./fuzz/{{ lib }}_fuzz {{ mode }} {{ arg }}
+fuzz-run lib inc mode arg='':
+    {{ CC }} {{ CFLAGS }} {{ inc }} -Ifuzz -g -O2 -o fuzz/{{ lib }}_fuzz fuzz/{{ lib }}_fuzz.c && ./fuzz/{{ lib }}_fuzz {{ mode }} {{ arg }}
 
 # debug fuzz: same stress under ASan/UBSan for precise fault isolation
-dfz-run lib mode arg='':
-    {{ CC }} {{ CFLAGS }} {{ INCS }} -Ifuzz -g -O1 -fsanitize=address,undefined -o fuzz/{{ lib }}_fuzz_dbg fuzz/{{ lib }}_fuzz.c && ./fuzz/{{ lib }}_fuzz_dbg {{ mode }} {{ arg }}
+dfz-run lib inc mode arg='':
+    {{ CC }} {{ CFLAGS }} {{ inc }} -Ifuzz -g -O1 -fsanitize=address,undefined -o fuzz/{{ lib }}_fuzz_dbg fuzz/{{ lib }}_fuzz.c && ./fuzz/{{ lib }}_fuzz_dbg {{ mode }} {{ arg }}
 
 # t = test source without .c suffix (may include dir), inc = include flags
 dbg-run t inc *tests='':
