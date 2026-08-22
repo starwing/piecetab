@@ -5,7 +5,7 @@ local dir = arg[0]:match("^(.*)[/\\]") or "."
 local root = dir .. "/../.."
 package.path = root .. "/?.lua;" .. dir .. "/?.lua;" .. package.path
 package.cpath = (_G["jit"] and root .. "/lua/luajit/?.so;"
-    or root .. "/lua/?.so;")
+      or root .. "/lua/?.so;")
     .. package.cpath
     .. ";./lua/?.so;/opt/homebrew/lib/lua/5.5/?.so;/opt/homebrew/lib/lua/5.4/?.so"
 package.cpath = package.cpath
@@ -43,14 +43,14 @@ function TestRPC:testNotifyNoParams()
   local s = lsp.RPC.enc_notify("initialized")
   local msg = assert(json.decode(s:match("\r\n\r\n(.*)$")))
   lu.assertEquals(msg.method, "initialized")
-  lu.assertNil(msg.params)
-  lu.assertNil(msg.id)
+  lu.assertIsNil(msg.params)
+  lu.assertIsNil(msg.id)
 end
 
 function TestRPC:testResultAndError()
   local msg = assert(json.decode(lsp.RPC.enc_result(5, { ok = true }):match("\r\n\r\n(.*)$")))
   lu.assertEquals(msg.id, 5)
-  lu.assertTrue(msg.result.ok)
+  lu.assertIsTrue(msg.result.ok)
   local msg2 = assert(json.decode(lsp.RPC.enc_error(6, -32601, "nope"):match("\r\n\r\n(.*)$")))
   lu.assertEquals(msg2.error.code, -32601)
   lu.assertEquals(msg2.error.message, "nope")
@@ -66,7 +66,7 @@ end
 function TestRPC:testWholeFrame()
   local wire = lsp.RPC.enc_notify("initialized")
   local msg, err = lsp.RPC.decoder(reader(wire)):read()
-  lu.assertNil(err)
+  lu.assertIsNil(err)
   lu.assertEquals(msg.method, "initialized")
 end
 
@@ -100,21 +100,21 @@ end
 
 function TestRPC:testEof()
   local msg, err = lsp.RPC.decoder(function() return nil end):read()
-  lu.assertNil(msg)
+  lu.assertIsNil(msg)
   lu.assertEquals(err, "eof")
 end
 
 function TestRPC:testTruncatedBody()
   local wire = lsp.RPC.enc_notify("x")
   local msg, err = lsp.RPC.decoder(reader(wire:sub(1, #wire - 3))):read()
-  lu.assertNil(msg)
+  lu.assertIsNil(msg)
   lu.assertEquals(err, "eof")
 end
 
 function TestRPC:testBadJson()
   local msg, err = lsp.RPC.decoder(reader("Content-Length: 3\r\n\r\nbad")):read()
-  lu.assertNil(msg)
-  lu.assertNotNil(err)
+  lu.assertIsNil(msg)
+  lu.assertNotIsNil(err)
 end
 
 function TestRPC:testResponseShape()
@@ -177,7 +177,9 @@ local function io_drive(h, want, frames)
     while true do
       local m = d:read()
       if m then
-        if want(m) then got = m; return end
+        if want(m) then
+          got = m; return
+        end
       else
         return
       end
@@ -236,12 +238,12 @@ sendmsg({ jsonrpc = "2.0", id = m.id, result = true })
 ]])
   local h = assert(lsp.IO.spawn({ "lua", path }))
   lsp.IO.send(h, lsp.RPC.enc_request(1, "x", {}))
-  lu.assertNotNil(io_drive(h, function(m) return m.id == 1 end),
+  lu.assertNotIsNil(io_drive(h, function(m) return m.id == 1 end),
     "response")
   -- after exit, reader must report EOF (nil, not pause)
   lsp.IO.pump(h)
   local m2, err2 = lsp.RPC.decoder(h.reader):read()
-  lu.assertNil(m2)
+  lu.assertIsNil(m2)
   lu.assertEquals(err2, "eof")
   lsp.IO.close(h)
   os.remove(path)
@@ -259,7 +261,7 @@ os.exit(3)
     if h.exit then break end
     os.execute("sleep 0.01")
   end
-  lu.assertTrue(h.exit)
+  lu.assertIsTrue(h.exit)
   lu.assertEquals(h.exit_code, 3)
   lsp.IO.close(h)
   os.remove(path)
@@ -361,7 +363,7 @@ function TestProto:testHandshakeDidOpen()
   local got
   local c, path = new_client(CODE, { "hello", "world" })
   c:on("test/didOpen", function(p) got = p end)
-  lu.assertTrue(drive(c, function() return got ~= nil end), "didOpen echo")
+  lu.assertIsTrue(drive(c, function() return got ~= nil end), "didOpen echo")
   lu.assertEquals(c.state, "running")
   lu.assertEquals(got.text, "hello\nworld")
   lu.assertEquals(got.uri, "file:///t.lua")
@@ -377,7 +379,7 @@ function TestProto:testHelloIgnored()
 sendmsg({ jsonrpc = "2.0", method = "$/hello", params = { "world" } })
 ]] .. CODE, { "x" })
   c:on("test/didOpen", function(p) got = p end)
-  lu.assertTrue(drive(c, function() return got ~= nil end), "didOpen echo")
+  lu.assertIsTrue(drive(c, function() return got ~= nil end), "didOpen echo")
   lu.assertEquals(c.state, "running")
   lsp.IO.close(c.io)
   os.remove(path)
@@ -388,10 +390,10 @@ function TestProto:testEditSync()
   local changes = {}
   local c, path = new_client(CODE, { "hello", "你好世界", "abc" })
   c:on("test/didChange", function(p) changes[#changes + 1] = p end)
-  lu.assertTrue(drive(c, function() return c.state == "running" end))
-  c:notify_edit(0, 0, "X")       -- line 0 col 0
-  c:notify_edit(9, 0, "界")       -- after "你" (byte 3): utf16 col 1
-  lu.assertTrue(drive(c, function() return #changes == 2 end), "changes")
+  lu.assertIsTrue(drive(c, function() return c.state == "running" end))
+  c:notify_edit(0, 0, "X") -- line 0 col 0
+  c:notify_edit(9, 0, "界") -- after "你" (byte 3): utf16 col 1
+  lu.assertIsTrue(drive(c, function() return #changes == 2 end), "changes")
   lu.assertEquals(changes[1].textDocument.version, 2)
   lu.assertEquals(changes[1].contentChanges[1].text, "X")
   lu.assertEquals(changes[1].contentChanges[1].range.start.character, 0)
@@ -410,10 +412,10 @@ function TestProto:testEmojiUtf16()
   local changes = {}
   local c, path = new_client(CODE, { "a😀b" })
   c:on("test/didChange", function(p) changes[#changes + 1] = p end)
-  lu.assertTrue(drive(c, function() return c.state == "running" end))
+  lu.assertIsTrue(drive(c, function() return c.state == "running" end))
   c:notify_edit(1, 0, "x")
   c:notify_edit(5, 0, "y")
-  lu.assertTrue(drive(c, function() return #changes == 2 end), "changes")
+  lu.assertIsTrue(drive(c, function() return #changes == 2 end), "changes")
   lu.assertEquals(changes[1].contentChanges[1].range.start.character, 1)
   lu.assertEquals(changes[2].contentChanges[1].range.start.character, 3)
   lsp.IO.close(c.io)
@@ -424,7 +426,7 @@ function TestProto:testDiagPush()
   local got
   local c, path = new_client(CODE_DIAG, { "hello" })
   c:on("textDocument/publishDiagnostics", function(p) got = p end)
-  lu.assertTrue(drive(c, function() return got ~= nil end), "diag push")
+  lu.assertIsTrue(drive(c, function() return got ~= nil end), "diag push")
   lu.assertEquals(got.uri, "file:///t.lua")
   lu.assertEquals(got.diagnostics[1].message, "oops")
   lsp.IO.close(c.io)
@@ -437,12 +439,12 @@ function TestProto:testNotifyEdits()
   local changes = {}
   local c, path = new_client(CODE, { "hello", "world" })
   c:on("test/didChange", function(p) changes[#changes + 1] = p end)
-  lu.assertTrue(drive(c, function() return c.state == "running" end))
+  lu.assertIsTrue(drive(c, function() return c.state == "running" end))
   c:notify_edits({
     { off = 5, del = 0, text = "X" },
     { off = 6, del = 5, text = "!" },
   })
-  lu.assertTrue(drive(c, function() return #changes == 1 end), "sync")
+  lu.assertIsTrue(drive(c, function() return #changes == 1 end), "sync")
   lu.assertEquals(changes[1].textDocument.version, 2)
   lu.assertEquals(#changes[1].contentChanges, 2)
   lu.assertEquals(changes[1].contentChanges[1].range.start,
@@ -465,7 +467,7 @@ function TestProto:testServerRequest()
     return { { hint = { enable = true } }, json.null }
   end)
   c:on("test/resp", function(p) resp = p end)
-  lu.assertTrue(drive(c, function() return resp ~= nil end), "answered")
+  lu.assertIsTrue(drive(c, function() return resp ~= nil end), "answered")
   lu.assertEquals(got.items[1].section, "Lua")
   lu.assertEquals(resp.result[1].hint.enable, true)
   lu.assertEquals(resp.result[2], json.null, "null preserved")
@@ -479,7 +481,7 @@ function TestProto:testConfigAnswer()
   local resp
   local c, path = new_client(CODE_CFG, { "x" })
   c:on("test/resp", function(p) resp = p end)
-  lu.assertTrue(drive(c, function() return resp ~= nil end), "answered")
+  lu.assertIsTrue(drive(c, function() return resp ~= nil end), "answered")
   lu.assertEquals(resp.result[1].hint.enable, true)
   lu.assertEquals(resp.result[1].hint.setType, true)
   lu.assertEquals(resp.result[2], json.null, "unknown section null")
@@ -492,7 +494,7 @@ function TestProto:testConfigOverrideEmpty()
   local resp
   local c, path = new_client(CODE_CFG, { "x" }, {})
   c:on("test/resp", function(p) resp = p end)
-  lu.assertTrue(drive(c, function() return resp ~= nil end), "answered")
+  lu.assertIsTrue(drive(c, function() return resp ~= nil end), "answered")
   lu.assertEquals(resp.result[1], json.null, "Lua section null")
   lu.assertEquals(resp.result[2], json.null, "unknown section null")
   lsp.IO.close(c.io)
@@ -501,9 +503,9 @@ end
 
 function TestProto:testShutdownExit()
   local c, path = new_client(CODE, { "x" })
-  lu.assertTrue(drive(c, function() return c.state == "running" end))
+  lu.assertIsTrue(drive(c, function() return c.state == "running" end))
   c:stop()
-  lu.assertTrue(drive(c, function() return c.state == "exited" end), "exited")
+  lu.assertIsTrue(drive(c, function() return c.state == "exited" end), "exited")
   lsp.IO.close(c.io)
   os.remove(path)
 end
@@ -514,10 +516,14 @@ TestClient = {}
 -- lifecycle calls; state/version simulate a running server
 local function fake_proto()
   local p = {
-    state = "running", version = 3,
+    state = "running",
+    version = 3,
     capabilities = { inlayHintProvider = true },
-    reqs = {}, cbs = {}, handlers = {},
-    edits = nil, synced = false,
+    reqs = {},
+    cbs = {},
+    handlers = {},
+    edits = nil,
+    synced = false,
   }
   p.request = function(self, method, params, cb)
     self.reqs[#self.reqs + 1] = method
@@ -528,7 +534,9 @@ local function fake_proto()
   p.poll = function(self) end
   p.stop = function(self) end
   p.on = function(self, method, fn) self.handlers[method] = fn end
-  p.start = function(self, argv, uri) self.uri = uri; return true end
+  p.start = function(self, argv, uri)
+    self.uri = uri; return true
+  end
   return p
 end
 
@@ -633,7 +641,7 @@ function TestClient:testResponseWritesVtext()
   lu.assertEquals(#got, 3)
   lu.assertEquals(got[2][1], 1)
   lu.assertEquals(got[3][1], 0)
-  lu.assertNil(got[3][2], "old line cleared")
+  lu.assertIsNil(got[3][2], "old line cleared")
 end
 
 function TestClient:testPostRenderSemanticPull()
@@ -648,8 +656,10 @@ end
 
 function TestClient:testSemanticDecodeAscii()
   local c, proto, got = mk_client()
-  proto.capabilities.semanticTokensProvider = { full = true,
-    legend = { tokenTypes = { "comment" } } }
+  proto.capabilities.semanticTokensProvider = {
+    full = true,
+    legend = { tokenTypes = { "comment" } }
+  }
   c:post_render()
   -- tokens (5 ints each: dline/dunit/len/ttype/mod): line 0 unit 3
   -- len 2; line 1 unit 0 len 1; unknown ttype idx 1 must be skipped
@@ -662,7 +672,7 @@ function TestClient:testSemanticDecodeAscii()
   lu.assertEquals(spans[1].attr, "c")
   lu.assertEquals(spans[2].offset, 6) -- line 1 starts at byte 6
   lu.assertEquals(spans[2].length, 1)
-  lu.assertFalse(c.sem.dirty, "decode clears dirty")
+  lu.assertIsFalse(c.sem.dirty, "decode clears dirty")
   c:post_render() -- not dirty: no new request
   lu.assertEquals(#proto.reqs, 1)
 end
@@ -670,8 +680,10 @@ end
 function TestClient:testSemanticDecodeCjkUtf16()
   -- "你好a😀": CJK = 1 unit / 3 bytes, emoji = 2 units / 4 bytes
   local c, proto, got = mk_client({ lines = { "你好a😀", "x" } })
-  proto.capabilities.semanticTokensProvider = { full = true,
-    legend = { tokenTypes = { "comment" } } }
+  proto.capabilities.semanticTokensProvider = {
+    full = true,
+    legend = { tokenTypes = { "comment" } }
+  }
   c:post_render()
   -- tokens (5 ints each): unit 2 len 1 ("a", bytes 6-7); unit 3 len 2
   -- (emoji, bytes 7-11); line 1 unit 0 len 1
@@ -693,8 +705,8 @@ function TestClient:testOnEditMarksDirty()
   lu.assertEquals(proto.edits[1], 3)
   lu.assertEquals(proto.edits[2], 2)
   lu.assertEquals(proto.edits[3], "xy")
-  lu.assertTrue(c.sem.dirty)
-  lu.assertTrue(c.hint_dirty)
+  lu.assertIsTrue(c.sem.dirty)
+  lu.assertIsTrue(c.hint_dirty)
 end
 
 function TestClient:testOnSwitchNoClear()
@@ -703,8 +715,8 @@ function TestClient:testOnSwitchNoClear()
   c:on_switch(changes)
   lu.assertEquals(proto.switch_edits, changes)
   lu.assertEquals(#got, 0) -- no vtext clear: the tree splice shifts it
-  lu.assertTrue(c.sem.dirty)
-  lu.assertTrue(c.hint_dirty)
+  lu.assertIsTrue(c.sem.dirty)
+  lu.assertIsTrue(c.hint_dirty)
 end
 
 function TestClient:testUndoSwitchCollectsHunks()
@@ -716,47 +728,70 @@ function TestClient:testUndoSwitchCollectsHunks()
   lu.assertEquals(proto.switch_edits,
     { { off = 5, del = 2, text = "ab" }, { off = 0, del = 0, text = "X" } })
   lu.assertEquals(#got, 0) -- no vtext clear: the tree splice shifts it
-  lu.assertTrue(c.sem.dirty)
+  lu.assertIsTrue(c.sem.dirty)
 end
 
 function TestClient:testDiagAt()
   local c = mk_client()
-  c.diag = { spans = {
-    { offset = 1, length = 5, severity = 2, msg = "warn" },
-    { offset = 2, length = 3, severity = 1, msg = "error" },
-  } }
+  c.diag = {
+    spans = {
+      { offset = 1, length = 5, severity = 2, msg = "warn" },
+      { offset = 2, length = 3, severity = 1, msg = "error" },
+    }
+  }
   lu.assertEquals(c:diag_at(3).msg, "error") -- lowest severity wins
-  lu.assertNil(c:diag_at(0))
+  lu.assertIsNil(c:diag_at(0))
   c.diag = nil
-  lu.assertNil(c:diag_at(3))
+  lu.assertIsNil(c:diag_at(3))
 end
 
 function TestClient:testDiagDecodeCjkAndVersionGuard()
   local c, proto, got = mk_client({ lines = { "你好", "x" } })
-  lu.assertTrue(c:start({ "lua" }, "file:///t.lua", "lua"))
+  lu.assertIsTrue(c:start({ "lua" }, "file:///t.lua", "lua"))
   local handler = proto.handlers["textDocument/publishDiagnostics"]
-  lu.assertNotNil(handler)
+  lu.assertNotIsNil(handler)
   -- CJK: chars 0-2 span 6 bytes; line 1 chars 0-1 span 1 byte (off 8)
-  handler({ uri = "file:///t.lua", version = 2,
+  handler({
+    uri = "file:///t.lua",
+    version = 2,
     diagnostics = {
-      { range = { start = { line = 0, character = 0 },
-        ["end"] = { line = 0, character = 2 } }, message = "boom",
-        severity = 1 },
-      { range = { start = { line = 1, character = 0 },
-        ["end"] = { line = 1, character = 1 } }, message = "x" },
-    } })
+      {
+        range = {
+          start = { line = 0, character = 0 },
+          ["end"] = { line = 0, character = 2 }
+        },
+        message = "boom",
+        severity = 1
+      },
+      {
+        range = {
+          start = { line = 1, character = 0 },
+          ["end"] = { line = 1, character = 1 }
+        },
+        message = "x"
+      },
+    }
+  })
   lu.assertEquals(c.diag.version, 2)
   lu.assertEquals(#c.diag.spans, 2)
   lu.assertEquals(c.diag.spans[1].offset, 0)
   lu.assertEquals(c.diag.spans[1].length, 6)
   lu.assertEquals(c.diag.spans[1].msg, "boom")
   lu.assertEquals(c.diag.spans[2].offset, 7) -- line 1 starts at byte 7
-  lu.assertEquals(got[1][1], "diag") -- rendered into the tree layer
+  lu.assertEquals(got[1][1], "diag")         -- rendered into the tree layer
   lu.assertEquals(got[1][2][1].attr.severity, 1)
   -- stale snapshot (older version) dropped
-  handler({ uri = "file:///t.lua", version = 1,
-    diagnostics = { { range = { start = { line = 0, character = 0 },
-      ["end"] = { line = 0, character = 1 } }, message = "stale" } } })
+  handler({
+    uri = "file:///t.lua",
+    version = 1,
+    diagnostics = { {
+      range = {
+        start = { line = 0, character = 0 },
+        ["end"] = { line = 0, character = 1 }
+      },
+      message = "stale"
+    } }
+  })
   lu.assertEquals(#c.diag.spans, 2)
   lu.assertEquals(c.diag.spans[1].msg, "boom")
 end
@@ -765,8 +800,8 @@ function TestClient:testStartFailureClears()
   local c, proto, got = mk_client()
   proto.start = function() return false end
   local ok = c:start({ "lua" }, "file:///t.lua", "lua")
-  lu.assertFalse(ok)
-  lu.assertNil(c.proto)
+  lu.assertIsFalse(ok)
+  lu.assertIsNil(c.proto)
   lu.assertEquals(#got, 3) -- sem/diag/vtext tree layers all cleared
   lu.assertEquals(got[1][1], "sem-clear")
   lu.assertEquals(got[2][1], "diag-clear")
@@ -788,7 +823,7 @@ function TestClient:testRestartResetsHints()
   c:stop()
   lu.assertEquals(#got, 4) -- sem/diag/vtext tree layers cleared
   lu.assertEquals(got[4][1], "clear")
-  lu.assertTrue(c:start({ "lua" }, "file:///t.lua", "lua"))
+  lu.assertIsTrue(c:start({ "lua" }, "file:///t.lua", "lua"))
   c:tick()
   -- response on a different line: no stale clear of line 0 from the old run
   proto.cbs[#proto.cbs]({ { position = { line = 1, character = 2 }, label = "x" } })

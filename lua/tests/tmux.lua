@@ -4,9 +4,10 @@
 --- @class tmux
 --- @field name string  tmux session name
 --- @field files {path: string, content: string}[]  temp files written/removed
+--- @field errfile string? temp file path for stderr capture (if set)
+--- @field codefile string? temp file path for exit code capture (if set)
 local tmux = {}
-
-local M = { __index = tmux }
+tmux.__index = tmux
 
 --- @param args string
 --- @return string
@@ -33,7 +34,7 @@ local nextid = 0
 --- @return tmux
 function tmux.new(opts)
   nextid = nextid + 1
-  local self = setmetatable({}, M)
+  local self = setmetatable({}, tmux)
   self.name = "pttest" .. nextid
   self.files = opts.files or {}
   for _, f in ipairs(self.files) do
@@ -45,7 +46,10 @@ function tmux.new(opts)
     self.name, opts.cols or 80, opts.rows or 24, opts.cmd)
   local ok = false
   for _ = 1, 5 do
-    if run(cmd):find("^$") then ok = true break end
+    if run(cmd):find("^$") then
+      ok = true
+      break
+    end
     os.execute("sleep 0.1")
   end
   assert(ok, "tmux spawn failed: " .. cmd)

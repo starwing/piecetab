@@ -17,16 +17,16 @@
 
 `just <xx> [args...]` — `xx` 为库前缀：
 
-| 命令 | 库 |
-|---|---|
-| `just lc` | linecache（FANOUT=4 + 8 全跑） |
-| `just lc4` / `just lc8` | linecache（FANOUT=4 / 8） |
-| `just pt` | piecetab |
-| `just sp` | spantree（FANOUT=4 + 8 全跑） |
-| `just sp4` / `just sp8` | spantree（FANOUT=4 / 8） |
-| `just ut` | undotree |
-| `just cg` | cellgrid |
-| `just tf` | termfeed |
+| 命令                    | 库                             |
+| ----------------------- | ------------------------------ |
+| `just lc`               | linecache（FANOUT=4 + 8 全跑） |
+| `just lc4` / `just lc8` | linecache（FANOUT=4 / 8）      |
+| `just pt`               | piecetab                       |
+| `just sp`               | spantree（FANOUT=4 + 8 全跑）  |
+| `just sp4` / `just sp8` | spantree（FANOUT=4 / 8）       |
+| `just ut`               | undotree                       |
+| `just cg`               | cellgrid                       |
+| `just tf`               | termfeed                       |
 
 - 无参数：运行全部
 - 前缀匹配：`just lc4 splice` 匹配所有 `splice*`
@@ -73,8 +73,8 @@
   （如果某个测试文件没有，修测试文件而不是改头文件）。
   需要在 spantree.h 内临时打印时，依赖测试已先包含 stdio；
   若 standalone 编译也要在包含头文件前先 `#include <stdio.h>`。
-- 断言 API：`assertEquals` / `assertTrue` / `assertNotEquals` /
-  `assertNil` / `assertStrContains`（luaunit 内建）
+- 断言 API：`assertEquals` / `assertIsTrue` / `assertNotEquals` /
+  `assertIsNil` / `assertStrContains`（luaunit 内建）
 
 ## 测试文件与命名
 

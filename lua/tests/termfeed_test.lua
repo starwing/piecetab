@@ -73,7 +73,7 @@ end
 
 function TestFeed:testPartial()
     local t = tf.new()
-    t:feed("\xe4") -- lead byte of 中 (U+4E2D)
+    t:feed("\xe4")     -- lead byte of 中 (U+4E2D)
     lu.assertEquals(t:readkey(), "AGAIN")
     t:feed("\xb8\xad") -- continuation bytes
     lu.assertEquals(t:readkey(), "KEY")
@@ -212,7 +212,7 @@ function TestTypes:testUnknownCsiInitial()
     local d = t:data()
     lu.assertEquals(d.initial, 63) -- '?'
     lu.assertEquals(d.cmd, 122)    -- 'z'
-    lu.assertNil(d.intermediate)
+    lu.assertIsNil(d.intermediate)
 end
 
 function TestTypes:testUnknownCsiIntermediate()
@@ -222,7 +222,7 @@ function TestTypes:testUnknownCsiIntermediate()
     local d = t:data()
     lu.assertEquals(d.intermediate, 33) -- '!'
     lu.assertEquals(d.cmd, 122)         -- 'z'
-    lu.assertNil(d.initial)
+    lu.assertIsNil(d.initial)
 end
 
 function TestTypes:testDCS()
@@ -315,12 +315,12 @@ end
 
 function TestMod:testLetters()
     local t, r = feedone("\x1b[1;2A")
-    lu.assertTrue(t:mod("S"))
-    lu.assertFalse(t:mod("C"))
-    lu.assertFalse(t:mod("A"))
-    lu.assertFalse(t:mod("D"))
-    lu.assertFalse(t:mod("T"))
-    lu.assertFalse(t:mod("H"))
+    lu.assertIsTrue(t:mod("S"))
+    lu.assertIsFalse(t:mod("C"))
+    lu.assertIsFalse(t:mod("A"))
+    lu.assertIsFalse(t:mod("D"))
+    lu.assertIsFalse(t:mod("T"))
+    lu.assertIsFalse(t:mod("H"))
     -- empty string is the no-arg form: returns modifier string
     lu.assertEquals(t:mod(""), "S")
 end
@@ -329,21 +329,21 @@ function TestMod:testAltCtrl()
     local t, r = feedone("\x1b[1;5C") -- C-Right
     lu.assertEquals(r, "KEY")
     lu.assertEquals(t:mod(), "C")
-    lu.assertTrue(t:mod("c"))
+    lu.assertIsTrue(t:mod("c"))
     t = tf.new()
     t:feed("\x1ba") -- M-a
     lu.assertEquals(t:readkey(), "KEY")
     lu.assertEquals(t:mod(), "A")
-    lu.assertTrue(t:mod("m"))
-    lu.assertTrue(t:mod("M"))
-    lu.assertTrue(t:mod("a"))
+    lu.assertIsTrue(t:mod("m"))
+    lu.assertIsTrue(t:mod("M"))
+    lu.assertIsTrue(t:mod("a"))
 end
 
 function TestMod:testUnknown()
     local t = tf.new()
     t:feed("a")
     t:readkey()
-    lu.assertNil(t:mod("Z"))
+    lu.assertIsNil(t:mod("Z"))
 end
 
 function TestMod:testExtraModifiers()
@@ -354,17 +354,17 @@ function TestMod:testExtraModifiers()
         lu.assertEquals(t:readkey(), "KEY")
         return t:mod()
     end
-    lu.assertEquals(mods_of(10, 97), "SD")  -- SHIFT | SUPER
-    lu.assertEquals(mods_of(7, 97), "AC")   -- ALT | CTRL
-    lu.assertEquals(mods_of(33, 97), "T")   -- META
-    lu.assertEquals(mods_of(17, 97), "H")   -- HYPER
+    lu.assertEquals(mods_of(10, 97), "SD") -- SHIFT | SUPER
+    lu.assertEquals(mods_of(7, 97), "AC")  -- ALT | CTRL
+    lu.assertEquals(mods_of(33, 97), "T")  -- META
+    lu.assertEquals(mods_of(17, 97), "H")  -- HYPER
     local t = tf.new()
-    t:feed("\x1b[27;9;97~") -- SUPER
+    t:feed("\x1b[27;9;97~")                -- SUPER
     t:readkey()
-    lu.assertTrue(t:mod("d"))
-    lu.assertFalse(t:mod("s"))
-    lu.assertFalse(t:mod("h"))
-    lu.assertFalse(t:mod("t"))
+    lu.assertIsTrue(t:mod("d"))
+    lu.assertIsFalse(t:mod("s"))
+    lu.assertIsFalse(t:mod("h"))
+    lu.assertIsFalse(t:mod("t"))
 end
 
 -- ======== Format ========
@@ -394,7 +394,7 @@ TestParse = {}
 function TestParse:testKeysym()
     local t = tf.new()
     local ok, n = t:parse("<Up>")
-    lu.assertTrue(ok)
+    lu.assertIsTrue(ok)
     lu.assertEquals(n, 4)
     lu.assertEquals(t:format(), "<Up>")
     lu.assertEquals(t:key(), "KEYSYM")
@@ -403,7 +403,7 @@ end
 function TestParse:testPlain()
     local t = tf.new()
     local ok, n = t:parse("a")
-    lu.assertTrue(ok)
+    lu.assertIsTrue(ok)
     lu.assertEquals(n, 1)
     lu.assertEquals(t:key(), "UNICODE")
 end
@@ -411,7 +411,7 @@ end
 function TestParse:testMods()
     local t = tf.new()
     local ok = t:parse("<C-S-Up>")
-    lu.assertTrue(ok)
+    lu.assertIsTrue(ok)
     lu.assertEquals(t:mod(), "SC")
     -- termfeed formats Shift before Ctrl
     lu.assertEquals(t:format(), "<S-C-Up>")
@@ -419,10 +419,10 @@ end
 
 function TestParse:testFailures()
     local t = tf.new()
-    lu.assertNil(t:parse(""))
-    lu.assertNil(t:parse("<>"))
-    lu.assertNil(t:parse("<foo>"))
-    lu.assertNil(t:parse("\xc3")) -- dangling lead byte
+    lu.assertIsNil(t:parse(""))
+    lu.assertIsNil(t:parse("<>"))
+    lu.assertIsNil(t:parse("<foo>"))
+    lu.assertIsNil(t:parse("\xc3")) -- dangling lead byte
 end
 
 -- ======== Name / sym ========
@@ -434,9 +434,9 @@ function TestNames:testRoundtrip()
 end
 
 function TestNames:testInvalid()
-    lu.assertNil(tf.name(0))
-    lu.assertNil(tf.name(9999))
-    lu.assertNil(tf.sym("nope"))
+    lu.assertIsNil(tf.name(0))
+    lu.assertIsNil(tf.name(9999))
+    lu.assertIsNil(tf.sym("nope"))
 end
 
 function TestNames:testConstants()
@@ -462,7 +462,7 @@ function TestFlush:testPartialEscape()
     t:feed("\x1b[")
     lu.assertEquals(t:readkey(), "AGAIN") -- CSI partial: bytes consumed
     lu.assertEquals(t:flush(), "KEY")
-    lu.assertEquals(t:format(), "<M-[>") -- ALT, vim-style M- token
+    lu.assertEquals(t:format(), "<M-[>")  -- ALT, vim-style M- token
     lu.assertEquals(t:mod(), "A")
 end
 
@@ -472,7 +472,7 @@ function TestFlush:testIdle()
     lu.assertEquals(t:format(), "<>") -- KEYSYM NONE, empty name
     -- KEYSYM NONE: data() yields nil name
     local nm, sym = t:data()
-    lu.assertNil(nm)
+    lu.assertIsNil(nm)
     lu.assertEquals(sym, 0)
 end
 

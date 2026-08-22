@@ -4,7 +4,7 @@ local dir = arg[0]:match("^(.*)[/\\]") or "."
 local root = dir .. "/../.."
 package.path = root .. "/?.lua;" .. dir .. "/?.lua;" .. package.path
 package.cpath = (_G["jit"] and root .. "/lua/luajit/?.so;"
-    or root .. "/lua/?.so;")
+      or root .. "/lua/?.so;")
     .. package.cpath
     .. ";./lua/?.so;/opt/homebrew/lib/lua/5.5/?.so;/opt/homebrew/lib/lua/5.4/?.so"
 
@@ -45,30 +45,30 @@ end
 
 function TestDecode:testParseError()
   local v, err, pos = json.decode("{bad")
-  lu.assertNil(v)
+  lu.assertIsNil(v)
   lu.assertEquals(err, "unexpected_character")
   lu.assertEquals(pos, 1)
   local v2, err2 = json.decode("")
-  lu.assertNil(v2)
-  lu.assertNotNil(err2)
+  lu.assertIsNil(v2)
+  lu.assertNotIsNil(err2)
 end
 
 function TestDecode:testErrorCodes()
   -- one bad input per reachable yyjson_read_code (2/8/11 are not
   -- producible through the binding: OOM / comment flag / internal literal)
   local cases = {
-    { "", "invalid_parameter" },
-    { "  ", "empty_content" },
-    { "1.2.3", "unexpected_content" },
-    { "[1,", "unexpected_end" },
-    { "{bad", "unexpected_character" },
+    { "",       "invalid_parameter" },
+    { "  ",     "empty_content" },
+    { "1.2.3",  "unexpected_content" },
+    { "[1,",    "unexpected_end" },
+    { "{bad",   "unexpected_character" },
     { "[1,2,]", "json_structure" },
-    { "01", "invalid_number" },
+    { "01",     "invalid_number" },
     { '"a\\q"', "invalid_string" },
   }
   for _, c in ipairs(cases) do
     local v, err = json.decode(c[1])
-    lu.assertNil(v)
+    lu.assertIsNil(v)
     lu.assertEquals(err, c[2])
   end
 end
@@ -151,7 +151,7 @@ function TestMarkers:testNullMarker()
   setmetatable(t, json.null)
   lu.assertEquals(json.encode(t), "null")
   -- decoded null is the marker table itself: identity compare holds
-  lu.assertTrue(dec("null") == json.null)
+  lu.assertIsTrue(dec("null") == json.null)
 end
 
 function TestType:testKind()
@@ -173,8 +173,8 @@ function TestType:testKind()
   lu.assertEquals(json.type({ a = 1 }), "object")
   lu.assertEquals(json.type({ [1] = 1, [5] = 5 }), "object")
   -- unsupported
-  lu.assertNil(json.type(nil))
-  lu.assertNil(json.type(function() end))
+  lu.assertIsNil(json.type(nil))
+  lu.assertIsNil(json.type(function() end))
 end
 
 function TestMarkers:testMarkersNest()

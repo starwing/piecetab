@@ -386,7 +386,7 @@ end
 function TestDoc:testReadNEof()
     local d = pt.doc("hi")
     d:seek("end")
-    lu.assertNil(d:read(1))
+    lu.assertIsNil(d:read(1))
 end
 
 function TestDoc:testReadNZero()
@@ -400,14 +400,14 @@ function TestDoc:testReadLine()
     local d = pt.doc("hello\nworld")
     lu.assertEquals(d:read("l"), "hello")
     lu.assertEquals(d:read("l"), "world")
-    lu.assertNil(d:read("l"))
+    lu.assertIsNil(d:read("l"))
 end
 
 function TestDoc:testReadLineWithNL()
     local d = pt.doc("hello\nworld\n")
     lu.assertEquals(d:read("L"), "hello\n")
     lu.assertEquals(d:read("L"), "world\n")
-    lu.assertNil(d:read("L"))
+    lu.assertIsNil(d:read("L"))
 end
 
 function TestDoc:testReadLineStar()
@@ -499,7 +499,7 @@ function TestDoc:testCommit()
     d:seek("end")
     d:write(" world")
     local v2 = d:commit()
-    lu.assertTrue(v2 > v1)
+    lu.assertIsTrue(v2 > v1)
     d:seek("set", 0)
     lu.assertEquals(d:read("a"), "hello world")
 end
@@ -621,100 +621,100 @@ end
 -- Sequential-application replay: apply edits (off = byte offset in the
 -- current text, del = bytes deleted, text = bytes inserted).
 local function apply_edits(src, edits)
-  for _, e in ipairs(edits) do
-    src = src:sub(1, e.off) .. e.text .. src:sub(e.off + e.del + 1)
-  end
-  return src
+    for _, e in ipairs(edits) do
+        src = src:sub(1, e.off) .. e.text .. src:sub(e.off + e.del + 1)
+    end
+    return src
 end
 
 -- undo/redo(f): f receives (off, del, text) per hunk in application
 -- order; replaying them on the pre-jump text reproduces the post-jump
 -- text (off is sequential: each relative to the previous edit's result)
 function TestDoc:testUndoCallbackReplays()
-  local d = pt.doc("abcdef")
-  d:commit()
-  d:seek("set", 1); d:write("XY"); d:commit() -- "aXYbcdef"
-  d:seek("set", 4); d:write("Z"); d:commit()  -- "aXYbZcdef"
-  local before = d:dump()
-  local edits = {}
-  d:undo(function(off, del, text)
-    edits[#edits + 1] = { off = off, del = del, text = text }
-  end)
-  lu.assertEquals(d:dump(), "aXYbcdef")
-  lu.assertEquals(apply_edits(before, edits), "aXYbcdef")
+    local d = pt.doc("abcdef")
+    d:commit()
+    d:seek("set", 1); d:write("XY"); d:commit() -- "aXYbcdef"
+    d:seek("set", 4); d:write("Z"); d:commit()  -- "aXYbZcdef"
+    local before = d:dump()
+    local edits = {}
+    d:undo(function(off, del, text)
+        edits[#edits + 1] = { off = off, del = del, text = text }
+    end)
+    lu.assertEquals(d:dump(), "aXYbcdef")
+    lu.assertEquals(apply_edits(before, edits), "aXYbcdef")
 end
 
 function TestDoc:testUndoCallbackMultiHunk()
-  -- two scattered edits in one commit: hunks keep sequential offsets
-  local d = pt.doc("abcdef")
-  d:commit()
-  d:seek("set", 1); d:write("X") -- journal (1,0,1)
-  d:seek("set", 5); d:write("Y") -- journal (5,0,1)
-  d:commit()                     -- "aXbcdeYf"
-  local before = d:dump()
-  local edits = {}
-  d:undo(function(off, del, text)
-    edits[#edits + 1] = { off = off, del = del, text = text }
-  end)
-  lu.assertEquals(d:dump(), "abcdef")
-  lu.assertEquals(apply_edits(before, edits), "abcdef")
+    -- two scattered edits in one commit: hunks keep sequential offsets
+    local d = pt.doc("abcdef")
+    d:commit()
+    d:seek("set", 1); d:write("X") -- journal (1,0,1)
+    d:seek("set", 5); d:write("Y") -- journal (5,0,1)
+    d:commit()                     -- "aXbcdeYf"
+    local before = d:dump()
+    local edits = {}
+    d:undo(function(off, del, text)
+        edits[#edits + 1] = { off = off, del = del, text = text }
+    end)
+    lu.assertEquals(d:dump(), "abcdef")
+    lu.assertEquals(apply_edits(before, edits), "abcdef")
 end
 
 function TestDoc:testUndoCallbackFresh()
-  -- uncommitted edits: the fresh hunks are fed before version hunks
-  -- (here the parent is root, so only fresh hunks arrive)
-  local d = pt.doc("abcdef")
-  d:commit()
-  d:seek("set", 1); d:write("X")
-  d:seek("set", 5); d:write("Y")
-  local before = d:dump() -- "aXbcdeYf"
-  local edits = {}
-  d:undo(function(off, del, text)
-    edits[#edits + 1] = { off = off, del = del, text = text }
-  end)
-  lu.assertEquals(d:dump(), "abcdef")
-  lu.assertEquals(apply_edits(before, edits), "abcdef")
+    -- uncommitted edits: the fresh hunks are fed before version hunks
+    -- (here the parent is root, so only fresh hunks arrive)
+    local d = pt.doc("abcdef")
+    d:commit()
+    d:seek("set", 1); d:write("X")
+    d:seek("set", 5); d:write("Y")
+    local before = d:dump() -- "aXbcdeYf"
+    local edits = {}
+    d:undo(function(off, del, text)
+        edits[#edits + 1] = { off = off, del = del, text = text }
+    end)
+    lu.assertEquals(d:dump(), "abcdef")
+    lu.assertEquals(apply_edits(before, edits), "abcdef")
 end
 
 function TestDoc:testRedoCallback()
-  -- redo(f): forward hunks, inserted text read from the child buffer
-  local d = pt.doc("abcdef")
-  d:commit()
-  d:seek("set", 1); d:write("XY"); d:commit() -- "aXYbcdef"
-  d:undo()
-  local edits = {}
-  d:redo(function(off, del, text)
-    edits[#edits + 1] = { off = off, del = del, text = text }
-  end)
-  lu.assertEquals(d:dump(), "aXYbcdef")
-  lu.assertEquals(apply_edits("abcdef", edits), "aXYbcdef")
+    -- redo(f): forward hunks, inserted text read from the child buffer
+    local d = pt.doc("abcdef")
+    d:commit()
+    d:seek("set", 1); d:write("XY"); d:commit() -- "aXYbcdef"
+    d:undo()
+    local edits = {}
+    d:redo(function(off, del, text)
+        edits[#edits + 1] = { off = off, del = del, text = text }
+    end)
+    lu.assertEquals(d:dump(), "aXYbcdef")
+    lu.assertEquals(apply_edits("abcdef", edits), "aXYbcdef")
 end
 
 function TestDoc:testUndoCallbackVidStillWorks()
-  -- undo(vid) without f keeps the old semantics
-  local d = pt.doc("")
-  d:commit()
-  d:seek("end"); d:write("hello"); local v1 = d:commit()
-  d:seek("end"); d:write(" world"); d:commit()
-  lu.assertEquals(d:undo(v1), v1)
-  lu.assertEquals(d:dump(), "hello")
+    -- undo(vid) without f keeps the old semantics
+    local d = pt.doc("")
+    d:commit()
+    d:seek("end"); d:write("hello"); local v1 = d:commit()
+    d:seek("end"); d:write(" world"); d:commit()
+    lu.assertEquals(d:undo(v1), v1)
+    lu.assertEquals(d:dump(), "hello")
 end
 
 function TestDoc:testUndoCallbackVid()
-  -- undo(vid, f) must feed the version hunks to f, not only jump.
-  local d = pt.doc("abcdef")
-  d:commit()
-  d:seek("set", 1); d:write("XY"); local v1 = d:commit() -- "aXYbcdef"
-  d:seek("set", 4); d:write("Z"); local v2 = d:commit()  -- "aXYbZcdef"
-  local before = d:dump()
-  local edits = {}
-  local ret = d:undo(v1, function(off, del, text)
-    edits[#edits + 1] = { off = off, del = del, text = text }
-  end)
-  lu.assertEquals(ret, v1)
-  lu.assertEquals(d:dump(), "aXYbcdef")
-  lu.assertEquals(#edits, 1)
-  lu.assertEquals(apply_edits(before, edits), "aXYbcdef")
+    -- undo(vid, f) must feed the version hunks to f, not only jump.
+    local d = pt.doc("abcdef")
+    d:commit()
+    d:seek("set", 1); d:write("XY"); local v1 = d:commit() -- "aXYbcdef"
+    d:seek("set", 4); d:write("Z"); local v2 = d:commit()  -- "aXYbZcdef"
+    local before = d:dump()
+    local edits = {}
+    local ret = d:undo(v1, function(off, del, text)
+        edits[#edits + 1] = { off = off, del = del, text = text }
+    end)
+    lu.assertEquals(ret, v1)
+    lu.assertEquals(d:dump(), "aXYbcdef")
+    lu.assertEquals(#edits, 1)
+    lu.assertEquals(apply_edits(before, edits), "aXYbcdef")
 end
 
 function TestDoc:testBufferExport()
@@ -792,12 +792,12 @@ function TestDoc:testReadLineEmptyLastLine()
     local d = pt.doc("line1\n")
     lu.assertEquals(d:read("l"), "line1")
     d:read("l") -- last empty line
-    lu.assertNil(d:read("l"))
+    lu.assertIsNil(d:read("l"))
 end
 
 function TestDoc:testReadLineEOF()
     local d = pt.doc("")
-    lu.assertNil(d:read("l"))
+    lu.assertIsNil(d:read("l"))
 end
 
 function TestDoc:testFreshUndoDiscards()
@@ -822,9 +822,9 @@ end
 function TestDoc:testFreshUndoNoSyncLineCache()
     -- lck=1 at undo: assert(d->lck == 0) fires before ut_discard
     local d = pt.doc("L0\nL1\nL2\nL3\n")
-    d:seek("line", 0); d:edit(0, "X")       -- freshcount=1, lck=0
-    d:breaks()                                 -- sync lc → lck=1
-    d:undo()                                   -- assert: lck must be 0
+    d:seek("line", 0); d:edit(0, "X") -- freshcount=1, lck=0
+    d:breaks()                        -- sync lc → lck=1
+    d:undo()                          -- assert: lck must be 0
     d:seek("line", 1)
     lu.assertEquals(d:read("l"), "L1")
 end
@@ -832,10 +832,10 @@ end
 function TestDoc:testCommitLckInvariant()
     -- lck not 0 and not freshcount at commit: assert fires
     local d = pt.doc("L0\nL1\nL2\n")
-    d:seek("line", 0); d:edit(0, "A")        -- edit #1: fc=1, lck=0
-    d:line()                                   -- sync → lck=1
-    d:seek("line", 1); d:edit(0, "B")        -- edit #2: fc=2, lck=1
-    d:commit()                                 -- assert: lck not 0, not fc
+    d:seek("line", 0); d:edit(0, "A") -- edit #1: fc=1, lck=0
+    d:line()                          -- sync → lck=1
+    d:seek("line", 1); d:edit(0, "B") -- edit #2: fc=2, lck=1
+    d:commit()                        -- assert: lck not 0, not fc
 end
 
 function TestDoc:testRedoFreshError()
@@ -877,7 +877,7 @@ function TestDoc:testBreaksAfterAppendPastNL()
     -- append after \n (shifts \n position, line count unchanged)
     local d = pt.doc("hello\nworld\n")
     lu.assertEquals(d:breaks(), 2)
-    d:seek(6); d:append("X")  -- at "world"
+    d:seek(6); d:append("X") -- at "world"
     lu.assertEquals(d:breaks(), 2)
 end
 
@@ -931,7 +931,7 @@ function TestDoc:testBreaksLinesMismatchTrailingNL()
     -- but lines() does not yield it. This mismatch causes
     -- editor G command to leave a ghost row at screen bottom.
     local d = pt.doc("a\nb\n")
-    lu.assertEquals(d:breaks(), 2)   -- should match lines() yield count
+    lu.assertEquals(d:breaks(), 2) -- should match lines() yield count
 
     local yielded = {}
     for text in d:lines() do
@@ -991,7 +991,7 @@ function TestDoc:testReadNoArg()
     local d = pt.doc("hello\nworld")
     lu.assertEquals(d:read(), "hello")
     lu.assertEquals(d:read(), "world")
-    lu.assertNil(d:read())
+    lu.assertIsNil(d:read())
 end
 
 function TestDoc:testReadlineMultiPiece()
@@ -1000,7 +1000,7 @@ function TestDoc:testReadlineMultiPiece()
     d:append("aa"); d:edit(0, "bb"); d:append("cc\n")
     d:seek(0)
     lu.assertEquals(d:read("l"), "aabbcc")
-    lu.assertNil(d:read("l"))
+    lu.assertIsNil(d:read("l"))
 end
 
 function TestDoc:testReadlineMultiPiece2()
@@ -1020,7 +1020,7 @@ function TestDoc:testReadlineMultiPieceEmptyLine()
     lu.assertEquals(d:read("l"), "aa")
     lu.assertEquals(d:read("l"), "")
     lu.assertEquals(d:read("l"), "bb")
-    lu.assertNil(d:read("l"))
+    lu.assertIsNil(d:read("l"))
 end
 
 function TestDoc:testReadlineMultiPieceWithNL()
@@ -1029,7 +1029,7 @@ function TestDoc:testReadlineMultiPieceWithNL()
     d:append("aa"); d:edit(0, "bb"); d:append("cc\n")
     d:seek(0)
     lu.assertEquals(d:read("L"), "aabbcc\n")
-    lu.assertNil(d:read("L"))
+    lu.assertIsNil(d:read("L"))
 end
 
 function TestDoc:testReadlineMultiPieceNoNewline()
@@ -1038,7 +1038,7 @@ function TestDoc:testReadlineMultiPieceNoNewline()
     d:append("aa"); d:edit(0, "bb"); d:append("cc")
     d:seek(0)
     lu.assertEquals(d:read("l"), "aabbcc")
-    lu.assertNil(d:read("l"))
+    lu.assertIsNil(d:read("l"))
 end
 
 function TestDoc:testReadlineMultiPieceSeekMiddle()
@@ -1135,9 +1135,9 @@ function TestDoc:testRedoCursorPosition()
     d:commit()
     d:seek("set", 3)
     d:write("xxx")
-    d:commit() -- "helxxxlo", cursor at 6
-    d:undo()   -- back to "hello", cursor at 3
-    d:redo()   -- forward to "helxxxlo"
+    d:commit()                     -- "helxxxlo", cursor at 6
+    d:undo()                       -- back to "hello", cursor at 3
+    d:redo()                       -- forward to "helxxxlo"
     lu.assertEquals(d:dump(), "helxxxlo")
     lu.assertEquals(d:offset(), 3) -- insert point (geometric mapping)
 end
@@ -1283,7 +1283,7 @@ function TestDoc:testLinecolFragment()
     local d = pt.doc("a\nb")
     local line, col = d:linecol(2) -- fragment start
     lu.assertEquals(line, 1); lu.assertEquals(col, 0)
-    line, col = d:linecol(3) -- fragment end (doc end)
+    line, col = d:linecol(3)       -- fragment end (doc end)
     lu.assertEquals(line, 1); lu.assertEquals(col, 1)
 end
 
@@ -1291,7 +1291,7 @@ function TestDoc:testLinecolEndAndClamp()
     local d = pt.doc("hello\nworld")
     local line, col = d:linecol(11) -- doc end = last line end
     lu.assertEquals(line, 1); lu.assertEquals(col, 5)
-    line, col = d:linecol(999) -- clamped to #doc
+    line, col = d:linecol(999)      -- clamped to #doc
     lu.assertEquals(line, 1); lu.assertEquals(col, 5)
 end
 
@@ -1300,9 +1300,9 @@ function TestDoc:testLinecolEmptyLines()
     local d = pt.doc("a\n\nb")
     local line, col = d:linecol(1) -- after "a" newline
     lu.assertEquals(line, 0); lu.assertEquals(col, 1)
-    line, col = d:linecol(2) -- blank line start
+    line, col = d:linecol(2)       -- blank line start
     lu.assertEquals(line, 1); lu.assertEquals(col, 0)
-    line, col = d:linecol(3) -- fragment "b" start
+    line, col = d:linecol(3)       -- fragment "b" start
     lu.assertEquals(line, 2); lu.assertEquals(col, 0)
 end
 
@@ -1311,9 +1311,9 @@ function TestDoc:testLinecolUtf8Bytes()
     local d = pt.doc("héllo\nwörld") -- é, ö = 2 bytes each
     local line, col = d:linecol(2)   -- inside é (line 0)
     lu.assertEquals(line, 0); lu.assertEquals(col, 2)
-    line, col = d:linecol(7) -- start of line 1 ("w")
+    line, col = d:linecol(7)         -- start of line 1 ("w")
     lu.assertEquals(line, 1); lu.assertEquals(col, 0)
-    line, col = d:linecol(9) -- inside ö (line 1)
+    line, col = d:linecol(9)         -- inside ö (line 1)
     lu.assertEquals(line, 1); lu.assertEquals(col, 2)
 end
 
@@ -1625,10 +1625,10 @@ function TestDoc:testPieceMidRemaining()
     local d = pt.doc("hello")
     d:seek("set", 2)
     local rem = d:piece("len")
-    lu.assertEquals(rem, 3)  -- "llo"
+    lu.assertEquals(rem, 3) -- "llo"
     -- next after cursor mid-piece: skips remaining, starts next piece
     local n = d:piece("next")
-    lu.assertEquals(rem + n, 3)  -- n=0 since only 1 piece
+    lu.assertEquals(rem + n, 3) -- n=0 since only 1 piece
 end
 
 function TestDoc:testPieceSeekMidAdvance()
@@ -1735,7 +1735,6 @@ function TestDoc:testEditNegativeAmount()
     lu.assertError(function() d:splice(-1, "x") end)
 end
 
-
 function TestDoc:testSeekLineFragmentTail()
     -- trailing fragment ("x" has no \n): breaks() = lc_breaks + 1,
     -- seek("line", breaks) must land at fragment start, not error
@@ -1756,13 +1755,13 @@ end
 
 function TestDoc:testReadAt()
     local d = pt.doc("hello\nworld")
-    lu.assertEquals(d:readat(6), "world")      -- default len = to end
-    lu.assertEquals(d:readat(0, 5), "hello")   -- explicit range
-    lu.assertEquals(d:readat(6, 3), "wor")     -- mid-document range
-    lu.assertEquals(d:readat(8, 0), "")        -- len 0
+    lu.assertEquals(d:readat(6), "world")             -- default len = to end
+    lu.assertEquals(d:readat(0, 5), "hello")          -- explicit range
+    lu.assertEquals(d:readat(6, 3), "wor")            -- mid-document range
+    lu.assertEquals(d:readat(8, 0), "")               -- len 0
     lu.assertEquals(d:readat(0, 999), "hello\nworld") -- len clamped
-    lu.assertEquals(d:readat(11), "")          -- off == #doc
-    lu.assertEquals(d:readat(100), "")         -- off past end
+    lu.assertEquals(d:readat(11), "")                 -- off == #doc
+    lu.assertEquals(d:readat(100), "")                -- off past end
 end
 
 function TestDoc:testReadAtNoCursorMove()
@@ -1784,19 +1783,19 @@ end
 
 function TestDoc:testLineLenNoEol()
     local d = pt.doc("hello\nworld\n!")
-    lu.assertEquals(d:linelen(0, true), 5)  -- "hello" without \n
-    lu.assertEquals(d:linelen(1, true), 5)  -- "world" without \n
-    lu.assertEquals(d:linelen(2, true), 1)  -- final line has no \n
-    lu.assertEquals(d:linelen(0), 6)        -- noeol=false: unchanged
+    lu.assertEquals(d:linelen(0, true), 5) -- "hello" without \n
+    lu.assertEquals(d:linelen(1, true), 5) -- "world" without \n
+    lu.assertEquals(d:linelen(2, true), 1) -- final line has no \n
+    lu.assertEquals(d:linelen(0), 6)       -- noeol=false: unchanged
     lu.assertEquals(d:linelen(2), 1)
 end
 
 function TestDoc:testLineLenNoEolEmptyLine()
     local d = pt.doc("a\n\nb")
-    lu.assertEquals(d:linelen(0, true), 1)  -- "a\n" minus \n
-    lu.assertEquals(d:linelen(1), 1)        -- empty line "\n"
-    lu.assertEquals(d:linelen(1, true), 0)  -- empty line without \n
-    lu.assertEquals(d:linelen(2, true), 1)  -- final line as-is
+    lu.assertEquals(d:linelen(0, true), 1) -- "a\n" minus \n
+    lu.assertEquals(d:linelen(1), 1)       -- empty line "\n"
+    lu.assertEquals(d:linelen(1, true), 0) -- empty line without \n
+    lu.assertEquals(d:linelen(2, true), 1) -- final line as-is
 end
 
 function TestDoc:testLineLenNoEolCurrent()
@@ -1819,10 +1818,10 @@ end
 
 function TestDoc:testSeekLineColClamp()
     local d = pt.doc("hello\nworld")
-    lu.assertEquals(d:seek("line", 0, 999), 5)  -- line text end = \n
-    lu.assertEquals(d:seek("line", 1, 999), 11) -- trailing line: doc end
-    lu.assertEquals(d:seek("line", 0, -5), 0)   -- negative col → 0
-    lu.assertError(function() d:seek("line", 3, 0) end)  -- line out of range
+    lu.assertEquals(d:seek("line", 0, 999), 5)          -- line text end = \n
+    lu.assertEquals(d:seek("line", 1, 999), 11)         -- trailing line: doc end
+    lu.assertEquals(d:seek("line", 0, -5), 0)           -- negative col → 0
+    lu.assertError(function() d:seek("line", 3, 0) end) -- line out of range
     lu.assertError(function() d:seek("line", 99, 0) end)
 end
 
@@ -1837,7 +1836,7 @@ function TestDoc:testSeekLineColFragment()
 end
 
 function TestDoc:testSeekChar()
-    local d = pt.doc("héllo") -- é = 2 bytes: h é l l o
+    local d = pt.doc("héllo")              -- é = 2 bytes: h é l l o
     lu.assertEquals(d:advancechars(1), 1)  -- h
     lu.assertEquals(d:advancechars(1), 3)  -- é (2 bytes)
     lu.assertEquals(d:advancechars(1), 4)  -- l
@@ -1850,15 +1849,15 @@ end
 
 function TestDoc:testSeekCharMulti()
     local d = pt.doc("héllo")
-    lu.assertEquals(d:advancechars(3), 4)   -- h é l
-    lu.assertEquals(d:advancechars(2), 6)   -- l o → doc end
-    lu.assertEquals(d:advancechars(5), 6)   -- clamped at end
-    lu.assertEquals(d:advancechars(-9), 0)  -- clamped at 0
+    lu.assertEquals(d:advancechars(3), 4)  -- h é l
+    lu.assertEquals(d:advancechars(2), 6)  -- l o → doc end
+    lu.assertEquals(d:advancechars(5), 6)  -- clamped at end
+    lu.assertEquals(d:advancechars(-9), 0) -- clamped at 0
 end
 
 function TestDoc:testSeekCharContinuation()
     local d = pt.doc("héllo")
-    d:seek("set", 2) -- inside é
+    d:seek("set", 2)                       -- inside é
     lu.assertEquals(d:advancechars(1), 3)  -- continuation: step 1
     d:seek("set", 2)
     lu.assertEquals(d:advancechars(-1), 1) -- back to é start
@@ -1866,9 +1865,9 @@ end
 
 function TestDoc:testSeekCharWide()
     local d = pt.doc("a中b") -- 中 = 3 bytes (E4 B8 AD)
-    lu.assertEquals(d:advancechars(1), 1)  -- a
-    lu.assertEquals(d:advancechars(1), 4)  -- 中 (3 bytes)
-    lu.assertEquals(d:advancechars(1), 5)  -- b
+    lu.assertEquals(d:advancechars(1), 1) -- a
+    lu.assertEquals(d:advancechars(1), 4) -- 中 (3 bytes)
+    lu.assertEquals(d:advancechars(1), 5) -- b
     lu.assertEquals(d:advancechars(-1), 4) -- back one
     lu.assertEquals(d:advancechars(-1), 1) -- back over 中
 end
@@ -1911,13 +1910,13 @@ function TestDoc:testSeekChar4Byte()
 end
 
 function TestDoc:testCharlen()
-    local d = pt.doc("héllo") -- é = 2 bytes
-    lu.assertEquals(d:charlen(0), 1) -- h
-    lu.assertEquals(d:charlen(1), 2) -- é lead
-    lu.assertEquals(d:charlen(2), 1) -- é continuation byte
-    lu.assertEquals(d:charlen(3), 1) -- l
-    lu.assertEquals(d:charlen(5), 1) -- o
-    lu.assertEquals(d:charlen(6), 0) -- at doc end
+    local d = pt.doc("héllo")         -- é = 2 bytes
+    lu.assertEquals(d:charlen(0), 1)  -- h
+    lu.assertEquals(d:charlen(1), 2)  -- é lead
+    lu.assertEquals(d:charlen(2), 1)  -- é continuation byte
+    lu.assertEquals(d:charlen(3), 1)  -- l
+    lu.assertEquals(d:charlen(5), 1)  -- o
+    lu.assertEquals(d:charlen(6), 0)  -- at doc end
     lu.assertEquals(d:charlen(99), 0) -- past end
 end
 
@@ -1932,6 +1931,5 @@ function TestDoc:testCharlenError()
     local d = pt.doc("hi")
     lu.assertError(function() d:charlen(-1) end)
 end
-
 
 os.exit(lu.LuaUnit.run(), true)

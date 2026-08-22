@@ -5,7 +5,7 @@ local dir = arg[0]:match("^(.*)[/\\]") or "."
 local root = dir .. "/../.."
 package.path = root .. "/?.lua;" .. dir .. "/?.lua;" .. package.path
 package.cpath = (_G["jit"] and root .. "/lua/luajit/?.so;"
-    or root .. "/lua/?.so;")
+      or root .. "/lua/?.so;")
     .. package.cpath
     .. ";./lua/?.so;/opt/homebrew/lib/lua/5.5/?.so;/opt/homebrew/lib/lua/5.4/?.so"
 
@@ -15,12 +15,15 @@ local Ed = require "editor"
 local ROWS, COLS = 6, 40
 
 local function make_ed(content)
-  local term = { s = "", write = function(t, x) t.s = t.s .. x end,
-                 flush = function() end,
-                 move = function(t, row, col)
-                   t.s = t.s .. string.format("\27[%d;%dH", row, col)
-                 end,
-                 size = function() return ROWS, COLS end }
+  local term = {
+    s = "",
+    write = function(t, x) t.s = t.s .. x end,
+    flush = function() end,
+    move = function(t, row, col)
+      t.s = t.s .. string.format("\27[%d;%dH", row, col)
+    end,
+    size = function() return ROWS, COLS end
+  }
   local e = Ed.new(content, term)
   e.log = function() end
   return e
@@ -33,7 +36,8 @@ local LINES = 20 -- document lines for scroll tests
 -- handle never equals them — assert the folded attr instead.
 local function assert_style(e, st, attr)
   local a = e.comp:attr(st)
-  lu.assertNotNil(a, "style id " .. tostring(st) .. " has no attr")
+  lu.assertNotIsNil(a, "style id " .. tostring(st) .. " has no attr")
+  assert(a)
   for k, v in pairs(attr) do
     lu.assertEquals(a[k], v, "style key " .. tostring(k))
   end
@@ -72,17 +76,20 @@ function TestSkeleton:testEscTimeoutFinite()
   -- blocks forever after ESC in real tty, breaking :mode exit).
   -- Real-tty behavior verified manually; here we lock the config.
   local e = Ed.new()
-  lu.assertTrue(e.esc_timeout > 0 and e.esc_timeout <= 1000)
-  local e2 = Ed.new(nil, { esc_timeout = 7, write = function() end,
-                           flush = function() end,
-                           size = function() return 24, 80 end })
+  lu.assertIsTrue(e.esc_timeout > 0 and e.esc_timeout <= 1000)
+  local e2 = Ed.new(nil, {
+    esc_timeout = 7,
+    write = function() end,
+    flush = function() end,
+    size = function() return 24, 80 end
+  })
   lu.assertEquals(e2.esc_timeout, 7)
 end
 
 function TestSkeleton:testConstruct()
   local e = make_ed("a\nb")
   lu.assertEquals(e.mode, "NORMAL")
-  lu.assertNotNil(e.doc)
+  lu.assertNotIsNil(e.doc)
   lu.assertEquals(e.doc:breaks(), 2)
 end
 
@@ -158,13 +165,13 @@ function TestSkeleton:testCommandRegister()
   e:dispatch("l")
   e:dispatch("e")
   e:dispatch("<Enter>")
-  lu.assertNotNil(got)
+  lu.assertNotIsNil(got)
 end
 
 function TestSkeleton:testQuitSetsDone()
   local e = make_ed("")
   e:quit()
-  lu.assertTrue(e.done)
+  lu.assertIsTrue(e.done)
 end
 
 function TestSkeleton:testKeymapReturnsSelf()
@@ -181,7 +188,7 @@ function TestSkeleton:testDispatchAfterQuit()
   local e = make_ed("ab\n")
   e:quit()
   e:dispatch("x")
-  lu.assertTrue(e.done)
+  lu.assertIsTrue(e.done)
 end
 
 TestNormal = {}
@@ -347,7 +354,7 @@ end
 
 function TestInsert:testBackspaceUtf8()
   local e = make_ed("你好\n")
-  e.doc:seek("set", 6) -- end of line, after the 3-byte "好"
+  e.doc:seek("set", 6)      -- end of line, after the 3-byte "好"
   e:dispatch("i")
   e:dispatch("<Backspace>") -- deletes whole "好" (3 bytes), cursor trails to its start
   e:dispatch("<Escape>")
@@ -379,7 +386,7 @@ end
 
 function TestInsert:testEscapeAtEofMovesLeft()
   local e = make_ed("ab") -- no trailing newline
-  e.doc:seek("set", 2) -- EOF
+  e.doc:seek("set", 2)    -- EOF
   e:dispatch("i")
   e:dispatch("X")
   e:dispatch("<Escape>")
@@ -442,7 +449,7 @@ function TestCommand:testBangParsed() -- regression: q! dead-code branch
   e2:dispatch("q")
   e2:dispatch("!")
   e2:dispatch("<Enter>")
-  lu.assertTrue(got)
+  lu.assertIsTrue(got)
 end
 
 function TestCommand:testSaveWritesFile()
@@ -467,7 +474,7 @@ function TestCommand:testQuitSetsDone()
   e:dispatch(":")
   e:dispatch("q")
   e:dispatch("<Enter>")
-  lu.assertTrue(e.done)
+  lu.assertIsTrue(e.done)
 end
 
 function TestCommand:testWqSavesAndQuits()
@@ -481,7 +488,7 @@ function TestCommand:testWqSavesAndQuits()
   e:dispatch(":")
   e:dispatch("wq")
   e:dispatch("<Enter>")
-  lu.assertTrue(e.done)
+  lu.assertIsTrue(e.done)
   local out = assert(io.open(path, "r"))
   lu.assertEquals(out:read("*a"), "Xab\n")
   out:close()
@@ -512,7 +519,7 @@ function TestUtf8:setUp()
 end
 
 function TestUtf8:testHLeftAcrossUtf8()
-  self.e.doc:seek("set", 6) -- end of "你好" line (byte 6)
+  self.e.doc:seek("set", 6)               -- end of "你好" line (byte 6)
   self.e:dispatch("h")
   lu.assertEquals(self.e.doc:column(), 3) -- start of "好"
   self.e:dispatch("h")
@@ -580,14 +587,15 @@ TestScroll = {}
 function TestScroll:setUp()
   self.e = make_ed(make_doc())
 end
+
 function TestScroll:testDownScrollEmitsSu()
   -- j to the last visible row (row 4 of 5), then one more j scrolls
   for _ = 1, 4 do
     keystroke(self.e, "j")
   end
-  local s = keystroke(self.e, "j") -- 5th j: scroll_line 0 -> 1
-  lu.assertStrContains(s, "\27[1;5r") -- scroll region rows 1..5
-  lu.assertStrContains(s, "\27[1S")   -- SU 1: content scrolls UP
+  local s = keystroke(self.e, "j")      -- 5th j: scroll_line 0 -> 1
+  lu.assertStrContains(s, "\27[1;5r")   -- scroll region rows 1..5
+  lu.assertStrContains(s, "\27[1S")     -- SU 1: content scrolls UP
   lu.assertNotStrContains(s, "\27%[1T") -- no SD
   lu.assertEquals(self.e.scroll_line, 1)
 end
@@ -615,10 +623,11 @@ function TestScroll:testUpScrollEmitsSd()
     if self.e.scroll_line < 10 then break end
   end
   lu.assertStrContains(s, "\27[1;5r")
-  lu.assertStrContains(s, "\27[1T")    -- SD 1: content scrolls DOWN
+  lu.assertStrContains(s, "\27[1T")     -- SD 1: content scrolls DOWN
   lu.assertNotStrContains(s, "\27%[1S") -- no SU
   lu.assertEquals(self.e.scroll_line, 9)
 end
+
 function TestScroll:testScrollThenIdleFrame()
   -- after a scroll frame, an unchanged frame must not redraw grid
   -- content: the ring offset must persist across delta=0 frames
@@ -642,7 +651,7 @@ function TestStyleTable:testFullStateReset()
   -- the DIM attribute onto the colored cell
   local e = make_ed("")
   local attrs = { { fg = 207 }, { bg = 237, dim = true },
-                  { bold = true, underline = true } }
+    { bold = true, underline = true } }
   for i, a in ipairs(attrs) do
     lu.assertStrContains(e:csi(e.comp:intern(a)), "\27[0m", false, "attr " .. i)
   end
@@ -656,7 +665,7 @@ function TestSyntax:testKeywordC()
   local e = make_ed("int main(void) { return 0; }\n")
   e:open_language("c")
   frame(e)
-  local _, st = e.grid:cell(0, 4) -- content col 0 ('i' of int)
+  local _, st = e.grid:cell(0, 4)  -- content col 0 ('i' of int)
   assert_style(e, st, Ed.ATTR_KEYWORD)
   local _, st2 = e.grid:cell(0, 8) -- content col 4 ('m' of main)
   assert_not_style(e, st2, Ed.ATTR_KEYWORD)
@@ -670,7 +679,7 @@ function TestSyntax:testCommentStringC()
   local e = make_ed("int x; /* note */ char *s = \"hi\";\n")
   e:open_language("c")
   frame(e)
-  local _, st = e.grid:cell(0, 11) -- content col 7 ('/' of comment)
+  local _, st = e.grid:cell(0, 11)  -- content col 7 ('/' of comment)
   assert_style(e, st, Ed.ATTR_COMMENT)
   local _, st2 = e.grid:cell(0, 32) -- content col 28 ('"' of string)
   assert_style(e, st2, Ed.ATTR_STRING)
@@ -692,7 +701,7 @@ function TestSyntax:testNoLanguageNoHighlight()
   local e = make_ed("int main(void) { return 0; }\n")
   frame(e)
   local _, st = e.grid:cell(0, 4) -- content col 0
-  lu.assertEquals(st, 0) -- default handle
+  lu.assertEquals(st, 0)          -- default handle
 end
 
 TestSc = {}
@@ -713,15 +722,15 @@ end
 function TestSc:testInternFieldOrderIrrelevant()
   local s = Ed.newcompositor()
   lu.assertEquals(s:intern({ fg = 1, bold = true }),
-                  s:intern({ bold = true, fg = 1 }))
+    s:intern({ bold = true, fg = 1 }))
 end
 
 function TestSc:testInternUnsetSkipped()
   local s = Ed.newcompositor()
   lu.assertEquals(s:intern({ bold = true }),
-                  s:intern({ bold = true, dim = nil }))
+    s:intern({ bold = true, dim = nil }))
   lu.assertNotEquals(s:intern({ bold = true }),
-                     s:intern({ bold = true, underline = false }))
+    s:intern({ bold = true, underline = false }))
 end
 
 function TestSc:testInverseLookup()
@@ -730,8 +739,8 @@ function TestSc:testInverseLookup()
   local a = assert(s:attr(id))
   lu.assertEquals(a.fg, 207)
   lu.assertEquals(a.bg, "#010203")
-  lu.assertTrue(a.bold)
-  lu.assertNil(s:attr(id + 999))
+  lu.assertIsTrue(a.bold)
+  lu.assertIsNil(s:attr(id + 999))
 end
 
 function TestSc:testCsiGeneration()
@@ -741,10 +750,10 @@ function TestSc:testCsiGeneration()
   lu.assertEquals(e:csi(e.comp:intern({})), "\27[0m")
   lu.assertEquals(e:csi(e.comp:intern({ fg = 207 })), "\27[0m\27[38;5;207m")
   lu.assertEquals(e:csi(e.comp:intern({ bold = true, bg = 237 })),
-                  "\27[0m\27[1;48;5;237m")
+    "\27[0m\27[1;48;5;237m")
   lu.assertEquals(e:csi(e.comp:intern({ fg = "#010203" })),
-                  "\27[0m\27[38;2;1;2;3m")
-  lu.assertNil(e:csi(999))
+    "\27[0m\27[38;2;1;2;3m")
+  lu.assertIsNil(e:csi(999))
 end
 
 TestLayers = {}
@@ -755,7 +764,7 @@ local function make_pieces(content)
   e.doc:seek("set", 4)
   e:docedit(0, "XY") -- split into 2 pieces
   e.doc:seek("set", 8)
-  e:docedit(0, "Z") -- split into 3 pieces
+  e:docedit(0, "Z")  -- split into 3 pieces
   e.show_pieces = true
   return e
 end
@@ -765,9 +774,9 @@ end
 function TestLayers:testPiecesAlternate()
   local e = make_pieces("aaaa bbbb\n")
   frame(e)
-  local _, st = e.grid:cell(0, 4) -- 'a' (piece 1, plain)
+  local _, st = e.grid:cell(0, 4)   -- 'a' (piece 1, plain)
   lu.assertEquals(st, 0)
-  local _, st2 = e.grid:cell(0, 8) -- 'X' (piece 2, gray)
+  local _, st2 = e.grid:cell(0, 8)  -- 'X' (piece 2, gray)
   assert_style(e, st2, Ed.ATTR_GRAY_BG)
   local _, st3 = e.grid:cell(0, 12) -- 'Z' (piece 4, gray)
   assert_style(e, st3, Ed.ATTR_GRAY_BG)
@@ -777,17 +786,17 @@ end
 
 function TestLayers:testPiecesToggleCommand()
   local e = make_pieces("aaaa bbbb\n")
-  lu.assertTrue(e.show_pieces)
+  lu.assertIsTrue(e.show_pieces)
   e:dispatch(":") -- not needed; command path below
   e.commands.pieces(e, "", false)
-  lu.assertFalse(e.show_pieces)
+  lu.assertIsFalse(e.show_pieces)
 end
 
 function TestLayers:testPieceGrayOnlyOnEvenPieces()
   -- odd piece must NOT carry gray (piece 1 = plain)
   local e = make_pieces("aaaa bbbb\n")
   frame(e)
-  local _, st = e.grid:cell(0, 9) -- 'Y' (piece 2, gray)
+  local _, st = e.grid:cell(0, 9)  -- 'Y' (piece 2, gray)
   assert_style(e, st, Ed.ATTR_GRAY_BG)
   local _, st2 = e.grid:cell(0, 4) -- 'a' (piece 1, plain)
   lu.assertEquals(st2, 0)
@@ -803,7 +812,7 @@ function TestLayers:testLayeredCompose()
   e.show_pieces = true
   frame(e)
   local bg = e.comp:intern(Ed.ATTR_GRAY_BG)
-  local _, st = e.grid:cell(0, 4) -- 'i' (piece 1, plain): keyword only
+  local _, st = e.grid:cell(0, 4)  -- 'i' (piece 1, plain): keyword only
   assert_style(e, st, Ed.ATTR_KEYWORD)
   local _, st2 = e.grid:cell(0, 8) -- 'Q' (piece 2, gray): no syntax
   assert_style(e, st2, Ed.ATTR_GRAY_BG)
@@ -820,7 +829,7 @@ function TestLayers:testPieceAcrossLineBoundary()
   e:docedit(0, "XY")
   e.show_pieces = true
   frame(e)
-  local _, st = e.grid:cell(0, 4) -- 'a' col 0 (piece 1, plain)
+  local _, st = e.grid:cell(0, 4)  -- 'a' col 0 (piece 1, plain)
   lu.assertEquals(st, 0)
   local _, st2 = e.grid:cell(0, 8) -- 'Y' col 4 (piece 2, gray, same row)
   assert_style(e, st2, Ed.ATTR_GRAY_BG)
@@ -838,7 +847,7 @@ function TestLayers:testMergeLayersUnsetPassesThrough()
   e:docedit(0, "XY")
   e.show_pieces = true
   frame(e)
-  local _, st = e.grid:cell(0, 4) -- 'c' of char (piece 1, plain): keyword
+  local _, st = e.grid:cell(0, 4)   -- 'c' of char (piece 1, plain): keyword
   assert_style(e, st, Ed.ATTR_KEYWORD)
   local _, st2 = e.grid:cell(0, 16) -- '"' (piece 2, gray): string + gray
   lu.assertEquals(st2, e.comp:intern({ fg = 114, bg = 237 }))
@@ -856,13 +865,13 @@ function TestVisual:testEnterAndExtend()
   local s = frame(e)
   lu.assertStrContains(s, "VISUAL") -- status bar mode
   -- cursor char is inside the selection immediately (vim charwise)
-  local _, st = e.grid:cell(0, 4) -- 'a'
+  local _, st = e.grid:cell(0, 4)   -- 'a'
   assert_style(e, st, Ed.ATTR_REVERSE)
-  e:dispatch("l") -- cursor 1, selection [0,2) = "ab"
+  e:dispatch("l")                   -- cursor 1, selection [0,2) = "ab"
   frame(e)
-  local _, st2 = e.grid:cell(0, 5) -- 'b'
+  local _, st2 = e.grid:cell(0, 5)  -- 'b'
   assert_style(e, st2, Ed.ATTR_REVERSE)
-  local _, st3 = e.grid:cell(0, 6) -- 'c' (outside selection)
+  local _, st3 = e.grid:cell(0, 6)  -- 'c' (outside selection)
   lu.assertEquals(st3, 0)
 end
 
@@ -871,10 +880,10 @@ function TestVisual:testReverseSelectionExtendsBackward()
   local e = make_ed("abcdef\n")
   e:dispatch("v")
   e:dispatch("l")
-  e:dispatch("l") -- cursor 2, selection [0,3) = "abc"
-  e:dispatch("h") -- cursor 1, selection [0,2) = "ab"
+  e:dispatch("l")                  -- cursor 2, selection [0,3) = "abc"
+  e:dispatch("h")                  -- cursor 1, selection [0,2) = "ab"
   frame(e)
-  local _, st = e.grid:cell(0, 5) -- 'b' (cursor char)
+  local _, st = e.grid:cell(0, 5)  -- 'b' (cursor char)
   assert_style(e, st, Ed.ATTR_REVERSE)
   local _, st2 = e.grid:cell(0, 6) -- 'c' (outside selection)
   lu.assertEquals(st2, 0)
@@ -901,7 +910,7 @@ function TestVisual:testEscapeClears()
   e:dispatch("l")
   e:dispatch("<Escape>")
   lu.assertEquals(e.mode, "NORMAL")
-  lu.assertNil(e.sel_start)
+  lu.assertIsNil(e.sel_start)
 end
 
 function TestVisual:testYankPaste()
@@ -947,10 +956,10 @@ end
 
 function TestVisual:testMultilineSelection()
   local e = make_ed("ab\ncd\n")
-  e:dispatch("v") -- sel_start 0
-  e:dispatch("j") -- cursor line 1 col 0, selection "ab\nc"
+  e:dispatch("v")                  -- sel_start 0
+  e:dispatch("j")                  -- cursor line 1 col 0, selection "ab\nc"
   frame(e)
-  local _, st = e.grid:cell(0, 4) -- 'a'
+  local _, st = e.grid:cell(0, 4)  -- 'a'
   assert_style(e, st, Ed.ATTR_REVERSE)
   local _, st2 = e.grid:cell(0, 5) -- 'b'
   assert_style(e, st2, Ed.ATTR_REVERSE)
@@ -958,7 +967,7 @@ function TestVisual:testMultilineSelection()
   assert_style(e, st3, Ed.ATTR_REVERSE)
   local _, st4 = e.grid:cell(1, 5) -- 'd' (outside selection)
   lu.assertEquals(st4, 0)
-  e:dispatch("d") -- deletes "ab\nc"
+  e:dispatch("d")                  -- deletes "ab\nc"
   lu.assertEquals(e.doc:buffer():read(0, 2), "d\n")
 end
 
@@ -985,13 +994,13 @@ function TestHint:testSpawnFailSilentAndLoud()
   -- manual :lsp on (loud): reports the failure in msg
   local e = make_ed("x\n")
   e.filename = "foo.lua"
-  lu.assertFalse(e:lsp_start(true, { "/nonexistent/lsp-server" }))
-  lu.assertNil(e.lsp)
+  lu.assertIsFalse(e:lsp_start(true, { "/nonexistent/lsp-server" }))
+  lu.assertIsNil(e.lsp)
   lu.assertEquals(e.msg, "", "silent start: no message")
   local e2 = make_ed("x\n")
   e2.filename = "foo.lua"
-  lu.assertFalse(e2:lsp_start(false, { "/nonexistent/lsp-server" }))
-  lu.assertNil(e2.lsp)
+  lu.assertIsFalse(e2:lsp_start(false, { "/nonexistent/lsp-server" }))
+  lu.assertIsNil(e2.lsp)
   lu.assertStrContains(e2.msg, "exited", "loud start: reports failure")
 end
 
@@ -1001,7 +1010,7 @@ function TestHint:testNoServerMsg()
   e.filename = "foo.txt"
   e.commands.lsp(e, "on")
   lu.assertStrContains(e.msg, "no server")
-  lu.assertNil(e.lsp)
+  lu.assertIsNil(e.lsp)
 end
 
 -- vtext: injected display text on the Ed core, stored in the spantree
@@ -1127,10 +1136,13 @@ TestTreeLayers = {}
 function TestTreeLayers:testSemDiagStyled()
   local e = make_ed("int x;\n")
   e:set_sem({ { offset = 0, length = 3, attr = { fg = 207 } } })
-  e:set_diag({ { offset = 1, length = 2,
-    attr = { underline = true, severity = 1 } } })
+  e:set_diag({ {
+    offset = 1,
+    length = 2,
+    attr = { underline = true, severity = 1 }
+  } })
   e:render()
-  local _, st = e.grid:cell(0, 4) -- content col 0 ('i'): sem only
+  local _, st = e.grid:cell(0, 4)  -- content col 0 ('i'): sem only
   assert_style(e, st, { fg = 207 })
   local _, st2 = e.grid:cell(0, 5) -- content col 1 ('n'): both fold
   assert_style(e, st2, { fg = 207, underline = true })
@@ -1165,7 +1177,7 @@ function TestGoal:testJKKeepsGoalAcrossShortLine()
   e.doc:seek("set", 0)
   e.doc:seek("cur", 10)
   e:dispatch("j")
-  lu.assertEquals(e.doc:column(), 5) -- "world" is short: clamp to its end
+  lu.assertEquals(e.doc:column(), 5)  -- "world" is short: clamp to its end
   e:dispatch("j")
   lu.assertEquals(e.doc:column(), 10) -- goal restored on the long line
 end
@@ -1175,7 +1187,7 @@ function TestGoal:testJKKeepsGoalAcrossEmptyLine()
   e.doc:seek("set", 0)
   e.doc:seek("cur", 10)
   e:dispatch("j")
-  lu.assertEquals(e.doc:column(), 0) -- empty line: clamp to line start
+  lu.assertEquals(e.doc:column(), 0)  -- empty line: clamp to line start
   e:dispatch("j")
   lu.assertEquals(e.doc:column(), 10) -- goal restored
 end

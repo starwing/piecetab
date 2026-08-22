@@ -4,7 +4,7 @@ local dir = arg[0]:match("^(.*)[/\\]") or "."
 local root = dir .. "/../.."
 package.path = dir .. "/?.lua;" .. package.path
 package.cpath = (_G["jit"] and root .. "/lua/luajit/?.so;"
-    or root .. "/lua/?.so;")
+        or root .. "/lua/?.so;")
     .. package.cpath
     .. ";./lua/?.so;/opt/homebrew/lib/lua/5.5/?.so;/opt/homebrew/lib/lua/5.4/?.so"
 
@@ -43,8 +43,8 @@ end
 -- key-level attr assertion: tree segments carry synthetic (merged)
 -- ids, so compare the folded attr table via comp:attr instead
 local function assert_attr(comp, id, attr)
-    local a = comp:attr(id)
-    lu.assertNotNil(a, "style id " .. tostring(id) .. " has no attr")
+    local a = comp:attr(assert(id))
+    lu.assertNotIsNil(a, "style id " .. tostring(id) .. " has no attr")
     for k, v in pairs(attr) do
         lu.assertEquals(a[k], v, "style key " .. tostring(k))
     end
@@ -144,8 +144,8 @@ function TestStyle:testAttr()
     lu.assertEquals(a.fg, 7)
     lu.assertEquals(a.bold, true)
     -- unknown ids return nil (editor contract: csi on unknown = nil)
-    lu.assertNil(comp:attr(999))
-    lu.assertNil(comp:attr(-1))
+    lu.assertIsNil(comp:attr(999))
+    lu.assertIsNil(comp:attr(-1))
 end
 
 function TestStyle:testHash()
@@ -221,7 +221,7 @@ function TestStyle:testFieldsRead()
     -- default SGR set + vtext payload
     lu.assertEquals(comp:fields(),
         { "bg", "bold", "dim", "fg", "italic", "reverse", "underline",
-          "vstyle", "vtext" })
+            "vstyle", "vtext" })
     comp:fields({ "fg", "bg" })
     lu.assertEquals(comp:fields(), { "fg", "bg" })
     comp:fields({})
@@ -289,8 +289,8 @@ function TestStyle:testSharedComp()
     lu.assertEquals(comp:attr(comp:intern({ fg = 2 })).fg, 2)
     local comp2 = newcomp()
     comp2:fields({ "fg" })
-    lu.assertNotNil(comp2:attr(comp2:intern({ fg = 1 })).fg)
-    lu.assertNil(comp2:attr(comp2:intern({ bg = 1 })).bg) -- bg ignored in comp2
+    lu.assertNotIsNil(comp2:attr(comp2:intern({ fg = 1 })).fg)
+    lu.assertIsNil(comp2:attr(comp2:intern({ bg = 1 })).bg)   -- bg ignored in comp2
     lu.assertEquals(comp:attr(comp:intern({ bg = 1 })).bg, 1) -- still set in comp
 end
 
@@ -300,22 +300,22 @@ TestNs = {}
 function TestNs:testQueryStates()
     local comp = newcomp(); local t = newtree(comp)
     -- query on an unregistered name: nil, no error
-    lu.assertNil(comp:namespace("q"))
+    lu.assertIsNil(comp:namespace("q"))
     -- fresh registration returns nil
-    lu.assertNil(comp:namespace("q", 1))
+    lu.assertIsNil(comp:namespace("q", 1))
     lu.assertEquals(comp:namespace("q"), 1)
     -- re-register changes the priority, returns the old one
     lu.assertEquals(comp:namespace("q", 7), 1)
     lu.assertEquals(comp:namespace("q"), 7)
     -- ordinary mode: second return is nil
-    lu.assertNil(select(2, comp:namespace("q")))
+    lu.assertIsNil(select(2, comp:namespace("q")))
     -- release the name (the registry is shared across tests)
     comp:namespace("q", nil)
 end
 
 function TestNs:testStrictNew()
     local comp = newcomp(); local t = newtree(comp)
-    lu.assertNil(comp:namespace("sn1", 1, "c"))
+    lu.assertIsNil(comp:namespace("sn1", 1, "c"))
     -- strict mode on an existing name raises; priority unchanged
     lu.assertErrorMsgContains("namespace already registered",
         function() comp:namespace("sn1", 2, "c") end)
@@ -323,7 +323,7 @@ function TestNs:testStrictNew()
     -- non-strict re-register still works (no flags arg)
     lu.assertEquals(comp:namespace("sn1", 3), 1)
     -- strict + ephemeral combination parses
-    lu.assertNil(comp:namespace("sn2", 2, "ec"))
+    lu.assertIsNil(comp:namespace("sn2", 2, "ec"))
     lu.assertEquals(select(2, comp:namespace("sn2")), "ephemeral")
     lu.assertErrorMsgContains("namespace already registered",
         function() comp:namespace("sn2", 3, "ce") end)
@@ -340,7 +340,7 @@ function TestNs:testFlagsErrors()
     lu.assertErrorMsgContains("invalid namespace flags",
         ---@diagnostic disable-next-line: param-type-mismatch
         function() comp:namespace("fe", 1, 7) end)
-    lu.assertNil(comp:namespace("fe"))
+    lu.assertIsNil(comp:namespace("fe"))
 end
 
 function TestNs:testEphUnlimited()
@@ -361,7 +361,7 @@ function TestNs:testEphUnlimited()
     -- query + unregister on eph ns
     lu.assertEquals(comp:namespace("e1"), 1)
     lu.assertEquals(comp:namespace("e1", nil), 1)
-    lu.assertNil(comp:namespace("e1"))
+    lu.assertIsNil(comp:namespace("e1"))
     lu.assertErrorMsgContains("unknown namespace",
         function() comp:namespace("e1", nil) end)
     -- release the ordinary slots and eph names (registry is global)
@@ -385,7 +385,7 @@ function TestNs:testEphModeSwitch()
     -- ephemeral -> ordinary: eph data drops, returns old priority
     t:mark("em", { fg = 3 }, 2, 4)
     lu.assertEquals(comp:namespace("em", 5), 2)
-    lu.assertNil(select(2, comp:namespace("em")))
+    lu.assertIsNil(select(2, comp:namespace("em")))
     lu.assertEquals(collect(t, "span", 0, 10), { { 0, 10 } })
     comp:namespace("em", nil)
 end
@@ -395,7 +395,7 @@ function TestNs:testUnregister()
     comp:namespace("ur", 5)
     -- unregister returns the old priority
     lu.assertEquals(comp:namespace("ur", nil), 5)
-    lu.assertNil(comp:namespace("ur"))
+    lu.assertIsNil(comp:namespace("ur"))
     -- unknown name raises
     lu.assertErrorMsgContains("unknown namespace",
         function() comp:namespace("zzz", nil) end)
@@ -505,7 +505,7 @@ function TestNs:testReprioRefold()
     t:mark("rr1", { fg = 1 }, 0, 10)
     t:mark("rr2", { fg = 2 }, 0, 10)
     assert_attr(cur_comp, collect(t, "styled", 0, 10)[1][1], { fg = 1 }) -- rr1(2) > rr2(1)
-    lu.assertEquals(comp:namespace("rr2", 3), 1) -- returns the old priority
+    lu.assertEquals(comp:namespace("rr2", 3), 1)                         -- returns the old priority
     assert_attr(cur_comp, collect(t, "styled", 0, 10)[1][1], { fg = 2 }) -- rr2(3) > rr1(2)
     comp:namespace("rr1", nil)
     comp:namespace("rr2", nil)
@@ -521,10 +521,10 @@ function TestNs:testNsIsolation()
     comp:namespace("gr", 9)
     lu.assertEquals(comp:namespace("gr"), 9)
     comp:namespace("gr", nil)
-    lu.assertNil(comp:namespace("gr"))
+    lu.assertIsNil(comp:namespace("gr"))
     local comp2 = newcomp()
     local t3 = newtree(comp2)
-    lu.assertNil(comp2:namespace("gr"))
+    lu.assertIsNil(comp2:namespace("gr"))
     lu.assertErrorMsgContains("unknown namespace",
         function() t3:mark("gr", { fg = 1 }, 0, 5) end)
 end
@@ -545,7 +545,7 @@ function TestNs:testEphIsolation()
     comp:namespace("glo", nil)
     -- a fresh compositor has no such eph ns
     local comp2 = newcomp()
-    lu.assertNil(comp2:namespace("glo"))
+    lu.assertIsNil(comp2:namespace("glo"))
 end
 
 function TestNs:tearDown()
@@ -674,7 +674,7 @@ end
 function TestTree:testClearRange()
     -- clear(ns, off, len): range clear of one layer
     local t = clear_tree()
-    t:clear("b", 2, 3) -- b survives only on [5,6)
+    t:clear("b", 2, 3)     -- b survives only on [5,6)
     local s = collect(t, "span", 0, 6)
     lu.assertEquals(#s, 4) -- the ab seg decomposes into a + b marks
     lu.assertEquals(s[1], { 0, 2 })
@@ -908,7 +908,7 @@ function TestCursor:testCreate()
     local comp = newcomp(); local t = newtree(comp)
     local c = t:cursor()
     lu.assertEquals(c:offset(), 0)
-    lu.assertNil(c:style()) -- empty tree
+    lu.assertIsNil(c:style()) -- empty tree
 end
 
 function TestCursor:testSeekRelocate()
@@ -968,7 +968,7 @@ function TestCursor:testLocateAdvance()
     -- locate past the tree end: virtual region reads nil
     c:locate(50)
     lu.assertEquals(c:offset(), 50)
-    lu.assertNil(c:style())
+    lu.assertIsNil(c:style())
 end
 
 function TestCursor:testThreeStates()
@@ -983,8 +983,8 @@ function TestCursor:testThreeStates()
     assert_attr(cur_comp, id, { fg = 1 })
     lu.assertEquals(len, 8)
     -- segment-end / tree-end: next is nil, style is nil, prev rewinds
-    lu.assertNil(c:next())
-    lu.assertNil(c:style())
+    lu.assertIsNil(c:next())
+    lu.assertIsNil(c:style())
     off, len, tab, id = c:prev()
     assert_attr(cur_comp, id, { fg = 1 })
     lu.assertEquals(len, 8)
@@ -993,19 +993,19 @@ function TestCursor:testThreeStates()
     off, len, tab, id = c:prev()
     lu.assertEquals(off, 0)
     lu.assertEquals(len, 2)
-    lu.assertNil(tab.fg)
+    lu.assertIsNil(tab.fg)
     -- tree head sits on an id-0 segment: style returns it, next jumps to A
     local c2 = t:seek(0)
     off, len, tab, id = c2:style()
     lu.assertEquals(off, 0)
     lu.assertEquals(len, 2)
-    lu.assertNil(tab.fg)
+    lu.assertIsNil(tab.fg)
     off, len, tab, id = c2:next()
     assert_attr(cur_comp, id, { fg = 1 })
     lu.assertEquals(len, 8)
     -- past the tree end: style nil, prev reads the last segment
     local c3 = t:seek(10)
-    lu.assertNil(c3:style())
+    lu.assertIsNil(c3:style())
     off, len, tab, id = c3:prev()
     assert_attr(cur_comp, id, { fg = 1 })
     lu.assertEquals(len, 8)
@@ -1017,11 +1017,11 @@ function TestCursor:testNextPrevFilter()
     local c = t:seek(3)
     local off, len, tab, id = c:style()
     assert_attr(cur_comp, id, { fg = 1 })
-    lu.assertEquals(len, 2) -- whole segment (off = segment head)
+    lu.assertEquals(len, 2)               -- whole segment (off = segment head)
     off, len, tab, id = c:next("a")
     assert_attr(cur_comp, id, { fg = 1 }) -- a's own attr, not the merge
     lu.assertEquals(len, 4)
-    lu.assertNil(c:next("a"))
+    lu.assertIsNil(c:next("a"))
     -- a filter skips segments without the layer
     local c2 = t:seek(3)
     off, len, tab, id = c2:next("b")
@@ -1030,7 +1030,7 @@ function TestCursor:testNextPrevFilter()
     off, len, tab, id = c2:next("b")
     assert_attr(cur_comp, id, { bg = 2 })
     lu.assertEquals(len, 2)
-    lu.assertNil(c2:next("b"))
+    lu.assertIsNil(c2:next("b"))
     -- prev filters symmetrically
     local c3 = t:seek(9)
     off, len, tab, id = c3:prev("a")
@@ -1139,7 +1139,7 @@ function TestCursor:testEditVerbs()
     local off7, len7, tab7, id7 = c7:style()
     lu.assertEquals(off7, 4)
     lu.assertEquals(len7, 2)
-    lu.assertNil(tab7.fg)
+    lu.assertIsNil(tab7.fg)
     local s7 = collect(t7, "span", 0, 6)
     lu.assertEquals(#s7, 3)
     lu.assertEquals(s7[1], { 0, 2 })
@@ -1214,13 +1214,13 @@ function TestCursor:testSelfEditSync()
     local off, len, tab, id = c:style()
     lu.assertEquals(off, 3)
     lu.assertEquals(len, 7)
-    lu.assertNil(tab.fg)
+    lu.assertIsNil(tab.fg)
     c:append(2) -- inherits the marked run; lands at its tail
     lu.assertEquals(c:offset(), 5)
     local off2, len2, tab2, id2 = c:style()
     lu.assertEquals(off2, 5)
     lu.assertEquals(len2, 7)
-    lu.assertNil(tab2.fg)
+    lu.assertIsNil(tab2.fg)
     local s = collect(t, "span", 0, 12)
     assert_attr(cur_comp, s[1][1], { fg = 1 })
     lu.assertEquals(s[1][2], 5)
@@ -1524,7 +1524,7 @@ function TestEph:testCursorMerged()
     assert_attr(cur_comp, id, { fg = 9 })
     lu.assertEquals(c:offset(), 10)
     -- next past the last eph seg: nil
-    lu.assertNil(c:next("h"))
+    lu.assertIsNil(c:next("h"))
     -- prev from past the seg: full eph seg, cursor at its head
     c:locate(15)
     off, len, tab, id = c:prev("h")
@@ -1539,9 +1539,9 @@ function TestEph:testCursorMerged()
     assert_attr(cur_comp, id, { fg = 7 })
     -- prev at 0 / next past the end: nil
     c:locate(0)
-    lu.assertNil(c:prev())
+    lu.assertIsNil(c:prev())
     c:locate(20)
-    lu.assertNil(c:next())
+    lu.assertIsNil(c:next())
 end
 
 function TestEph:testCursorEphFilter()
@@ -1563,7 +1563,7 @@ function TestEph:testCursorEphFilter()
     assert_attr(cur_comp, id, { fg = 2 })
     lu.assertEquals(c:offset(), 16)
     -- next past the last seg: nil
-    lu.assertNil(c:next("h"))
+    lu.assertIsNil(c:next("h"))
     -- prev from inside a seg: full seg, cursor at head
     c:locate(14)
     off, len, tab, id = c:prev("h")
@@ -1575,12 +1575,12 @@ function TestEph:testCursorEphFilter()
     lu.assertEquals(len, 4)
     assert_attr(cur_comp, id, { fg = 1 })
     lu.assertEquals(c:offset(), 4)
-    lu.assertNil(c:prev("h"))
+    lu.assertIsNil(c:prev("h"))
     -- empty layer: nil reads
     t:clear("h")
     c:locate(0)
-    lu.assertNil(c:next("h"))
-    lu.assertNil(c:prev("h"))
+    lu.assertIsNil(c:next("h"))
+    lu.assertIsNil(c:prev("h"))
 end
 
 function TestEph:testEditClears()
@@ -1704,7 +1704,7 @@ function TestEph:testFillJoinNeighbors()
     t:mark("h", { fg = 2 }, 5, 5)
     lu.assertEquals(collect(t, "span", "h", 0, 20),
         { { comp:intern({ fg = 1 }), 5 }, { comp:intern({ fg = 2 }), 5 },
-          { comp:intern({ fg = 1 }), 5 } })
+            { comp:intern({ fg = 1 }), 5 } })
     t:mark("h", { fg = 1 }, 5, 5)
     local s = collect(t, "span", "h", 0, 20)
     lu.assertEquals(#s, 1)
@@ -1775,7 +1775,7 @@ function TestEph:testStyleBoundary()
     assert_attr(cur_comp, id, { bg = 2 })
     c:locate(11)
     off, len, tab, id = c:style()
-    lu.assertNotNil(id)
+    lu.assertNotIsNil(id)
 end
 
 function TestEph:testCursorClearAll()
@@ -1856,8 +1856,8 @@ function TestEph:testMissingEphReadsAreNoop()
     t:clear("h", 0, 5)
     local c = t:cursor()
     c:clear("h", 5)
-    lu.assertNil(c:next("h"))
-    lu.assertNil(c:prev("h"))
+    lu.assertIsNil(c:next("h"))
+    lu.assertIsNil(c:prev("h"))
     comp:namespace("h", nil)
 end
 
@@ -1912,7 +1912,7 @@ function TestMerge:testUnregisterIsolated()
     lu.assertEquals(#s, 1)
     lu.assertEquals(s[1][2], 10)
     assert_attr(cur_comp, s[1][1], { bg = 2 })
-    lu.assertNil(comp:attr(s[1][1]).fg)
+    lu.assertIsNil(comp:attr(s[1][1]).fg)
     lu.assertEquals(t:bytes(), 10)
 end
 
@@ -2035,8 +2035,8 @@ function TestSpan:testNsFilter()
     comp:namespace("nf2", 2)
     comp:namespace("nf3", 3)
     t:splice(0, 0, 12)
-    t:mark("nf1", { fg = 1 }, 2, 6) -- [2,8)
-    t:mark("nf2", { bg = 2 }, 4, 4) -- [4,8)
+    t:mark("nf1", { fg = 1 }, 2, 6)      -- [2,8)
+    t:mark("nf2", { bg = 2 }, 4, 4)      -- [4,8)
     t:mark("nf3", { bold = true }, 4, 2) -- [4,6)
     local f1 = comp:intern({ fg = 1 })
     local s1 = collect(t, "span", "nf1", 0, 12)
@@ -2074,7 +2074,7 @@ function TestSpan:testEphWalk()
     t:splice(0, 0, 20)
     local f1 = comp:intern({ fg = 1 })
     local f2 = comp:intern({ fg = 2 })
-    t:mark("ew1", f1, 4, 6) -- [4,10)
+    t:mark("ew1", f1, 4, 6)  -- [4,10)
     t:mark("ew1", f2, 15, 3) -- [15,18)
     lu.assertEquals(collect(t, "span", "ew1", 0, 20), { { f1, 6 }, { f2, 3 } })
     -- the window clips a covered segment head
@@ -2113,7 +2113,7 @@ function TestSpan:testCursorMidx()
     lu.assertEquals(len, 6)
     lu.assertEquals(id, bg3)
     lu.assertEquals(c:offset(), 10)
-    lu.assertNil(c:next())
+    lu.assertIsNil(c:next())
     -- prev walks back symmetrically (last mark first)
     off, len, tab, id = c:prev()
     lu.assertEquals(off, 10)
@@ -2125,11 +2125,11 @@ function TestSpan:testCursorMidx()
     off, len, tab, id = c:prev()
     lu.assertEquals(off, 0)
     lu.assertEquals(id, fg1)
-    lu.assertNil(c:prev())
+    lu.assertIsNil(c:prev())
     -- style reads the current midx
     local c2 = t:seek(3)
     c2:style() -- establishes the midx state
-    c2:next() -- midx + 1
+    c2:next()  -- midx + 1
     off, len, tab, id = c2:style()
     lu.assertEquals(id, bg2)
 end
@@ -2142,8 +2142,8 @@ function TestSpan:testCursorNsFilter()
     comp:namespace("cn2", 2)
     comp:namespace("cn3", 3)
     t:splice(0, 0, 12)
-    t:mark("cn1", { fg = 1 }, 2, 6) -- [2,8)
-    t:mark("cn2", { bg = 2 }, 4, 4) -- [4,8)
+    t:mark("cn1", { fg = 1 }, 2, 6)      -- [2,8)
+    t:mark("cn2", { bg = 2 }, 4, 4)      -- [4,8)
     t:mark("cn3", { bold = true }, 4, 2) -- [4,6)
     local c = t:seek(5)
     local off, len, tab, id = c:next("cn1")
@@ -2151,21 +2151,21 @@ function TestSpan:testCursorNsFilter()
     lu.assertEquals(len, 2)
     lu.assertEquals(id, comp:intern({ fg = 1 }))
     lu.assertEquals(c:offset(), 6)
-    lu.assertNil(c:next("cn1"))
+    lu.assertIsNil(c:next("cn1"))
     local c2 = t:seek(5)
     off, len, tab, id = c2:next("cn2")
     lu.assertEquals(off, 6)
     lu.assertEquals(id, comp:intern({ bg = 2 }))
-    lu.assertNil(c2:next("cn2"))
+    lu.assertIsNil(c2:next("cn2"))
     -- no more cn3 segments past [4,6): nil
-    lu.assertNil(t:seek(5):next("cn3"))
+    lu.assertIsNil(t:seek(5):next("cn3"))
     -- prev prunes symmetrically
     local c3 = t:seek(7)
     off, len, tab, id = c3:prev("cn3")
     lu.assertEquals(off, 4)
     lu.assertEquals(len, 2)
     lu.assertEquals(id, comp:intern({ bold = true }))
-    lu.assertNil(c3:prev("cn3"))
+    lu.assertIsNil(c3:prev("cn3"))
 end
 
 function TestSpan:testWindowClip()
@@ -2210,7 +2210,7 @@ function TestIds:testFlatSeg()
     lu.assertEquals(aid, comp:intern(attr))
     lu.assertEquals(collect(t, "span", 0, 10), { { 0, 2 }, { aid, 4 }, { 0, 4 } })
     local sid = collect(t, "styled", 2, 4)[1][1]
-    lu.assertTrue(sid < COMP_ID_START)
+    lu.assertIsTrue(sid < COMP_ID_START)
     assert_attr(cur_comp, sid, attr)
     -- idempotent re-mark merges: the stored id flattens to the attr id
     t:mark(nil, attr, 2, 4)
@@ -2227,7 +2227,7 @@ function TestIds:testSingleOpDirect()
     lu.assertEquals(collect(t, "span", 0, 10), { { 0, 2 }, { aid, 4 }, { 0, 4 } })
     local s = collect(t, "styled", 0, 10)
     lu.assertEquals(#s, 3)
-    lu.assertTrue(s[2][1] < COMP_ID_START)
+    lu.assertIsTrue(s[2][1] < COMP_ID_START)
     assert_attr(cur_comp, s[2][1], { fg = 9 })
 end
 
@@ -2241,7 +2241,7 @@ function TestIds:testCompositeId()
     local f1 = t:mark("co1", { fg = 1 }, 0, 10)
     local b2 = t:mark("co2", { bg = 2 }, 0, 10)
     local sid = collect(t, "styled", 0, 10)[1][1]
-    lu.assertTrue(sid >= COMP_ID_START)
+    lu.assertIsTrue(sid >= COMP_ID_START)
     assert_attr(cur_comp, sid, { fg = 1, bg = 2 })
     local s = collect(t, "span", 0, 10)
     lu.assertEquals(#s, 2)
@@ -2259,9 +2259,9 @@ function TestIds:testCompositeReuse()
     t:mark("cr1", { fg = 1 }, 0, 10)
     t:mark("cr2", { bg = 2 }, 0, 10)
     local before = collect(t, "styled", 0, 10)[1][1]
-    lu.assertTrue(before >= COMP_ID_START)
+    lu.assertIsTrue(before >= COMP_ID_START)
     t:clear("cr2")
-    lu.assertTrue(collect(t, "styled", 0, 10)[1][1] < COMP_ID_START)
+    lu.assertIsTrue(collect(t, "styled", 0, 10)[1][1] < COMP_ID_START)
     t:mark("cr2", { bg = 2 }, 0, 10)
     lu.assertEquals(collect(t, "styled", 0, 10)[1][1], before)
 end
@@ -2304,7 +2304,7 @@ function TestIds:testUnmark()
     comp:namespace("um2", 2)
     t:splice(0, 0, 20)
     local fg1 = t:mark("um1", { fg = 1 }, 0, 10)
-    t:mark("um2", fg1, 4, 6) -- same attr id on a second ns
+    t:mark("um2", fg1, 4, 6)         -- same attr id on a second ns
     t:mark("um2", { bg = 2 }, 10, 4) -- non-matching: excluded from count
     t:mark("um2", fg1, 14, 6)
     -- 3 of 4 segments carry fg=1: partial hit count
@@ -2381,7 +2381,7 @@ end
 function TestCov:testAttrPastChain()
     -- composite-range ids beyond the chain space read nil (no crash)
     local comp = newcomp()
-    lu.assertNil(comp:attr(2 ^ 24 + 100000))
+    lu.assertIsNil(comp:attr(2 ^ 24 + 100000))
 end
 
 function TestCov:testClearSpanningTwoSegs()
@@ -2429,13 +2429,13 @@ function TestCov:testRtmpGrow()
         comp:namespace("g" .. i, i, "e")
         t:mark("g" .. i, { fg = 1 }, 0, 5)
     end
-    lu.assertNotNil(collect(t, "styled", 0, 5)[1])
+    lu.assertNotIsNil(collect(t, "styled", 0, 5)[1])
     for i = 101, 257 do
         comp:namespace("g" .. i, i, "e")
         t:mark("g" .. i, { fg = 1 }, 0, 5)
     end
     local s = collect(t, "styled", 0, 5)
-    lu.assertNotNil(s[1])
+    lu.assertNotIsNil(s[1])
     for i = 1, 257 do
         comp:namespace("g" .. i, nil)
     end
@@ -2450,7 +2450,7 @@ function TestCov:testEphUnregisterTop()
     t:mark("et1", { fg = 1 }, 0, 5)
     t:mark("et2", { fg = 2 }, 0, 5)
     lu.assertEquals(comp:namespace("et2", nil), 2)
-    lu.assertNil(comp:namespace("et2"))
+    lu.assertIsNil(comp:namespace("et2"))
     lu.assertEquals(comp:namespace("et1"), 1)
     comp:namespace("et1", nil)
 end
@@ -2463,12 +2463,12 @@ function TestCov:testCompositeZeroBase()
     t:splice(0, 0, 20)
     local b2 = comp:intern({ bg = 2 })
     t:mark(nil, 0, 0, 5)
-    t:mark("zb1", b2, 0, 5) -- composite [(0,0),(zb1,b2)]
+    t:mark("zb1", b2, 0, 5)  -- composite [(0,0),(zb1,b2)]
     t:mark(nil, 0, 10, 5)
     t:mark("zb1", b2, 10, 5) -- same composition: hash reuse
     local s = collect(t, "styled", 0, 20)
     lu.assertEquals(s[1][1], s[3][1])
-    lu.assertTrue(s[1][1] >= 2 ^ 24)
+    lu.assertIsTrue(s[1][1] >= 2 ^ 24)
     -- clearing the layer releases the composite from both segments
     t:clear("zb1")
     lu.assertEquals(collect(t, "styled", 0, 20)[1][1], 0)
@@ -2495,7 +2495,7 @@ function TestCov:testCursorMoveInvalidatesStyleCache()
     off, len, tab, id = c:style()
     lu.assertEquals(off, 4)
     lu.assertEquals(len, 4)
-    lu.assertNotNil(id)
+    lu.assertNotIsNil(id)
 end
 
 function TestCov:testNextIntoHole()
@@ -2506,7 +2506,7 @@ function TestCov:testNextIntoHole()
     lu.assertEquals(off, 8)
     lu.assertEquals(len, 2)
     lu.assertEquals(id, 0)
-    lu.assertNil(tab.fg)
+    lu.assertIsNil(tab.fg)
 end
 
 function TestCov:testCmarkIdPayload()
@@ -2570,10 +2570,10 @@ function TestComp:testCompositorIsolation()
     local c1, c2 = newcomp(), newcomp()
     c1:fields({ "fg", "bg" })
     c2:fields({ "fg" })
-    lu.assertNotNil(c1:attr(c1:intern({ bg = 1 })).bg)
-    lu.assertNil(c2:attr(c2:intern({ bg = 1 })).bg)
+    lu.assertNotIsNil(c1:attr(c1:intern({ bg = 1 })).bg)
+    lu.assertIsNil(c2:attr(c2:intern({ bg = 1 })).bg)
     c1:namespace("iso", 1)
-    lu.assertNil(c2:namespace("iso"))
+    lu.assertIsNil(c2:namespace("iso"))
 end
 
 function TestComp:testTreeNoStyleFace()
@@ -2581,16 +2581,16 @@ function TestComp:testTreeNoStyleFace()
     local comp = newcomp()
     local t = newtree(comp)
     ---@diagnostic disable: undefined-field
-    lu.assertNil(t.intern)
-    lu.assertNil(t.attr)
-    lu.assertNil(t.fields)
-    lu.assertNil(t.namespace)
+    lu.assertIsNil(t.intern)
+    lu.assertIsNil(t.attr)
+    lu.assertIsNil(t.fields)
+    lu.assertIsNil(t.namespace)
     ---@diagnostic enable: undefined-field
     -- the compositor keeps them
-    lu.assertNotNil(comp.intern)
-    lu.assertNotNil(comp.attr)
-    lu.assertNotNil(comp.fields)
-    lu.assertNotNil(comp.namespace)
+    lu.assertNotIsNil(comp.intern)
+    lu.assertNotIsNil(comp.attr)
+    lu.assertNotIsNil(comp.fields)
+    lu.assertNotIsNil(comp.namespace)
 end
 
 function TestComp:testUnregisterNoTrees()
@@ -2598,7 +2598,7 @@ function TestComp:testUnregisterNoTrees()
     local comp = newcomp()
     comp:namespace("empty", 1)
     lu.assertEquals(comp:namespace("empty", nil), 1)
-    lu.assertNil(comp:namespace("empty"))
+    lu.assertIsNil(comp:namespace("empty"))
 end
 
 function TestComp:testCompositorGc()

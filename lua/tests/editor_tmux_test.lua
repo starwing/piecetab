@@ -8,7 +8,7 @@ local dir = arg[0]:match("^(.*)[/\\]") or "."
 local root = dir .. "/../.."
 package.path = root .. "/?.lua;" .. dir .. "/?.lua;" .. package.path
 package.cpath = (_G["jit"] and root .. "/lua/luajit/?.so;"
-    or root .. "/lua/?.so;") .. package.cpath
+  or root .. "/lua/?.so;") .. package.cpath
 
 if not os.execute("command -v tmux >/dev/null 2>&1") then
   io.write("SKIP: tmux not installed\n")
@@ -41,9 +41,9 @@ local function fakelsp_src(hints, diag)
   end
   local hint_lit = "{" .. table.concat(parts, ", ") .. "}"
   local diag_lit = diag and string.format(
-      "{{ range = { start = { line = 0, character = 0 }, "
-      .. "['end'] = { line = 0, character = 1 } }, message = %q, "
-      .. "severity = 1 } }", diag) or "nil"
+    "{{ range = { start = { line = 0, character = 0 }, "
+    .. "['end'] = { line = 0, character = 1 } }, message = %q, "
+    .. "severity = 1 } }", diag) or "nil"
   return string.format([[
 package.path = package.path .. ";" .. %q .. "/lua/?.lua"
 package.cpath = package.cpath .. ";" .. %q .. "/lua/?.so;"
@@ -133,9 +133,9 @@ local function spawn_ed(content, hints, opts)
       "PT_LSP_CMD='%s %s' PT_HINT_IDLE=0 %s %s %s 2>%s; echo \\$? > %s",
       lua_bin, fs, lua_bin, root .. "/editor.lua", f, errf, codef),
     files = { { path = f, content = content },
-              { path = fs, content = fakelsp_src(hints, opts.diag) },
-              { path = errf, content = "" },
-              { path = codef, content = "" } },
+      { path = fs,    content = fakelsp_src(hints, opts.diag) },
+      { path = errf,  content = "" },
+      { path = codef, content = "" } },
   })
   s.errfile = errf
   s.codefile = codef
@@ -185,8 +185,8 @@ function TestDisplay:testBasicRender()
   local s = spawn_ed("local x = 1\n", nil)
   local rows = s:capture()
   lu.assertStrContains(rows[1] or "", "local x = 1")
-  lu.assertStrContains(rows[1] or "", "1")            -- line-number column
-  lu.assertStrContains(rows[24] or "", "NORMAL")      -- status bar
+  lu.assertStrContains(rows[1] or "", "1")       -- line-number column
+  lu.assertStrContains(rows[24] or "", "NORMAL") -- status bar
 end
 
 function TestDisplay:testJKKeepsScreenCol()
@@ -199,7 +199,7 @@ function TestDisplay:testJKKeepsScreenCol()
   local x = s:cursor().x
   s:feed("j")
   s:wait(function() return s:cursor().y == 1 end)
-  lu.assertEquals(s:cursor().x, x)   -- screen column preserved
+  lu.assertEquals(s:cursor().x, x) -- screen column preserved
 end
 
 function TestDisplay:testInsertGapCursor()
@@ -218,7 +218,7 @@ function TestDisplay:testMoveVertSkipsHint()
   local s = spawn_ed("package.path\nlocal pt = require\n",
     { { line = 1, character = 8, label = ": table" } })
   wait_screen(s, ": table")
-  for _ = 1, 11 do s:feed("l") end -- col 11: the 'h' of package.path
+  for _ = 1, 11 do s:feed("l") end  -- col 11: the 'h' of package.path
   lu.assertEquals(s:cursor().x, 15) -- 4 + 11, no hint on line 0
   s:feed("j")
   s:wait(function() return s:cursor().y == 1 end)
@@ -255,7 +255,7 @@ function TestDisplay:testScroll()
   local lines = {}
   for i = 1, 40 do lines[i] = "line " .. i end
   local s = spawn_ed(table.concat(lines, "\n") .. "\n", nil)
-  s:feed("G")                       -- jump to last line: viewport scrolls
+  s:feed("G") -- jump to last line: viewport scrolls
   s:wait(function()
     local row = s:capture()[1] or ""
     return row:find("line 18", 1, true) ~= nil
@@ -277,7 +277,7 @@ end
 function TestDisplay:testQuit()
   local s = spawn_ed("x\n", nil)
   s:feed(":", "q", "Enter")
-  lu.assertTrue(s:wait(function() return s:gone() end), "editor did not quit")
+  lu.assertIsTrue(s:wait(function() return s:gone() end), "editor did not quit")
 end
 
 -- migrated display-behavior cases (screen state asserted; the escape/
@@ -326,7 +326,7 @@ function TestDisplay:testScrollLineNumbers()
     return row:find("line 30", 1, true) ~= nil
   end)
   local row = s:capture()[23] or ""
-  lu.assertStrContains(row, "30")    -- line number "30" at the pane edge
+  lu.assertStrContains(row, "30") -- line number "30" at the pane edge
   lu.assertStrContains(row, "line 30")
 end
 
@@ -335,7 +335,7 @@ function TestDisplay:testCursorClampedToScreen()
   local s = spawn_ed(string.rep("x", 100) .. "\n", nil)
   s:feed("$")
   s:wait(function() return s:cursor().x > 0 end)
-  lu.assertTrue(s:cursor().x < 80, "cursor x " .. s:cursor().x)
+  lu.assertIsTrue(s:cursor().x < 80, "cursor x " .. s:cursor().x)
 end
 
 function TestDisplay:testLongLineTruncated()
@@ -344,7 +344,7 @@ function TestDisplay:testLongLineTruncated()
   local s = spawn_ed(string.rep("x", 120) .. "\n", nil)
   local row = s:capture()[1] or ""
   lu.assertEquals(#row, 80)
-  lu.assertTrue(row:match("^%s*%d+") ~= nil, "line number prefix")
+  lu.assertIsTrue(row:match("^%s*%d+") ~= nil, "line number prefix")
 end
 
 function TestDisplay:testTabExpands()

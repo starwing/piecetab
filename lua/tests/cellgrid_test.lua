@@ -6,7 +6,7 @@ local dir = arg[0]:match("^(.*)[/\\]") or "."
 local root = dir .. "/../.."
 package.path = dir .. "/?.lua;" .. package.path
 package.cpath = (_G["jit"] and root .. "/lua/luajit/?.so;"
-    or root .. "/lua/?.so;")
+        or root .. "/lua/?.so;")
     .. package.cpath
     .. ";./lua/?.so;/opt/homebrew/lib/lua/5.5/?.so;/opt/homebrew/lib/lua/5.4/?.so"
 
@@ -288,14 +288,14 @@ function TestWrite:testPutlineContinuation()
     local g = cg.new()
     g:begin(0, 3, 10)
     local c = g:putslice(0, 0, 0, "\x80") -- continuation only
-    lu.assertEquals(c, 0)                -- nothing written
+    lu.assertEquals(c, 0)                 -- nothing written
 end
 
 function TestWrite:testPutlineWide()
     local g = cg.new()
     g:begin(0, 3, 10)
     local c = g:putslice(0, 0, 0, "\xe4\xb8\xad") -- 中(CJK)
-    lu.assertEquals(c, 2)                        -- advances by 2
+    lu.assertEquals(c, 2)                         -- advances by 2
     local cp, st = g:cell(0, 0)
     lu.assertEquals(cp, 0x4E2D)
     cp, st = g:cell(0, 1)
@@ -375,23 +375,23 @@ function TestGetter:testIsdirty()
     local g = cg.new()
     g:begin(0, 3, 10)
     -- after begin, cur=0, back=0 → not dirty (isdirty compares cells)
-    lu.assertFalse(g:isdirty(0, 0))
+    lu.assertIsFalse(g:isdirty(0, 0))
     -- put changes cur, now dirty
     g:put(0, 0, 65)
-    lu.assertTrue(g:isdirty(0, 0))
+    lu.assertIsTrue(g:isdirty(0, 0))
     g:freeze()
     -- after freeze, cur=back → not dirty
-    lu.assertFalse(g:isdirty(0, 0))
+    lu.assertIsFalse(g:isdirty(0, 0))
     -- put after freeze → dirty
     g:put(0, 0, 66)
-    lu.assertTrue(g:isdirty(0, 0))
+    lu.assertIsTrue(g:isdirty(0, 0))
 end
 
 function TestGetter:testIsdirtyOutOfBounds()
     local g = cg.new()
     g:begin(0, 3, 10)
-    lu.assertFalse(g:isdirty(-1, 0))
-    lu.assertFalse(g:isdirty(3, 0))
+    lu.assertIsFalse(g:isdirty(-1, 0))
+    lu.assertIsFalse(g:isdirty(3, 0))
 end
 
 function TestGetter:testDimensions()
@@ -447,9 +447,11 @@ function TestDiff:testStyleProxy()
     g:put(0, 0, 65, 1)
     g:freeze()
     g:put(0, 0, 66, 7) -- change style to an unlisted id
-    local proxy = setmetatable({}, { __index = function(_, id)
-        return "P" .. id
-    end })
+    local proxy = setmetatable({}, {
+        __index = function(_, id)
+            return "P" .. id
+        end
+    })
     local s = g:diff(proxy)
     lu.assertStrContains(s, "P7")
 end
@@ -809,7 +811,7 @@ function TestCols:testRange()
     -- middle ranges are independent: tab expands from the range start
     lu.assertEquals(g:cols("a\tb", 1, 1), 1)
     lu.assertEquals(g:cols("a\tb", 3, 3), 1)
-    lu.assertEquals(g:cols("a\tb", 2, 3), 5) -- \t (4) + b (1)
+    lu.assertEquals(g:cols("a\tb", 2, 3), 5)    -- \t (4) + b (1)
     -- byte offsets are within the slice (string.sub view)
     lu.assertEquals(g:byte(4, "a\tb", 1, 3), 3) -- b at col 4
     lu.assertEquals(g:byte(3, "a\tb", 2, 3), 1) -- inside tab: its start
@@ -823,7 +825,7 @@ function TestCols:testRange()
     for byte, col in g:next("a\tb", 2, 3) do out[byte] = col end
     lu.assertEquals(out, { [1] = 0, [2] = 4 })
     -- negative i/j are string.sub style (from the end)
-    lu.assertEquals(g:cols("a\tb", -2, -1), 5)  -- [2..3] = "\tb": 4 + 1
+    lu.assertEquals(g:cols("a\tb", -2, -1), 5)    -- [2..3] = "\tb": 4 + 1
     lu.assertEquals(g:byte(3, "a\tb", -2, -1), 1) -- tab inside: slice start
     -- dispatch: (c, s, ...) form equals (s, ...) with c = 0
     lu.assertEquals(g:cols(0, "abc", 1, 2), g:cols("abc", 1, 2))
@@ -855,10 +857,10 @@ function TestCols:testPutsliceSpan()
     g:begin(0, 1, 10)
     local text = "hello world"
     lu.assertEquals(g:putslice(0, 0, 3, text, 7, 11), 5) -- "world"
-    lu.assertEquals(g:cell(0, 0), 119) -- w
+    lu.assertEquals(g:cell(0, 0), 119)                   -- w
     lu.assertEquals(g:putslice(0, 5, 4, text, 1, 5), 10) -- "hello" after
-    lu.assertEquals(g:cell(0, 5), 104) -- h
-    lu.assertEquals(g:cell(0, 9), 111) -- o
+    lu.assertEquals(g:cell(0, 5), 104)                   -- h
+    lu.assertEquals(g:cell(0, 9), 111)                   -- o
     -- j < i: empty span is a no-op, returns c
     lu.assertEquals(g:putslice(0, 5, 3, text, 5, 3), 5)
     -- out-of-range clamps to the string bounds; grid edge truncates
@@ -910,7 +912,7 @@ function TestCols:testRandomFuzz()
         end
         for dcol = 0, #text + 4 do
             lu.assertEquals(g:byte(dcol, text, 1, #text),
-                    ref_byte(text, dcol, ts) + 1)
+                ref_byte(text, dcol, ts) + 1)
         end
         -- iterator (byte 1-based, start col) matches the sparse reference
         for byte, col in g:next(text) do
@@ -1145,7 +1147,7 @@ function TestUtflen:testTwoByte()
     local g = cg.new()
     g:begin(0, 1, 10)
     local c = g:putslice(0, 0, 0, "\xc2\x80") -- U+0080
-    lu.assertEquals(c, 1)                 -- width 1
+    lu.assertEquals(c, 1)                     -- width 1
 end
 
 function TestUtflen:testThreeByte()
@@ -1153,7 +1155,7 @@ function TestUtflen:testThreeByte()
     local g = cg.new()
     g:begin(0, 1, 10)
     local c = g:putslice(0, 0, 0, "\xe0\xa0\x80") -- U+0800
-    lu.assertEquals(c, 1)                     -- width 1
+    lu.assertEquals(c, 1)                         -- width 1
 end
 
 function TestUtflen:testFourByte()
@@ -1161,7 +1163,7 @@ function TestUtflen:testFourByte()
     local g = cg.new()
     g:begin(0, 1, 10)
     local c = g:putslice(0, 0, 0, "\xf0\x90\x8d\x88") -- U+10348
-    lu.assertEquals(c, 1)                         -- width 1
+    lu.assertEquals(c, 1)                             -- width 1
 end
 
 function TestUtflen:testContinuation()

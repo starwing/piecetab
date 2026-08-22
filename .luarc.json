@@ -6,15 +6,20 @@
         "lua/termfeed.d.lua",
         "lua/lua-utf8.d.lua",
         "lua/treesitter.d.lua",
-        "lua/spantree.d.lua"
+        "lua/spantree.d.lua",
+        "lua/tests/luaunit.lua",
+        "lua/tests/serpent.lua"
+    ],
+    "runtime.path": [
+        "?.lua",
+        "lua/?.lua",
+        "lua/tests/?.lua"
     ],
     "runtime.version": "Lua 5.4",
+    "diagnostics.libraryFiles": "Disable",
+    "diagnostics.ignoredFiles": "Disable",
     "workspace.ignoreDir": [
-        ".git",
-        ".vscode",
-        "luaunit.lua",
-        "misc",
-        "serpent.lua"
+        "lua/tests/luaunit.lua"
     ],
     "diagnostics": {
         "disable": [
