@@ -247,17 +247,24 @@ enables it manually. Editing updates highlights incrementally.
 From the repo root:
 
 ```sh
+just lua/deps # builds required C modules only (for running the demo)
 just lua/ed   # builds required C modules and runs the editor unit tests
 ```
 
-The `ed` recipe compiles `piecetab`, `cellgrid`, `termfeed`, `json`, and
-`spantree` into `lua/*.so` (PUC Lua). For interactive use you only need
-those `.so` files present; you can build them individually with
-`just lua/json`, `just lua/sp`, etc. LuaJIT variants are produced by the
+The `deps` recipe compiles `piecetab`, `cellgrid`, `termfeed`, `json`, and
+`spantree` into `lua/*.so` (PUC Lua) without running tests. For interactive
+use you only need those `.so` files present; you can build them individually
+with `just lua/json`, `just lua/sp`, etc. LuaJIT variants are produced by the
 generic `just lua/build <name>` recipes.
+
+`lua/tests/editor_test.lua` treats tree-sitter as optional: if the binding
+or the C grammar is missing, the syntax-highlighting tests are skipped, so
+`just lua/ed` passes after a clean checkout/build. Use `just lua/build-ts` to
+add tree-sitter support for highlighted demos.
 
 #### Just commands
 
+- `just lua/deps` — build the PUC Lua modules needed by the demo (no tests)
 - `just lua/ed` — build required modules and run `lua/tests/editor_test.lua`
 - `just lua/ed-tmux` — display integration tests in a real tmux terminal
 - `just lua/json` — build/test the yyjson binding (`json`)

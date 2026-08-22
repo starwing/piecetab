@@ -227,16 +227,22 @@ comment/function 样式）。`Ed:open_language(lang)` 可手动开启；编辑�
 在仓库根目录运行：
 
 ```sh
+just lua/deps # 只构建运行 demo 所需的 C 模块（不跑测试）
 just lua/ed   # 构建所需 C 模块并运行编辑器单元测试
 ```
 
-`ed` recipe 会把 `piecetab`、`cellgrid`、`termfeed`、`json`、`spantree`
-编译为 `lua/*.so`（PUC Lua）。交互运行只需这些 `.so` 存在；也可以单独
-构建，如 `just lua/json`、`just lua/sp`。LuaJIT 变体由通用
+`deps` recipe 会把 `piecetab`、`cellgrid`、`termfeed`、`json`、`spantree`
+编译为 `lua/*.so`（PUC Lua），不运行测试。交互运行只需这些 `.so` 存在；
+也可以单独构建，如 `just lua/json`、`just lua/sp`。LuaJIT 变体由通用
 `just lua/build <name>` recipe 生成。
+
+`lua/tests/editor_test.lua` 将 tree-sitter 视为可选：如果绑定或 C 语法
+文件缺失，语法高亮相关测试会被跳过，因此 `just lua/ed` 在 clean 后也能
+通过。需要高亮 demo 时可运行 `just lua/build-ts` 补上 tree-sitter。
 
 #### just 命令
 
+- `just lua/deps` — 构建 demo 所需的 PUC Lua 模块（不跑测试）
 - `just lua/ed` — 构建所需模块并运行 `lua/tests/editor_test.lua`
 - `just lua/ed-tmux` — 在真实 tmux 终端中运行显示集成测试
 - `just lua/json` — 构建/测试 yyjson 绑定（`json`）

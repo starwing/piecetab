@@ -12,6 +12,18 @@ package.cpath = (_G["jit"] and root .. "/lua/luajit/?.so;"
 local lu = require "luaunit"
 local Ed = require "editor"
 
+-- tree-sitter is optional: editor.lua disables highlighting when the binding
+-- (or the compiled grammar) is absent. Keep these tests green after a clean
+-- build by skipping only the syntax-highlighting cases.
+local has_treesitter = pcall(function()
+  local ts = require "treesitter"
+  ts.require("c")
+end)
+
+local function skip_without_treesitter()
+  lu.skipIf(not has_treesitter, "tree-sitter not available")
+end
+
 local ROWS, COLS = 6, 40
 
 local function make_ed(content)
@@ -661,6 +673,7 @@ end
 TestSyntax = {}
 
 function TestSyntax:testKeywordC()
+  skip_without_treesitter()
   -- "int main(void) { return 0; }": i@0, main@4, return@15
   local e = make_ed("int main(void) { return 0; }\n")
   e:open_language("c")
@@ -675,6 +688,7 @@ function TestSyntax:testKeywordC()
 end
 
 function TestSyntax:testCommentStringC()
+  skip_without_treesitter()
   -- "int x; /* note */ char *s = \"hi\";": /@7, quote@29
   local e = make_ed("int x; /* note */ char *s = \"hi\";\n")
   e:open_language("c")
@@ -686,6 +700,7 @@ function TestSyntax:testCommentStringC()
 end
 
 function TestSyntax:testEditUpdatesHighlight()
+  skip_without_treesitter()
   local e = make_ed("int main(void) { return 0; }\n")
   e:open_language("c")
   frame(e)
@@ -804,6 +819,7 @@ end
 
 -- "int Qx\n": pieces [0,4) "int " plain, [4,5) "Q" gray, [5,7) "x\n" plain
 function TestLayers:testLayeredCompose()
+  skip_without_treesitter()
   -- syntax fg on plain piece; piece bg alone on gray piece
   local e = make_ed("int x\n")
   e:open_language("c")
@@ -841,6 +857,7 @@ end
 -- [14,20) plain; the string literal "XYaaaa" spans the piece boundary —
 -- string+bg on the gray piece, fg-only on the plain pieces
 function TestLayers:testMergeLayersUnsetPassesThrough()
+  skip_without_treesitter()
   local e = make_ed('char *s = "aaaa";\n')
   e:open_language("c")
   e.doc:seek("set", 12) -- at the opening quote
@@ -892,6 +909,7 @@ end
 -- '"XY' at bytes 10..16: 'X' (byte 12) carries string fg (syntax) +
 -- gray bg (piece 2) + reverse (selection) in one cell — 3-layer merge
 function TestVisual:testThreeLayerCompose()
+  skip_without_treesitter()
   local e = make_ed('char *s = "aaaa";\n')
   e:open_language("c")
   e.doc:seek("set", 12)
