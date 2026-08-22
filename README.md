@@ -36,6 +36,21 @@ Peripheral libraries extend the core toward a full editor:
 All of them follow the same stb-style layout: single-header C89
 implementation, a Lua binding in `lua/`, and a test file in `tests/`.
 
+## Performance
+
+Current tuned defaults (100k structural corpus, ns/op, lower is better):
+
+| Operation | piecetab.h | linecache.h | spantree.h |
+| --- | ---: | ---: | ---: |
+| seek | 15.58 | 16.43 | 11.40 |
+| locate | 11.78 | 11.21 | 11.74 |
+| advance | 6.800 | 6.797 | 6.062 |
+| splice | 120.8 | 16.36 | 28.04 |
+| next (per item) | 2.281 | - | 2.383 |
+| edit | 100.7 | - | - |
+| scan (per line) | - | 0.964 | - |
+| fill | - | - | 238.7 |
+
 ## AI Usage
 - All implements (stb header) are written by hand, AI used to find solutions, help with design, and generate documentation.
 - All tests are written by AI, reviewed by human, used to verify the correctness of the implementation, and to ensure that the code meets the requirements and specifications.
@@ -525,17 +540,6 @@ just bench/confirm
 # Plot JSON results (needs matplotlib; falls back to CSV/Markdown)
 just bench/plot
 ```
-
-Current tuned defaults (100k structural corpus, ns/op, lower is better):
-
-| Operation | piecetab.h | linecache.h | spantree.h |
-| --- | ---: | ---: | ---: |
-| seek | 15.58 | 16.43 | 11.40 |
-| locate | 11.78 | 11.21 | 11.74 |
-| advance | 6.800 | 6.797 | 6.062 |
-| edit | 100.7 | - | - |
-| scan (per line) | - | 0.964 | - |
-| fill | - | - | 238.7 |
 
 Set `FANOUTS` and `BENCH_ROUNDS` to run a subset, e.g.
 `FANOUTS="16 24 31" BENCH_ROUNDS=5 just bench/sweep`. Raw JSON goes to

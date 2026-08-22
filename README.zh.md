@@ -31,6 +31,21 @@ O(log n) 偏移 ↔ 行号双向导航和 undo/redo 的完整编辑器 buffer；
 全部遵循同一 stb 风格布局：单头 C89 实现、`lua/` 下的 Lua 绑定、
 `tests/` 下的测试文件。
 
+## 性能
+
+当前调优默认值（100k 结构语料，ns/op，越低越好）：
+
+| 操作 | piecetab.h | linecache.h | spantree.h |
+| --- | ---: | ---: | ---: |
+| seek | 15.58 | 16.43 | 11.40 |
+| locate | 11.78 | 11.21 | 11.74 |
+| advance | 6.800 | 6.797 | 6.062 |
+| splice | 120.8 | 16.36 | 28.04 |
+| next（每项） | 2.281 | - | 2.383 |
+| edit | 100.7 | - | - |
+| scan（每行） | - | 0.964 | - |
+| fill | - | - | 238.7 |
+
 ## AI 使用
 - 所有实现（stb 头文件）均为手写，AI 用于寻找解决方案、辅助设计和生成文档。
 - 所有测试均由 AI 编写，人工review，用于验证实现的正确性，并确保代码满足需求和规范。
@@ -481,17 +496,6 @@ just bench/confirm
 # 绘制 JSON 结果（需要 matplotlib；无则回退 CSV/Markdown）
 just bench/plot
 ```
-
-当前调优默认值（100k 结构语料，ns/op，越低越好）：
-
-| 操作 | piecetab.h | linecache.h | spantree.h |
-| --- | ---: | ---: | ---: |
-| seek | 15.58 | 16.43 | 11.40 |
-| locate | 11.78 | 11.21 | 11.74 |
-| advance | 6.800 | 6.797 | 6.062 |
-| edit | 100.7 | - | - |
-| scan（每行） | - | 0.964 | - |
-| fill | - | - | 238.7 |
 
 可通过 `FANOUTS` 与 `BENCH_ROUNDS` 运行子集，例如
 `FANOUTS="16 24 31" BENCH_ROUNDS=5 just bench/sweep`。原始 JSON 在

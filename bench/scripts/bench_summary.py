@@ -9,7 +9,8 @@ libraries are columns:
 - linecache.h : bench/results/lc/confirm/lc_f16_lf34_seed1.json (LC_FANOUT=16, LC_LEAF_FANOUT=34)
 - spantree.h  : bench/results/sp/sp_fanout_34.json        (SP_FANOUT=34)
 
-Common rows: seek, locate, advance.
+Common rows: seek, locate, advance, splice.
+Next row is per-item amortized for piecetab/spantree.
 Unique rows: pt_edit / lc_scan (per line) / sp_fill.
 """
 import json
@@ -25,9 +26,14 @@ FILES = {
 }
 
 COMMON = {
-    "piecetab.h": ("fragmented_100k", {"seek": "pt_seek", "locate": "pt_locate", "advance": "pt_advance"}),
-    "linecache.h": ("lines_100k", {"seek": "lc_seek", "locate": "lc_locate", "advance": "lc_advance"}),
-    "spantree.h": ("fragmented_100k", {"seek": "sp_seek", "locate": "sp_locate", "advance": "sp_advance"}),
+    "piecetab.h": ("fragmented_100k", {"seek": "pt_seek", "locate": "pt_locate", "advance": "pt_advance", "splice": "pt_splice"}),
+    "linecache.h": ("lines_100k", {"seek": "lc_seek", "locate": "lc_locate", "advance": "lc_advance", "splice": "lc_splice"}),
+    "spantree.h": ("fragmented_100k", {"seek": "sp_seek", "locate": "sp_locate", "advance": "sp_advance", "splice": "sp_splice"}),
+}
+
+NEXT = {
+    "piecetab.h": ("fragmented_100k", "pt_next"),
+    "spantree.h": ("fragmented_100k", "sp_next"),
 }
 
 UNIQUE = {
@@ -72,10 +78,16 @@ def main():
         path = FILES[lib]
         corpus, names = COMMON[lib]
         uniq_corpus, uniq_name, uniq_label = UNIQUE[lib]
+        nxt = None
+        if lib in NEXT:
+            ncorpus, nname = NEXT[lib]
+            nxt = find(path, nname, ncorpus)
         data[lib] = {
             "seek": find(path, names["seek"], corpus),
             "locate": find(path, names["locate"], corpus),
             "advance": find(path, names["advance"], corpus),
+            "splice": find(path, names["splice"], corpus),
+            "next": nxt,
             "unique_label": uniq_label,
             "unique": find(path, uniq_name, uniq_corpus),
         }
@@ -84,6 +96,8 @@ def main():
         ("seek", "seek", None),
         ("locate", "locate", None),
         ("advance", "advance", None),
+        ("splice", "splice", None),
+        ("next (per item)", "next", None),
         ("edit", "unique", "piecetab.h"),
         ("scan (per line)", "unique", "linecache.h"),
         ("fill", "unique", "spantree.h"),
