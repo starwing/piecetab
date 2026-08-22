@@ -88,7 +88,7 @@ struct lc_Cursor {
 | ---------------- | ----- | ----------- | -------------- |
 | `LC_FANOUT`      | 62    | 4           | 内节点最大子数 |
 | `LC_LEAF_FANOUT` | 62    | 4           | 叶最大行数     |
-| `LC_MAX_LEVEL`   | 16    | 16          | 最大树深       |
+| `LC_MAX_LEVEL`   | 13    | 13          | 最大树深（默认按 FANOUT=62 取安全值，见 docs/max_levels.zh.md） |
 | `LC_PAGE_SIZE`   | 65536 | 512         | 池分配器页大小 |
 
 半满阈值 = FANOUT/2 (lc_test4=2, 默认=31)。小扇出极易触发分裂/合并。

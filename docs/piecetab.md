@@ -83,9 +83,9 @@ Default `ptS_defallocf` wraps `realloc`, aborting on failure.
 
 | Symbol            | Default | Meaning                                   |
 | ----------------- | ------- | ----------------------------------------- |
-| `PT_FANOUT`       | 62      | Maximum children per node (≤64)           |
+| `PT_FANOUT`       | 31      | Maximum children per node (≤64)           |
 | `PT_MAX_HOLESIZE` | 64      | Hole capacity (bytes)                     |
-| `PT_MAX_LEVEL`    | 16      | Maximum tree depth (paths array size)     |
+| `PT_MAX_LEVEL`    | 17      | Maximum tree depth / cursor path size (see [max_levels.md](max_levels.md)) |
 | `PT_PAGE_SIZE`    | 65536   | Pool allocator page size                  |
 | `PT_ARENA_SIZE`   | 1024    | Arena block minimum capacity              |
 | `PT_COMPACT_RANGES` | 64    | Compact range array initial capacity      |
@@ -348,7 +348,7 @@ typedef struct pt_Node {
 } pt_Node;
 ```
 
-- `pt_Mask = size_t` single-word bitmap — `PT_FANOUT ≤ sizeof(void*)*CHAR_BIT` (64) has a static assertion
+- `pt_Mask` is `unsigned` when `PT_FANOUT < 32`, and `unsigned long long` when `PT_FANOUT >= 32` — the default (31) stays strict C89; higher fanouts use the `long long` extension. `PT_FANOUT ≤ PT_MASK_BITS` has a static assertion.
 - Half-full threshold = `FANOUT/2`
 - The `mask` bitmap enables fast skipping of hole-free subtrees during COW commit freeze
 

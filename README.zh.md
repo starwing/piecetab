@@ -389,10 +389,12 @@ tree-sitter，因此克隆仓库或把仓库拷到新机器后，请先运行一
 
 | 宏                                                                | 默认  | 含义                                |
 | ----------------------------------------------------------------- | ----- | ----------------------------------- |
-| `PT_FANOUT` / `LC_FANOUT` / `SP_FANOUT`                           | 62    | 节点最大子数                        |
+| `PT_FANOUT`                                                       | 31    | piecetab 节点最大子数               |
+| `LC_FANOUT` / `SP_FANOUT`                                         | 62    | linecache/spantree 节点最大子数     |
 | `LC_LEAF_FANOUT`                                                  | 62    | 叶最大行数                          |
 | `PT_MAX_HOLESIZE`                                                 | 64    | hole piece 容量                     |
-| `PT_MAX_LEVEL` / `LC_MAX_LEVEL` / `SP_MAX_LEVEL`                  | 16    | 最大树深 / 游标路径容量             |
+| `PT_MAX_LEVEL`                                                    | 17    | 最大树深 / 游标路径容量（见 [docs/max_levels.zh.md](docs/max_levels.zh.md)） |
+| `LC_MAX_LEVEL` / `SP_MAX_LEVEL`                                   | 13    | 最大树深 / 游标路径容量（见 [docs/max_levels.zh.md](docs/max_levels.zh.md)） |
 | `PT_PAGE_SIZE` / `LC_PAGE_SIZE` / `UT_PAGE_SIZE` / `SP_PAGE_SIZE` | 65536 | 池分配器页大小                      |
 | `PT_ARENA_SIZE`                                                   | 1024  | arena 块最小容量                    |
 | `PT_COMPACT_RANGES`                                               | 64    | compact 区间数组初始容量            |

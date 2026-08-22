@@ -107,7 +107,7 @@ typedef sp_Id sp_Arbiterf(void *ud, sp_Id id, sp_Id old, sp_Mask *mask);
 | --------------- | ----- | ---------------------------------- |
 | `SP_FANOUT`     | 62    | 节点最大子数（必须 ≥ 4）           |
 | `SP_PAGE_SIZE`  | 65536 | 池分配器页大小                     |
-| `SP_MAX_LEVEL`  | 16    | 最大树深 / 游标路径数组大小        |
+| `SP_MAX_LEVEL`  | 13    | 最大树深 / 游标路径数组大小（见 [max_levels.zh.md](max_levels.zh.md)） |
 | `SP_STATIC_API` | —     | 定义后所有 `SP_API` 函数变为 static |
 
 `SP_FANOUT >= 4` 由静态断言强制。

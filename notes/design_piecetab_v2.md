@@ -432,9 +432,9 @@ piecetab 不内嵌调用 linecache。两个库各自独立，状态由外部分�
 
 | 宏              | 含义                    | 默认                          |
 | --------------- | ----------------------- | ----------------------------- |
-| `PT_FANOUT`     | 节点最大子数            | 62                            |
+| `PT_FANOUT`     | 节点最大子数            | 31                            |
 | `PT_HOLE_CAP`   | hole 容量（字节）       | `64 - sizeof(unsigned short)` |
-| `PT_MAX_LEVEL`  | 最大树深                | 16                            |
+| `PT_MAX_LEVEL`  | 最大树深                | 17（FANOUT=31 安全值，完整表见 docs/max_levels.zh.md） |
 | `PT_PAGE_SIZE`  | 池分配器页大小          | 65536                         |
 | `PT_STATIC_API` | 定义后所有函数为 static | —                             |
 

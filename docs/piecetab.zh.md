@@ -80,9 +80,9 @@ typedef void *pt_Alloc(void *ud, void *ptr, size_t osize, size_t nsize);
 
 | 符号              | 默认  | 含义                       |
 | ----------------- | ----- | -------------------------- |
-| `PT_FANOUT`       | 62    | 节点最大子数（≤64）        |
+| `PT_FANOUT`       | 31    | 节点最大子数（≤64）        |
 | `PT_MAX_HOLESIZE` | 64    | hole 容量（字节）          |
-| `PT_MAX_LEVEL`    | 16    | 最大树深（paths 数组大小） |
+| `PT_MAX_LEVEL`    | 17    | 最大树深 / 游标路径容量（见 [max_levels.zh.md](max_levels.zh.md)） |
 | `PT_PAGE_SIZE`    | 65536 | 池分配器页大小             |
 | `PT_ARENA_SIZE`   | 1024  | arena 块最小容量           |
 | `PT_COMPACT_RANGES` | 64  | compact 区间数组初始容量   |
@@ -349,7 +349,7 @@ typedef struct pt_Node {
 } pt_Node;
 ```
 
-- `pt_Mask = size_t` 单字位图——`PT_FANOUT ≤ sizeof(void*)*CHAR_BIT` (64) 有静态断言
+- `pt_Mask` 在 `PT_FANOUT < 32` 时为 `unsigned`，`PT_FANOUT >= 32` 时为 `unsigned long long`——默认值 31 保持严格 C89；更高 fanout 使用 `long long` 扩展。`PT_FANOUT ≤ PT_MASK_BITS` 有静态断言。
 - 半满阈值 = `FANOUT/2`
 - `mask` 位图用于 COW 提交冻结时快速跳过无 hole 子树
 

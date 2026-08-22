@@ -122,7 +122,7 @@ PT_API const char *pt_literal(pt_Cursor *C, size_t len);
 /* cursor definition */
 
 #ifndef PT_MAX_LEVEL
-# define PT_MAX_LEVEL 13 /* safe for PT_FANOUT=62; see docs */
+# define PT_MAX_LEVEL 17 /* safe for PT_FANOUT=31; see docs */
 #endif
 
 struct pt_Cursor {
@@ -153,7 +153,7 @@ PT_NS_END
 #define PT_SA_1(cond, prefix, line) typedef char prefix##line[(cond) ? 1 : -1]
 
 #ifndef PT_FANOUT
-# define PT_FANOUT 62
+# define PT_FANOUT 31
 #endif /* PT_FANOUT */
 
 /* makeroom needs at most 2 free slots; a split of a full node leaves
@@ -185,7 +185,11 @@ PT_STATIC_ASSERT(PT_COMPACT_RANGES > 1);
 
 PT_NS_BEGIN
 
-typedef size_t   pt_Mask;
+#if PT_FANOUT < 32
+typedef unsigned pt_Mask;
+#else  /* PT_FANOUT >= 32 */
+typedef unsigned long long pt_Mask;
+#endif /* PT_FANOUT < 32 */
 typedef unsigned pt_Ver;
 
 #define PT_MASK_BITS (sizeof(pt_Mask) * CHAR_BIT)

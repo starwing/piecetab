@@ -47,7 +47,7 @@ typedef struct pt_Node {
 } pt_Node;
 ```
 
-- `pt_Mask` = `size_t` 单字位图（非数组），故 `PT_FANOUT <= PT_MASK_BITS`（静态断言）
+- `pt_Mask` 单字位图（非数组）：`PT_FANOUT < 32` 时为 `unsigned`，`PT_FANOUT >= 32` 时为 `unsigned long long`；故 `PT_FANOUT <= PT_MASK_BITS`（静态断言）
 - 叶容器（levels 层的父）children[i] 实为 `char*` 或 `pt_Hole*`，由 mask 位辨识
 
 ### pt_Tree — 树（Buffer 即 `const pt_Tree *`）
@@ -101,9 +101,9 @@ ptK_parent(C, levels) = 叶容器(pt_Node)，其 children[] 直接存数据指�
 
 | 符号              | 默认  | pt_test4 值 | 含义                |
 | ----------------- | ----- | ----------- | ------------------- |
-| `PT_FANOUT`       | 62    | 4           | 节点最大子数（≤64） |
+| `PT_FANOUT`       | 31    | 4           | 节点最大子数（≤64） |
 | `PT_MAX_HOLESIZE` | 64    | 16          | hole 容量（字节）   |
-| `PT_MAX_LEVEL`    | 16    | 16          | 最大树深            |
+| `PT_MAX_LEVEL`    | 17    | 17          | 最大树深（默认按 FANOUT=31 取安全值，见 docs/max_levels.zh.md） |
 | `PT_PAGE_SIZE`    | 65536 | 512         | 池分配器页大小      |
 | `PT_ARENA_SIZE`   | 1024  | 1024        | arena 块最小容量    |
 | `PT_COMPACT_RANGES` | 64  | 2           | compact 区间数组初始容量（倍增） |
@@ -283,7 +283,7 @@ just pt-lines         # 未覆盖行源码
 | `pt_buffer(S, *plen)`        | `pt_scratch(C, *plen)` + `pt_reserve(C, len)` + `pt_literal(C, len)`（cursor 级，绑定树 arena） |
 | `PT_HOLE_CAP`                | `PT_MAX_HOLESIZE`                                                                               |
 | `pt_Hole { n; data[] }`      | `pt_Hole { data[] }`（长度存父 bytes[i]）                                                       |
-| `mask[PT_MASK_SIZE]` 数组    | 单 `pt_Mask`（size_t），FANOUT ≤ 64                                                             |
+| `mask[PT_MASK_SIZE]` 数组    | 单 `pt_Mask`（FANOUT<32 为 `unsigned`，≥32 为 `unsigned long long`），FANOUT ≤ PT_MASK_BITS |
 | `pt_Offset` / `pt_Size`      | `pt_Delta`（ptrdiff_t）/ `size_t`                                                               |
 | `ptM_upbytes` + `ptM_upmask` | 合并为 `ptM_up`                                                                                 |
 | scratch 全局共享             | arena 每树独享（`pt_Tree.arena`）                                                               |

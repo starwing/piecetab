@@ -360,7 +360,7 @@ C 在原左侧时 `mid` 多留一个段给左侧，反之亦然。保证游标�
 | ---------------- | ----- | ------------------------------------ |
 | `LC_FANOUT`      | 62    | 内节点最大子数                       |
 | `LC_LEAF_FANOUT` | 62    | 叶最大行数                           |
-| `LC_MAX_LEVEL`   | 16    | 最大树深（paths 数组大小）           |
+| `LC_MAX_LEVEL`   | 13    | 最大树深 / 游标路径容量（见 [max_levels.zh.md](max_levels.zh.md)） |
 | `LC_PAGE_SIZE`   | 65536 | 池分配器页大小                       |
 | `LC_STATIC_API`  | —     | 定义后所有函数为 static (单文件嵌入) |
 | `LC_POOL_STATS`  | —     | 定义后统计池中 live objects          |

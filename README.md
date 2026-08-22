@@ -418,10 +418,12 @@ Override before including the implementation:
 
 | Macro                                                             | Default | Meaning                                            |
 | ----------------------------------------------------------------- | ------- | -------------------------------------------------- |
-| `PT_FANOUT` / `LC_FANOUT` / `SP_FANOUT`                           | 62      | max children per node                              |
+| `PT_FANOUT`                                                       | 31      | max children per piecetab node                     |
+| `LC_FANOUT` / `SP_FANOUT`                                         | 62      | max children per linecache/spantree node           |
 | `LC_LEAF_FANOUT`                                                  | 62      | max lines per leaf                                 |
 | `PT_MAX_HOLESIZE`                                                 | 64      | hole piece capacity                                |
-| `PT_MAX_LEVEL` / `LC_MAX_LEVEL` / `SP_MAX_LEVEL`                  | 16      | max tree depth / cursor path size                  |
+| `PT_MAX_LEVEL`                                                    | 17      | max tree depth / cursor path size (see [docs/max_levels.md](docs/max_levels.md)) |
+| `LC_MAX_LEVEL` / `SP_MAX_LEVEL`                                   | 13      | max tree depth / cursor path size (see [docs/max_levels.md](docs/max_levels.md)) |
 | `PT_PAGE_SIZE` / `LC_PAGE_SIZE` / `UT_PAGE_SIZE` / `SP_PAGE_SIZE` | 65536   | pool allocator page size                           |
 | `PT_ARENA_SIZE`                                                   | 1024    | arena block minimum size                           |
 | `PT_COMPACT_RANGES`                                               | 64      | compact range array initial capacity               |
