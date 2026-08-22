@@ -131,7 +131,9 @@ static void bench_json_str(FILE *out, const char *s) {
 
 static void bench_print_header(FILE *out, const bench_Params *p) {
     fprintf(out, "{\n");
-#if defined(SP_FANOUT)
+#if defined(LC_FANOUT) && defined(LC_LEAF_FANOUT)
+    fprintf(out, "  \"benchmark\": \"lc_fanout_sweep\",\n");
+#elif defined(SP_FANOUT)
     fprintf(out, "  \"benchmark\": \"sp_fanout_sweep\",\n");
 #elif defined(PT_FANOUT)
     fprintf(out, "  \"benchmark\": \"pt_fanout_sweep\",\n");
@@ -168,7 +170,13 @@ static void bench_print_header(FILE *out, const bench_Params *p) {
     fprintf(out, "\"unknown\"");
 #endif
     fprintf(out, ", \"cpu\": \"unknown\", \"ram\": \"unknown\"},\n");
-#if defined(SP_FANOUT) && defined(SP_MAX_LEVEL)
+#if defined(LC_FANOUT) && defined(LC_LEAF_FANOUT) && defined(LC_MAX_LEVEL)
+    fprintf(out, "  \"params\": {\"LC_FANOUT\": %d, \"LC_LEAF_FANOUT\": %d, \"LC_MAX_LEVEL\": %d, \"seed\": %ld},\n",
+            (int)LC_FANOUT, (int)LC_LEAF_FANOUT, (int)LC_MAX_LEVEL, p->seed);
+#elif defined(LC_FANOUT) && defined(LC_LEAF_FANOUT)
+    fprintf(out, "  \"params\": {\"LC_FANOUT\": %d, \"LC_LEAF_FANOUT\": %d, \"seed\": %ld},\n",
+            (int)LC_FANOUT, (int)LC_LEAF_FANOUT, p->seed);
+#elif defined(SP_FANOUT) && defined(SP_MAX_LEVEL)
     fprintf(out, "  \"params\": {\"SP_FANOUT\": %d, \"SP_MAX_LEVEL\": %d, \"seed\": %ld},\n",
             (int)SP_FANOUT, (int)SP_MAX_LEVEL, p->seed);
 #elif defined(SP_FANOUT)

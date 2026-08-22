@@ -390,12 +390,12 @@ tree-sitter，因此克隆仓库或把仓库拷到新机器后，请先运行一
 | 宏                                                                | 默认  | 含义                                                                         |
 | ----------------------------------------------------------------- | ----- | ---------------------------------------------------------------------------- |
 | `PT_FANOUT`                                                       | 31    | piecetab 节点最大子数                                                        |
-| `LC_FANOUT`                                                       | 62    | linecache 节点最大子数                                                       |
+| `LC_FANOUT`                                                       | 16    | linecache 节点最大子数                                                       |
 | `SP_FANOUT`                                                       | 34    | spantree 节点最大子数                                                        |
-| `LC_LEAF_FANOUT`                                                  | 62    | 叶最大行数                                                                   |
+| `LC_LEAF_FANOUT`                                                  | 34    | 叶最大行数                                                                   |
 | `PT_MAX_HOLESIZE`                                                 | 64    | hole piece 容量                                                              |
 | `PT_MAX_LEVEL`                                                    | 17    | 最大树深 / 游标路径容量（见 [docs/max_levels.zh.md](docs/max_levels.zh.md)） |
-| `LC_MAX_LEVEL`                                                    | 13    | 最大树深 / 游标路径容量（见 [docs/max_levels.zh.md](docs/max_levels.zh.md)） |
+| `LC_MAX_LEVEL`                                                    | 21    | 最大树深 / 游标路径容量（见 [docs/max_levels.zh.md](docs/max_levels.zh.md)） |
 | `SP_MAX_LEVEL`                                                    | 16    | 最大树深 / 游标路径容量（见 [docs/max_levels.zh.md](docs/max_levels.zh.md)） |
 | `PT_PAGE_SIZE` / `LC_PAGE_SIZE` / `UT_PAGE_SIZE` / `SP_PAGE_SIZE` | 65536 | 池分配器页大小                                                               |
 | `PT_ARENA_SIZE`                                                   | 1024  | arena 块最小容量                                                             |
@@ -466,7 +466,7 @@ just lua/ts-lines  # treesitter 未覆盖行
 使用确定性结构基数语料（piece/行/span 数量，而非文件字节数），并输出 JSON。
 
 ```sh
-# 编译并运行默认 FANOUT 的 piecetab 基准
+# 输出当前基准摘要表
 just bench/all
 
 # 快速冒烟运行
@@ -481,6 +481,17 @@ just bench/confirm
 # 绘制 JSON 结果（需要 matplotlib；无则回退 CSV/Markdown）
 just bench/plot
 ```
+
+当前调优默认值（100k 结构语料，ns/op，越低越好）：
+
+| 操作 | piecetab.h | linecache.h | spantree.h |
+| --- | ---: | ---: | ---: |
+| seek | 15.58 | 16.43 | 11.40 |
+| locate | 11.78 | 11.21 | 11.74 |
+| advance | 6.800 | 6.797 | 6.062 |
+| edit | 100.7 | - | - |
+| scan（每行） | - | 0.964 | - |
+| fill | - | - | 238.7 |
 
 可通过 `FANOUTS` 与 `BENCH_ROUNDS` 运行子集，例如
 `FANOUTS="16 24 31" BENCH_ROUNDS=5 just bench/sweep`。原始 JSON 在

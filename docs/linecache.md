@@ -358,9 +358,9 @@ Relies on stitch's transactional nature: because OOM inside stitch is prevented 
 
 | Macro             | Default | Meaning                                       |
 | ----------------- | ------- | --------------------------------------------- |
-| `LC_FANOUT`       | 62      | Maximum children per internal node            |
-| `LC_LEAF_FANOUT`  | 62      | Maximum lines per leaf                        |
-| `LC_MAX_LEVEL`   | 13      | Maximum tree depth / cursor path size (see [max_levels.md](max_levels.md)) |
+| `LC_FANOUT`       | 16      | Maximum children per internal node            |
+| `LC_LEAF_FANOUT`  | 34      | Maximum lines per leaf                        |
+| `LC_MAX_LEVEL`   | 21      | Maximum tree depth / cursor path size (see [max_levels.md](max_levels.md)) |
 | `LC_PAGE_SIZE`    | 65536   | Pool allocator page size                      |
 | `LC_STATIC_API`   | —       | When defined, all functions are static (single-file embedding) |
 | `LC_POOL_STATS`   | —       | When defined, tracks live objects in pools    |

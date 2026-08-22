@@ -419,12 +419,12 @@ Override before including the implementation:
 | Macro                                                             | Default | Meaning                                                                          |
 | ----------------------------------------------------------------- | ------- | -------------------------------------------------------------------------------- |
 | `PT_FANOUT`                                                       | 31      | max children per piecetab node                                                   |
-| `LC_FANOUT`                                                       | 62      | max children per linecache node                                                |
+| `LC_FANOUT`                                                       | 16      | max children per linecache node                                                |
 | `SP_FANOUT`                                                       | 34      | max children per spantree node                                                 |
-| `LC_LEAF_FANOUT`                                                  | 62      | max lines per leaf                                                               |
+| `LC_LEAF_FANOUT`                                                  | 34      | max lines per leaf                                                               |
 | `PT_MAX_HOLESIZE`                                                 | 64      | hole piece capacity                                                              |
 | `PT_MAX_LEVEL`                                                    | 17      | max tree depth / cursor path size (see [docs/max_levels.md](docs/max_levels.md)) |
-| `LC_MAX_LEVEL`                                                    | 13      | max tree depth / cursor path size (see [docs/max_levels.md](docs/max_levels.md)) |
+| `LC_MAX_LEVEL`                                                    | 21      | max tree depth / cursor path size (see [docs/max_levels.md](docs/max_levels.md)) |
 | `SP_MAX_LEVEL`                                                    | 16      | max tree depth / cursor path size (see [docs/max_levels.md](docs/max_levels.md)) |
 | `PT_PAGE_SIZE` / `LC_PAGE_SIZE` / `UT_PAGE_SIZE` / `SP_PAGE_SIZE` | 65536   | pool allocator page size                                                         |
 | `PT_ARENA_SIZE`                                                   | 1024    | arena block minimum size                                                         |
@@ -510,7 +510,7 @@ family. It uses public-API cases, deterministic structural corpora
 (piece/line/span counts, not file bytes), and JSON output.
 
 ```sh
-# Build and run the default-FANOUT piecetab benchmark
+# Print the current benchmark summary table
 just bench/all
 
 # Quick smoke run
@@ -525,6 +525,17 @@ just bench/confirm
 # Plot JSON results (needs matplotlib; falls back to CSV/Markdown)
 just bench/plot
 ```
+
+Current tuned defaults (100k structural corpus, ns/op, lower is better):
+
+| Operation | piecetab.h | linecache.h | spantree.h |
+| --- | ---: | ---: | ---: |
+| seek | 15.58 | 16.43 | 11.40 |
+| locate | 11.78 | 11.21 | 11.74 |
+| advance | 6.800 | 6.797 | 6.062 |
+| edit | 100.7 | - | - |
+| scan (per line) | - | 0.964 | - |
+| fill | - | - | 238.7 |
 
 Set `FANOUTS` and `BENCH_ROUNDS` to run a subset, e.g.
 `FANOUTS="16 24 31" BENCH_ROUNDS=5 just bench/sweep`. Raw JSON goes to

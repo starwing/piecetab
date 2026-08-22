@@ -5,12 +5,12 @@ ROOT := ".."
 
 default: all
 
-all *args='':
-    mkdir -p build/pt results/pt
-    gcc -Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic \
-        -std=c89 -Wno-variadic-macros -O2 -DNDEBUG -I{{ ROOT }} -I. \
-        -o build/pt/pt_bench bench_pt.c
-    ./build/pt/pt_bench {{ args }}
+all:
+    @if [ -x {{ ROOT }}/.venv/bin/python ]; then \
+        {{ ROOT }}/.venv/bin/python scripts/bench_summary.py; \
+    else \
+        python3 scripts/bench_summary.py; \
+    fi
 
 smoke:
     mkdir -p build/pt results/pt
@@ -57,6 +57,52 @@ sp-plot:
     else \
         python3 scripts/plot_bench.py \
             results/sp/sp_fanout_*.json --out reports/sp; \
+    fi
+lc *args='':
+    mkdir -p build/lc results/lc
+    gcc -Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic \
+        -std=c89 -Wno-variadic-macros -O2 -DNDEBUG \
+        -DLC_FANOUT=16 -DLC_LEAF_FANOUT=34 -DLC_MAX_LEVEL=21 -I{{ ROOT }} -I. \
+        -o build/lc/lc_bench bench_lc.c
+    ./build/lc/lc_bench {{ args }}
+
+lc-smoke:
+    mkdir -p build/lc results/lc
+    gcc -Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic \
+        -std=c89 -Wno-variadic-macros -O2 -DNDEBUG \
+        -DLC_FANOUT=16 -DLC_LEAF_FANOUT=34 -DLC_MAX_LEVEL=21 -I{{ ROOT }} -I. \
+        -o build/lc/lc_bench bench_lc.c
+    ./build/lc/lc_bench --rounds 2 --iters 100 --json results/lc/lc_smoke.json
+
+lc-probe:
+    bash scripts/bench_lc_probe.sh
+
+lc-probe-plot:
+    @if [ -x {{ ROOT }}/.venv/bin/python ]; then \
+        {{ ROOT }}/.venv/bin/python scripts/plot_lc_probe3d.py; \
+    else \
+        python3 scripts/plot_lc_probe3d.py; \
+    fi
+
+lc-sweep *args='':
+    bash scripts/bench_lc_sweep.sh {{ args }}
+
+lc-analyze:
+lc-sweep-analyze *args='':
+    python3 scripts/analyze_lc_sweep.py {{ args }}
+lc-confirm:
+    bash scripts/bench_lc_confirm.sh
+
+lc-confirm-analyze:
+    python3 scripts/analyze_lc_confirm.py
+
+lc-plot:
+    @if [ -x {{ ROOT }}/.venv/bin/python ]; then \
+        {{ ROOT }}/.venv/bin/python scripts/plot_bench.py \
+            results/lc/probe/lc_f*_lf*.json --out reports/lc; \
+    else \
+        python3 scripts/plot_bench.py \
+            results/lc/probe/lc_f*_lf*.json --out reports/lc; \
     fi
 
 pt-sweep:

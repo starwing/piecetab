@@ -20,7 +20,7 @@ grep -c 'X(' tests/lc_test8.c
 ```
 
 编译参数（测试用）: `-DLC_LEAF_FANOUT=4 -DLC_FANOUT=4` 以极小扇出迫树分裂。
-`lc_test8` 用默认扇出 62。
+`lc_test8` 用默认扇出（LC_FANOUT=16, LC_LEAF_FANOUT=34）。
 
 ## 二、数据结构
 
@@ -86,12 +86,12 @@ struct lc_Cursor {
 
 | 符号             | 默认  | lc_test4 值 | 含义           |
 | ---------------- | ----- | ----------- | -------------- |
-| `LC_FANOUT`      | 62    | 4           | 内节点最大子数 |
-| `LC_LEAF_FANOUT` | 62    | 4           | 叶最大行数     |
-| `LC_MAX_LEVEL`   | 13    | 13          | 最大树深（默认按 FANOUT=62 取安全值，见 docs/max_levels.zh.md） |
+| `LC_FANOUT`      | 16    | 4           | 内节点最大子数 |
+| `LC_LEAF_FANOUT` | 34    | 4           | 叶最大行数     |
+| `LC_MAX_LEVEL`   | 21    | 13          | 最大树深（默认按 LC_FANOUT=16, LC_LEAF_FANOUT=34 取安全值，见 docs/max_levels.zh.md） |
 | `LC_PAGE_SIZE`   | 65536 | 512         | 池分配器页大小 |
 
-半满阈值 = FANOUT/2 (lc_test4=2, 默认=31)。小扇出极易触发分裂/合并。
+半满阈值 = FANOUT/2 (lc_test4=2, 默认=8；叶默认=17)。小扇出极易触发分裂/合并。
 
 ## 四、核心游标宏
 

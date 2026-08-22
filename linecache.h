@@ -103,7 +103,7 @@ LC_API int lc_splice(lc_Cursor *C, size_t del, unsigned ins);
 
 /* struct definition */
 #ifndef LC_MAX_LEVEL
-# define LC_MAX_LEVEL 13 /* safe for LC_FANOUT=LC_LEAF_FANOUT=62; see docs */
+# define LC_MAX_LEVEL 21 /* safe for LC_FANOUT=16 LC_LEAF_FANOUT=34; see docs */
 #endif
 
 struct lc_Cursor {
@@ -137,11 +137,11 @@ LC_NS_END
 #include <string.h>
 
 #ifndef LC_FANOUT
-# define LC_FANOUT 62
+# define LC_FANOUT 16
 #endif
 
 #ifndef LC_LEAF_FANOUT
-# define LC_LEAF_FANOUT 62
+# define LC_LEAF_FANOUT 34
 #endif
 
 #ifndef LC_PAGE_SIZE
