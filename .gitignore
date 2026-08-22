@@ -1,6 +1,7 @@
 .ignore
 .opencode
 .codegraph
+.dsh_better_edit
 .sync.ffs_db
 .DS_Store
 .claude/
@@ -38,6 +39,14 @@ fuzz/pt_fuzz_fast
 fuzz/pt_replay
 
 tmp_*
+build/
+results/
+reports/
+bench/build/
+bench/results/
+bench/reports/
+__pycache__/
+*.pyc
 
 # DSH project skills (local, mirrors .opencode/agents)
 .dsh/

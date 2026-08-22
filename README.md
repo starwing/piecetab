@@ -416,18 +416,17 @@ Build/test recipes live in `lua/justfile` and are run as `just lua/<name>`
 
 Override before including the implementation:
 
-| Macro                                                             | Default | Meaning                                            |
-| ----------------------------------------------------------------- | ------- | -------------------------------------------------- |
-| `PT_FANOUT`                                                       | 31      | max children per piecetab node                     |
-| `LC_FANOUT` / `SP_FANOUT`                                         | 62      | max children per linecache/spantree node           |
-| `LC_LEAF_FANOUT`                                                  | 62      | max lines per leaf                                 |
-| `PT_MAX_HOLESIZE`                                                 | 64      | hole piece capacity                                |
+| Macro                                                             | Default | Meaning                                                                          |
+| ----------------------------------------------------------------- | ------- | -------------------------------------------------------------------------------- |
+| `PT_FANOUT`                                                       | 31      | max children per piecetab node                                                   |
+| `LC_FANOUT` / `SP_FANOUT`                                         | 62      | max children per linecache/spantree node                                         |
+| `LC_LEAF_FANOUT`                                                  | 62      | max lines per leaf                                                               |
+| `PT_MAX_HOLESIZE`                                                 | 64      | hole piece capacity                                                              |
 | `PT_MAX_LEVEL`                                                    | 17      | max tree depth / cursor path size (see [docs/max_levels.md](docs/max_levels.md)) |
 | `LC_MAX_LEVEL` / `SP_MAX_LEVEL`                                   | 13      | max tree depth / cursor path size (see [docs/max_levels.md](docs/max_levels.md)) |
-| `PT_PAGE_SIZE` / `LC_PAGE_SIZE` / `UT_PAGE_SIZE` / `SP_PAGE_SIZE` | 65536   | pool allocator page size                           |
-| `PT_ARENA_SIZE`                                                   | 1024    | arena block minimum size                           |
-| `PT_COMPACT_RANGES`                                               | 64      | compact range array initial capacity               |
-| `SP_STATIC_API`                                                   | —       | when defined, all spantree functions become static |
+| `PT_PAGE_SIZE` / `LC_PAGE_SIZE` / `UT_PAGE_SIZE` / `SP_PAGE_SIZE` | 65536   | pool allocator page size                                                         |
+| `PT_ARENA_SIZE`                                                   | 1024    | arena block minimum size                                                         |
+| `PT_COMPACT_RANGES`                                               | 64      | compact range array initial capacity                                             |
 
 All libraries accept a custom allocator (`lc_Alloc` / `pt_Alloc`
 / `ut_Alloc` / `sp_Alloc`, Lua-style realloc signature) at `*_open`.
@@ -501,6 +500,35 @@ treesitter binding; grammars are fetched and compiled by
 `misc/fetch_grammars.sh` (run by `just lua/ts-grammars`).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for coding conventions.
+
+## Benchmarking
+
+The `bench/` tree contains a C89 benchmark harness for the piecetab library
+family. It uses public-API cases, deterministic structural corpora
+(piece/line/span counts, not file bytes), and JSON output.
+
+```sh
+# Build and run the default-FANOUT piecetab benchmark
+just bench/all
+
+# Quick smoke run
+just bench/smoke
+
+# Full PT_FANOUT sweep 4..63 (64 excluded: ptM_mask(64) is UB)
+just bench/sweep
+
+# Focused multi-seed confirmation sweep
+just bench/confirm
+
+# Plot JSON results (needs matplotlib; falls back to CSV/Markdown)
+just bench/plot
+```
+
+Set `FANOUTS` and `BENCH_ROUNDS` to run a subset, e.g.
+`FANOUTS="16 24 31" BENCH_ROUNDS=5 just bench/sweep`. Raw JSON goes to
+`bench/results/`, plots and summaries to `bench/reports/`. The tuning report
+is `notes/reports/bench_tuning_pt.md` (local/gitignored); see
+`notes/design_bench.md` for the design.
 
 ## License
 

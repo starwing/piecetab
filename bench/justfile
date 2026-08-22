@@ -1,0 +1,37 @@
+# piecetab benchmark recipes
+# Run from repo root: just bench/<recipe> (just runs this file from bench/)
+
+ROOT := ".."
+
+default: all
+
+all *args='':
+    mkdir -p build results
+    gcc -Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic \
+        -std=c89 -Wno-variadic-macros -O2 -DNDEBUG -I{{ ROOT }} -I. \
+        -o build/pt_bench bench_pt.c
+    ./build/pt_bench {{ args }}
+
+smoke:
+    mkdir -p build results
+    gcc -Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic \
+        -std=c89 -Wno-variadic-macros -O2 -DNDEBUG -I{{ ROOT }} -I. \
+        -o build/pt_bench bench_pt.c
+    ./build/pt_bench --rounds 2 --iters 100 --json results/pt_smoke.json
+
+sweep:
+    bash scripts/bench_sweep.sh
+
+confirm:
+    bash scripts/bench_confirm.sh
+plot:
+    @if [ -x {{ ROOT }}/.venv/bin/python ]; then \
+        {{ ROOT }}/.venv/bin/python scripts/plot_bench.py \
+            results/pt_fanout_*.json --out reports; \
+    else \
+        python3 scripts/plot_bench.py \
+            results/pt_fanout_*.json --out reports; \
+    fi
+
+clean:
+    rm -rf build results reports

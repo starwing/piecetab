@@ -387,18 +387,17 @@ tree-sitter，因此克隆仓库或把仓库拷到新机器后，请先运行一
 
 在包含实现之前覆盖以下宏：
 
-| 宏                                                                | 默认  | 含义                                |
-| ----------------------------------------------------------------- | ----- | ----------------------------------- |
-| `PT_FANOUT`                                                       | 31    | piecetab 节点最大子数               |
-| `LC_FANOUT` / `SP_FANOUT`                                         | 62    | linecache/spantree 节点最大子数     |
-| `LC_LEAF_FANOUT`                                                  | 62    | 叶最大行数                          |
-| `PT_MAX_HOLESIZE`                                                 | 64    | hole piece 容量                     |
+| 宏                                                                | 默认  | 含义                                                                         |
+| ----------------------------------------------------------------- | ----- | ---------------------------------------------------------------------------- |
+| `PT_FANOUT`                                                       | 31    | piecetab 节点最大子数                                                        |
+| `LC_FANOUT` / `SP_FANOUT`                                         | 62    | linecache/spantree 节点最大子数                                              |
+| `LC_LEAF_FANOUT`                                                  | 62    | 叶最大行数                                                                   |
+| `PT_MAX_HOLESIZE`                                                 | 64    | hole piece 容量                                                              |
 | `PT_MAX_LEVEL`                                                    | 17    | 最大树深 / 游标路径容量（见 [docs/max_levels.zh.md](docs/max_levels.zh.md)） |
 | `LC_MAX_LEVEL` / `SP_MAX_LEVEL`                                   | 13    | 最大树深 / 游标路径容量（见 [docs/max_levels.zh.md](docs/max_levels.zh.md)） |
-| `PT_PAGE_SIZE` / `LC_PAGE_SIZE` / `UT_PAGE_SIZE` / `SP_PAGE_SIZE` | 65536 | 池分配器页大小                      |
-| `PT_ARENA_SIZE`                                                   | 1024  | arena 块最小容量                    |
-| `PT_COMPACT_RANGES`                                               | 64    | compact 区间数组初始容量            |
-| `SP_STATIC_API`                                                   | —     | 定义后 spantree 全部函数变为 static |
+| `PT_PAGE_SIZE` / `LC_PAGE_SIZE` / `UT_PAGE_SIZE` / `SP_PAGE_SIZE` | 65536 | 池分配器页大小                                                               |
+| `PT_ARENA_SIZE`                                                   | 1024  | arena 块最小容量                                                             |
+| `PT_COMPACT_RANGES`                                               | 64    | compact 区间数组初始容量                                                     |
 
 所有库均可在 `*_open` 时传入自定义分配器（`lc_Alloc` / `pt_Alloc`
 / `ut_Alloc` / `sp_Alloc`，Lua 风格 realloc 签名）。
@@ -458,6 +457,34 @@ just lua/ts-lines  # treesitter 未覆盖行
 ```
 
 编码规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+## 基准测试
+
+`bench/` 目录包含 piecetab 库族的 C89 基准测试框架。它以 public API 为维度、
+使用确定性结构基数语料（piece/行/span 数量，而非文件字节数），并输出 JSON。
+
+```sh
+# 编译并运行默认 FANOUT 的 piecetab 基准
+just bench/all
+
+# 快速冒烟运行
+just bench/smoke
+
+# 完整 PT_FANOUT 扫描 4..63（64 排除：ptM_mask(64) 是 UB）
+just bench/sweep
+
+# 多 seed 确认扫描
+just bench/confirm
+
+# 绘制 JSON 结果（需要 matplotlib；无则回退 CSV/Markdown）
+just bench/plot
+```
+
+可通过 `FANOUTS` 与 `BENCH_ROUNDS` 运行子集，例如
+`FANOUTS="16 24 31" BENCH_ROUNDS=5 just bench/sweep`。原始 JSON 在
+`bench/results/`，图表与摘要输出到 `bench/reports/`。调优报告在
+`notes/reports/bench_tuning_pt.md`（本地/gitignored）；设计见
+`notes/design_bench.md`。
 
 ## 许可证
 
