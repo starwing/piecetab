@@ -25,9 +25,12 @@ except Exception:
 def load_files(paths):
     rows = []
     for path in paths:
-        with open(path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        fanout = data.get("params", {}).get("PT_FANOUT")
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            continue
+        fanout = data.get("params", {}).get("PT_FANOUT", data.get("params", {}).get("SP_FANOUT"))
         for case in data.get("cases", []):
             case["fanout"] = fanout
             case["source"] = path
@@ -103,9 +106,9 @@ def write_csv(rows, path):
 
 def write_best_md(best, path, meta):
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write("# PT_FANOUT sweep: best per case\n\n")
+        fh.write("# %s: best per case\n\n" % meta.get("benchmark", "FANOUT").replace("_", " ").title())
         fh.write("machine: %s\n\n" % meta.get("machine", "unknown"))
-        fh.write("Note: full-scan cases (`pt_next`/`pt_prev`) use `amortized_ns` "
+        fh.write("Note: full-scan cases (`*_next`/`*_prev`) use `amortized_ns` "
                  "(per successful call), not the whole-traversal time.\n\n")
         fh.write("| case | corpus | best FANOUT | metric ns/op |\n")
         fh.write("|---|---|---|---|\n")
@@ -131,7 +134,7 @@ def make_plots(rows, outdir):
         best_i = min(range(len(ys)), key=lambda i: ys[i])
         ax.plot(xs[best_i], ys[best_i], "r*", ms=14,
                 label="best FANOUT=%s" % xs[best_i])
-        ax.set_xlabel("PT_FANOUT")
+        ax.set_xlabel("FANOUT")
         ax.set_ylabel("metric ns/op")
         ax.set_title("%s (%s)" % key)
         ax.legend()
@@ -163,7 +166,7 @@ def make_plots(rows, outdir):
                 ys = [metric(x) for x in citems]
                 ax.plot(xs, ys, marker="o", label=corpus)
             ax.set_title(case_name, fontsize=9)
-            ax.set_xlabel("PT_FANOUT", fontsize=8)
+            ax.set_xlabel("FANOUT", fontsize=8)
             ax.set_ylabel("metric ns/op", fontsize=8)
             ax.grid(True, alpha=0.3)
             ax.legend(fontsize=6)
@@ -199,13 +202,13 @@ def main():
     meta = {}
     with open(paths[0], "r", encoding="utf-8") as fh:
         meta = json.load(fh)
-
     best = best_by_case(rows)
-    write_csv(rows, os.path.join(args.out, "pt_fanout_curves.csv"))
-    write_best_md(best, os.path.join(args.out, "pt_fanout_best.md"), meta)
+    prefix = "pt_fanout" if "PT_FANOUT" in meta.get("params", {}) else "sp_fanout"
+    write_csv(rows, os.path.join(args.out, prefix + "_curves.csv"))
+    write_best_md(best, os.path.join(args.out, prefix + "_best.md"), meta)
     print("wrote %s and %s" % (
-        os.path.join(args.out, "pt_fanout_curves.csv"),
-        os.path.join(args.out, "pt_fanout_best.md")))
+        os.path.join(args.out, prefix + "_curves.csv"),
+        os.path.join(args.out, prefix + "_best.md")))
 
     if HAVE_MPL:
         make_plots(rows, args.out)

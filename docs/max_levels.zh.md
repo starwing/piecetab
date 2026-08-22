@@ -35,7 +35,7 @@ spantree 的值一致。
 
 - `PT_FANOUT = 31` → `PT_MAX_LEVEL = 17`（64 位）/ `9`（32 位）
 - `LC_FANOUT = LC_LEAF_FANOUT = 62` → `LC_MAX_LEVEL = 13`
-- `SP_FANOUT = 62` → `SP_MAX_LEVEL = 13`
+- `SP_FANOUT = 34` → `SP_MAX_LEVEL = 16`
 
 64 位的 `PT_MAX_LEVEL = 17` 在 32 位与 64 位构建上都安全
 （32 位实际只需要 9，但 17 仍然很小）。
@@ -107,10 +107,11 @@ spantree 的值一致。
 快速规则：
 
 - 64 位 `size_t`：piecetab 默认 `PT_FANOUT = 31` 需要
-  `PT_MAX_LEVEL = 17`；linecache/spantree 默认 `FANOUT = 62` 需要
-  `MAX_LEVELS = 13`。
+  `PT_MAX_LEVEL = 17`；linecache 默认 `FANOUT = 62` 需要
+  `LC_MAX_LEVEL = 13`；spantree 默认 `SP_FANOUT = 34` 需要
+  `SP_MAX_LEVEL = 16`。
 - 32 位 `size_t`：默认值也安全（`PT_FANOUT = 31` 需要 9，
-  `FANOUT = 62` 需要 7）；覆盖为更小 fanout 时请查表。
+  `FANOUT = 62` 需要 7，`SP_FANOUT = 34` 需要 8）；覆盖为更小 fanout 时请查表。
 
 ## 使用方法
 

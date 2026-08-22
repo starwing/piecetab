@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Confirmation sweep: multiple seeds over a focused FANOUT set.
-# Outputs bench/results/confirm/pt_fanout_<f>_seed<s>.json
+# Confirmation sweep for SP_FANOUT: multiple seeds over a focused FANOUT set.
+# Outputs bench/results/sp/confirm/sp_fanout_<f>_seed<s>.json
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -10,11 +10,11 @@ cd "$ROOT"
 
 CC="${CC:-gcc}"
 CFLAGS="${CFLAGS:--Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic -std=c89 -Wno-variadic-macros}"
-FANOUTS="${FANOUTS:-16 18 20 22 24 26 28 30 31 32 36}"
+FANOUTS="${FANOUTS:-28 30 31 32 34 36 38 40}"
 SEEDS="${BENCH_SEEDS:-1 2 3}"
 ROUNDS="${BENCH_ROUNDS:-5}"
 ITERS="${BENCH_ITERS:-}"
-MIN_SECONDS="${BENCH_MIN_SECONDS:-1.0}"
+MIN_SECONDS="${BENCH_MIN_SECONDS:-0.5}"
 
 safe_max_levels() {
     case "$1" in
@@ -38,28 +38,24 @@ safe_max_levels() {
     esac
 }
 
-mkdir -p bench/build/pt bench/results/pt/confirm
+mkdir -p bench/build/sp bench/results/sp/confirm
 GIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 for f in $FANOUTS; do
-    echo "== FANOUT $f =="
+    echo "== SP_FANOUT $f =="
     safe=$(safe_max_levels "$f")
-    LONGLONG_FLAG=""
-    if [ "$f" -ge 32 ]; then
-        LONGLONG_FLAG="-Wno-long-long"
-    fi
-    bin="bench/build/pt/pt_confirm_$f"
-    $CC $CFLAGS $LONGLONG_FLAG -O2 -DNDEBUG -DPT_FANOUT="$f" \
+    bin="bench/build/sp/sp_confirm_$f"
+    $CC $CFLAGS -O2 -DNDEBUG -DSP_FANOUT="$f" \
         -DBENCH_GIT="\"$GIT\"" \
-        -DPT_MAX_LEVEL="$safe" \
-        -I. -Ibench -o "$bin" bench/bench_pt.c
+        -DSP_MAX_LEVEL="$safe" \
+        -I. -Ibench -o "$bin" bench/bench_sp.c
     for s in $SEEDS; do
         echo "  seed $s"
         ./"$bin" --seed "$s" --rounds "$ROUNDS" \
             --min-seconds "$MIN_SECONDS" \
             ${ITERS:+--iters "$ITERS"} \
-            ${BENCH_ARGS:-} --json "bench/results/pt/confirm/pt_fanout_${f}_seed${s}.json"
+            ${BENCH_ARGS:-} --json "bench/results/sp/confirm/sp_fanout_${f}_seed${s}.json"
     done
 done
 
-echo "confirmation complete: $(echo $FANOUTS | wc -w) fanouts x $(echo $SEEDS | wc -w) seeds -> bench/results/pt/confirm/"
+echo "confirmation complete: $(echo $FANOUTS | wc -w) fanouts x $(echo $SEEDS | wc -w) seeds -> bench/results/sp/confirm/"

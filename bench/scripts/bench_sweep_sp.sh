@@ -7,15 +7,13 @@ cd "$ROOT"
 
 CC="${CC:-gcc}"
 CFLAGS="${CFLAGS:--Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic -std=c89 -Wno-variadic-macros}"
-# FANOUT=64 is excluded: ptM_mask(64) is UB even with unsigned long long.
 FANOUTS="${FANOUTS:-$(seq 4 63)}"
-ROUNDS="${BENCH_ROUNDS:-3}"
+ROUNDS="${BENCH_ROUNDS:-5}"
 ITERS="${BENCH_ITERS:-}"
-MIN_SECONDS="${BENCH_MIN_SECONDS:-1.0}"
+MIN_SECONDS="${BENCH_MIN_SECONDS:-0.2}"
 
-# Safe PT_MAX_LEVEL for 64-bit size_t, worst-case half-full B+ tree.
-# Generated from MAX_LEVELS = ceil(log_{FANOUT/2}(SIZE_MAX)).
-# Uses a case statement instead of an associative array for macOS bash 3.2.
+# Safe SP_MAX_LEVEL for 64-bit size_t, worst-case half-full B+ tree.
+# Same formula as piecetab: MAX_LEVELS = ceil(log_{FANOUT/2}(SIZE_MAX)).
 safe_max_levels() {
     case "$1" in
         4|5) echo 64 ;;
@@ -38,26 +36,20 @@ safe_max_levels() {
     esac
 }
 
-mkdir -p bench/build/pt bench/results/pt
+mkdir -p bench/build/sp bench/results/sp
 GIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
 for f in $FANOUTS; do
-    echo "== FANOUT $f =="
+    echo "== SP_FANOUT $f =="
     safe=$(safe_max_levels "$f")
-    LONGLONG_FLAG=""
-    if [ "$f" -ge 32 ]; then
-        # PT_FANOUT >= 32 uses unsigned long long; keep the bench build
-        # usable even with -pedantic -std=c89 by suppressing that extension warning.
-        LONGLONG_FLAG="-Wno-long-long"
-    fi
-    $CC $CFLAGS $LONGLONG_FLAG -O2 -DNDEBUG -DPT_FANOUT="$f" \
+    $CC $CFLAGS -O2 -DNDEBUG -DSP_FANOUT="$f" \
         -DBENCH_GIT="\"$GIT\"" \
-        -DPT_MAX_LEVEL="$safe" \
-        -I. -Ibench -o "bench/build/pt/pt_fanout_$f" bench/bench_pt.c
-    ./bench/build/pt/pt_fanout_$f --seed 1 --rounds "$ROUNDS" \
+        -DSP_MAX_LEVEL="$safe" \
+        -I. -Ibench -o "bench/build/sp/sp_fanout_$f" bench/bench_sp.c
+    ./bench/build/sp/sp_fanout_$f --seed 1 --rounds "$ROUNDS" \
         --min-seconds "$MIN_SECONDS" \
         ${ITERS:+--iters "$ITERS"} \
-        ${BENCH_ARGS:-} --json "bench/results/pt/pt_fanout_$f.json"
+        ${BENCH_ARGS:-} --json "bench/results/sp/sp_fanout_$f.json"
 done
 
-echo "sweep complete: $(echo $FANOUTS | wc -w) fanouts -> bench/results/pt/"
+echo "sweep complete: $(echo $FANOUTS | wc -w) fanouts -> bench/results/sp/"

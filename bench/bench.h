@@ -13,6 +13,7 @@ typedef struct bench_Params {
     long        seed;
     long        iters;
     long        rounds;
+    double      min_seconds;
     const char *json;
     const char *cases[BENCH_MAX_CASES];
     int         ncases;
@@ -27,10 +28,12 @@ typedef struct bench_Case {
     int (*run)(void *ud, long iters);
     void (*teardown)(void *ud);
     long (*calls_per_iter)(void *ud);
+    int  oneshot;
 } bench_Case;
 
 typedef struct bench_Result {
     double ns_per_op;
+    double mean_ns;
     double median_ns;
     double min_ns;
     double p10_ns;
@@ -69,6 +72,7 @@ static void bench_parse(int argc, char **argv, bench_Params *p) {
     memset(p, 0, sizeof(*p));
     p->seed = 1;
     p->rounds = 7;
+    p->min_seconds = 1.0;
     for (i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc)
             p->seed = atol(argv[++i]);
@@ -76,6 +80,8 @@ static void bench_parse(int argc, char **argv, bench_Params *p) {
             p->iters = atol(argv[++i]);
         else if (strcmp(argv[i], "--rounds") == 0 && i + 1 < argc)
             p->rounds = atol(argv[++i]);
+        else if (strcmp(argv[i], "--min-seconds") == 0 && i + 1 < argc)
+            p->min_seconds = atof(argv[++i]);
         else if (strcmp(argv[i], "--json") == 0 && i + 1 < argc)
             p->json = argv[++i];
         else if (strcmp(argv[i], "--case") == 0 && i + 1 < argc) {
@@ -101,14 +107,17 @@ static int bench_cmp_double(const void *a, const void *b) {
 }
 
 static void bench_stats(double *s, int n, bench_Result *r) {
-    double med;
+    double med, sum = 0.0;
+    int    i;
     qsort(s, (size_t)n, sizeof(double), bench_cmp_double);
+    for (i = 0; i < n; ++i) sum += s[i];
     med = (n % 2) ? s[n / 2] : (s[n / 2 - 1] + s[n / 2]) * 0.5;
     r->min_ns = s[0];
     r->p10_ns = s[n / 10];
     r->median_ns = med;
     r->p90_ns = s[n * 9 / 10];
-    r->ns_per_op = med;
+    r->mean_ns = sum / (double)n;
+    r->ns_per_op = r->mean_ns;
 }
 
 static void bench_json_str(FILE *out, const char *s) {
@@ -122,7 +131,13 @@ static void bench_json_str(FILE *out, const char *s) {
 
 static void bench_print_header(FILE *out, const bench_Params *p) {
     fprintf(out, "{\n");
+#if defined(SP_FANOUT)
+    fprintf(out, "  \"benchmark\": \"sp_fanout_sweep\",\n");
+#elif defined(PT_FANOUT)
     fprintf(out, "  \"benchmark\": \"pt_fanout_sweep\",\n");
+#else
+    fprintf(out, "  \"benchmark\": \"bench\",\n");
+#endif
     fprintf(out, "  \"git_commit\": ");
 #ifdef BENCH_GIT
     bench_json_str(out, BENCH_GIT);
@@ -153,7 +168,13 @@ static void bench_print_header(FILE *out, const bench_Params *p) {
     fprintf(out, "\"unknown\"");
 #endif
     fprintf(out, ", \"cpu\": \"unknown\", \"ram\": \"unknown\"},\n");
-#if defined(PT_FANOUT) && defined(PT_MAX_LEVEL)
+#if defined(SP_FANOUT) && defined(SP_MAX_LEVEL)
+    fprintf(out, "  \"params\": {\"SP_FANOUT\": %d, \"SP_MAX_LEVEL\": %d, \"seed\": %ld},\n",
+            (int)SP_FANOUT, (int)SP_MAX_LEVEL, p->seed);
+#elif defined(SP_FANOUT)
+    fprintf(out, "  \"params\": {\"SP_FANOUT\": %d, \"seed\": %ld},\n",
+            (int)SP_FANOUT, p->seed);
+#elif defined(PT_FANOUT) && defined(PT_MAX_LEVEL)
     fprintf(out, "  \"params\": {\"PT_FANOUT\": %d, \"PT_MAX_LEVEL\": %d, \"seed\": %ld},\n",
             (int)PT_FANOUT, (int)PT_MAX_LEVEL, p->seed);
 #elif defined(PT_FANOUT)
@@ -178,6 +199,7 @@ static void bench_print_case(FILE *out, const bench_Case *c,
     fprintf(out, "      \"iters\": %ld,\n", r->iters);
     fprintf(out, "      \"rounds\": %ld,\n", r->rounds);
     fprintf(out, "      \"ns_per_op\": %.3f,\n", r->ns_per_op);
+    fprintf(out, "      \"mean_ns\": %.3f,\n", r->mean_ns);
     fprintf(out, "      \"median_ns\": %.3f,\n", r->median_ns);
     fprintf(out, "      \"min_ns\": %.3f,\n", r->min_ns);
     fprintf(out, "      \"p10_ns\": %.3f,\n", r->p10_ns);
@@ -187,34 +209,85 @@ static void bench_print_case(FILE *out, const bench_Case *c,
     fprintf(out, "    }%s\n", last ? "" : ",");
 }
 
+static long bench_calibrate(const bench_Case *c, const bench_Params *p,
+                            long iters) {
+    int attempt;
+    if (p->min_seconds <= 0.0) return iters;
+    for (attempt = 0; attempt < 6; ++attempt) {
+        void  *ud = NULL;
+        double t0, t1, secs, target;
+        int    ok = 1;
+        if (c->setup && c->setup(&ud, p) == 0) return -1;
+        if (c->run) {
+            t0 = bench_now();
+            ok = c->run(ud, iters);
+            t1 = bench_now();
+            secs = t1 - t0;
+        } else {
+            secs = p->min_seconds;
+        }
+        if (c->teardown) c->teardown(ud);
+        if (!ok) return -1;
+        target = p->min_seconds * 1.5;
+        if (secs >= p->min_seconds && secs <= target) return iters;
+        if (secs < p->min_seconds) {
+            iters = (long)((double)iters * p->min_seconds / secs * 1.2 + 1.0);
+            if (iters < 1000) iters = 1000;
+        } else if (iters > 1) {
+            long next = (long)((double)iters * p->min_seconds / secs * 0.9 + 1.0);
+            if (next < 1) next = 1;
+            if (next >= iters) next = iters - 1;
+            iters = next;
+        }
+        if (iters > 1000000000L) iters = 1000000000L;
+    }
+    return iters;
+}
+
 static int bench_run_one(const bench_Case *c, const bench_Params *p,
                          FILE *out, const char *corpus, int last) {
     bench_Result res;
     void        *ud = NULL;
     double      *s;
-    double       t0, t1;
+    double       t0, t1, sample_secs = 0.0;
     long         iters = p->iters > 0 ? p->iters : c->default_iters;
+    long         rounds = p->rounds;
     long         i;
     int          ok = 1;
 
     if (iters <= 0) iters = 1000;
-    if (p->rounds <= 0) return 0;
-    s = (double *)malloc((size_t)p->rounds * sizeof(double));
-    if (s == NULL) return 0;
+    if (rounds <= 0) return 0;
+    if (c->oneshot && p->iters <= 0) iters = 1;
+    if (!c->oneshot && p->iters <= 0) {
+        iters = bench_calibrate(c, p, iters);
+        if (iters < 0) return 0;
+    }
 
+    t0 = bench_now();
     if (c->setup && c->setup(&ud, p) == 0) ok = 0;
     if (ok && c->run) {
         long w = iters < 10 ? iters : iters / 10;
-        t0 = bench_now();
-        c->run(ud, w);
-        t1 = bench_now();
-        (void)t0;
-        (void)t1;
+        ok = c->run(ud, w);
     }
     if (ok && c->per_round && c->teardown) c->teardown(ud);
     if (ok && c->per_round) ud = NULL;
+    t1 = bench_now();
+    sample_secs = t1 - t0;
 
-    for (i = 0; ok && i < p->rounds; ++i) {
+    if (ok && c->oneshot && p->iters <= 0 && p->min_seconds > 0.0 &&
+        sample_secs > 0.0) {
+        if (sample_secs >= p->min_seconds) {
+            rounds = 1;
+        } else {
+            long need = (long)(p->min_seconds / sample_secs) + 1;
+            if (need > rounds) rounds = need;
+        }
+        if (rounds > 100000L) rounds = 100000L;
+    }
+    s = (double *)malloc((size_t)rounds * sizeof(double));
+    if (s == NULL) return 0;
+
+    for (i = 0; ok && i < rounds; ++i) {
         if (c->per_round && c->setup && c->setup(&ud, p) == 0) {
             ok = 0;
             break;
@@ -230,9 +303,9 @@ static int bench_run_one(const bench_Case *c, const bench_Params *p,
         long   calls = 0;
         double amortized = 0.0;
         memset(&res, 0, sizeof(res));
-        bench_stats(s, (int)p->rounds, &res);
+        bench_stats(s, (int)rounds, &res);
         res.iters = iters;
-        res.rounds = p->rounds;
+        res.rounds = rounds;
         if (!c->per_round && c->calls_per_iter && ud != NULL) {
             calls = c->calls_per_iter(ud);
             if (calls > 0) amortized = res.ns_per_op / (double)calls;

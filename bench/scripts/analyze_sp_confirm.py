@@ -1,35 +1,48 @@
 #!/usr/bin/env python3
-"""Analyze bench/results/confirm JSONs and print normalized geomeans per FANOUT."""
+"""Analyze SP_FANOUT confirmation JSONs and print normalized geomeans."""
 import glob
 import json
 import math
 import os
 import sys
 
+
 def metric(c):
     if c.get("amortized_ns") and c["amortized_ns"] > 0:
         return c["amortized_ns"]
     return c["ns_per_op"]
 
+
 def main():
-    pattern = os.path.join(os.path.dirname(__file__), "..", "results", "pt", "confirm", "pt_fanout_*_seed*.json")
+    here = os.path.dirname(os.path.abspath(__file__))
+    pattern = os.path.join(
+        os.path.dirname(here), "results", "sp", "confirm",
+        "sp_fanout_*_seed*.json")
     files = sorted(glob.glob(os.path.normpath(pattern)))
     if not files:
-        print("no confirm files", file=sys.stderr)
+        print("no sp confirm files", file=sys.stderr)
         return 1
     data = {}
     for p in files:
         base = os.path.basename(p)
-        body = base.replace("pt_fanout_", "").replace(".json", "")
+        body = base.replace("sp_fanout_", "").replace(".json", "")
         parts = body.split("_seed")
+        if len(parts) != 2:
+            continue
         f = int(parts[0])
         s = int(parts[1])
-        with open(p) as fh:
-            d = json.load(fh)
+        try:
+            with open(p, "r", encoding="utf-8") as fh:
+                d = json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            continue
         data.setdefault(f, {})[s] = {}
         for c in d["cases"]:
             data[f][s][(c["name"], c["corpus"])] = metric(c)
     fanouts = sorted(data)
+    if not fanouts:
+        print("no SP confirm data", file=sys.stderr)
+        return 1
     cases = set()
     for f in fanouts:
         for s in data[f]:
@@ -41,7 +54,10 @@ def main():
         ratios = []
         for c in sorted(cases):
             for s in sorted(data[f]):
-                vals = [data[ff][s][c] for ff in fanouts if s in data[ff] and c in data[ff][s]]
+                vals = [data[ff][s][c] for ff in fanouts
+                        if s in data[ff] and c in data[ff][s]]
+                if not vals:
+                    continue
                 base = min(vals)
                 ratios.append(data[f][s][c] / base)
         geos[f] = math.exp(sum(math.log(r) for r in ratios) / len(ratios))
@@ -50,9 +66,8 @@ def main():
         print("%3d %.4f" % (f, geos[f]))
     best = min(geos, key=lambda f: geos[f])
     print("best", best, geos[best])
-    cand = [f for f in fanouts if f <= 32 and geos[f] <= geos[best] * 1.02]
-    print("within 2% <=32", cand)
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

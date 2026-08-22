@@ -1,7 +1,7 @@
 # bench 设计案
 
-> 状态：已实现第一期（bench/ + bench/scripts/ + bench/justfile），完整 4..63 扫描已跑（64 因 `ptM_mask(64)` UB 排除）。
-> 范围：第一期只做 harness + piecetab FANOUT 扫描（4..63 全整数）。
+> 状态：已实现 piecetab 与 spantree 两套（bench/ + bench/scripts/ + bench/justfile），各自完整 FANOUT 扫描已跑/进行中（PT 64 因 `ptM_mask(64)` UB 排除）。
+> 范围：harness + piecetab FANOUT 扫描（4..63 全整数）+ spantree FANOUT 扫描（4..63 全整数）。
 > 原则：性能基准与正确性压力分离；bench 用 release 构建，stress 用 ASan/UBSan。
 > 坐标系：结构基数驱动（piece 数 / 行数 / span 数 / 版本数），不是文件字节数。
 
@@ -27,14 +27,20 @@
 bench/
   bench.h           # C89 harness：CLI、计时、统计、JSON 输出
   bench_pt.c        # piecetab API 维度 cases
-  bench_data.h      # 确定性 corpus 生成器（结构基数驱动）
-  justfile          # recipes: all/smoke/sweep/confirm/plot/clean
+  bench_sp.c        # spantree API 维度 cases
+  bench_data.h      # piecetab 确定性 corpus 生成器（结构基数驱动）
+  justfile          # recipes: all/smoke/pt-sweep/sp-sweep/pt-plot/sp-plot/clean
   scripts/
-    bench_sweep.sh   # 编译矩阵：FANOUT 循环 → 运行 → 收集 JSON
-    plot_bench.py    # 读 JSON → 生成曲线图
-  results/           # 每次 sweep 的 JSON（gitignore）
-  reports/           # 生成的图表和调优报告
-  build/             # 编译产物（gitignore）
+    bench_sweep.sh    # piecetab 编译矩阵：FANOUT 循环 → 运行 → 收集 JSON
+    bench_sweep_sp.sh # spantree 编译矩阵：SP_FANOUT 循环 → 运行 → 收集 JSON
+    plot_bench.py     # 读 JSON → 生成曲线图（PT/SP 通用）
+    analyze_sp.py     # spantree sweep 聚合分析
+  build/pt/          # piecetab 编译产物（gitignore）
+  build/sp/          # spantree 编译产物（gitignore）
+  results/pt/        # piecetab 每次 sweep 的 JSON（gitignore）
+  results/sp/        # spantree 每次 sweep 的 JSON（gitignore）
+  reports/pt/        # piecetab 图表和报告（gitignore）
+  reports/sp/        # spantree 图表和报告（gitignore）
 ```
 
 数据流：
@@ -43,9 +49,21 @@ bench/
 bench/scripts/bench_sweep.sh
   └─ for F in $(seq 4 63)
        ├─ cc -DPT_FANOUT=$F -DPT_MAX_LEVEL=$safe -O2 -DNDEBUG ... \
-       │    -o bench/build/pt_fanout_$F bench/bench_pt.c
-       └─ ./bench/build/pt_fanout_$F --json bench/results/pt_fanout_$F.json
-            └─ bench/results/pt_fanout_*.json
+       │    -o bench/build/pt/pt_fanout_$F bench/bench_pt.c
+       └─ ./bench/build/pt/pt_fanout_$F --json bench/results/pt/pt_fanout_$F.json
+            └─ bench/results/pt/pt_fanout_*.json
+                 └─ bench/scripts/plot_bench.py
+                      └─ bench/reports/pt/pt_fanout_*.svg/png + summary table
+
+bench/scripts/bench_sweep_sp.sh
+  └─ for F in $(seq 4 63)
+       ├─ cc -DSP_FANOUT=$F -DSP_MAX_LEVEL=$safe -O2 -DNDEBUG ... \
+       │    -o bench/build/sp/sp_fanout_$F bench/bench_sp.c
+       └─ ./bench/build/sp/sp_fanout_$F --json bench/results/sp/sp_fanout_$F.json
+            └─ bench/results/sp/sp_fanout_*.json
+                 └─ bench/scripts/plot_bench.py
+                      └─ bench/reports/sp/sp_fanout_*.svg/png + summary table
+```
                  └─ bench/scripts/plot_bench.py
                       └─ bench/reports/pt_fanout_*.svg/png + summary table
 ```

@@ -2510,12 +2510,12 @@ TEST(ns_params) {
     asserteq(sp_addns(&m, 3), SP_OK);
     asserteq(m, 5);
     asserteq(sp_hasns(&m, 3), 1);
-    asserteq(sp_addns(&m, 64), SP_OK);
+    asserteq(sp_addns(&m, SP_MASK_BITS), SP_OK);
     asserteq(sp_delns(&m, 3), SP_OK);
-    asserteq(m, 1 + ((sp_Mask)1 << 63));
+    asserteq(m, 1 + ((sp_Mask)1 << (SP_MASK_BITS - 1)));
     asserteq(sp_hasns(&m, 3), 0);
-    asserteq(sp_hasns(&m, 64), 1);
-    asserteq(sp_delns(&m, 64), SP_OK);
+    asserteq(sp_hasns(&m, SP_MASK_BITS), 1);
+    asserteq(sp_delns(&m, SP_MASK_BITS), SP_OK);
     asserteq(m, 1);
     asserteq(sp_delns(&m, 1), SP_OK);
     asserteq(m, 0);
@@ -2523,17 +2523,17 @@ TEST(ns_params) {
     asserteq(sp_addns(NULL, 1), SP_ERRPARAM);
     asserteq(sp_addns(&m, 0), SP_ERRPARAM);
     asserteq(sp_addns(&m, -1), SP_ERRPARAM);
-    asserteq(sp_addns(&m, 65), SP_ERRPARAM);
+    asserteq(sp_addns(&m, SP_MASK_BITS + 1), SP_ERRPARAM);
     asserteq(sp_delns(&m, 0), SP_ERRPARAM);
     asserteq(sp_delns(&m, -1), SP_ERRPARAM);
-    asserteq(sp_delns(&m, 66), SP_ERRPARAM);
+    asserteq(sp_delns(&m, SP_MASK_BITS + 2), SP_ERRPARAM);
     asserteq(sp_delns(NULL, 1), SP_ERRPARAM);
     asserteq(sp_hasns(NULL, 1), 0);
     asserteq(sp_hasns(&m, 0), 0);
     asserteq(sp_hasns(&m, -1), 0);
-    asserteq(sp_hasns(&m, 65), 0);
-    asserteq(sp_addns(&m, 64), SP_OK);
-    asserteq(sp_delns(&m, 64), SP_OK);
+    asserteq(sp_hasns(&m, SP_MASK_BITS + 1), 0);
+    asserteq(sp_addns(&m, SP_MASK_BITS), SP_OK);
+    asserteq(sp_delns(&m, SP_MASK_BITS), SP_OK);
     asserteq(m, 0);
 }
 

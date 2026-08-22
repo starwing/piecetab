@@ -6,31 +6,71 @@ ROOT := ".."
 default: all
 
 all *args='':
-    mkdir -p build results
+    mkdir -p build/pt results/pt
     gcc -Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic \
         -std=c89 -Wno-variadic-macros -O2 -DNDEBUG -I{{ ROOT }} -I. \
-        -o build/pt_bench bench_pt.c
-    ./build/pt_bench {{ args }}
+        -o build/pt/pt_bench bench_pt.c
+    ./build/pt/pt_bench {{ args }}
 
 smoke:
-    mkdir -p build results
+    mkdir -p build/pt results/pt
     gcc -Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic \
         -std=c89 -Wno-variadic-macros -O2 -DNDEBUG -I{{ ROOT }} -I. \
-        -o build/pt_bench bench_pt.c
-    ./build/pt_bench --rounds 2 --iters 100 --json results/pt_smoke.json
+        -o build/pt/pt_bench bench_pt.c
+    ./build/pt/pt_bench --rounds 2 --iters 100 --json results/pt/pt_smoke.json
 
-sweep:
-    bash scripts/bench_sweep.sh
+sp *args='':
+    mkdir -p build/sp results/sp
+    gcc -Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic \
+        -std=c89 -Wno-variadic-macros -O2 -DNDEBUG \
+        -DSP_FANOUT=34 -DSP_MAX_LEVEL=16 -I{{ ROOT }} -I. \
+        -o build/sp/sp_bench bench_sp.c
+    ./build/sp/sp_bench {{ args }}
 
-confirm:
-    bash scripts/bench_confirm.sh
-plot:
+sp-smoke:
+    mkdir -p build/sp results/sp
+    gcc -Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic \
+        -std=c89 -Wno-variadic-macros -O2 -DNDEBUG \
+        -DSP_FANOUT=34 -DSP_MAX_LEVEL=16 -I{{ ROOT }} -I. \
+        -o build/sp/sp_bench bench_sp.c
+    ./build/sp/sp_bench --rounds 2 --iters 100 --json results/sp/sp_smoke.json
+
+sp-sweep:
+    bash scripts/bench_sweep_sp.sh
+
+sp-confirm:
+    bash scripts/bench_confirm_sp.sh
+
+sp-analyze:
+    python3 scripts/analyze_sp_confirm.py
+
+sp-sparse-confirm:
+    bash scripts/bench_sparse_confirm.sh
+
+sp-sparse-analyze:
+    python3 scripts/analyze_sparse_confirm.py
+
+sp-plot:
     @if [ -x {{ ROOT }}/.venv/bin/python ]; then \
         {{ ROOT }}/.venv/bin/python scripts/plot_bench.py \
-            results/pt_fanout_*.json --out reports; \
+            results/sp/sp_fanout_*.json --out reports/sp; \
     else \
         python3 scripts/plot_bench.py \
-            results/pt_fanout_*.json --out reports; \
+            results/sp/sp_fanout_*.json --out reports/sp; \
+    fi
+
+pt-sweep:
+    bash scripts/bench_sweep.sh
+
+pt-confirm:
+    bash scripts/bench_confirm.sh
+pt-plot:
+    @if [ -x {{ ROOT }}/.venv/bin/python ]; then \
+        {{ ROOT }}/.venv/bin/python scripts/plot_bench.py \
+            results/pt/pt_fanout_*.json --out reports/pt; \
+    else \
+        python3 scripts/plot_bench.py \
+            results/pt/pt_fanout_*.json --out reports/pt; \
     fi
 
 clean:

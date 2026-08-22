@@ -113,9 +113,9 @@ cause false negatives (the tree does not validate it).
 
 | Symbol          | Default | Meaning                                  |
 | --------------- | ------- | ---------------------------------------- |
-| `SP_FANOUT`     | 62      | Max children per node (must be ≥ 4)      |
+| `SP_FANOUT`     | 34      | Max children per node (must be ≥ 4)      |
 | `SP_PAGE_SIZE`  | 65536   | Pool allocator page size                 |
-| `SP_MAX_LEVEL`  | 13      | Max tree depth / cursor path array size (see [max_levels.md](max_levels.md)) |
+| `SP_MAX_LEVEL`  | 16      | Max tree depth / cursor path array size (see [max_levels.md](max_levels.md)) |
 | `SP_STATIC_API` | —       | When defined, all `SP_API` functions become static |
 
 `SP_FANOUT >= 4` is enforced by a static assertion.

@@ -106,7 +106,7 @@ SP_API int sp_remove(sp_Cursor *L, sp_Cursor *R);
 /* cursor definition */
 
 #ifndef SP_MAX_LEVEL
-# define SP_MAX_LEVEL 13 /* safe for SP_FANOUT=62; see docs for other */
+# define SP_MAX_LEVEL 16 /* safe for SP_FANOUT=34; see docs for other */
 #endif
 
 struct sp_Cursor {
@@ -132,7 +132,7 @@ SP_NS_END
 #define SP_SA_1(cond, prefix, line) typedef char prefix##line[(cond) ? 1 : -1]
 
 #ifndef SP_FANOUT
-# define SP_FANOUT 62
+# define SP_FANOUT 34
 #endif /* SP_FANOUT */
 
 /* a full-node split leaves FANOUT/2 free; makeroom needs 2, so >= 4 */
