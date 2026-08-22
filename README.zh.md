@@ -1,10 +1,20 @@
-# ![Piecetab](misc/logo.svg)
+![Piecetab](misc/logo.svg)
 
-[![Build](https://github.com/starwing/piecetab/actions/workflows/test.yml/badge.svg)](https://github.com/starwing/piecetab/actions/workflows/test.yml) [![Coverage Status](https://coveralls.io/repos/github/starwing/piecetab/badge.svg?branch=master)](https://coveralls.io/github/starwing/piecetab?branch=master)
+**多个轻量级 stb 风格单头文件 C89 库，用于构建高性能文本编辑器 buffer**
 
 [English](README.md) | **中文**
 
-多个轻量级 stb 风格单头文件 C89 库，用于构建高性能文本编辑器 buffer：
+<div align="center">
+
+[![Build](https://github.com/starwing/piecetab/actions/workflows/test.yml/badge.svg)](https://github.com/starwing/piecetab/actions/workflows/test.yml) [![Coverage Status](https://coveralls.io/repos/github/starwing/piecetab/badge.svg?branch=master)](https://coveralls.io/github/starwing/piecetab?branch=master)
+
+[概述](#概述) • [特性](#特性) • [快速上手](#快速上手) • [API](#api-总览) • [Lua](#lua-绑定) • [测试](#测试)
+
+</div>
+
+## 概述
+
+核心库包括：
 
 - **`piecetab.h`** — 基于 B+ 树的字节级 piece table，支持写时复制（COW）
   快照、事务化编辑、零拷贝读取。
@@ -35,20 +45,20 @@ O(log n) 偏移 ↔ 行号双向导航和 undo/redo 的完整编辑器 buffer；
 
 当前调优默认值（100k 结构语料，ns/op，越低越好）：
 
-| 操作 | piecetab.h | linecache.h | spantree.h |
-| --- | ---: | ---: | ---: |
-| seek | 15.58 | 16.43 | 11.40 |
-| locate | 11.78 | 11.21 | 11.74 |
-| advance | 6.800 | 6.797 | 6.062 |
-| splice | 120.8 | 16.36 | 28.04 |
-| next（每项） | 2.281 | - | 2.383 |
-| edit | 100.7 | - | - |
-| scan（每行） | - | 0.964 | - |
-| fill | - | - | 238.7 |
+| 操作         | piecetab.h | linecache.h | spantree.h |
+| ------------ | ---------: | ----------: | ---------: |
+| seek         |      15.58 |       16.43 |      11.40 |
+| locate       |      11.78 |       11.21 |      11.74 |
+| advance      |      6.800 |       6.797 |      6.062 |
+| splice       |      120.8 |       16.36 |      28.04 |
+| next（每项） |      2.281 |           - |      2.383 |
+| edit         |      100.7 |           - |          - |
+| scan（每行） |          - |       0.964 |          - |
+| fill         |          - |           - |      238.7 |
 
 ## AI 使用
 - 所有实现（stb 头文件）均为手写，AI 用于寻找解决方案、辅助设计和生成文档。
-- 所有测试均由 AI 编写，人工review，用于验证实现的正确性，并确保代码满足需求和规范。
+- 所有测试均由 AI 编写、人工 review，用于验证实现的正确性，并确保代码满足需求和规范。
 - `editor.lua` 由 AI 编写，用于演示库的使用，并为希望在自己的项目中使用库的开发者提供参考。
 
 ## 动机
@@ -255,18 +265,6 @@ just lua/ed   # 构建所需 C 模块并运行编辑器单元测试
 文件缺失，语法高亮相关测试会被跳过，因此 `just lua/ed` 在 clean 后也能
 通过。需要高亮 demo 时可运行 `just lua/build-ts` 补上 tree-sitter。
 
-#### just 命令
-
-- `just lua/deps` — 构建 demo 所需的 PUC Lua 模块（不跑测试）
-- `just lua/ed` — 构建所需模块并运行 `lua/tests/editor_test.lua`
-- `just lua/ed-tmux` — 在真实 tmux 终端中运行显示集成测试
-- `just lua/json` — 构建/测试 yyjson 绑定（`json`）
-- `just lua/sp` — 构建/测试 spantree 绑定
-- `just lua/ts` / `just lua/ts-grammars` — 构建/测试 tree-sitter 绑定；
-  获取并编译语法
-- `just lua/test` — 运行全部 Lua 测试套件（需要 lua-utf8、tmux、
-  tree-sitter 语法）
-
 #### 运行方法
 
 ```sh
@@ -308,15 +306,6 @@ demo 将 `treesitter` 视为可选模块，因此高亮缺失是静默降级而�
 just lua/ts   # 获取/编译 lua/grammar/*.so，构建 treesitter.so + luajit/treesitter.so 并测试
 ```
 
-在 macOS 上确认二进制可用：
-
-```sh
-file lua/treesitter.so lua/luajit/treesitter.so lua/grammar/lua.so lua/grammar/c.so
-```
-
-输出应为 `Mach-O`（arm64/x86_64），而不是 `ELF`。`just lua/ed` 不会构建
-tree-sitter，因此克隆仓库或把仓库拷到新机器后，请先运行一次 `just lua/ts`。
-
 ## API 总览
 
 ### piecetab.h
@@ -345,7 +334,7 @@ tree-sitter，因此克隆仓库或把仓库拷到新机器后，请先运行一
 | 批量     | `lc_scan`                                                                            |
 | 查询     | `lc_breaks`, `lc_bytes`                                                              |
 | 游标     | `lc_seek`, `lc_seekline`, `lc_locate`, `lc_locline`, `lc_advance`, `lc_advline`      |
-| 查询     | `lc_offset`, `lc_line`, `lc_col`, `lc_lineoffset`, `lc_linelen`                      |
+| 定位     | `lc_offset`, `lc_line`, `lc_col`, `lc_lineoffset`, `lc_linelen`                      |
 | 编辑     | `lc_markbreak`, `lc_clearbreaks`, `lc_remove`, `lc_splice`, `lc_insert`, `lc_append` |
 
 ### undotree.h
@@ -481,20 +470,11 @@ just lua/ts-lines  # treesitter 未覆盖行
 使用确定性结构基数语料（piece/行/span 数量，而非文件字节数），并输出 JSON。
 
 ```sh
-# 输出当前基准摘要表
-just bench/all
-
-# 快速冒烟运行
-just bench/smoke
-
-# 完整 PT_FANOUT 扫描 4..63（64 排除：ptM_mask(64) 是 UB）
-just bench/sweep
-
-# 多 seed 确认扫描
-just bench/confirm
-
-# 绘制 JSON 结果（需要 matplotlib；无则回退 CSV/Markdown）
-just bench/plot
+just bench/all     # 输出当前基准摘要表
+just bench/smoke   # 快速冒烟运行
+just bench/sweep   # 完整 PT_FANOUT 扫描 4..63（64 排除：ptM_mask(64) 是 UB）
+just bench/confirm # 多 seed 确认扫描
+just bench/plot    # 绘制 JSON 结果（需要 matplotlib；无则回退 CSV/Markdown）
 ```
 
 可通过 `FANOUTS` 与 `BENCH_ROUNDS` 运行子集，例如

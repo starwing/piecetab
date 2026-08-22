@@ -1,11 +1,20 @@
-# ![Piecetab](misc/logo.svg)
+![Piecetab](misc/logo.svg)
 
-[![Build](https://github.com/starwing/piecetab/actions/workflows/test.yml/badge.svg)](https://github.com/starwing/piecetab/actions/workflows/test.yml) [![Coverage Status](https://coveralls.io/repos/github/starwing/piecetab/badge.svg?branch=master)](https://coveralls.io/github/starwing/piecetab?branch=master)
+**Lightweight, stb-style single-header C89 libraries for building high-performance text editor buffers**
 
 **English** | [中文](README.zh.md)
 
-lightweight, stb-style single-header C89 libraries for building
-high-performance text editor buffers:
+<div align="center">
+
+[![Build](https://github.com/starwing/piecetab/actions/workflows/test.yml/badge.svg)](https://github.com/starwing/piecetab/actions/workflows/test.yml) [![Coverage Status](https://coveralls.io/repos/github/starwing/piecetab/badge.svg?branch=master)](https://coveralls.io/github/starwing/piecetab?branch=master)
+
+[Overview](#overview) • [Features](#features) • [Quick Start](#quick-start) • [API](#api-overview) • [Lua](#lua-bindings) • [Testing](#testing)
+
+</div>
+
+## Overview
+
+The core libraries are:
 
 - **`piecetab.h`** — a byte-level piece table backed by a B+ tree, with
   copy-on-write snapshots, transactional editing, and zero-copy reads.
@@ -40,20 +49,20 @@ implementation, a Lua binding in `lua/`, and a test file in `tests/`.
 
 Current tuned defaults (100k structural corpus, ns/op, lower is better):
 
-| Operation | piecetab.h | linecache.h | spantree.h |
-| --- | ---: | ---: | ---: |
-| seek | 15.58 | 16.43 | 11.40 |
-| locate | 11.78 | 11.21 | 11.74 |
-| advance | 6.800 | 6.797 | 6.062 |
-| splice | 120.8 | 16.36 | 28.04 |
-| next (per item) | 2.281 | - | 2.383 |
-| edit | 100.7 | - | - |
-| scan (per line) | - | 0.964 | - |
-| fill | - | - | 238.7 |
+| Operation       | piecetab.h | linecache.h | spantree.h |
+| --------------- | ---------: | ----------: | ---------: |
+| seek            |      15.58 |       16.43 |      11.40 |
+| locate          |      11.78 |       11.21 |      11.74 |
+| advance         |      6.800 |       6.797 |      6.062 |
+| splice          |      120.8 |       16.36 |      28.04 |
+| next (per item) |      2.281 |           - |      2.383 |
+| edit            |      100.7 |           - |          - |
+| scan (per line) |          - |       0.964 |          - |
+| fill            |          - |           - |      238.7 |
 
 ## AI Usage
-- All implements (stb header) are written by hand, AI used to find solutions, help with design, and generate documentation.
-- All tests are written by AI, reviewed by human, used to verify the correctness of the implementation, and to ensure that the code meets the requirements and specifications.
+- All implementations (stb headers) are written by hand; AI was used to find solutions, help with design, and generate documentation.
+- All tests are written by AI and reviewed by humans, used to verify the correctness of the implementation and to ensure that the code meets the requirements and specifications.
 - `editor.lua` is written by AI, used to demonstrate the usage of the library, and to provide a reference for developers who want to use the library in their own projects.
 
 ## Motivation
@@ -277,18 +286,6 @@ or the C grammar is missing, the syntax-highlighting tests are skipped, so
 `just lua/ed` passes after a clean checkout/build. Use `just lua/build-ts` to
 add tree-sitter support for highlighted demos.
 
-#### Just commands
-
-- `just lua/deps` — build the PUC Lua modules needed by the demo (no tests)
-- `just lua/ed` — build required modules and run `lua/tests/editor_test.lua`
-- `just lua/ed-tmux` — display integration tests in a real tmux terminal
-- `just lua/json` — build/test the yyjson binding (`json`)
-- `just lua/sp` — build/test the spantree binding
-- `just lua/ts` / `just lua/ts-grammars` — build/test the tree-sitter
-  binding / fetch and compile grammars
-- `just lua/test` — run every Lua suite (needs lua-utf8, tmux, tree-sitter
-  grammars)
-
 #### Run method
 
 ```sh
@@ -335,16 +332,6 @@ fetches and compiles the grammars):
 just lua/ts   # fetch/compile lua/grammar/*.so, build treesitter.so + luajit/treesitter.so, test
 ```
 
-Verify the binaries are usable on macOS:
-
-```sh
-file lua/treesitter.so lua/luajit/treesitter.so lua/grammar/lua.so lua/grammar/c.so
-```
-
-They should report `Mach-O` (arm64/x86_64), not `ELF`. `just lua/ed` does
-not build tree-sitter, so run `just lua/ts` once after cloning or after
-copying the repo to a new machine.
-
 ## API Overview
 
 ### piecetab.h
@@ -373,7 +360,7 @@ the caller must keep the memory alive while any buffer references it.
 | Bulk      | `lc_scan`                                                                            |
 | Query     | `lc_breaks`, `lc_bytes`                                                              |
 | Cursor    | `lc_seek`, `lc_seekline`, `lc_locate`, `lc_locline`, `lc_advance`, `lc_advline`      |
-| Query     | `lc_offset`, `lc_line`, `lc_col`, `lc_lineoffset`, `lc_linelen`                      |
+| Position  | `lc_offset`, `lc_line`, `lc_col`, `lc_lineoffset`, `lc_linelen`                      |
 | Edit      | `lc_markbreak`, `lc_clearbreaks`, `lc_remove`, `lc_splice`, `lc_insert`, `lc_append` |
 
 ### undotree.h
@@ -434,8 +421,8 @@ Override before including the implementation:
 | Macro                                                             | Default | Meaning                                                                          |
 | ----------------------------------------------------------------- | ------- | -------------------------------------------------------------------------------- |
 | `PT_FANOUT`                                                       | 31      | max children per piecetab node                                                   |
-| `LC_FANOUT`                                                       | 16      | max children per linecache node                                                |
-| `SP_FANOUT`                                                       | 34      | max children per spantree node                                                 |
+| `LC_FANOUT`                                                       | 16      | max children per linecache node                                                  |
+| `SP_FANOUT`                                                       | 34      | max children per spantree node                                                   |
 | `LC_LEAF_FANOUT`                                                  | 34      | max lines per leaf                                                               |
 | `PT_MAX_HOLESIZE`                                                 | 64      | hole piece capacity                                                              |
 | `PT_MAX_LEVEL`                                                    | 17      | max tree depth / cursor path size (see [docs/max_levels.md](docs/max_levels.md)) |
@@ -477,6 +464,7 @@ All libraries accept a custom allocator (`lc_Alloc` / `pt_Alloc`
 Peripheral libraries (`cellgrid.h`, `termfeed.h`) have no API docs yet —
 see their `lua/*.d.lua` declarations and `notes/design_cellgrid.md`,
 `notes/design_termfeed.md`.
+
 - [`notes/`](notes/) — design documents: architecture overviews
   (`brief_*.md`), algorithm designs (`design_*.md`), and the range-delete
   algorithm evolution history
@@ -525,20 +513,11 @@ family. It uses public-API cases, deterministic structural corpora
 (piece/line/span counts, not file bytes), and JSON output.
 
 ```sh
-# Print the current benchmark summary table
-just bench/all
-
-# Quick smoke run
-just bench/smoke
-
-# Full PT_FANOUT sweep 4..63 (64 excluded: ptM_mask(64) is UB)
-just bench/sweep
-
-# Focused multi-seed confirmation sweep
-just bench/confirm
-
-# Plot JSON results (needs matplotlib; falls back to CSV/Markdown)
-just bench/plot
+just bench/all     # Print the current benchmark summary table
+just bench/smoke   # Quick smoke run
+just bench/sweep   # Full PT_FANOUT sweep 4..63 (64 excluded: ptM_mask(64) is UB)
+just bench/confirm # Focused multi-seed confirmation sweep
+just bench/plot    # Plot JSON results (needs matplotlib; falls back to CSV/Markdown)
 ```
 
 Set `FANOUTS` and `BENCH_ROUNDS` to run a subset, e.g.
