@@ -105,7 +105,9 @@ SP_API int sp_remove(sp_Cursor *L, sp_Cursor *R);
 
 /* cursor definition */
 
-#define SP_MAX_LEVEL 16
+#ifndef SP_MAX_LEVEL
+# define SP_MAX_LEVEL 13 /* safe for SP_FANOUT=62; see docs for other */
+#endif
 
 struct sp_Cursor {
     struct sp_Node **paths[SP_MAX_LEVEL]; /* root-to-leaf child slot ptrs */
@@ -138,10 +140,6 @@ SP_STATIC_ASSERT(SP_FANOUT >= 4);
 
 #ifndef SP_PAGE_SIZE
 # define SP_PAGE_SIZE 65536
-#endif
-
-#ifndef SP_MAX_LEVEL
-# define SP_MAX_LEVEL 16
 #endif
 
 SP_NS_BEGIN
@@ -719,7 +717,8 @@ static int spD_makechain(sp_Cursor *C, int from, int to) {
         p->bytes[0] = spK_bytes(C), p->mask[0] = spM_sumns(nn);
         p->children[0] = nn, spN_setcc(p, 1);
         memmove(cp + 2, cp + 1, (spK_levels(C) - to) * sizeof(sp_Node **));
-        C->tree->levels += 1, from = 0, to += 1, cp += 1, r = 1;
+        C->tree->levels += 1, assert(C->tree->levels < SP_MAX_LEVEL);
+        from = 0, to += 1, cp += 1, r = 1;
     }
     for (l = from; l < to; ++l) {
         nn = (sp_Node *)spP_ralloc(&C->tree->S->nodes);
@@ -872,7 +871,7 @@ static void spI_splitroot(sp_Cursor *C) {
     r->bytes[0] = spN_sumbytes(pp, 0, mid);
     r->bytes[1] = spK_bytes(C) - r->bytes[0];
     r->mask[0] = spM_sumns(pp), r->mask[1] = spM_sumns(nw);
-    C->tree->levels++;
+    C->tree->levels += 1, assert(C->tree->levels < SP_MAX_LEVEL);
     memmove(C->paths + 1, C->paths, C->tree->levels * sizeof(sp_Node **));
     C->paths[0] = &r->children[i >= mid];
     C->paths[1] = &(*C->paths[0])->children[i < mid ? i : i - mid];

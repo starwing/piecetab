@@ -121,7 +121,9 @@ PT_API const char *pt_literal(pt_Cursor *C, size_t len);
 
 /* cursor definition */
 
-#define PT_MAX_LEVEL 16
+#ifndef PT_MAX_LEVEL
+# define PT_MAX_LEVEL 13 /* safe for PT_FANOUT=62; see docs */
+#endif
 
 struct pt_Cursor {
     struct pt_Node **paths[PT_MAX_LEVEL]; /* root-to-leaf child slot ptrs */
@@ -778,7 +780,7 @@ static void ptI_splitroot(pt_Cursor *C) {
     r->bytes[1] = C->tree->bytes - r->bytes[0];
     ptM_clamp(r); /* old root cc may exceed 2: reset bits before the rewrite */
     ptM_sethole(r, 0, pp->mask != 0), ptM_sethole(r, 1, nw->mask != 0);
-    C->tree->levels++;
+    C->tree->levels += 1, assert(C->tree->levels < PT_MAX_LEVEL);
     memmove(C->paths + 1, C->paths, C->tree->levels * sizeof(pt_Node **));
     C->paths[0] = &r->children[i >= mid];
     C->paths[1] = &(*C->paths[0])->children[i < mid ? i : i - mid];
@@ -1096,7 +1098,8 @@ static int ptD_makechain(pt_Cursor *C, int from, int to, int nofail) {
         p->bytes[0] = ptK_bytes(C), p->children[0] = nn;
         ptN_setcc(p, 1), p->mask = 0, ptM_sethole(p, 0, h);
         memmove(cp + 2, cp + 1, (ptK_levels(C) - to) * sizeof(pt_Node **));
-        C->tree->levels += 1, from = 0, to += 1, cp += 1, r = 1;
+        C->tree->levels += 1, assert(C->tree->levels < PT_MAX_LEVEL);
+        from = 0, to += 1, cp += 1, r = 1;
     }
     for (l = from; l < to; ++l) {
         nn = (pt_Node *)ptP_ralloc(&C->tree->S->nodes);

@@ -103,7 +103,7 @@ LC_API int lc_splice(lc_Cursor *C, size_t del, unsigned ins);
 
 /* struct definition */
 #ifndef LC_MAX_LEVEL
-# define LC_MAX_LEVEL 16
+# define LC_MAX_LEVEL 13 /* safe for LC_FANOUT=LC_LEAF_FANOUT=62; see docs */
 #endif
 
 struct lc_Cursor {
@@ -725,7 +725,8 @@ static int lcD_makechain(lc_Cursor *C, int from, int to, int nofail) {
         p->bytes[0] = lcK_bytes(C), p->breaks[0] = lcK_breaks(C);
         p->children[0] = nn, lcN_setcc(p, 1),
         memmove(cp + 2, cp + 1, (lcK_levels(C) - to) * sizeof(lc_Node **));
-        C->tree->levels += 1, from = 0, to += 1, cp += 1, r = 1;
+        C->tree->levels += 1, assert(C->tree->levels < LC_MAX_LEVEL);
+        from = 0, to += 1, cp += 1, r = 1;
     }
     for (l = from; l < to; ++l) {
         nn = (lc_Node *)lcP_ralloc(&C->tree->S->nodes);
@@ -885,8 +886,7 @@ LC_API int lc_remove(lc_Cursor *L, lc_Cursor *R) {
     if (!L || !R || !L->tree || L->tree != R->tree) return LC_ERRPARAM;
     offL = lc_offset(L), offR = lc_offset(R);
     if (offL < offR && offL < lcK_bytes(L)) {
-        int r = lcP_reserve(
-                L->tree->S, &L->tree->S->nodes, lcK_levels(L) + 2);
+        int r = lcP_reserve(L->tree->S, &L->tree->S->nodes, lcK_levels(L) + 2);
         if (r != LC_OK) return r;
         if (L->paths[lcK_levels(L)] != R->paths[lcK_levels(R)])
             return lcD_rmrange(L, R), LC_OK;
@@ -940,7 +940,8 @@ static void lcB_splitroot(lc_Cursor *C, lc_Node *n, lc_Node *pp) {
     c->root.breaks[0] = lcN_sumbreaks(c->root.children[0], 0, mid);
     c->root.bytes[1] = c->bytes - c->root.bytes[0];
     c->root.breaks[1] = c->breaks - c->root.breaks[0];
-    c->root.children[1] = n, lcN_setcc(&c->root, 2), c->levels++;
+    c->root.children[1] = n, lcN_setcc(&c->root, 2);
+    c->levels += 1, assert(c->levels < LC_MAX_LEVEL);
     memmove(C->paths + 1, C->paths, (c->levels) * sizeof(lc_Node **));
     C->paths[0] = &c->root.children[i >= mid];
     C->paths[1] = &(*C->paths[0])->children[i < mid ? i : i - mid];
