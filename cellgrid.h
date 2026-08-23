@@ -46,6 +46,8 @@ CG_NS_BEGIN
 #define CG_ERRPARAM (-1)
 #define CG_ERRMEM   (-2)
 
+#define CG_TRANSPARENT (~(unsigned)0)
+
 typedef void *cg_Allocf(void *ud, void *p, size_t osize, size_t nsize);
 typedef int   cg_WcWidthf(void *ud, int cp);
 
@@ -328,9 +330,9 @@ static void cgF_putcp(cg_Grid *G, int r, int c, int cp, int w, unsigned st) {
         if (c + 1 >= G->cols)
             cp = '>';
         else
-            pc[1] = -1, ps[1] = st;
+            pc[1] = -1, ps[1] = (st == CG_TRANSPARENT ? ps[1] : st);
     }
-    *pc = cp, *ps = st;
+    *pc = cp, *ps = (st == CG_TRANSPARENT ? *ps : st);
 }
 
 CG_API void cg_put(cg_Grid *G, int r, int c, int cp, unsigned st) {
@@ -359,7 +361,7 @@ CG_API void cg_fill(cg_Grid *G, int r, int cs, int ce, int cp) {
 
 CG_API void cg_span(cg_Grid *G, int r, int cs, int ce, unsigned st) {
     int i, ro;
-    if (!cg_valid(G) || r < 0 || r >= G->rows) return;
+    if (!cg_valid(G) || r < 0 || r >= G->rows || st == CG_TRANSPARENT) return;
     if (ce > G->cols) ce = G->cols;
     ce = cg_max(0, cg_min(ce, G->cols)), cs = cg_max(0, cg_min(cs, ce));
     ro = cgR_idx(G, r) * G->cols;

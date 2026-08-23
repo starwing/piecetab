@@ -167,7 +167,8 @@ CG_API void cg_span(cg_Grid *G, int r, int cs, int ce, unsigned st);
 
 `cg_put`：写单个 codepoint 到 (r,c)。宽字符（宽度=2）写 cp 到 c，c+1 设 -1
 （continuation 标记），st 同时写入。行末仅剩 1 列时写 cp='>' 占位。
-窄字符 overwrite 宽字符的左半/右半时自动清对侧。越界 nop。
+窄字符 overwrite 宽字符的左半/右半时自动清对侧。`st == CG_TRANSPARENT`
+时只写文本、保留该 cell（及宽字符 continuation）原有 st。越界 nop。
 
 `cg_clearrow`：清空行 r 的区间 [cs, ce) 的 cp 和 st（设为 0）。
 
@@ -188,8 +189,16 @@ slice 内 UTF-8 写入，内部解码为 codepoint 后调用 `cgF_putcp`。
 跳过非法 continuation byte。返回文本末绝对列号（方便调用方知道
 下段起点）。`\t` 展开为空格（宽度 = `ts - c%ts`，基数 = 写入列
 c——渲染列停靠；ts≤1 原样写 tab 字符）。NUL 无特殊语义（普通
-字符，宽 1）。**overlay（vtext/hint）场景**：调用方拆 tab（文本列
+字符，宽 1）。`st == CG_TRANSPARENT` 时逐 cell 保留原有 style，
+只写入文本。**overlay（vtext/hint）场景**：调用方拆 tab（文本列
 基数，坐标一致），见 §3.9 摩擦点。
+
+**CG_TRANSPARENT 哨兵**：`CG_TRANSPARENT`（`~(unsigned)0`）表示“只碰
+文本、不碰 style”。`cg_put` / `cg_putslice` 传入它时保留目标 cell 的
+st；`cg_span` 是纯 style 更新，传入它视为 no-op（不写任何 st）。
+Lua 绑定中，`Grid:put(r,c,cp,st?)` 与 `Grid:putstring(r,c,st?,s,...)`
+的 `st` 省略/nil 时映射为 `CG_TRANSPARENT`；`Grid:span` 的 `st` 仍为
+必填 integer——span 的目的只是更新 style，不接受 nil 作为“保留”语义。
 
 ### 3.5 Diff（回调模式）
 
@@ -334,7 +343,7 @@ overlay 场景 editor 渲染层拆 tab（文本列基数）。摩擦点由 spant
 **绑定层**（lua/cellgrid.c）：`g:cols(text, off?, c?)` / `g:byte(text,
 col, c?)` / `g:next(text, c?)`（generic-for 迭代器，产出 1-based
 byte + 起始列；C 闭包 = 纯 cfunction + state 表，upvalue 伪索引
-不可用于栈 API）/ `g:putslice(r, c, s, st)` / `g:settabstop(ts)` /
+不可用于栈 API）/ `g:putstring(r, c, st?, s, i?, j?)` / `g:settabstop(ts)` /
 `g:tabstop()`。宽度固定注入 `lcgW_width`；Lgrid_new 默认 tabstop 4。
 
 ## 四、宽字符处理
@@ -360,6 +369,12 @@ byte + 起始列；C 闭包 = 纯 cfunction + state 表，upvalue 伪索引
 
 或做查表索引（含 RGB 24bit 真彩色）。`0` = 默认文本，与未初始化
 cell 同值——diff 时不会误标脏。
+
+**CG_TRANSPARENT 哨兵**：`CG_TRANSPARENT`（`~(unsigned)0`）保留给
+“只写文本、不碰 style”的调用，不是合法 style ID。`cg_put`/`cg_putslice`
+遇到它保留目标 st；`cg_span` 遇到它 no-op。Lua 绑定中，文本写入接口
+（`Grid:put` / `Grid:putstring`）的 `st` 省略/nil 映射到它，而纯 style
+接口 `Grid:span` 拒绝 nil（见 §3.4）。
 
 ## 六、内部函数命名体系
 

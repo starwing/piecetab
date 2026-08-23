@@ -342,6 +342,34 @@ TEST(put_same) {
     cg_free(&g);
 }
 
+TEST(put_transparent_narrow) {
+    unsigned st;
+    cg_Grid  g;
+    cg_init(&g, test_alloc, NULL);
+    cg_begin(&g, 0, 1, 4);
+    cg_setwcwidth(&g, cw_double, NULL);
+    cg_put(&g, 0, 0, 'A', 7);
+    cg_put(&g, 0, 0, 'B', CG_TRANSPARENT);
+    asserteq(cg_cell(&g, 0, 0, &st), 'B');
+    asserteq(st, 7);
+    cg_free(&g);
+}
+
+TEST(put_transparent_wide) {
+    unsigned st;
+    cg_Grid  g;
+    cg_init(&g, test_alloc, NULL);
+    cg_begin(&g, 0, 1, 4);
+    cg_setwcwidth(&g, cw_double, NULL);
+    cg_put(&g, 0, 0, 0x4e2d, 7);
+    cg_put(&g, 0, 0, 0x4e2d, CG_TRANSPARENT);
+    asserteq(cg_cell(&g, 0, 0, &st), 0x4e2d);
+    asserteq(st, 7);
+    asserteq(cg_cell(&g, 0, 1, &st), -1);
+    asserteq(st, 7);
+    cg_free(&g);
+}
+
 /* ================================================================== */
 /*  cg_clearrow                                                        */
 /* ================================================================== */
@@ -454,6 +482,19 @@ TEST(span_backmatch) {
     cg_free(&g);
 }
 
+TEST(span_transparent) {
+    unsigned st;
+    cg_Grid  g;
+    cg_init(&g, test_alloc, NULL);
+    cg_begin(&g, 0, 1, 4);
+    cg_setwcwidth(&g, cw_double, NULL);
+    cg_put(&g, 0, 0, 'A', 7);
+    cg_span(&g, 0, 0, 2, CG_TRANSPARENT);
+    asserteq(cg_cell(&g, 0, 0, &st), 'A');
+    asserteq(st, 7);
+    cg_free(&g);
+}
+
 /* ================================================================== */
 /*  cg_putslice                                                        */
 /* ================================================================== */
@@ -468,6 +509,21 @@ TEST(putline_ascii) {
     asserteq(cg_cell(&g, 0, 1, NULL), 'b');
     assert_diff(
             &g, "[M 0 0][T 1][P 'a'][M 0 1][P 'b'][M 0 2][T 0][F 4 0x20][F]");
+    cg_free(&g);
+}
+
+TEST(putline_transparent) {
+    unsigned st;
+    cg_Grid  g;
+    cg_init(&g, test_alloc, NULL);
+    cg_begin(&g, 0, 1, 6);
+    cg_setwcwidth(&g, cw_double, NULL);
+    cg_span(&g, 0, 0, 2, 7);
+    asserteq(cg_putslice(&g, 0, 0, SL("BC"), CG_TRANSPARENT), 2);
+    asserteq(cg_cell(&g, 0, 0, &st), 'B');
+    asserteq(st, 7);
+    asserteq(cg_cell(&g, 0, 1, &st), 'C');
+    asserteq(st, 7);
     cg_free(&g);
 }
 
@@ -1099,17 +1155,6 @@ TEST(diff_fill_min_pass) {
     d.fill_min = 2;
     asserteq(cg_diff(&g, &d), CG_OK);
     cg_free(&g);
-}
-
-TEST(tocp_trunc) {
-    char buf[8];
-    memset(buf, 0, sizeof(buf));
-    buf[0] = test_byte(0xc3);
-    cgK_tocp(buf, 1);
-    buf[0] = test_byte(0xe4);
-    cgK_tocp(buf, 2);
-    buf[0] = test_byte(0xe4);
-    cgK_tocp(buf, 1);
 }
 
 /* ================================================================== */

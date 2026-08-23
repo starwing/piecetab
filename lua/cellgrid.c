@@ -131,6 +131,7 @@ static int Lgrid_delete(lua_State *L) {
 
 static int Lgrid_new(lua_State *L) {
     cg_Grid *g = (cg_Grid *)lua_newuserdata(L, sizeof(cg_Grid));
+    assert((unsigned)(lua_Integer)-1 == CG_TRANSPARENT);
     cg_init(g, NULL, NULL);
     cg_setwcwidth(g, lcgW_width, NULL);
     cg_settabstop(g, 4);
@@ -172,7 +173,7 @@ static int Lgrid_put(lua_State *L) {
     int      r = (int)luaL_checkinteger(L, 2);
     int      c = (int)luaL_checkinteger(L, 3);
     int      cp = (int)luaL_checkinteger(L, 4);
-    unsigned st = (unsigned)luaL_optinteger(L, 5, 0);
+    unsigned st = (unsigned)luaL_optinteger(L, 5, -1);
     return cg_put(g, r, c, cp, st), lua_settop(L, 1), 1;
 }
 
@@ -205,11 +206,11 @@ static int Lgrid_span(lua_State *L) {
     return cg_span(g, r, cs, ce, st), lua_settop(L, 1), 1;
 }
 
-static int Lgrid_putslice(lua_State *L) {
+static int Lgrid_putstring(lua_State *L) {
     cg_Grid    *g = lcg_check(L, 1);
     int         r = (int)luaL_checkinteger(L, 2);
     int         c = (int)luaL_checkinteger(L, 3);
-    unsigned    st = (unsigned)luaL_checkinteger(L, 4);
+    unsigned    st = (unsigned)luaL_optinteger(L, 4, -1);
     size_t      len;
     const char *s = luaL_checklstring(L, 5, &len);
     lua_Integer i = luaL_optinteger(L, 6, 1);
@@ -521,7 +522,7 @@ LUALIB_API int luaopen_cellgrid(lua_State *L) {
             ENTRY(clearrow),
             ENTRY(fill),
             ENTRY(span),
-            ENTRY(putslice),
+            ENTRY(putstring),
             ENTRY(diff),
             ENTRY(render),
             ENTRY(cell),

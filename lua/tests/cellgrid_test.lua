@@ -112,6 +112,31 @@ function TestWrite:testPutStyle()
     lu.assertEquals(st, 7)
 end
 
+function TestWrite:testPutTransparent()
+    -- nil st keeps the existing style (CG_TRANSPARENT)
+    local g = cg.new()
+    g:begin(0, 3, 10)
+    g:put(0, 0, 65, 7)
+    g:put(0, 0, 66)
+    local cp, st = g:cell(0, 0)
+    lu.assertEquals(cp, 66)
+    lu.assertEquals(st, 7)
+end
+
+function TestWrite:testPutWideTransparent()
+    -- transparent wide write keeps style on both halves
+    local g = cg.new()
+    g:begin(0, 3, 10)
+    g:put(0, 0, 0x4E2D, 7)
+    g:put(0, 0, 0x4E2D)
+    local cp, st = g:cell(0, 0)
+    lu.assertEquals(cp, 0x4E2D)
+    lu.assertEquals(st, 7)
+    cp, st = g:cell(0, 1)
+    lu.assertEquals(cp, -1)
+    lu.assertEquals(st, 7)
+end
+
 function TestWrite:testPutOutOfBounds()
     local g = cg.new()
     g:begin(0, 3, 10)
@@ -246,10 +271,17 @@ function TestWrite:testSpanOutOfBounds()
     g:span(3, 0, 5, 3)  -- nop
 end
 
+function TestWrite:testSpanNilRejected()
+    -- span is style-only: nil must not silently mean transparent/no-op
+    local g = cg.new()
+    g:begin(0, 3, 10)
+    lu.assertError(function() g:span(0, 0, 2, nil) end)
+end
+
 function TestWrite:testPutline()
     local g = cg.new()
     g:begin(0, 3, 10)
-    local c = g:putslice(0, 0, 0, "ABC")
+    local c = g:putstring(0, 0, 0, "ABC")
     lu.assertEquals(c, 3)
     local cp, st = g:cell(0, 0)
     lu.assertEquals(cp, 65)
@@ -261,7 +293,7 @@ function TestWrite:testPutlineUtf8TwoByte()
     local g = cg.new()
     g:begin(0, 3, 10)
     -- é (0xE9) is ambiwidth → width=2. Use 0x80 (control, width=1).
-    g:putslice(0, 0, 0, "\xc2\x80") -- U+0080, width=1
+    g:putstring(0, 0, 0, "\xc2\x80") -- U+0080, width=1
     local cp, st = g:cell(0, 0)
     lu.assertEquals(cp, 0x80)
 end
@@ -270,7 +302,7 @@ function TestWrite:testPutlineUtf8ThreeByte()
     local g = cg.new()
     g:begin(0, 3, 10)
     -- U+0800, width=1, 3-byte UTF-8: 0xE0 0xA0 0x80
-    g:putslice(0, 0, 0, "\xe0\xa0\x80")
+    g:putstring(0, 0, 0, "\xe0\xa0\x80")
     local cp, st = g:cell(0, 0)
     lu.assertEquals(cp, 0x800)
 end
@@ -278,7 +310,7 @@ end
 function TestWrite:testPutlineUtf8FourByte()
     local g = cg.new()
     g:begin(0, 2, 10)
-    g:putslice(0, 0, 0, "\xf0\x90\x8d\x88") -- U+10348, width=1
+    g:putstring(0, 0, 0, "\xf0\x90\x8d\x88") -- U+10348, width=1
     local cp, st = g:cell(0, 0)
     lu.assertEquals(cp, 0x10348)
 end
@@ -287,14 +319,14 @@ function TestWrite:testPutlineContinuation()
     -- \x80 is continuation byte, cgK_utflen returns 0, skipped
     local g = cg.new()
     g:begin(0, 3, 10)
-    local c = g:putslice(0, 0, 0, "\x80") -- continuation only
+    local c = g:putstring(0, 0, 0, "\x80") -- continuation only
     lu.assertEquals(c, 0)                 -- nothing written
 end
 
 function TestWrite:testPutlineWide()
     local g = cg.new()
     g:begin(0, 3, 10)
-    local c = g:putslice(0, 0, 0, "\xe4\xb8\xad") -- 中(CJK)
+    local c = g:putstring(0, 0, 0, "\xe4\xb8\xad") -- 中(CJK)
     lu.assertEquals(c, 2)                         -- advances by 2
     local cp, st = g:cell(0, 0)
     lu.assertEquals(cp, 0x4E2D)
@@ -305,25 +337,36 @@ end
 function TestWrite:testPutlineEmpty()
     local g = cg.new()
     g:begin(0, 3, 10)
-    local c = g:putslice(0, 0, 0, "")
+    local c = g:putstring(0, 0, 0, "")
     lu.assertEquals(c, 0)
 end
 
 function TestWrite:testPutlineStyle()
     local g = cg.new()
     g:begin(0, 3, 10)
-    g:putslice(0, 0, 5, "X")
+    g:putstring(0, 0, 5, "X")
     local cp, st = g:cell(0, 0)
     lu.assertEquals(cp, 88)
+    lu.assertEquals(st, 5)
+end
+
+function TestWrite:testPutlineTransparent()
+    -- nil st keeps the existing style (CG_TRANSPARENT)
+    local g = cg.new()
+    g:begin(0, 3, 10)
+    g:putstring(0, 0, 5, "A")
+    g:putstring(0, 0, nil, "B")
+    local cp, st = g:cell(0, 0)
+    lu.assertEquals(cp, 66)
     lu.assertEquals(st, 5)
 end
 
 function TestWrite:testPutlineOutOfBounds()
     local g = cg.new()
     g:begin(0, 3, 10)
-    local c = g:putslice(-1, 0, 0, "ABC")
+    local c = g:putstring(-1, 0, 0, "ABC")
     lu.assertEquals(c, 0)
-    c = g:putslice(3, 0, 0, "ABC")
+    c = g:putstring(3, 0, 0, "ABC")
     lu.assertEquals(c, 0)
 end
 
@@ -841,11 +884,11 @@ function TestCols:testRange()
 end
 
 function TestCols:testPutlineTab()
-    -- putslice expands tabs itself (editor no longer pre-expands)
+    -- putstring expands tabs itself (editor no longer pre-expands)
     local g = cg.new()
     g:begin(0, 1, 10)
     g:tabstop(4)
-    local c = g:putslice(0, 0, 0, "a\tb")
+    local c = g:putstring(0, 0, 0, "a\tb")
     lu.assertEquals(c, 5)
     lu.assertEquals(g:cell(0, 1), 32) -- spaces
     lu.assertEquals(g:cell(0, 4), 98) -- b
@@ -856,15 +899,15 @@ function TestCols:testPutsliceSpan()
     local g = cg.new()
     g:begin(0, 1, 10)
     local text = "hello world"
-    lu.assertEquals(g:putslice(0, 0, 3, text, 7, 11), 5) -- "world"
+    lu.assertEquals(g:putstring(0, 0, 3, text, 7, 11), 5) -- "world"
     lu.assertEquals(g:cell(0, 0), 119)                   -- w
-    lu.assertEquals(g:putslice(0, 5, 4, text, 1, 5), 10) -- "hello" after
+    lu.assertEquals(g:putstring(0, 5, 4, text, 1, 5), 10) -- "hello" after
     lu.assertEquals(g:cell(0, 5), 104)                   -- h
     lu.assertEquals(g:cell(0, 9), 111)                   -- o
     -- j < i: empty span is a no-op, returns c
-    lu.assertEquals(g:putslice(0, 5, 3, text, 5, 3), 5)
+    lu.assertEquals(g:putstring(0, 5, 3, text, 5, 3), 5)
     -- out-of-range clamps to the string bounds; grid edge truncates
-    lu.assertEquals(g:putslice(0, 5, 3, text, -2, 99), 10) -- whole string
+    lu.assertEquals(g:putstring(0, 5, 3, text, -2, 99), 10) -- whole string
 end
 
 function TestCols:testTabstopGetter()
@@ -954,20 +997,20 @@ function TestScroll:testDeltaZeroAfterScroll()
     -- unchanged frame's diff must be empty, not a full redraw
     local g = cg.new()
     g:begin(0, 3, 4)
-    g:putslice(0, 0, 0, "L1")
-    g:putslice(1, 0, 0, "L2")
-    g:putslice(2, 0, 0, "L3")
+    g:putstring(0, 0, 0, "L1")
+    g:putstring(1, 0, 0, "L2")
+    g:putstring(2, 0, 0, "L3")
     g:freeze()
     g:begin(1, 3, 4) -- scroll down 1
-    g:putslice(0, 0, 0, "L2")
-    g:putslice(1, 0, 0, "L3")
-    g:putslice(2, 0, 0, "L4")
+    g:putstring(0, 0, 0, "L2")
+    g:putstring(1, 0, 0, "L3")
+    g:putstring(2, 0, 0, "L4")
     g:diff({})
     g:freeze()
     g:begin(1, 3, 4) -- same top: nothing changed
-    g:putslice(0, 0, 0, "L2")
-    g:putslice(1, 0, 0, "L3")
-    g:putslice(2, 0, 0, "L4")
+    g:putstring(0, 0, 0, "L2")
+    g:putstring(1, 0, 0, "L3")
+    g:putstring(2, 0, 0, "L4")
     lu.assertEquals(g:diff({}), "")
 end
 
@@ -1015,14 +1058,14 @@ function TestScroll:testScrollDownDirection()
     -- (SU = parm_index), exposing new lines at the bottom
     local g = cg.new()
     g:begin(0, 3, 4)
-    g:putslice(0, 0, 0, "L1")
-    g:putslice(1, 0, 0, "L2")
-    g:putslice(2, 0, 0, "L3")
+    g:putstring(0, 0, 0, "L1")
+    g:putstring(1, 0, 0, "L2")
+    g:putstring(2, 0, 0, "L3")
     g:freeze()
     g:begin(1, 3, 4)
-    g:putslice(0, 0, 0, "L2")
-    g:putslice(1, 0, 0, "L3")
-    g:putslice(2, 0, 0, "L4")
+    g:putstring(0, 0, 0, "L2")
+    g:putstring(1, 0, 0, "L3")
+    g:putstring(2, 0, 0, "L4")
     local s = g:diff({ parm_index = "SU%d", parm_rindex = "SD%d" })
     lu.assertStrContains(s, "SU1")
     lu.assertNotStrContains(s, "SD1")
@@ -1034,14 +1077,14 @@ function TestScroll:testScrollUpDirection()
     -- (SD = parm_rindex), exposing new lines at the top
     local g = cg.new()
     g:begin(1, 3, 4)
-    g:putslice(0, 0, 0, "L2")
-    g:putslice(1, 0, 0, "L3")
-    g:putslice(2, 0, 0, "L4")
+    g:putstring(0, 0, 0, "L2")
+    g:putstring(1, 0, 0, "L3")
+    g:putstring(2, 0, 0, "L4")
     g:freeze()
     g:begin(0, 3, 4)
-    g:putslice(0, 0, 0, "L1")
-    g:putslice(1, 0, 0, "L2")
-    g:putslice(2, 0, 0, "L3")
+    g:putstring(0, 0, 0, "L1")
+    g:putstring(1, 0, 0, "L2")
+    g:putstring(2, 0, 0, "L3")
     local s = g:diff({ parm_index = "SU%d", parm_rindex = "SD%d" })
     lu.assertStrContains(s, "SD1")
     lu.assertNotStrContains(s, "SU1")
@@ -1054,7 +1097,7 @@ TestTocp = {}
 function TestTocp:testOneByte()
     local g = cg.new()
     g:begin(0, 1, 10)
-    g:putslice(0, 0, 0, "X")
+    g:putstring(0, 0, 0, "X")
     lu.assertEquals(g:cell(0, 0), 88)
 end
 
@@ -1062,7 +1105,7 @@ function TestTocp:testTwoByte()
     -- 0x80 is NOT in any width table → width=1
     local g = cg.new()
     g:begin(0, 1, 10)
-    g:putslice(0, 0, 0, "\xc2\x80") -- U+0080
+    g:putstring(0, 0, 0, "\xc2\x80") -- U+0080
     lu.assertEquals(g:cell(0, 0), 0x80)
 end
 
@@ -1070,7 +1113,7 @@ function TestTocp:testThreeByte()
     -- 0x800 is NOT in any width table → width=1
     local g = cg.new()
     g:begin(0, 1, 10)
-    g:putslice(0, 0, 0, "\xe0\xa0\x80") -- U+0800
+    g:putstring(0, 0, 0, "\xe0\xa0\x80") -- U+0800
     lu.assertEquals(g:cell(0, 0), 0x800)
 end
 
@@ -1078,7 +1121,7 @@ function TestTocp:testFourByte()
     -- 0x10348 is NOT in any width table → width=1
     local g = cg.new()
     g:begin(0, 1, 10)
-    g:putslice(0, 0, 0, "\xf0\x90\x8d\x88") -- U+10348
+    g:putstring(0, 0, 0, "\xf0\x90\x8d\x88") -- U+10348
     lu.assertEquals(g:cell(0, 0), 0x10348)
 end
 
@@ -1138,7 +1181,7 @@ function TestUtflen:testOneByte()
     -- ASCII: b < 0x80 → len=1
     local g = cg.new()
     g:begin(0, 1, 10)
-    local c = g:putslice(0, 0, 0, "A")
+    local c = g:putstring(0, 0, 0, "A")
     lu.assertEquals(c, 1) -- width 1
 end
 
@@ -1146,7 +1189,7 @@ function TestUtflen:testTwoByte()
     -- 0xC2 >= 0xC0, < 0xE0 → len=2. U+0080 width=1.
     local g = cg.new()
     g:begin(0, 1, 10)
-    local c = g:putslice(0, 0, 0, "\xc2\x80") -- U+0080
+    local c = g:putstring(0, 0, 0, "\xc2\x80") -- U+0080
     lu.assertEquals(c, 1)                     -- width 1
 end
 
@@ -1154,7 +1197,7 @@ function TestUtflen:testThreeByte()
     -- 0xE0 >= 0xE0, < 0xF0 → len=3. U+0800 width=1.
     local g = cg.new()
     g:begin(0, 1, 10)
-    local c = g:putslice(0, 0, 0, "\xe0\xa0\x80") -- U+0800
+    local c = g:putstring(0, 0, 0, "\xe0\xa0\x80") -- U+0800
     lu.assertEquals(c, 1)                         -- width 1
 end
 
@@ -1162,7 +1205,7 @@ function TestUtflen:testFourByte()
     -- 0xF0 >= 0xF0 → len=4. U+10348 width=1.
     local g = cg.new()
     g:begin(0, 1, 10)
-    local c = g:putslice(0, 0, 0, "\xf0\x90\x8d\x88") -- U+10348
+    local c = g:putstring(0, 0, 0, "\xf0\x90\x8d\x88") -- U+10348
     lu.assertEquals(c, 1)                             -- width 1
 end
 
@@ -1170,7 +1213,7 @@ function TestUtflen:testContinuation()
     -- 0x80 < 0xC0 → len=0
     local g = cg.new()
     g:begin(0, 1, 10)
-    local c = g:putslice(0, 0, 0, "\x80")
+    local c = g:putstring(0, 0, 0, "\x80")
     lu.assertEquals(c, 0) -- skipped
 end
 
@@ -1254,7 +1297,7 @@ end
 function TestMisc:testPutlineAtEdge()
     local g = cg.new()
     g:begin(0, 1, 5)
-    local c = g:putslice(0, 3, 0, "ABCDE")
+    local c = g:putstring(0, 3, 0, "ABCDE")
     lu.assertEquals(c, 5) -- capped at cols
 end
 

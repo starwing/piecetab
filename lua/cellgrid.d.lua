@@ -5,7 +5,7 @@
 ---Terminal cell grid with dual-buffer diff rendering.
 ---
 ---Coordinate convention: grid rows/cols are 0-based. The string-slice
----arguments to `cols`/`byte`/`next`/`putslice` use Lua's 1-based
+---arguments to `cols`/`byte`/`next`/`putstring` use Lua's 1-based
 ---`string.sub` view, so converting between a 0-based byte offset from
 ---piecetab/spantree and a 1-based slice offset is the caller's glue.
 local Grid
@@ -28,11 +28,12 @@ function Grid:clear() end
 ---Freeze: snapshot current frame as back buffer for next diff.
 function Grid:freeze() end
 
----Write a codepoint with style at (r, c). 0-based coords.
+---Write a codepoint at (r, c). 0-based coords. If st is nil, the
+---cell's existing style is preserved (CG_TRANSPARENT).
 ---@param r  integer  row
 ---@param c  integer  column
 ---@param cp integer  Unicode codepoint
----@param st? integer  style ID (default 0)
+---@param st? integer  style ID (nil = keep existing style)
 function Grid:put(r, c, cp, st) end
 
 ---Clear cells in row [cs, ce). Sets cp=0, st=0.
@@ -96,7 +97,7 @@ function Grid:ncols() end
 ---@return integer
 function Grid:top() end
 
----Set tab expansion width used by cols/byte/next (and putslice's
+---Set tab expansion width used by cols/byte/next (and putstring's
 ---tab handling), or get current tabstop if ts is nil.
 ---@overload fun(self: cellgrid.Grid, ts: integer): integer
 ---@return integer
@@ -142,23 +143,29 @@ function Grid:byte(col, s, i, j) end
 ---@overload fun(self: cellgrid.Grid, c: integer, s: string, i?: integer, j?: integer): fun(): integer?, integer?
 function Grid:next(s, i, j) end
 
----Write a span of s[i..j] at (r, c) with style. Tabs expand to
----spaces (grid tabstop, render-column base); wide chars handled.
+---Write a span of s[i..j] at (r, c). Tabs expand to spaces (grid
+---tabstop, render-column base); wide chars handled. If st is nil, the
+---existing style is preserved (CG_TRANSPARENT).
 ---i/j follow string.sub semantics: 1-based, inclusive.
 ---@param r  integer  row
 ---@param c  integer  start column
----@param st integer  style id
+---@param st? integer  style id (nil = keep existing style)
 ---@param s  string   UTF-8 text
 ---@param i? integer  start byte offset (default 1)
 ---@param j? integer  end byte offset, inclusive (default #s)
----@return integer  end column
-function Grid:putslice(r, c, st, s, i, j) end
+---@return integer  absolute 0-based column after writing (not a delta;
+---                 subtract `c` to get the number of cells written)
+function Grid:putstring(r, c, st, s, i, j) end
 
 --------------------------------------------------------------------------------
 ---@class cellgrid.DiffTable
 ---Style and CSI format table passed to `Grid:diff()` or `Grid:render()`.
 ---
 ---All string keys are optional (defaults provided).
+---
+---Numeric style entries may be provided lazily via `__index`: diff only
+---reads `tbl[id]` when the style changes and expects a string (or nil),
+---so a proxy table such as `setmetatable({}, {__index=fn})` works.
 ---
 ---Example:
 ---```
