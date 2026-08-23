@@ -778,14 +778,16 @@ f 按 hunk 数组序分两阶段调用（实现最简，零临时存储）：
 
 ### 12.5 LSP 接线（已落地）
 
-- `Protocol:notify_edits(changes)`：一条 didChange，contentChanges
-  = 逐 edit 换算（offset_pos(off) → offset_pos(off+del)，UTF-16 同
-  notify_edit 路径）；空表跳过（version 不递增）。
-- `Client:on_switch(changes)`：notify_edits + `sem.dirty`/
-  `hint_dirty` + `vtext.clear()`（原 resync 行为）。
+- `Protocol:notify_ranges(cc)`：一条 didChange，contentChanges 直接
+  使用调用方在回调内算好的 range；空表跳过（version 不递增）。
+- `Client:undo_switch(doc_undo)`：`doc_undo(f)` 回调内用源文档现场
+  算 range（`offset_pos` + `_utf16_range`），收集成 `cc` 后
+  `notify_ranges(cc)` + dirty 标记。
+- **已删** `Protocol:notify_edits` / `Client:on_switch`（旧 API 在
+  doc 切换后用最终文档换算，多 hunk undo 必错）。
 - **已删** `Protocol:sync_full` / `Client:resync`。
-- editor.lua：`n.u`/`n["<C-r>"]` → `switch_sync`（f 攒 changes →
-  `lsp:on_switch(changes)`）；无 lsp 时 f 不提供（零回调开销）。
+- editor.lua：`n.u`/`n["<C-r>"]` → `lsp:undo_switch(doc.undo/redo)`；
+  无 lsp 时 f 不提供（零回调开销）。
 
 ### 12.6 摩擦记录
 
@@ -800,7 +802,7 @@ f 按 hunk 数组序分两阶段调用（实现最简，零临时存储）：
 - piecetab_test：回调重放对拍（apply_edits(before, edits) ==
   dump）——单 hunk/多 hunk（分散编辑）/fresh 两段/redo 前向
   （text 非空）/undo(vid) 旧用法共存。
-- lsp_test：notify_edits 消息形状（单条 didChange、多 edit 顺序、
-  version 递增、空表不发）；on_switch 清 vtext + dirty。
-- editor_test：u/<C-r> → on_switch 收到正确 edits。
+- lsp_test：notify_ranges 消息形状（单条 didChange、多 edit 顺序、
+  version 递增、空表不发）；undo_switch 回调内算 range + dirty。
+- editor_test：u/<C-r> → undo_switch 收到正确 edits。
 - 全量 `just lua/test` 绿 + luals 零诊断。

@@ -61,7 +61,7 @@ cg *args='': (build "cellgrid") (run "cellgrid_test" args)
 tf *args='': (build "termfeed") (run "termfeed_test" args)
 json *args='': (build "json") (run "json_test" args)
 utf8: build-utf8
-lsp *args='': (build "json") (build-utf8) (run "lsp_test" args)
+lsp *args='': (build "piecetab") (build "json") build-utf8 (run "lsp_test" args)
 sp *args='': (build "spantree") (run "spantree_test" args)
 # tree-sitter is optional; add it with `just lua/build-ts` for highlighting.
 # Build the PUC Lua modules needed to run the editor demo (no tests).

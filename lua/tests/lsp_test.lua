@@ -14,6 +14,7 @@ package.cpath = package.cpath
 local lu = require "luaunit"
 local json = require "json"
 local lsp = require "lsp"
+local pt = require "piecetab"
 
 -- chunk reader from a string; chunk_size splits it (0 = whole)
 local function reader(s, chunk_size)
@@ -344,7 +345,9 @@ local function new_client(code, lines, cfg)
   local path = fake_server(code)
   local c = lsp.Protocol.new({
     get_text = function() return table.concat(lines, "\n") end,
-    get_line = function(l) return lines[l + 1] end,
+    get_line = function(l, col, len)
+      return lines[l + 1]:sub(col + 1, col + len)
+    end,
     offset_pos = function(off)
       for l, t in ipairs(lines) do
         if off <= #t then return l - 1, off end
@@ -433,16 +436,17 @@ function TestProto:testDiagPush()
   os.remove(path)
 end
 
-function TestProto:testNotifyEdits()
-  -- undo/redo path: sequential edits in one didChange, ranges in order
-  -- (each relative to the previous edit's result)
+function TestProto:testNotifyRanges()
+  -- precomputed ranges are delivered as one didChange without re-mapping
   local changes = {}
   local c, path = new_client(CODE, { "hello", "world" })
   c:on("test/didChange", function(p) changes[#changes + 1] = p end)
   lu.assertIsTrue(drive(c, function() return c.state == "running" end))
-  c:notify_edits({
-    { off = 5, del = 0, text = "X" },
-    { off = 6, del = 5, text = "!" },
+  c:notify_ranges({
+    { range = { start = { line = 0, character = 5 },
+        ["end"] = { line = 0, character = 5 } }, text = "X" },
+    { range = { start = { line = 1, character = 0 },
+        ["end"] = { line = 1, character = 0 } }, text = "!" },
   })
   lu.assertIsTrue(drive(c, function() return #changes == 1 end), "sync")
   lu.assertEquals(changes[1].textDocument.version, 2)
@@ -530,7 +534,7 @@ local function fake_proto()
     self.cbs[#self.cbs + 1] = cb
   end
   p.notify_edit = function(self, off, del, s) self.edits = { off, del, s } end
-  p.notify_edits = function(self, changes) self.switch_edits = changes end
+  p.notify_ranges = function(self, cc) self.switch_ranges = cc end
   p.poll = function(self) end
   p.stop = function(self) end
   p.on = function(self, method, fn) self.handlers[method] = fn end
@@ -551,7 +555,14 @@ local function mk_client(over)
   local lines = over.lines or { "hello", "world" }
   local c = lsp.Client.new({
     get_text = function() return table.concat(lines, "\n") end,
-    get_line = function(l) return lines[l + 1] end,
+    get_line = function(l, col, len)
+      return lines[l + 1]:sub(col + 1, col + len)
+    end,
+    line_offset = function(l)
+      local off = 0
+      for i = 1, l do off = off + #lines[i] + 1 end
+      return off
+    end,
     offset_pos = function(off)
       for l, t in ipairs(lines) do
         if off <= #t then return l - 1, off end
@@ -562,7 +573,7 @@ local function mk_client(over)
     on_status = function() end,
     viewport_fn = function() return { top = over.top or 0, rows = over.rows or 5 } end,
     now_fn = over.nonow and nil or function() return clock end,
-    attrmap = { comment = "c", diag = { underline = true } },
+    attrmap = over.attrmap or { comment = "c", diag = { underline = true } },
     vtext = {
       set = function(line, list) got[#got + 1] = { line, list } end,
       clear = function() got[#got + 1] = { "clear" } end,
@@ -640,6 +651,8 @@ function TestClient:testResponseWritesVtext()
   proto.cbs[2]({ { position = { line = 1, character = 2 }, label = "x" } })
   lu.assertEquals(#got, 3)
   lu.assertEquals(got[2][1], 1)
+  lu.assertEquals(got[2][2][1].off, 2)
+  lu.assertEquals(got[2][2][1].text, "x")
   lu.assertEquals(got[3][1], 0)
   lu.assertIsNil(got[3][2], "old line cleared")
 end
@@ -652,6 +665,31 @@ function TestClient:testPostRenderSemanticPull()
   lu.assertEquals(proto.reqs[1], "textDocument/semanticTokens/full")
   c:post_render() -- already pending: no second request
   lu.assertEquals(#proto.reqs, 1)
+end
+
+function TestClient:testSemanticStaleResponseKeepsDirty()
+  local c, proto, got = mk_client()
+  proto.capabilities.semanticTokensProvider = {
+    full = true, legend = { tokenTypes = { "comment" } }
+  }
+  c:post_render()
+  proto.version = 4 -- edited while in flight
+  proto.cbs[1]({ data = { 0, 0, 1, 0, 0 } })
+  lu.assertEquals(#got, 0, "stale response must not write sem")
+  lu.assertIsTrue(c.sem.dirty, "stale response keeps dirty")
+  c:post_render()
+  lu.assertEquals(#proto.reqs, 2, "stale response triggers refetch")
+end
+
+function TestClient:testSemanticErrorKeepsDirty()
+  local c, proto, got = mk_client()
+  proto.capabilities.semanticTokensProvider = { full = true }
+  c:post_render()
+  proto.cbs[1](nil, { message = "boom" })
+  lu.assertEquals(#got, 0)
+  lu.assertIsTrue(c.sem.dirty, "error keeps dirty for retry")
+  c:post_render()
+  lu.assertEquals(#proto.reqs, 2, "error triggers retry")
 end
 
 function TestClient:testSemanticDecodeAscii()
@@ -677,6 +715,42 @@ function TestClient:testSemanticDecodeAscii()
   lu.assertEquals(#proto.reqs, 1)
 end
 
+function TestClient:testSemanticPassesThroughEmptyOrUnknownAttr()
+  local c, proto, got = mk_client({
+    attrmap = {
+      comment = {},
+      string = { foo = true },
+      number = { fg = 215 },
+    },
+  })
+  proto.capabilities.semanticTokensProvider = {
+    full = true,
+    legend = { tokenTypes = { "comment", "string", "number" } }
+  }
+  c:post_render()
+  -- No Lua-side style filtering: empty and unknown-only attr tables pass
+  -- through unchanged so rendering bugs stay visible instead of being
+  -- silently papered over.
+  proto.cbs[1]({ data = {
+    0, 0, 1, 0, 0,
+    0, 1, 1, 1, 0,
+    0, 1, 1, 2, 0,
+  } })
+  lu.assertEquals(#got, 1)
+  lu.assertEquals(got[1][1], "sem") -- decoded into the tree layer
+  local spans = got[1][2]
+  lu.assertEquals(#spans, 3)
+  lu.assertEquals(spans[1].offset, 0)
+  lu.assertEquals(spans[1].length, 1)
+  lu.assertEquals(spans[1].attr, {})
+  lu.assertEquals(spans[2].offset, 1)
+  lu.assertEquals(spans[2].length, 1)
+  lu.assertEquals(spans[2].attr, { foo = true })
+  lu.assertEquals(spans[3].offset, 2)
+  lu.assertEquals(spans[3].length, 1)
+  lu.assertEquals(spans[3].attr, { fg = 215 })
+end
+
 function TestClient:testSemanticDecodeCjkUtf16()
   -- "你好a😀": CJK = 1 unit / 3 bytes, emoji = 2 units / 4 bytes
   local c, proto, got = mk_client({ lines = { "你好a😀", "x" } })
@@ -698,6 +772,55 @@ function TestClient:testSemanticDecodeCjkUtf16()
   lu.assertEquals(spans[3].length, 1)
 end
 
+function TestClient:testSemanticDecodeChunkBoundary()
+  -- A 3-byte CJK char split by the 64-byte chunk boundary in
+  -- _utf16_to_byte: 20 ASCII + 20 "你" = 81 bytes, the 15th "你"
+  -- starts at byte 62 and spans bytes 62-64 (boundary at 64).
+  local line = string.rep("a", 20) .. string.rep("你", 20) .. "b"
+  local c, proto, got = mk_client({ lines = { line, "x" } })
+  proto.capabilities.semanticTokensProvider = {
+    full = true,
+    legend = { tokenTypes = { "comment" } }
+  }
+  c:post_render()
+  -- unit 34 = the split "你" (20 ascii + 14 CJK before it); then unit 35
+  -- and line 1 unit 0.
+  proto.cbs[1]({ data = {
+    0, 34, 1, 0, 0,
+    0, 1, 1, 0, 0,
+    1, 0, 1, 0, 0,
+  } })
+  local spans = got[1][2]
+  lu.assertEquals(#spans, 3)
+  lu.assertEquals(spans[1].offset, 62)
+  lu.assertEquals(spans[1].length, 3)
+  lu.assertEquals(spans[2].offset, 65)
+  lu.assertEquals(spans[2].length, 3)
+  lu.assertEquals(spans[3].offset, 82)
+  lu.assertEquals(spans[3].length, 1)
+end
+
+function TestClient:testAttachGetLineCapsAtLineEnd()
+  -- Regression: lsp.attach's get_line capped at `start + ll` instead of
+  -- `line_offset(lnum) + ll`, so reads past the end of a line and made
+  -- semantic spans (especially long comments >64 bytes) extend to EOF.
+  local d = pt.doc(string.rep("a", 80) .. "\n" .. "x")
+  d:commit()
+  local ed = { doc = d, filename = "/tmp/x.lua", msg = "" }
+  local orig_start_file = lsp.Client.start_file
+  lsp.Client.start_file = function() return true end
+  local ok = lsp.attach(ed)
+  lsp.Client.start_file = orig_start_file
+  lu.assertIsTrue(ok)
+  lu.assertIsTrue(ed.lsp ~= nil)
+  local opts = ed.lsp.opts
+  lu.assertEquals(#opts.get_line(0, 64, 64), 16)
+  lu.assertEquals(opts.get_line(0, 64, 64), string.rep("a", 16))
+  lu.assertEquals(opts.get_line(0, 70, 64), string.rep("a", 10))
+  lu.assertEquals(opts.get_line(0, 80, 64), "")
+end
+
+
 function TestClient:testOnEditMarksDirty()
   local c, proto = mk_client()
   c.sem.dirty, c.hint_dirty = false, false
@@ -709,26 +832,102 @@ function TestClient:testOnEditMarksDirty()
   lu.assertIsTrue(c.hint_dirty)
 end
 
-function TestClient:testOnSwitchNoClear()
-  local c, proto, got = mk_client()
-  local changes = { { off = 1, del = 0, text = "x" } }
-  c:on_switch(changes)
-  lu.assertEquals(proto.switch_edits, changes)
-  lu.assertEquals(#got, 0) -- no vtext clear: the tree splice shifts it
-  lu.assertIsTrue(c.sem.dirty)
-  lu.assertIsTrue(c.hint_dirty)
-end
-
-function TestClient:testUndoSwitchCollectsHunks()
+function TestClient:testUndoSwitchCollectsRanges()
   local c, proto, got = mk_client()
   c:undo_switch(function(f)
     f(5, 2, "ab")
     f(0, 0, "X")
   end)
-  lu.assertEquals(proto.switch_edits,
-    { { off = 5, del = 2, text = "ab" }, { off = 0, del = 0, text = "X" } })
+  lu.assertEquals(proto.switch_ranges, {
+    { range = { start = { line = 0, character = 5 },
+        ["end"] = { line = 1, character = 1 } }, text = "ab" },
+    { range = { start = { line = 0, character = 0 },
+        ["end"] = { line = 0, character = 0 } }, text = "X" },
+  })
   lu.assertEquals(#got, 0) -- no vtext clear: the tree splice shifts it
   lu.assertIsTrue(c.sem.dirty)
+  lu.assertIsTrue(c.hint_dirty)
+  lu.assertEquals(c.last_edit_t, 10)
+  lu.assertEquals(c.hint_retry, 0)
+end
+
+function TestClient:testUndoSwitchUsesSegmentSourceState()
+  -- Simulates the C hunk callback order: fresh hunks are fed while the
+  -- doc is still the live buffer, then version hunks after the fresh
+  -- segment has been applied (committed buffer). Ranges must be
+  -- computed against each segment's own source state, not the final doc.
+  local lines = { "aXbc" }
+  local c, proto = mk_client({ lines = lines })
+  c:undo_switch(function(f)
+    f(1, 1, "")      -- live "aXbc": delete X
+    lines[1] = "abc" -- committed state after fresh segment
+    f(0, 2, "")      -- "abc" -> "c": delete ab
+    lines[1] = "c"   -- final state after undo
+  end)
+  lu.assertEquals(proto.switch_ranges, {
+    { range = { start = { line = 0, character = 1 },
+        ["end"] = { line = 0, character = 2 } }, text = "" },
+    { range = { start = { line = 0, character = 0 },
+        ["end"] = { line = 0, character = 2 } }, text = "" },
+  })
+end
+
+function TestClient:testUndoSwitchRealDocRanges()
+  -- End-to-end through the C hunk callback: live "aXbc" -> committed
+  -- "abc" -> root "c". Ranges are computed while the doc is still the
+  -- source of each segment, using the prefix-safe get_line.
+  local d = pt.doc("c")
+  d:commit()
+  d:seek("set", 0); d:write("ab"); d:commit()
+  d:seek("set", 1); d:write("X") -- live "aXbc"
+  local proto = fake_proto()
+  local c = lsp.Client.new({
+    get_text = function() return d:dump() end,
+    get_line = function(l, col, len)
+      return d:readat(d:lineoffset(l) + col, len)
+    end,
+    line_offset = function(l) return d:lineoffset(l) end,
+    offset_pos = function(off) return d:linecol(off) end,
+    on_status = function() end,
+    proto = proto,
+  })
+  c:undo_switch(function(f) d:undo(f) end)
+  lu.assertEquals(d:dump(), "c")
+  lu.assertEquals(proto.switch_ranges, {
+    { range = { start = { line = 0, character = 1 },
+        ["end"] = { line = 0, character = 2 } }, text = "" },
+    { range = { start = { line = 0, character = 0 },
+        ["end"] = { line = 0, character = 2 } }, text = "" },
+  })
+end
+
+function TestClient:testUndoSwitchRealDocUtf16Ranges()
+  -- CJK variant: live "你Xbc" -> committed "你bc" -> root "bc". The
+  -- prefix view ends inside the first line, so UTF-16 conversion must
+  -- read only the allowed prefix bytes via get_line, not the full line.
+  local d = pt.doc("bc")
+  d:commit()
+  d:seek("set", 0); d:write("你"); d:commit()
+  d:seek("set", 3); d:write("X") -- live "你Xbc"
+  local proto = fake_proto()
+  local c = lsp.Client.new({
+    get_text = function() return d:dump() end,
+    get_line = function(l, col, len)
+      return d:readat(d:lineoffset(l) + col, len)
+    end,
+    line_offset = function(l) return d:lineoffset(l) end,
+    offset_pos = function(off) return d:linecol(off) end,
+    on_status = function() end,
+    proto = proto,
+  })
+  c:undo_switch(function(f) d:undo(f) end)
+  lu.assertEquals(d:dump(), "bc")
+  lu.assertEquals(proto.switch_ranges, {
+    { range = { start = { line = 0, character = 1 },
+        ["end"] = { line = 0, character = 2 } }, text = "" },
+    { range = { start = { line = 0, character = 0 },
+        ["end"] = { line = 0, character = 1 } }, text = "" },
+  })
 end
 
 function TestClient:testDiagAt()

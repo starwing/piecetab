@@ -346,7 +346,7 @@ function Doc:dump() end
 ---`"len"` reads the current piece without moving; `"next"` / `"prev"` move the
 ---doc cursor to the adjacent piece and return that piece's length. To iterate
 ---all pieces without moving the doc cursor, use `doc:buffer():pieces()`.
---- @param opt "len"|"next"|"prev"
+--- @param opt string  "len"|"next"|"prev" (invalid values error)
 --- @return integer
 function Doc:piece(opt) end
 

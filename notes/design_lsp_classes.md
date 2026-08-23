@@ -114,9 +114,8 @@ Client.new(opts)
 :start(argv, uri, langid, root)  -- 无 silent 参数（回更：silent 走 on_status 闭包）
 :stop()                          -- 联动清场：清调度 + sem/diag/vtext 树层
 :on_edit(off, del, s)            -- Protocol.notify_edit + dirty 标记（位移归树）
-:resync()                        -- undo/redo：sync_full + dirty 标记
-:on_switch(changes)              -- undo/redo hunks 交付（notify_edits；不清 vtext
-                                 --   层——树 splice 位移，2026-08-19）
+:undo_switch(doc_undo)           -- undo/redo：回调内算 range + notify_ranges；
+                                 --   不清 vtext 层——树 splice 位移（已删 on_switch）
 :tick()                          -- 主循环空闲：idle/视口变更/null 重试 → 重拉
 :post_render()                   -- render 末尾：semantic dirty 且非 pending → 重拉
                                  --   （响应直接 opts.sem.set 写树）
@@ -243,7 +242,7 @@ Ed:screen_to_text_dcol(line, scol)      -- 文本列（减该行注入偏移；s
   render 末尾：self.lsp:post_render()（semantic 重拉，响应 → set_sem 写树）
 状态栏：self.lsp:status()（右段）+ self.lsp:diag_at(cur_off)（中间段，
         LSP 元数据缓存）
-undo/redo：self.lsp:undo_switch(undo)（hunk 序列：tree:splice + notify_edits；
+undo/redo：self.lsp:undo_switch(undo)（hunk 序列：tree:splice + notify_ranges；
         不清 vtext 层——树 splice 位移）
 ```
 
@@ -387,7 +386,8 @@ tmux:kill()                     -- kill-session + 删临时文件
 ### 7.5 CI
 
 - 新 job `lua-tmux`（ubuntu + macos，test.yml 已落地）：apt/brew 装 tmux；
-  luarocks 装 luautf8 + luv（editor.lua 硬依赖，原 CI 未装）；tree-sitter
+  构建 vendored lua-utf8（`lua/lutf8lib.c`，`just lua/deps` 已含）+
+  luv（lsp.lua 硬依赖 vendored lua-utf8，原 CI 未装）；tree-sitter
   不装——**editor.lua 顶层宽容**（pcall require，无则降级无高亮，hl.new
   判 nil）；跑 `just lua/tmux`（先 build 各 .so）
 - windows：跳过（tmux 无）

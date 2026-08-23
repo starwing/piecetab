@@ -11,42 +11,45 @@ editor.lua 接入 LSP server（stdio/JSON-RPC），semantic tokens /
 diagnostics / inlay hints 渐进落地，为多层高亮栈产生第 4/5 层真实负载
 （C 化评估触发条件，Task 8）。Lua 原型先行，接口随演进固化。
 
-**架构原则**（用户裁定）：lspclient 为**独立模块**（lua/lspclient.lua，
-editor.lua require），非 editor 内嵌类；传输层两个纯模块（jsonrpc/lspio）
-离线可测，不依赖编辑器环境。
+**架构原则**（用户裁定）：lsp 为**独立模块**（lua/lsp.lua，editor.lua
+通过 `pcall(require, "lsp")` 加载），非 editor 内嵌类；传输层
+（RPC/IO）与 client 核心同文件内分层，离线可测，不依赖编辑器环境。
 
 ## 二、模块形态
 
 ```
 editor.lua 主循环（termfeed getkey 超时轮询）
-  └─ Ed 实例持有 lspclient 状态（nil = 未启动）
-      └─ lua/lspclient.lua —— 状态机 + pending + 通知分发 + 文本同步 + 请求队列
-          ├─ lua/jsonrpc.lua —— 帧解码器（持久状态，Content-Length 切帧）
-          │   └─ lua/yyjson.so —— decode/encode（yyjson 绑定，lyy_ 前缀）
-          └─ lua/lspio.lua —— luv 进程桥（spawn/pipe/nowait 泵/写队列）
+  └─ Ed 实例持有 lsp 状态（nil = 未启动）
+      └─ lua/lsp.lua —— RPC 帧 + IO 进程桥 + Protocol/Client 状态机
+          ├─ RPC —— 帧解码器（持久状态，Content-Length 切帧）
+          │   └─ lua/json.so —— decode/encode（yyjson 绑定）
+          └─ IO —— luv 进程桥（spawn/pipe/nowait 泵/写队列）
   └─ 数据面：semantic → 第 4 层写者（lsp_spans，拉模式裁剪缓存）
              diag     → 第 5 层写者（diag_spans，拉模式裁剪快照）
              hints    → Task 7（独立注入通道，不进 sc intern）
 ```
 
-主循环每帧：`Ed:lsp_poll()` → `lspio.pump(h)`（luv nowait）+ 解码分发。
+主循环每帧：`Ed:lsp_poll()` → `IO.pump(h)`（luv nowait）+ 解码分发。
 请求是异步的（pending 表 id→回调），写者数据全是**缓存+拉模式**——
 render 不发起任何 IO。
 
-**lspclient 依赖注入**（editor 无关，可测）：`get_text()`（didOpen 全
-文）、`get_line(lnum)`（UTF-16 换算行文本）、`offset_pos(off)`（字节
-offset → line, bytecol）、`on_status(state, why)`。editor 闭包接
-piecetab doc；测试接行表。**自足**：UTF-16 换算优先用 vendored
-lua-utf8，缺失时回退手写 charlen（双运行时可测）。
+**lsp 依赖注入**（editor 无关，可测）：`get_text()`（didOpen 全
+文）、`get_line(line, col, len)`（读该行 `[col, col+len)` 字节，prefix
+安全，undo/redo 回调内可用）、`line_offset(lnum)`（行起始字节）、
+`offset_pos(off)`（字节 offset → line, bytecol）、`on_status(state,
+why)`。editor 闭包接 piecetab doc；测试接行表。
+**自足**：UTF-16 换算硬依赖 vendored lua-utf8（`lua/lutf8lib.c`），
+所有方向（字节 → UTF-16、UTF-16 → 字节）都现场扫描，不建
+`utf16_map` 缓存；行起始用 `line_offset`，不再全文档扫描。
 
 ## 三、传输层定案（Task 2/3 终态，勿翻案）
 
 | 层 | 形态 | 要点 |
 |---|---|---|
-| jsonrpc.decoder | 持久状态对象 | `{data, body_start, body_len}` 跨调用保半帧；reader 协议 `chunk`/`""`(pause)/`nil`(EOF)；返回 `msg` 或 `nil, err`（"eof"/"again"/"bad JSON: ..."） |
-| jsonrpc.enc_* | 纯函数 | enc_request/enc_notify/enc_result/enc_error 四形态 + frame() 头 |
-| lspio.spawn | luv 薄封装 | 无重造 spawn；read_start 累积 buf + reader 索引游标（pause 存活） |
-| lspio 写队列 | try_write 回退 | EAGAIN 留队重试；send 只入队，pump 时 drain |
+| RPC.decoder | 持久状态对象 | `{data, body_start, body_len}` 跨调用保半帧；reader 协议 `chunk`/`""`(pause)/`nil`(EOF)；返回 `msg` 或 `nil, err`（"eof"/"again"/"bad JSON: ..."） |
+| RPC.enc_* | 纯函数 | enc_request/enc_notify/enc_result/enc_error 四形态 + frame() 头 |
+| IO.spawn | luv 薄封装 | 无重造 spawn；read_start 累积 buf + reader 索引游标（pause 存活） |
+| IO 写队列 | try_write 回退 | EAGAIN 留队重试；send 只入队，pump 时 drain |
 | 帧边界 | **Content-Length 权威** | 字节计数切帧，body 完整才 decode |
 
 **JSON 边界判断结论**（用户遗留问题）：**不需要 yyjson 新功能**。
@@ -89,13 +92,15 @@ diag 回调；未知（`$/hello`、`$/progress` 等）**一律忽略**（sumneko
   del, s)`——换算用的是编辑前状态（offset_pos 注入）
 - **version 追踪**：client 持自增 version（从 1 起），didChange 带上；
   server 侧诊断回推 version 即源自此
-- **start 参数**：`lspclient:start(argv, uri, langid, root)`——root 为
+- **start 参数**：`Client:start(argv, uri, langid, root)`——root 为
   workspace 根 uri（editor 传文件所在目录，测试默认 = uri）
 - **undo/redo 同步**（已落地 2026-08，定案见 design_luabind.md
-  §十二）：undo/redo 经 `doc:undo(f)` 回调拿 hunk 顺序链（f 逐
-  hunk 收 off/del/text）→ `notify_edits` 单条 didChange 多 edit
-  （顺序应用语义）；fresh 逆段与 switch 段天然衔接（fresh 应用完
-  恰 = committed = switch 的 pa 基准），f 无段感知。废弃
+  §十二）：undo/redo 经 `doc:undo(f)` 回调拿 hunk 链；新回调语义是
+  **逆序 + raw pa + 前缀只读视图**，回调发生时 doc 仍停在当前段的
+  源文档。`Client:undo_switch` 在回调内直接算 range（`offset_pos` +
+  `get_line(line,col,len)` 读部分行 + lua-utf8 现场换算），收集成
+  `contentChanges` 后由 `notify_ranges` 单条 didChange 发送；fresh
+  段先、switch 段后，段内逆序，天然是 server 的顺序应用语义。废弃
   `sync_full` 全量重传。
 
 ### 4.5 initialize 必须带 workspaceFolders（smoke 实测教训）
@@ -123,9 +128,9 @@ LuaLS 的 inlay hint 等特性由配置开关控制（`Lua.hint.enable` 默认
 不符"，是配置没开**（VSCode 扩展声明 capability 并响应配置，所以
 能看到 hint）。
 
-lspclient 侧：`on_server(method, fn)` 注册 server→client 请求
+lsp 侧：`Protocol:on_server(method, fn)` 注册 server→client 请求
 （fn 返回 result / result+err；nil result 编码为 JSON null——
-**Lua 表尾放字面 nil 不构成元素**，须用 `yyjson.null` 哨兵）。
+**Lua 表尾放字面 nil 不构成元素**，须用 `json.null` 哨兵）。
 editor 响应：`Lua` section → `{ hint = { enable = true } }`，其余
 section → null。
 
@@ -140,24 +145,22 @@ U+9FFF）= **1 code unit**；仅补充平面（U+10000+，emoji 等）= 2 units
 （代理对）。research 说 "CJK 每字 2 units" 错误——显示列 2 列 ≠
 UTF-16 2 units。
 
-**换算 = 数 UTF-8 首字节，无需解码码点**：
+**换算 = 用 vendored lua-utf8 按码点现场扫描**（`utf8.codes` /
+`utf8.next`，见 `lua/lsp.lua` 的 `_utf16` / `_utf16_to_byte`）：
 
-| 字符 | UTF-8 首字节 | UTF-16 units | 显示列 |
+| 字符 | UTF-8 编码 | UTF-16 units | 显示列 |
 |---|---|---|---|
-| ASCII | < 0xC0 | 1 | 1 |
-| 2-3 字节（含 CJK） | 0xC0–0xEF | 1 | 1 或 2（宽度查表） |
-| 4 字节（emoji 等） | 0xF0+ | 2 | 2 |
+| ASCII | 1 字节 | 1 | 1 |
+| 2-3 字节（含 CJK） | 2–3 字节 | 1 | 1 或 2（宽度查表） |
+| 4 字节（emoji 等） | 4 字节 | 2 | 2 |
 
 ```lua
--- editor.lua Section 2（C 化候选，同 cellgrid 家族）
+-- lua/lsp.lua 内部 helpers
 -- 字节 offset → 行内 UTF-16 code unit 列
-local function text_byte_to_utf16(text, byte)  -- 每字: 首字节>=0xF0 → +2, 否则 +1
--- UTF-16 unit 列 → 字节 offset（反向累计，clamp 到字符边界）
-local function text_utf16_to_byte(text, units)
--- 字节 offset → LSP position {line, character}
-local function doc_byte_to_utf16(doc, off)      -- 行定位 via doc:seek("line")
--- LSP position → 字节 offset（diag range / hint 解码用）
-local function doc_utf16_to_byte(doc, line, unitcol)
+local function _utf16(opts, line, bytecol)
+  -- get_line(line, 0, bytecol) + utf8.codes 累计 units
+-- UTF-16 unit 列 → 绝对字节 offset（按需部分行 64B 分块，utf8.next）
+local function _utf16_to_byte(opts, line, unit, col, base)
 ```
 
 三个坐标互不换算（UTF-8 字节 / UTF-16 units / 显示列各管各的）：
@@ -211,7 +214,7 @@ docedit → 漏斗记 edits → 渲染前 flush didChange(version++)
 | 议题 | 决策 | 理由 |
 |---|---|---|
 | JSON 边界 | Content-Length 计数，yyjson 零新功能 | 头即权威边界；流式解析无场景；坏帧弃帧即恢复 |
-| lspclient 形态 | 独立 lua/lspclient.lua | 状态机代码量大；独立可测（fake server 无需编辑器） |
+| lsp 形态 | 独立 lua/lsp.lua | 状态机代码量大；独立可测（fake server 无需编辑器） |
 | 空窗策略 | 保留旧缓存（dirty + 原子替换） | 无闪烁；漂移窗口短；VSCode 同款 |
 | 层序 | syntax < piece < visual < semantic < diag | semantic 盖 syntax（LSP 比 tree-sitter 准）；diag 最高（下划线压语义色仍可见） |
 | semantic 重拉 | dirty 且 render 后一次 | 非每帧；节流天然（编辑频率 < 帧率） |
@@ -226,19 +229,19 @@ docedit → 漏斗记 edits → 渲染前 flush didChange(version++)
   解码循环；merge_layers 区间折叠（与 spantree 同族）
 - **hint text 独立孵化**：Task 7 是唯一入口，之前不独立做
 - 请求节流：semantic 重拉若发现 server 忙（pending 中）则跳过本次
-- 多 URI（多文件）：lspclient 按当前文件单 URI 起步，多文件后补
+- 多 URI（多文件）：lsp 按当前文件单 URI 起步，多文件后补
   （didOpen/didChange 按活跃文件路由）
 
 ## 九、测试
 
-- Task 4：lspclient_test.lua 6 测试（fake server 进程对答：initialize
-  握手、$/hello 忽略、didOpen/didChange 回执、UTF-16 换算断言
-  （CJK/emoji）、publishDiagnostics 收到、shutdown/exit 序列）
+- Task 4：lsp_test.lua（fake server 对答：initialize 握手、$/hello 忽略、
+  didOpen/didChange 回执、UTF-16 换算断言（CJK/emoji）、
+  publishDiagnostics 收到、shutdown/exit 序列）
 - Task 5/6：editor_test.lua（TestLspSemantic/TestLspDiag：fake server 喂
   token 数组/diag 推送到 grid cell style 断言，含与 syntax 共存 +
   UTF-16 换算断言 + 版本丢弃断言）
 - UTF-16 换算：单测矩阵（ASCII/CJK/emoji/tab 混合行的双向一致性）
-- 验证：`just lua/lspclient`、`just lua/ed`、LuaLS 零诊断
+- 验证：`just lua/lsp`、`just lua/ed`、LuaLS 零诊断
 - **真实 server smoke 教训**（Task 4 已跑通）：lua-language-server 握手
   + 诊断推送实测（3 条 Undefined global）需 workspaceFolders（§4.5）；
-  smoke 脚本一次性不保留——回归靠 lspclient_test 的 fake server
+  smoke 脚本一次性不保留——回归靠 lsp_test 的 fake server

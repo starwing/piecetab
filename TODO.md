@@ -136,13 +136,13 @@
 
 - **C 化评估（剩余部分）**：sc 已 C 化进 spantree，cellgrid 坐标族 /
   字符移动已 C 化，merge_layers 区间折叠已由 spantree `styled()` 完成；
-  `_render_line` 单次 styled 遍历 + 屏幕列 tab 已落地；剩余
-  lsp.lua UTF-16 换算族仍待评估；评估以“让 Lua 层写得更顺手”为主要
+  `_render_line` 单次 styled 遍历 + 屏幕列 tab 已落地；lsp.lua
+  UTF-16 换算族已评估并落地；评估以“让 Lua 层写得更顺手”为主要
   标准，负载只作参考
-- **lsp.lua UTF-16 换算族**：已 vendored luautf8 并接入（`lua/lutf8lib.c`
+- **lsp.lua UTF-16 换算族**：已完成——vendored luautf8（`lua/lutf8lib.c`
   直接放 `lua/` 目录，与 `lua/cellgrid.c` 共用 `lua/unidata.h`，lsp.lua
-  硬 `require("lua-utf8")`，无回退）；剩余 per-line 批量映射与
-  `line_offset` 去全文档扫描
+  硬 `require("lua-utf8")`，无回退）；semantic/diag/hint 按行 `utf16_map`
+  批量映射，`line_offset` 取行起始，不再全文档扫描
 - **editor 读行不要整行读**：渲染路径已按 run 按需读；剩余 word motion
   等整行读取可改为按需/前缀读，避免大行全量拷贝
 
@@ -155,3 +155,11 @@
   span_decode、semantic/diag 写者的 C 化展示）；否则保持 Demo 够用即可
 - **popup window / cmd window**：横向新特性，无设计支撑，
   需先澄清孵什么 C 库
+- **lsp.lua UTF-16 换算遇非法 UTF-8 的显式处理**：piecetab 是字节级
+  库，编辑若在多字节码点中间切开会产生非法 UTF-8，此时
+  `Protocol.text_byte_to_utf16`（`lua/lsp.lua:283`）的 `utf8.codes`
+  会抛 `invalid UTF-8 code`。报错本身是对的（错就应报，且与
+  piecetab 无关，不改 piecetab）；后续找机会在 Lua 侧
+  （lsp.lua / editor 输入路径）把它处理成带上下文的明确错误，或
+  保证编辑不产生这种状态。低优先级：当前编辑（charlen 约束的光标
+  移动/编辑）不会产生这种文本

@@ -236,15 +236,15 @@ comment/function 样式）。`Ed:open_language(lang)` 可手动开启；编辑�
 - **Lua**：主运行时为 Lua 5.5，同时支持 LuaJIT 兼容验证。demo 按仓库
   根目录相对路径查找模块：`./lua/?.so`、`./lua/luajit/?.so` 与
   `./lua/?.lua`。
-- **必需 C 模块**：`piecetab`、`cellgrid`、`termfeed`、`spantree` 与
-  `json`（yyjson 绑定）。`json` 被 `lsp.lua` 依赖，而 `editor.lua`
-  无条件加载 `lsp.lua`。
+- **必需 C 模块**：`piecetab`、`cellgrid`、`termfeed`、`spantree`、
+  `json`（yyjson 绑定）与 `lua-utf8`（vendored luautf8）。`json` 与
+  `lua-utf8` 被 `lsp.lua` 依赖，而 `editor.lua` 通过
+  `pcall(require, "lsp")` 加载。
 - **可选 `treesitter`**：通过 `pcall(require, "treesitter")` 加载，缺失时
   仅关闭高亮。完整高亮需要 `libtree-sitter` 与 `lua/grammar` 下的编译
   语法文件。
-- **`lsp.lua`**：纯 Lua LSP 客户端，需要 `json` 绑定与 `luv`。文件配置
-  了对应 server 时会自动启动 LSP。UTF-16 换算优先使用 vendored
-  `lua-utf8`，缺失时回退 Lua 实现。
+- **`lsp.lua`**：纯 Lua LSP 客户端，需要 `json` 绑定、`luv` 与 vendored
+  `lua-utf8`（硬依赖）。文件配置了对应 server 时会自动启动 LSP。
 - **仅测试需要**：`luaunit` 测试框架；部分编辑器/cellgrid/显示测试还
   需要 `tmux`。
 
@@ -381,7 +381,7 @@ just lua/ts   # 获取/编译 lua/grammar/*.so，构建 treesitter.so + luajit/t
 | `spantree`   | `lua/spantree.c`, `lua/spantree.d.lua`        | `spantree.h` 的 C 绑定（Compositor/Tree/Cursor span 染色）                           |
 | `json`       | `lua/json.c`, `lua/json.d.lua`, `lua/yyjson/` | 基于 vendored yyjson 的纯 C 绑定（`decode`/`encode`/`array`/`object`/`null`/`type`） |
 | `treesitter` | `lua/treesitter.c`, `lua/treesitter.d.lua`    | 基于 `libtree-sitter` 的 C 绑定（parser/tree/query API）                             |
-| `lsp`        | `lua/lsp.lua`                                 | 纯 Lua LSP 客户端构建块；需要 `json` 与 `luv`                                        |
+| `lsp`        | `lua/lsp.lua`                                 | 纯 Lua LSP 客户端构建块；需要 `json`、`luv` 与 `lua-utf8`                            |
 | `lua-utf8`   | `lua/lutf8lib.c`, `lua/unidata.h`, `lua/lua-utf8.d.lua`                | Vendored luautf8（C 模块 + 类型声明）                                               |
 
 构建/测试 recipe 位于 `lua/justfile`，以 `just lua/<name>` 运行（如

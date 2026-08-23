@@ -59,7 +59,8 @@ end
 --- @return string
 function RPC.enc_error(id, code, message)
   return frame(json.encode({
-    jsonrpc = "2.0", id = id,
+    jsonrpc = "2.0",
+    id = id,
     error = { code = code, message = message },
   }))
 end
@@ -291,7 +292,7 @@ end
 
 -- Client factory. opts:
 --   get_text() -> full doc text (didOpen)
---   get_line(lnum) -> line text without "\n" (UTF-16 conversion)
+--   get_line(line, col, len) -> bytes [col, col+len) of that line
 --   offset_pos(off) -> line, bytecol of a byte offset
 --   on_status(state, msg?) -> state change callback
 --   config? -> per-section config table (default: Lua hints on)
@@ -299,7 +300,7 @@ end
 --- @return lsp.Protocol
 function Protocol.new(opts)
   opts.config = opts.config
-    or { Lua = { hint = { enable = true, setType = true } } }
+      or { Lua = { hint = { enable = true, setType = true } } }
   local self = setmetatable({
     state = "starting",
     io = nil,
@@ -330,12 +331,93 @@ end
 -- ---- internals (must precede the methods that call them: local
 -- functions are only visible after their definition)
 
--- UTF-16 unit column at (line, bytecol) of the current doc.
+-- UTF-16 unit column at (line, bytecol) of the current doc. Only the
+-- prefix bytes [0, bytecol) are read via get_line(line, 0, bytecol).
+--- @param opts table
 --- @param line integer
 --- @param bytecol integer
 --- @return integer
-local function _utf16(self, line, bytecol)
-  return Protocol.text_byte_to_utf16(self.opts.get_line(line), bytecol)
+local function _utf16(opts, line, bytecol)
+  return Protocol.text_byte_to_utf16(
+    opts.get_line(line, 0, bytecol), bytecol)
+end
+
+-- UTF-16 units for a byte range. When both ends are on the same line,
+-- the end reuses the start count and reads only the [sc, ec) slice.
+--- @param opts table
+--- @param sl integer
+--- @param sc integer
+--- @param el integer
+--- @param ec integer
+--- @return integer, integer
+local function _utf16_range(opts, sl, sc, el, ec)
+  local s = _utf16(opts, sl, sc)
+  if sl == el then
+    return s, s + Protocol.text_byte_to_utf16(
+      opts.get_line(sl, sc, ec - sc), ec - sc)
+  end
+  return s, _utf16(opts, el, ec)
+end
+
+-- Scan line `line` from byte column `col` (default 0) with `base`
+-- UTF-16 units already before `col`; return the absolute byte offset
+-- after the character containing UTF-16 unit `unit`. Reads only the
+-- needed partial line in chunks, never a whole line.
+--- @param opts table
+--- @param line integer
+--- @param unit integer
+--- @param col integer
+--- @param base integer
+--- @return integer
+local function _utf16_to_byte(opts, line, unit, col, base)
+  col = col or 0
+  base = base or 0
+  local ls = opts.line_offset(line)
+  local start = ls + col
+  if unit <= base then return start end
+  local target = unit - base
+  local buf = ""
+  local abs = start
+  local units = 0
+  while true do
+    local part = opts.get_line(line, abs + #buf - ls, 64)
+    if #part == 0 then return abs + #buf end
+    buf = buf .. part
+    local scan = 1
+    local consumed = 0
+    while scan <= #buf do
+      local b = buf:byte(scan)
+      local n = b < 0x80 and 1 or b < 0xE0 and 2
+          or b < 0xF0 and 3 or 4
+      if scan + n - 1 > #buf then
+        buf = buf:sub(scan)
+        abs = abs + consumed
+        consumed = 0
+        break
+      end
+      local ok, cur, cp = pcall(utf8.next, buf, scan, 0)
+      if not ok or not cur then
+        buf = buf:sub(scan)
+        abs = abs + consumed
+        consumed = 0
+        break
+      end
+      local ok, next_pos = pcall(utf8.next, buf, scan)
+      local u = cp > 0xFFFF and 2 or 1
+      if units + u >= target then
+        return abs + (next_pos or #buf + 1) - 1
+      end
+      units = units + u
+      scan = next_pos or (#buf + 1)
+      consumed = scan - 1
+    end
+    if consumed == #buf then
+      buf = ""
+      abs = abs + consumed
+      units = 0
+    end
+    if #part < 64 then return abs + #buf end
+  end
 end
 
 -- Route a message: response -> pending callback, server request ->
@@ -382,8 +464,12 @@ end
 local function _send_did_open(self)
   self.version = 1
   self:notify("textDocument/didOpen", {
-    textDocument = { uri = self.uri, languageId = self.langid,
-      version = self.version, text = self.opts.get_text() },
+    textDocument = {
+      uri = self.uri,
+      languageId = self.langid,
+      version = self.version,
+      text = self.opts.get_text()
+    },
   })
 end
 
@@ -429,16 +515,16 @@ function Protocol:start(argv, uri, langid, root)
       workspace = { configuration = true },
     },
   }, function(result, err)
-      if err then
-        _fail(self, "initialize: " .. tostring(err.message))
-        return
-      end
-      self.capabilities = result and result.capabilities or {}
-      self.state = "running"
-      self.opts.on_status("running")
-      self:notify("initialized", {})
-      _send_did_open(self)
-    end)
+    if err then
+      _fail(self, "initialize: " .. tostring(err.message))
+      return
+    end
+    self.capabilities = result and result.capabilities or {}
+    self.state = "running"
+    self.opts.on_status("running")
+    self:notify("initialized", {})
+    _send_did_open(self)
+  end)
   return true
 end
 
@@ -488,13 +574,14 @@ function Protocol:notify_edit(off, del, s)
   if self.state ~= "running" then return end
   local sl, sc = self.opts.offset_pos(off)
   local el, ec = self.opts.offset_pos(off + del)
+  local su, eu = _utf16_range(self.opts, sl, sc, el, ec)
   self.version = self.version + 1
   self:notify("textDocument/didChange", {
     textDocument = { uri = self.uri, version = self.version },
     contentChanges = { {
       range = {
-        start = { line = sl, character = _utf16(self, sl, sc) },
-        ["end"] = { line = el, character = _utf16(self, el, ec) },
+        start = { line = sl, character = su },
+        ["end"] = { line = el, character = eu },
       },
       text = s,
     } },
@@ -502,25 +589,14 @@ function Protocol:notify_edit(off, del, s)
 end
 
 --- @alias lsp.edit {off: integer, del: integer, text: string}
+--- @alias lsp.range_edit {range: table, text: string}
 
--- Send sequential edits as one didChange: the server applies the array
--- in order, every range relative to the previous edit's result. Edits
--- come from undo/redo hunks (off = hunk start in that coordinate).
---- @param changes lsp.edit[]
-function Protocol:notify_edits(changes)
-  if self.state ~= "running" or #changes == 0 then return end
-  local cc = {}
-  for _, e in ipairs(changes) do
-    local sl, sc = self.opts.offset_pos(e.off)
-    local el, ec = self.opts.offset_pos(e.off + e.del)
-    cc[#cc + 1] = {
-      range = {
-        start = { line = sl, character = _utf16(self, sl, sc) },
-        ["end"] = { line = el, character = _utf16(self, el, ec) },
-      },
-      text = e.text,
-    }
-  end
+-- Send precomputed sequential edits as one didChange. Ranges are
+-- measured by the caller against the state the server already has, so
+-- no rebase is needed after undo/redo callbacks finish.
+--- @param cc lsp.range_edit[]
+function Protocol:notify_ranges(cc)
+  if self.state ~= "running" or #cc == 0 then return end
   self.version = self.version + 1
   self:notify("textDocument/didChange", {
     textDocument = { uri = self.uri, version = self.version },
@@ -573,60 +649,17 @@ local Client = {}
 
 -- Methods resolve on the Client table; lifecycle fields proxy the proto
 -- so the editor reads c.state/uri/version like a plain Protocol.
-local CM = { __index = function(self, key)
-  if key == "state" or key == "uri" or key == "version" then
-    local p = self.proto
-    return p and p[key] or nil
+local CM = {
+  __index = function(self, key)
+    if key == "state" or key == "uri" or key == "version" then
+      local p = self.proto
+      return p and p[key] or nil
+    end
+    return Client[key]
   end
-  return Client[key]
-end }
+}
 
 -- ---- internals (module-private; UTF-16 conversion via lua-utf8)
-
--- UTF-16 unit column -> byte offset within a UTF-8 line. BMP chars are
--- 1 unit; 4-byte supplementary chars (emoji) are 2; trailing units
--- clamp to the line end (LSP positions never split chars).
---- @param text string
---- @param units integer
---- @return integer
-local function utf16_to_byte(text, units)
-  if units == 0 then return 0 end
-  for start, cp in utf8.codes(text) do
-    local u = cp > 0xFFFF and 2 or 1
-    if units <= u then
-      return (utf8.next(text, start) or #text + 1) - 1
-    end
-    units = units - u
-  end
-  return #text
-end
-
--- Byte offset of each line start (line 0 = 0) from the full doc text.
--- find() returns the 1-based newline index, which is exactly the
--- 0-based offset of the following line.
---- @param text string
---- @return integer[]
-local function line_offsets(text)
-  local out, pos = { 0 }, 1
-  while true do
-    local nl = text:find("\n", pos, true)
-    if not nl then break end
-    out[#out + 1] = nl
-    pos = nl + 1
-  end
-  return out
-end
-
--- LSP position {line, UTF-16 unit} -> byte offset (line base + line pos).
---- @param self lsp.Client
---- @param starts integer[]
---- @param line integer
---- @param unit integer
---- @return integer
-local function lsp_pos(self, starts, line, unit)
-  local text = self.opts.get_line(line)
-  return (starts[line + 1] or 0) + utf16_to_byte(text, unit)
-end
 
 -- Decode a semanticTokens/full response into {offset, length, attr}
 -- spans in document order. Tokens are relative-encoded: deltaLine
@@ -635,9 +668,9 @@ end
 --- @param tokens integer[]
 --- @param legend table  {tokenTypes = string[]}
 --- @param attrmap table  tokenType name -> attr table (unknown: skip)
---- @param posfn fun(line: integer, unit: integer): integer
+--- @param opts table  accessor set (get_line/line_offset)
 --- @return table
-local function span_decode(tokens, legend, attrmap, posfn)
+local function span_decode(tokens, legend, attrmap, opts)
   local types = legend and legend.tokenTypes or {}
   local line, unit = 0, 0
   local out = {}
@@ -650,8 +683,9 @@ local function span_decode(tokens, legend, attrmap, posfn)
     if dline == 0 then unit = unit + dunit else unit = dunit end
     local attr = attrmap[types[ttype + 1]]
     if attr and len > 0 then
-      local s = posfn(line, unit)
-      local e = posfn(line, unit + len)
+      local s = _utf16_to_byte(opts, line, unit, 0, 0)
+      local e = _utf16_to_byte(opts, line, unit + len,
+        s - opts.line_offset(line), unit)
       if e > s then
         out[#out + 1] = { offset = s, length = e - s, attr = attr }
       end
@@ -679,9 +713,12 @@ local function hint_decode(self, hints)
         label = table.concat(parts)
       end
       if type(label) == "string" and #label > 0 then
-        local bcol = utf16_to_byte(self.opts.get_line(pos.line), pos.character)
+        local bcol = _utf16_to_byte(self.opts, pos.line,
+          pos.character, 0, 0) - self.opts.line_offset(pos.line)
         local lst = out[pos.line]
-        if not lst then lst = {}; out[pos.line] = lst end
+        if not lst then
+          lst = {}; out[pos.line] = lst
+        end
         lst[#lst + 1] = { off = bcol, text = label }
       end
     end
@@ -765,18 +802,28 @@ local function diag_update(self, p)
   local cur = self.diag and self.diag.version or -1
   local v = p.version
   if v and v < cur then return end
-  local starts = line_offsets(self.opts.get_text())
   local spans = {}
   for _, d in ipairs(p.diagnostics or {}) do
     local r = d.range
-    local s = lsp_pos(self, starts, r.start.line, r.start.character)
-    local e = lsp_pos(self, starts, r["end"].line, r["end"].character)
+    local sl = r.start.line
+    local s = _utf16_to_byte(self.opts, sl, r.start.character, 0, 0)
+    local e
+    if r["end"].line == sl then
+      e = _utf16_to_byte(self.opts, sl, r["end"].character,
+        s - self.opts.line_offset(sl), r.start.character)
+    else
+      e = _utf16_to_byte(self.opts, r["end"].line,
+        r["end"].character, 0, 0)
+    end
     if e > s then
       local attr = { underline = true, severity = d.severity or 2 }
       for k, v in pairs(self.opts.attrmap.diag or {}) do attr[k] = v end
       spans[#spans + 1] = {
-        offset = s, length = e - s, attr = attr,
-        msg = d.message, severity = d.severity or 2,
+        offset = s,
+        length = e - s,
+        attr = attr,
+        msg = d.message,
+        severity = d.severity or 2,
       }
     end
   end
@@ -785,7 +832,11 @@ local function diag_update(self, p)
 end
 
 -- semantic tokenType name -> style attr table (unknown ignored; diag
--- is the fallback underline attr via attrmap.diag)
+-- is the fallback underline attr via attrmap.diag).
+-- Covers the common LSP semantic token families (clangd/LuaLS) so the
+-- semantic layer actually paints code instead of only suppressing the
+-- tree-sitter base. Tree-sitter colors are kept in the same table with
+-- matching values, so overlapping tokens keep a visible color.
 local LSP_ATTRS = {
   comment = { fg = 245 },
   string = { fg = 114 },
@@ -793,6 +844,18 @@ local LSP_ATTRS = {
   number = { fg = 215 },
   ["function"] = { fg = 81 },
   method = { fg = 81 },
+  variable = { fg = 114 },
+  parameter = { fg = 114 },
+  property = { fg = 114 },
+  type = { fg = 81 },
+  class = { fg = 81 },
+  interface = { fg = 81 },
+  enum = { fg = 81 },
+  enumMember = { fg = 114 },
+  namespace = { fg = 81 },
+  typeParameter = { fg = 81 },
+  concept = { fg = 81 },
+  macro = { fg = 207 },
   diag = { underline = true },
 }
 
@@ -825,10 +888,11 @@ function Client.langid(filename)
 end
 
 -- Client factory. opts adds to the Protocol contract; everything but
--- the accessors (get_text/get_line/offset_pos) has a default:
+-- the accessors (get_text/get_line/line_offset/offset_pos) has a default:
 --   get_text() -> full document text            [required]
---   get_line(line) -> line text (no \n)         [required]
---   offset_pos(off) -> line, UTF-16 unit col    [required]
+--   get_line(line, col, len) -> bytes [col, col+len) of that line [required]
+--   line_offset(line) -> byte offset of line start [required]
+--   offset_pos(off) -> line, bytecol            [required]
 --   viewport_fn() -> {top, rows}                (default: whole doc)
 --   now_fn() -> wall-clock seconds              (default: luv.hrtime)
 --   attrmap -> tokenType name -> attr table     (default: none)
@@ -843,14 +907,14 @@ function Client.new(opts)
   opts.now_fn = opts.now_fn or function() return luv.hrtime() / 1e9 end
   opts.on_status = opts.on_status or function() end
   opts.viewport_fn = opts.viewport_fn
-    or function() return { top = 0, rows = 1e9 } end
+      or function() return { top = 0, rows = 1e9 } end
   opts.attrmap = opts.attrmap or {}
   opts.vtext = opts.vtext or { set = function() end, clear = function() end }
   opts.sem = opts.sem or { set = function() end, clear = function() end }
   opts.diag = opts.diag or { set = function() end, clear = function() end }
   local self = h_state(opts)
   self.proto = opts.proto or nil
-  self.sem = { dirty = true, pending = false }
+  self.sem = { dirty = true, pending = false, reqver = 0 }
   self.diag = nil
   self.opts = opts
   return setmetatable(self, CM) --[[@as lsp.Client]]
@@ -876,7 +940,7 @@ function Client:start(argv, uri, langid, root)
   end)
   -- restart: fresh caches and hint scheduling (no stale slots/retries)
   for k, v in pairs(h_state(self.opts)) do self[k] = v end
-  self.sem = { dirty = true, pending = false }
+  self.sem = { dirty = true, pending = false, reqver = 0 }
   self.diag, self.hint_lines = nil, nil
   if not p:start(argv, uri, langid, root) then
     self.proto, self.diag = nil, nil
@@ -897,6 +961,14 @@ function Client:stop()
   self.opts.vtext.clear()
 end
 
+-- Mark caches dirty and reset the hint debounce/retry budget.
+function Client:_mark_edit()
+  if self.sem then self.sem.dirty = true end
+  self.hint_dirty = true
+  self.last_edit_t = self.opts.now_fn()
+  self.hint_retry, self.hint_null = 0, 0
+end
+
 -- Record an edit: protocol sync + dirty flags (slot shift is Ed's job).
 --- @param off integer
 --- @param del integer
@@ -904,31 +976,31 @@ end
 function Client:on_edit(off, del, s)
   if not self.proto then return end
   self.proto:notify_edit(off, del, s)
-  if self.sem then self.sem.dirty = true end
-  self.hint_dirty = true
-  self.last_edit_t = self.opts.now_fn()
-  self.hint_retry, self.hint_null = 0, 0
-end
-
--- Incremental sync after undo/redo: sequential edits in one didChange,
--- then mark caches dirty. The vtext layer shifts with the tree splice
--- (no clear); hints refetch on idle, covering any the LSP would change.
---- @param changes lsp.edit[]
-function Client:on_switch(changes)
-  if self.proto then self.proto:notify_edits(changes) end
-  if self.sem then self.sem.dirty = true end
-  self.hint_dirty = true
+  self:_mark_edit()
 end
 
 -- Undo/redo sync for doc objects: run doc_undo(f) collecting the
 -- change hunks, then deliver one didChange (caches + vtext reset).
+-- Ranges are computed inside the C hunk callbacks while the doc is
+-- still the source state for that segment, so multi-segment undo
+-- (fresh + version hunks) reaches the server as valid sequential edits.
 --- @param doc_undo fun(f: fun(off: integer, del: integer, text: string))  e.g. doc.undo / doc.redo
 function Client:undo_switch(doc_undo)
-  local changes = {}
+  local cc = {}
   doc_undo(function(off, del, text)
-    changes[#changes + 1] = { off = off, del = del, text = text }
+    local sl, sc = self.opts.offset_pos(off)
+    local el, ec = self.opts.offset_pos(off + del)
+    local su, eu = _utf16_range(self.opts, sl, sc, el, ec)
+    cc[#cc + 1] = {
+      range = {
+        start = { line = sl, character = su },
+        ["end"] = { line = el, character = eu },
+      },
+      text = text,
+    }
   end)
-  self:on_switch(changes)
+  if self.proto then self.proto:notify_ranges(cc) end
+  self:_mark_edit()
 end
 
 -- Start a server for a file path: resolves the server command (or uses
@@ -953,24 +1025,28 @@ end
 --- @return boolean
 function lsp.attach(ed, opts)
   opts = opts or {}
-  local c = Client.new({
+  local o = {
     get_text = function()
-      ed:_render_line(ed.cursor_row, true)
       return ed.doc:dump()
     end,
-    get_line = function(lnum)
-      ed:_render_line(ed.cursor_row, true)
-      return ed.doc:readat(ed.doc:lineoffset(lnum),
-        ed.doc:linelen(lnum, true))
+    get_line = function(lnum, col, len)
+      local lo = ed.doc:lineoffset(lnum)
+      local start = lo + col
+      local stop = start + len
+      local ok, ll = pcall(ed.doc.linelen, ed.doc, lnum, true)
+      if ok and stop > lo + ll then stop = lo + ll end
+      return ed.doc:readat(start, stop - start)
+    end,
+    line_offset = function(lnum)
+      return ed.doc:lineoffset(lnum)
     end,
     offset_pos = function(off)
-      ed:_render_line(ed.cursor_row, true)
       return ed.doc:linecol(off)
     end,
     on_status = function(state, why)
       if state == "exited" and not opts.silent then
         ed.msg = "lsp: " .. state
-          .. (why and " (" .. why .. ")" or "")
+            .. (why and " (" .. why .. ")" or "")
       end
     end,
     attrmap = LSP_ATTRS,
@@ -986,7 +1062,8 @@ function lsp.attach(ed, opts)
       set = function(spans) ed:set_diag(spans) end,
       clear = function() ed.tree:clear("diag") end,
     },
-  })
+  }
+  local c = Client.new(o)
   ed.lsp = c
   local ok = c:start_file(ed.filename, opts.argv)
   if not ok then ed.lsp = nil end
@@ -1010,19 +1087,25 @@ function Client:tick()
   self.hint_reqver = p.version
   p:request("textDocument/inlayHint", {
     textDocument = { uri = p.uri },
-    range = { start = { line = vp.top, character = 0 },
-      ["end"] = { line = vp.top + vp.rows - 1, character = 0x7fffffff } },
+    range = {
+      start = { line = vp.top, character = 0 },
+      ["end"] = { line = vp.top + vp.rows - 1, character = 0x7fffffff }
+    },
   }, function(result, err)
-      h_response(self, result, err, now)
-    end)
+    h_response(self, result, err, now)
+  end)
 end
 
 -- Render-tail work: refresh semantic tokens when dirty (edit once ->
--- one request; skip while a request is already in flight).
+-- one request; skip while a request is already in flight). The request
+-- version is recorded so a stale response (edit landed while in flight)
+-- keeps dirty set and triggers a refetch instead of suppressing it.
 function Client:post_render()
   local p = self.proto
   if not (p and p.state == "running" and self.sem and self.sem.dirty
-      and not self.sem.pending) then return end
+        and not self.sem.pending) then
+    return
+  end
   local cap = p.capabilities.semanticTokensProvider
   if not (cap and cap.full) then
     self.sem.dirty = false
@@ -1030,20 +1113,21 @@ function Client:post_render()
   end
   local sem = self.sem
   sem.pending = true
+  sem.reqver = p.version
   p:request("textDocument/semanticTokens/full", {
     textDocument = { uri = p.uri },
   }, function(result, err)
-      sem.pending = false
-      if err then
-        sem.dirty = false
-      elseif result and result.data then
-        local starts = line_offsets(self.opts.get_text())
-        self.opts.sem.set(span_decode(result.data, cap.legend,
-          self.opts.attrmap,
-          function(line, unit) return lsp_pos(self, starts, line, unit) end))
-        sem.dirty = false
-      end
-    end)
+    sem.pending = false
+    if err then
+      -- keep dirty: retry on the next render pass
+    elseif self.proto.version ~= sem.reqver then
+      -- edited while in flight: keep dirty, refetch next pass
+    elseif result and result.data then
+      self.opts.sem.set(span_decode(result.data, cap.legend,
+        self.opts.attrmap, self.opts))
+      sem.dirty = false
+    end
+  end)
 end
 
 -- Diag span containing byte offset `off`; lowest severity number wins

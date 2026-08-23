@@ -256,15 +256,15 @@ enables it manually. Editing updates highlights incrementally.
   compatibility. The demo finds modules relative to the repo root:
   `./lua/?.so`, `./lua/luajit/?.so`, and `./lua/?.lua`.
 - **Required C modules**: `piecetab`, `cellgrid`, `termfeed`, `spantree`,
-  `json` (yyjson binding), and `lua-utf8` (vendored luautf8). `json` is
-  required by `lsp.lua`, which `editor.lua` loads unconditionally.
+  `json` (yyjson binding), and `lua-utf8` (vendored luautf8). `json` and
+  `lua-utf8` are required by `lsp.lua`, which `editor.lua` loads with
+  `pcall(require, "lsp")`.
 - **Optional `treesitter`**: `pcall(require, "treesitter")` is used, so the
   demo runs without it (highlighting is disabled). Full highlighting needs
   `libtree-sitter` and compiled grammars in `lua/grammar`.
-- **`lsp.lua`**: pure-Lua LSP client; requires the `json` binding and `luv`.
+- **`lsp.lua`**: pure-Lua LSP client; requires the `json` binding, `luv`,
+  and vendored `lua-utf8` (hard dependency).
   LSP is started automatically when a server is configured for the file.
-  UTF-16 conversion uses vendored `lua-utf8` when present, with a Lua
-  fallback otherwise.
 - **Tests only**: `luaunit` for the Lua test harness; `tmux` for some
   editor/cellgrid/display tests.
 
@@ -409,7 +409,7 @@ vendored JSON binding:
 | `spantree`   | `lua/spantree.c`, `lua/spantree.d.lua`        | C binding for `spantree.h` (Compositor/Tree/Cursor span coloring)                      |
 | `json`       | `lua/json.c`, `lua/json.d.lua`, `lua/yyjson/` | Pure C binding over vendored yyjson (`decode`/`encode`/`array`/`object`/`null`/`type`) |
 | `treesitter` | `lua/treesitter.c`, `lua/treesitter.d.lua`    | C binding over `libtree-sitter` (parser/tree/query APIs)                               |
-| `lsp`        | `lua/lsp.lua`                                 | Pure-Lua LSP client building blocks; requires `json` and `luv`                         |
+| `lsp`        | `lua/lsp.lua`                                 | Pure-Lua LSP client building blocks; requires `json`, `luv`, and `lua-utf8`            |
 | `lua-utf8`   | `lua/lutf8lib.c`, `lua/unidata.h`, `lua/lua-utf8.d.lua`                | Vendored luautf8 (C module + type declarations)                                       |
 
 Build/test recipes live in `lua/justfile` and are run as `just lua/<name>`
