@@ -60,13 +60,19 @@ sp *args='': (build "spantree") (run "spantree_test" args)
 deps: (build-lua "piecetab") (build-lua "cellgrid") (build-lua "termfeed") (build-lua "json") (build-lua "spantree")
 
 # editor demo needs lua-utf8 rock (PUC Lua only); json.so is required
-# by lsp.lua, which editor.lua loads
+# by lsp.lua, which editor.lua loads optionally (pcall require)
 ed *args='': deps
     lua tests/editor_test.lua {{ args }}
 # display integration tests: real terminal via tmux helper
 # (needs tmux in PATH; json.so is required by lsp.lua in the session)
 ed-tmux *args='': deps
     lua tests/editor_tmux_test.lua {{ args }}
+
+# LuaLS formatting is LSP-only (no CLI flag); this recipe uses stylua as
+# the standalone CLI formatter.
+fmt:
+    @command -v stylua >/dev/null || { echo "stylua not installed: brew install stylua"; exit 1; }
+    stylua ../editor.lua .
 
 TS_INC := "-I/opt/homebrew/include"
 TS_LIB := "-L/opt/homebrew/lib -ltree-sitter"

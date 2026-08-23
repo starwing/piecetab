@@ -275,6 +275,8 @@ function TestWrite:testSpanNilRejected()
     -- span is style-only: nil must not silently mean transparent/no-op
     local g = cg.new()
     g:begin(0, 3, 10)
+    -- Intentionally violates the type: span rejects nil at runtime.
+    ---@diagnostic disable-next-line: param-type-mismatch
     lu.assertError(function() g:span(0, 0, 2, nil) end)
 end
 

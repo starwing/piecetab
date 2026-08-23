@@ -101,8 +101,8 @@ Client.new(opts)
   -- opts: 协议四件套 get_text/get_line/offset_pos/on_status（转发 Protocol）
   --      + viewport_fn() → {top, rows}（editor: scroll_line + term:size）
   --      + now_fn() → 墙钟秒（默认已实现: luv.hrtime()/1e9；测试: 假钟）
-  --      + attrmap（semantic tokenType 名 → attr 表，editor 的 LSP_ATTRS；
-  --        含可选 diag 键——回更：diag 底色 attr 由 editor 注入）
+  --      + attrmap（semantic tokenType 名 → attr 表，lsp.lua 的 LSP_ATTRS；
+  --        含可选 diag 键——回更：diag 底色 attr 由 lsp.lua 注入）
   --      + vtext（Ed 注入接口，见 §3.3）: { set = fn(line, list),
   --        clear = fn() } —— editor 传 ed 绑定闭包，Client 不直接碰 Ed
   --      + sem/diag（树写出口，2026-08-19）: { set = fn(spans),
@@ -182,7 +182,7 @@ Ed:screen_to_text_dcol(line, scol)      -- 文本列（减该行注入偏移；s
   （`clear("vtext", lo, ll + 有换行符 ? 1 : 0)`）→ 逐 hint
   `mark("vtext", {vtext=, vstyle?=}, lo+off, charlen(lo+off))`；行尾 hint
   （off = ll）绑换行符；文件末尾（charlen == 0）退化跳过。vstyle 缺省 =
-  渲染层统一 styles.dim（editor 渲染策略，非 Client 写入）。
+  渲染层统一 styles.hint（editor 渲染策略，非 Client 写入）。
 - `vtext_dcol(line, bytecol, at_start)`：行内字节 → grid:cols 正查文本 dcol，
   叠加"绑定字符 dcol 之前"的注入宽度（at_start 时 `==` 即停，hint 首字符处
   插入落于 hint 前）。span 迭代器按字节序，dcol 单调安全。
@@ -192,7 +192,7 @@ Ed:screen_to_text_dcol(line, scol)      -- 文本列（减该行注入偏移；s
   正向编辑，piecetab.d.lua 契约"replaying on pre-undo reproduces post-undo"）。
 - **渲染**：render_line 的 hints 参数每行从 `span("vtext", cur_off,
   #line_text + 1)` 构造（dcol = g:cols 换算，style = attr.vstyle or
-  styles.dim）；render_line 保持纯函数。
+  styles.hint）；render_line 保持纯函数。
 - **光标**：render_cursor / move_vert 全走 `vtext_dcol` + `screen_to_text_dcol`。
 - **载荷字段**：vtext/vstyle 非 SGR 字段名（cp_defaults 收录）——styled 折叠
   时绑定字符段合成 attr 含它们但 Ed:csi 忽略，绑定字符不被 vtext 样式污染。
@@ -266,15 +266,17 @@ undo/redo：self.lsp:undo_switch(undo)（hunk 序列：tree:splice + notify_edit
 - :lsp on/off/status 命令体（改调 Client）——命令保留，体量缩减
 - lsp_start 内 workspace/configuration 回答 + diag 解析 + semantic 请求块
 
-**（实现回更）`require luv` 与 `LSP_ATTRS` 保留**：设计原列删 luv，实际
-保留——editor.lua 仍用 `luv.cwd()` 解析相对文件路径（L1232），属文件系统
-职责非 LSP 侵入；LSP 侧（spawn/pipe/墙钟）的 luv 在 lsp.lua 内部。`LSP_ATTRS`
-亦保留（semantic tokenType 名 → attr 表，Client 的 attrmap 注入源，加
-`diag = ATTR_DIAG` 键，见 §3.2）。editor 侧 `require "luv"` 仅剩 cwd 一处。
+**（实现回更）`require luv` 已完全移出 editor.lua；`LSP_ATTRS` 已移入
+lsp.lua**：设计原列删 luv，实际保留过一段，当前 editor.lua 已无 `require
+"luv"`（相对路径由 `lsp.attach` 内 `Client:start_file` 处理，属 LSP 侧）。
+`LSP_ATTRS`（semantic tokenType 名 → attr 表，含 `diag = {underline=true}`
+键）为 lsp.lua 模块私有，`Client.new` 的 `attrmap` 注入源在 `lsp.attach`
+内直接使用，editor.lua 不再持有。
 
 **改**：
-- `require "lsp"` → `self.lsp = lsp.Client.new(...)`（lsp_start 装配）+ 注入
-  接口闭包（§3.3）
+- `require "lsp"` → `pcall(require,"lsp")`，缺省 `lsp = nil`（LSP 关闭）；
+  `Ed:lsp_start` 只调 `lsp.attach(self, {silent=, argv=})`（薄入口，
+  装配 + 注入接口闭包全部在 lsp.lua，§3.3）
 - **新增**（2026-08-19 树化后）：`Ed:set_vtext` / `Ed:clear_vtexts` /
   `Ed:set_sem` / `Ed:set_diag` / `Ed:vtext_dcol` / `Ed:screen_to_text_dcol`
   ——数据全在 spantree 层（vtext 绑后一字符、sem/diag 全文件快照），

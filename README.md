@@ -473,7 +473,8 @@ see their `lua/*.d.lua` declarations and `notes/design_cellgrid.md`,
 
 Tests run with tiny fanout (4) under ASan/UBSan to force tree splits, plus
 coverage builds via lcov. All libraries maintain **100% line / function
-coverage** and ~90% branch coverage.
+coverage** and 95% branch coverage (coverage builds use `-DNDEBUG`, so
+assert branches are not counted).
 
 ```sh
 # C tests (one runner per lib)

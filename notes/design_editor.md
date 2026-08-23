@@ -1,192 +1,337 @@
-# editor.lua 演进设计（class 化 + 注册表 + 可测试性）
+# editor.lua 现状设计
 
-> 状态：讨论已定案，待实施。背景：editor.lua 从简单 demo 膨胀至 866 行
-> 单文件——term/ed 单例名字空间 + 全局私有变量（tk_instance），命令靠
-> `normal_cmds` 表 + if/elseif 链。目标：正规化 class 写法、LuaLS 标注
-> 完全、方便接入 spantree/highlighter 等外围库、任何显示/行为 bug 可在
-> editor_test.lua 重现。
->
-> **行为标准（用户裁定，Task 5 后生效）：与 Vim/Neovim 对应行为等价，
-> 非旧 editor.lua 等价。旧实现只是迁移起点，其 bug（如 status L 列恒 0）
-> 不保留。**
-> `$`/ESC 行首已按 vim 语义修正（final review）。
+> 状态：目标设计（2026-08 修订中）。当前未提交 `editor.lua` 经审计判定
+> 不保留，将回滚 `HEAD` 后按本文目标重写；本文随 `editor.lua` 同步更新。
+> 旧规划与历史决策见文末「历史」章节。
 
-## 一、决策（与用户讨论确认）
+## 〇、接口阅读约定
 
-| 议题 | 决策 |
-|---|---|
-| 模块组织 | **单文件内部正规化**（保持 demo 属性，不拆多文件） |
-| 实例化 | **多实例 + 依赖注入**：`Ed.new(content, term, grid)` / `Ed.open(filename, term, grid)` |
-| 构造参数 | **位置参数，不用 opts 表**（防 setmetatable 混入多余字段） |
-| 按键/命令 | **注册表 API**：`e:keymap(mode, key, fn)` / `e:command(name, fn)`，内置同样走注册表 |
-| 高亮模块 | 现状 + 类型标注，spantree 落地时再重构（YAGNI） |
-| 类型定义 | 新建 `lua/lua-utf8.d.lua`（luautf8 仓库无官方定义，按 README v0.2.x 公开 API 写，可回推上游）；`.luarc.json` workspace.library 修正为四个 `.d.lua` 实际路径 |
-| 测试 | luaunit（与 cg/tf/pt 测试一致），`just lua/ed` 不变 |
+- `editor.lua` 只依赖各 Lua 绑定的 **`.d.lua` 接口文档**
+  （`lua/cellgrid.d.lua`、`lua/spantree.d.lua`、`lua/piecetab.d.lua` 等），
+  不直接依赖 `.h` 或 C 实现细节。
+- 对接口有疑问时，**先读对应 `.d.lua`**；仍不清晰才读 `.h` 或
+  `notes/design_*.md`。
+- 一旦通过 `.h`/设计案解答了疑问，**把答案整理回 `.d.lua`**，
+  避免下次再翻底层文件。
 
-## 二、类结构
+## 一、定位与模块结构
+
+`editor.lua` 是 piecetab 系 C 库的终端编辑器 demo，也是 C 模块孵化平台。
+单文件实现，`return Ed`；测试通过 `require("editor")` 直接驱动 `Ed`。
+
+依赖：
+
+- `piecetab`（Doc：piece tree + undo）
+- `cellgrid`（屏幕网格、坐标/宽度/写入）
+- `termfeed`（终端输入解析）
+- `spantree`（样式合成器 + span 树：hl/sem/diag/piece/visual/vtext）
+- `treesitter`（可选，缺失时 `hl` 关闭）
+- `lsp`（`lua/lsp.lua`，可选 LSP client）
+
+## 二、Ed 类与依赖注入
 
 ```lua
---- @class editor.Term          -- 文件内 class，不导出（内部实现）
---- @class editor.Ed            -- 模块唯一导出（"整个文件都是 editor"）
+Ed.new(content?, term?, grid?)     -- content 缺省/空 => 空文档
+Ed.open(filename, term?, grid?)    -- 读文件
 ```
 
-模块 `return Ed`。Term 是内部实现细节——后面计划用 unibilium 替代物
-换掉 termfeed 时，只改文件内部 + `Ed.newterm` 工厂，模块导出面不动。
+- `term` 是鸭子类型：`{ write(s), flush(), size() -> rows, cols }`；
+  测试传 fake term，不依赖真终端。
+- `grid` 缺省 `cg.new()`。
+- `tf` 恒为 `termfeed.State`，`esc_timeout` 控制转义序列超时。
 
-### Term（封装 termfeed + 终端 I/O，不导出）
+主要字段：
 
-- `Term.new(opts)`：**纯构造无终端副作用**——创建 termfeed 实例
-  （`tf.new()` + `FLAG_DELBS`，安全）、存 out/size。opts 字段：
-  `out`（默认 io，须有 write/flush 方法）、`size`（默认 `cg.winsize(1)`）
-- `term:enter()`：alt screen（`?1049h`）+ 隐藏光标（`?25l`）+ `tf:raw(0)`，
-  只在 main 调用（raw 会改真终端，测试环境禁用）
-- `term:leave()`：`tf:cooked()`/`tf:delete()` + 恢复光标/清屏/退 alt screen
-- `term:write(s)` / `term:flush()`：统一输出口（render 全部 io.write 改此）
-- `term:getkey()`：`waitkey(0,-1)` → `format()`，nil 当超时/失败
-- `term:size()` → rows, cols（注入函数）
-- `term:move(row, col)`、style 常量 REVERSE/DIM/RESET
-
-原 `tk_instance`（全局）→ `Term` 实例字段 `tf`，LuaLS 标
-`--- @type termfeed.State`。
-
-### Ed
-
-字段（全部实例化）：`doc/filename/mode/cmdline/msg/saved_vid/pending_key/
-scroll_line/grid/term/tabstop(=4)/log/done`。
-
-- `Ed.new(content?, term?, grid?)`：初始内容（缺省空文档），term 缺省
-  `Ed.newterm()`（鸭子类型，测试传 fake 表），grid 缺省 `cg.new()`
-- `Ed.open(filename, term?, grid?)`：读文件
-- `Ed.newterm()`：默认终端工厂——未来换 unibilium 替代物的唯一替换点
-- 可配项（tabstop、log）为公开实例字段，测试 `e.log = function() end` 禁日志
-- main 不单持 term 变量：`e.term:enter()` / `e.term:getkey()` /
-  `e.term:leave()` 全走实例字段
+| 字段 | 含义 |
+|---|---|
+| `doc` | `piecetab.Doc`，文本/光标/undo 的权威状态 |
+| `mode` | `"NORMAL"` / `"INSERT"` / `"COMMAND"` / `"VISUAL"` |
+| `goal` | 纵向目标列（Neovim curswant），**不是当前屏幕列**；空行/短行会 clamp |
+| `scroll_line` | 视口首行 |
+| `grid` / `term` / `tf` | 屏幕、终端输出、输入解析 |
+| `comp` / `tree` | `spantree.Compositor` / `Tree`，样式与 span 层 |
+| `styles` | 预 intern 的 style handle 表 |
+| `hl` | tree-sitter 高亮器（可空） |
+| `lsp` | `lsp.Client`（可空） |
+| `show_pieces` | piece 边界可视化（debug） |
+| `sel_start` | visual 模式锚点 |
+| `clip` | 无名寄存器 |
+| `keymaps` / `commands` | 注册表：`normal/insert/command/visual` + `:命令` |
 
 ## 三、按键/命令注册表
 
-```lua
---- @alias editor.Mode "normal"|"insert"|"command"
---- @alias editor.Key string          -- termfeed format，如 "j"、"<C-r>"、"<Up>"
---- @alias editor.KeymapFn fun(self: editor.Ed, key: editor.Key)
---- @alias editor.CommandFn fun(self: editor.Ed, arg: string, bang: boolean)
+- `Ed:keymap(mode, key, fn)`、`Ed:command(name, fn)` 注册，返回 `self`。
+- 内置按键/命令全部走同一注册表（`install_normal_keys` 等）。
+- `Ed:dispatch(key)` 按 `mode_dispatch[mode:lower()]` 分发。
+- 两键组合（`gg`/`dd`）通过 `pending_key` 实现：某键是组合前缀且自身无
+  绑定时等待下一键。
+- `:命令` 解析：`line:match("^(%a+)(!?)(.*)")`，`q!`/`wq!` 语义正确。
 
-e.keymaps  = { normal = {}, insert = {}, command = {} }  -- key -> KeymapFn
-e.commands = {}                                          -- name -> CommandFn
+**keymap/cmdmap 是实现细节，工具函数不外露**：
 
-e:keymap(mode, key, fn)   -- 注册按键，返回 self
-e:command(name, fn)       -- 注册 :命令（不含冒号），返回 self
-```
+- `keymaps` / `commands` 及其 install 函数只是编辑器内部实现细节，对
+  “Demo 暴露 C 函数摩擦 / 孵化 C 库”没有作用；工具函数不要放在文件顶部
+  全局可见。
+- 所有命令/按键专用工具函数藏在对应的 install 函数内部：
+  `install_normal_keys`、`install_insert_keys`、`install_visual_keys`、
+  `install_command_keys`、`install_builtin_commands`。
+- 例如 `word_class`、`move_word_forward/backward`、`move_vert`、`open_line`
+  放到 normal keys 使用处；`ins_escape` / `ins_backspace` / `ins_delete`
+  放到 `install_insert_keys` 内；`exec_command` 放到 `install_command_keys`
+  内；builtin command handlers 全部在 `install_builtin_commands` 内定义。
+- `sel_range` 不保留模块级 helper：内联到 visual `y`/`d` 与 `render()` 的
+  visual mark 两处；是否新增 C `Doc:sel_range` / `Doc:char_span` 另议
+  （见 audit 第 11 节，`charlen` 本身够用，剩余判断是 Lua 选择语义）。
 
-内置按键/命令全部走同一机制注册。分发：
+## 四、样式与 span 层（spantree）
 
-- `e:dispatch(key)`：按 `e.mode` 查 `mode_dispatch[mode](self, key)`
-- 每模式 = **查表 + fallback**：
-  - normal：查 keymaps.normal → 未命中无操作；两键组合（gg/dd）
-    泛化：**key 是某组合键前缀且自身无绑定 → 等下一键**（新增 zz 等
-    组合键零改动）
-  - insert：查 keymaps.insert → 未命中 fallback 插入文本字符
-    （`<...>` 控制键过滤）
-  - command：查 keymaps.command → 未命中 fallback 追加 cmdline
-    （单可打印字符）
+`Ed.new` 建立 compositor 并注册 namespace：
 
-**:命令解析（顺带修死代码 bug）**：现 `cmd:match("^(%a+)(.*)")` 使
-`cmdname == "q!"` 永不命中（q! 被拆成 q+!，行为碰巧正确但语义错乱）。
-新解析：
-
-```lua
-local name, bang, arg = self.cmdline:match("^(%a+)(!?)(.*)")
-arg = arg:match("^%s*(.*)")
--- commands[name](self, arg, bang ~= "")；未命中 msg = "Unknown: :"..cmdline
-```
-
-## 四、渲染与主流程
-
-- `e:render()`：主体流程不变（scroll clamp → lines_data → grid 绘制 →
-  diff 输出），所有 `io.write` 改 `term:write`
-- `e:render_status()`：status bar（现 render 尾部 if/else）
-- `e:render_cursor()`：光标计算与定位
-- **退出路径**：`e:quit()` 置 `e.done = true`（替换 `:q` 内 `os.exit`，
-  原实现绕过 pcall 清理链）
-
-```lua
-local function main(argv)
-  local e = argv[1] and Ed.open(argv[1]) or Ed.new()
-  e.term:enter()
-  local ok, err = pcall(function()
-    while not e.done do
-      e:render()
-      e:dispatch(e.term:getkey())
-    end
-  end)
-  e.term:leave()
-  -- 错误处理不变（RESET + stderr + exit 1）
-end
-```
-
-## 五、测试（luaunit）
-
-harness（editor_test.lua 文件内 helper，不再写 tmp 文件/hack io.output）：
-fake term 只需 render 用到的三个方法（鸭子类型，无需 Term 实例）：
-
-```lua
-local ROWS, COLS = 6, 40
-local function make_ed(content)
-  local term = { s = "", write = function(t, x) t.s = t.s .. x end,
-                 flush = function() end,
-                 size = function() return ROWS, COLS end }
-  local e = Ed.new(content, term)
-  e.log = function() end
-  return e
-end
-```
-
-断言三维度：
-- `e.grid:cell(r, c)` → cp, style（cg 自带读取，屏幕矩阵断言）
-- `out.s` 字节流（CSI/status bar 断言）
-- `e.doc` / `e.mode` / `e.scroll_line` 状态断言
-
-既有 7 个测试（scroll 回归 4 + 基础 ops 3）原样改写保留，作为行为
-回归网。新增：每个内置按键/命令一个断言组（keymap 注册、命令解析含
-q! 修复、模式切换、pending 组合键）。
-
-## 六、遗留（本期不做）
-
-- hl 模块：现状 + 标注；spantree 落地时重构为可替换回调
-  （render 通过 ed.highlighter 取每行 segments）
-- highlighter：不建接口，等引擎选型
-- 多文件拆分：维持单文件，膨胀到 ~900 行再议
-- 文档：README editor 小节更新（Ed.new/open 用法 + 外围库挂载示例）
-
-## 六b、C 模块孵化候选（demo 定位：C 库孵化平台）
-
-editor.lua 是 C 模块库的 demo——cellgrid/termfeed 均由 editor demo 需求
-孵化。当前仍留在 Lua 侧的计算，凡属"库级算法"均打 `TODO(C)` 标记，
-按需孵化：
-
-| 候选 | 位置 | 说明 |
+| namespace | 优先级 | 用途 |
 |---|---|---|
-| 字符移动原语 | `cursor_move_char`（utf8.next/offset + pt seek） | UTF-8 委托 lua-utf8 已完成（Task 4b）；余下 pt 侧逻辑（seek/边界 clamp）可入 pt 或独立 C 模块（配合 undo 对齐） |
-| 显示列换算 | `text_byte_to_dcol`/`text_dcol_to_byte`（tab 展开 + 宽字符） | **已孵化完成（2026-08-12）**：cellgrid 坐标族 `cg_next/cg_cols/cg_byte/cg_putslice`（slice 形态），见 design_cellgrid.md §3.9 |
-| 单词移动 | `move_word_forward/backward` + `word_class` | 暂留 Lua（vim 语义属编辑器逻辑）；若入 kana/多语言分词再 C 化 |
-| 渲染管线 | render_line 的 style 批量 putslice | spantree 落地后与 highlighter 合并进 C 渲染路径 |
+| `vtext` | 0 | 注入显示文本（LSP inlay hint），`attr = {vtext=string, vstyle?=style}` |
+| `hl` | 1（eph） | tree-sitter 语法高亮，每帧清空重填 |
+| `sem` | 2 | LSP semantic tokens |
+| `diag` | 3 | LSP diagnostics |
+| `piece` | 4 | piece 边界可视化（快速层，每帧重填） |
+| `visual` | 5 | 视觉选择反色（快速层，每帧重填） |
 
-**hint/vtext 层摩擦点**（2026-08-12 记录，spantree 消解）：cellgrid
-不理解 vtext——hint 拼接循环（hint 段 + 文本段 → 显示流）在 editor
-层。putslice 的 tab 展开基数 = 写入列（渲染列停靠），overlay 场景
-下与坐标（文本列停靠）不一致——render_line 拆 tab（文本列基数 +
-hint 偏移公式）。**两套坐标模型**（逻辑列 = 文本语义/goal；显示列 =
-渲染位置）是自然形态（Neovim textcol/screencol 同款），拼接循环与
-显示流坐标映射（byte↔show col）为 hint 层职责。spantree 落地后
-vtext 作为**带宽度节点**挂树：树遍历 = 拼接流，拼接循环与坐标映射
-由树迭代天然提供，摩擦消解。vtext 子系统（宽度语义/坐标映射/编辑
-移位）是 spantree 该项能力的技术孵化器。
+`tree:styled(s_off, e_off)` 返回已按 namespace/优先级折叠好的非重叠 run，
+Lua 侧不再有 `merge_layers`。
 
-`word_class` 为纯查表小函数，永久留 Lua 亦可，不标记。
+## 五、渲染管线
 
-## 七、实施顺序
+`Ed:render()` 主流程：
 
-1. `lua-utf8.d.lua` + `.luarc.json`（已完成）
-2. 重写 editor.lua（Term → Ed 结构 → 注册表 → render → main）
-3. 改写 editor_test.lua（既有 7 测试先通过）
-4. 新增按键/命令测试组
-5. `just lua/ed` 全绿 + README 更新
+1. 隐藏光标，取 `rows/cols`，clamp `scroll_line`。
+2. 若启用 `hl`：清 `hl` 层，`hl:query_region(self.tree, "hl", s_off, e_off)` 直接写
+   spantree（不再返回 span 表）。
+3. 填 `piece`/`visual` 快速层：piece 直接内联遍历
+   `doc:buffer():pieces()` 并 `tree:mark("piece", ...)`，不建中间 table
+   （不保留 `piece_spans` 函数）。
+4. `tree:styled(s_off, e_off)` 收集 viewport 级 spans（仅供非行内用途；
+   `_render_line` 不再依赖 `self._spans`）。
+5. `g:begin` + 行号列。
+6. 逐行调用 `_render_line(line_idx, col, dry_run, target_scol, ...)`：
+   - 行内样式与 vtext 全部来自 `tree:styled(lo, lo + linelen + 1)`；
+   - 不再需要 `hl.line_segments` 或单独 `tree:span("vtext")`。
+7. `g:diff` 生成 CSI 输出。
+8. `render_status` + `render_cursor`，`g:freeze`。
+9. `lsp:post_render()` 异步刷新。
+
+### `Ed:_render_line`（目标算法，2026-08 用户澄清后修订）
+
+`_render_line(line_idx, row, col, dry_run, target_scol, ...)` 是唯一行走；
+dry_run 与真实渲染共用同一流程，区别只有：
+
+1. dry_run 不写 cell；
+2. dry_run 一旦发生 Doc 更新就立即 return。
+
+非 dry_run 在 `text_dirty` 为真时**同样更新 Doc**，只是更新后继续渲染。
+
+入口：
+
+- 若 `dry_run and not text_dirty`：直接 return（没有要同步的东西）。
+
+状态变量：
+
+- `text_start = 0`：尚未写入 grid 的文本起始 byte。
+- `style_start = 0`：该段积压文本在屏幕上的起始列。
+- `dc = 0`：当前屏幕列。
+- `cursor_col`：权威屏幕列。
+- `text_dirty`：Doc 光标是否已落后于 `cursor_row/col`。
+
+对每个 run：
+
+1. **没有 `vtext`**
+   - 若 `not dry_run`：**只写样式不写文本**——`g:span(row, col+dc, col+endc, id)`，
+     其中 `endc = g:cols(dc, run_text)`。
+   - 推进 `dc`（dry_run 只推进，不写）。
+   - 不更新 `text_start` / `style_start`。
+
+2. **有 `vtext`**
+   a. 若 `off > text_start`，处理积压文本 `pending = doc:readat(text_start, off)`：
+      - 若 `text_dirty` 且 `cursor_col` 在
+        `[style_start, style_start + width(pending))` 内：
+        用 `g:byte(style_start, cursor_col - style_start, pending)` 得到
+        byte，更新 Doc，置 `text_dirty = false`；**若 dry_run 立即 return**，
+        非 dry_run 继续。
+      - 若 `cursor_col` 在 hint 区间 `[dc, dc + hint_w)` 内 →
+        `cursor_col = dc + hint_w`（跳过 hint），**不更新 Doc、不 return**；
+        此行为 dry_run 与真实渲染都执行。
+      - 若 `not dry_run`：`g:putstring(row, col+style_start, nil, pending)`
+        （nil 即 `CG_TRANSPARENT`，只填字符、保留已铺 style）。
+   b. 写 hint：`hint_w = g:cols(dc, attr.vtext) - dc`；
+      - 若 `not dry_run`：`g:putstring(row, col+dc, attr.vstyle or styles.hint, attr.vtext)`；
+      - `dc = dc + hint_w`。
+   c. 写锚点文本 `anchor = doc:readat(off, len)`：
+      - 若 `text_dirty` 且 `cursor_col` 落在锚点内：用
+        `g:byte(dc, cursor_col - dc, anchor)` 映射并更新 Doc，置
+        `text_dirty = false`；**若 dry_run 立即 return**，非 dry_run 继续。
+      - 若 `not dry_run`：`g:putstring(row, col+dc, id, anchor)`（直接带 style）。
+      - `dc = g:cols(dc, anchor)`。
+   d. `text_start = off + len`；`style_start = dc`。
+
+3. 循环结束后：
+   - 若 `text_dirty` 仍为真：在 `remaining` 内映射到 EOL/clamp，更新 Doc，
+     置 `text_dirty = false`；**若 dry_run 立即 return**。
+   - 若 `not dry_run`：`g:putstring(row, col+style_start, nil, remaining)`。
+
+**EOL hint 特殊规则（Neovim 模型，2026-08 用户实测确认）**：
+- hint 挂在换行符（`rel_off >= text_end`）时，EOL 光标停在最后一个字符上，
+  **不**在 hint 后；渲染记录 `cursor_col = eol_cursor_dc`（文本末尾、hint 前）。
+- dry_run 若 `cursor_col` 落在 EOL hint 内或之后：更新 Doc 到 EOL，并把
+  `cursor_col` 置为 `eol_cursor_dc`；dry_run 更新后立即 return。
+- `a` 在最后一个字符上按下时，插入发生在 hint 前；hint 随换行符右移。
+
+> dry_run 与真实渲染共用同一 run 流。dry_run 不写 cell，且一旦发生 Doc
+> 更新就提前 return；非 dry_run 在 `text_dirty` 时同样更新 Doc，只是更新后
+> 继续渲染。hint 跳过只调整 `cursor_col`，不触发 return。`styled()` 已覆盖
+> 整行（含无 style run），`vtext` 字段是 hint 锚点信号。真实渲染中
+> “无 vtext run 先 span 染色、vtext 时 transparent 冲刷积压文本”是
+> `CG_TRANSPARENT` 的核心用途。
+
+### 坐标模型
+
+- **文本列**：Doc 存的光标列，`g:next`/`g:cols`/`g:byte` 的输入输出，
+  用于编辑与 hint 锚定。
+- **屏幕列**：实际显示列，用于画光标和 j/k 目标列。
+- `Ed.cursor_row/col`：屏幕坐标；`doc:line/column/offset`：文本坐标。
+- `Ed:_render_line(dry_run=true)`：屏幕列 → 文本列（只对光标行）。
+- `Ed:_render_line(dry_run=false)` 渲染光标行时记录 `cursor_col`：
+  文本列 → 屏幕列。
+- `move_vert` 用 `goal` 保存屏幕目标列；`goal == nil` 时用 `cursor_col`
+  作为当前屏幕列；目标行由 dry_run 换算回文本列。
+- **注意**：`goal` 是目标列（curswant），不是当前屏幕列；当前屏幕列
+  在短行/空行会被 clamp 到行尾（如空行屏幕列 0，但 goal 仍保留原值）。
+
+## 六、LSP 集成
+
+`lsp` 模块可选（`pcall(require,"lsp")`，缺省时 LSP 关闭）。`Ed:lsp_start`
+是薄入口，只调 `lsp.attach(self, {silent=, argv=})`；Client 装配、样式映射
+与回调全部在 `lua/lsp.lua` 内：
+
+- `get_text` / `get_line` / `offset_pos`：文本快照与位置换算。
+- `vtext.set/clear`：inlay hint → `set_vtext` / `clear_vtexts`。
+- `sem.set/clear`：semantic tokens → `set_sem` / `tree:clear("sem")`。
+- `diag.set/clear`：diagnostics → `set_diag` / `tree:clear("diag")`。
+- `on_status`：LSP 进程状态进 `msg`。
+
+`set_vtext` 把 hint 写成 `tree:mark("vtext", {vtext=..., vstyle=?}, off, n)`，
+编辑移位由 spantree splice 承担。
+
+## 七、C 模块孵化边界
+
+editor demo 是 C 库孵化平台：cellgrid 坐标族、spantree 样式折叠均由此
+孵化。判断标准是【让 Lua 层写得更顺手】，负载只作参考。
+
+**C 孵化独立铁律**：
+
+> 任何 C 库/模块都不得接受其他 C 库对象作为输入：C 层禁止做胶水。
+> 跨库组合只能在 Lua 层完成，或通过独立纯数据接口衔接；若某个 C 库
+> 需要另一个 C 库的数据，应重新设计边界，而不是直接传对方对象。
+
+**Demo 暴露摩擦原则（禁 C 函数垫片）**：
+
+> 不允许为 C 绑定函数写 Lua 垫片（shim）。Demo 必须直接调用 C 模块 API，
+> 以便真实暴露“这里用起来不顺”的摩擦点，驱动 C 库孵化。像 `line_text`
+> 这种把 `doc:readat(doc:lineoffset(...), doc:linelen(...))` 包一层的
+> oneliner 应删除，调用处直接写 C API。
+
+已 C 化：
+
+- cellgrid 坐标族：`cg_next` / `cg_cols` / `cg_byte` / `cg_putslice`
+  （slice 形态，见 design_cellgrid.md）。
+- spantree：`styled()` 区间折叠、`span()` 行内迭代、vtext 带宽度节点。
+
+仍在 Lua 侧、可能继续孵化的候选见 `TODO.md`（render_line 批量
+putstring、坐标 bridge 等）。
+
+## 八、开放问题
+
+- tab 展开基数：目标设计统一用屏幕列基数——宽度计算与 dry_run 映射都用
+  `g:cols(dc, ...)` / `g:byte(dc, ...)`，`putstring` 负责 tab 展开；不再
+  按文本列手拆 tab。
+- ~~`screen_to_text_dcol` 的摩擦~~：已由 `Ed:_render_line(dry_run=true)`
+  吸收（只对光标行，不再单独维护反向换算方法）。
+
+## 九、光标坐标同步（目标设计，修订中）
+
+> 本节是目标设计；审计判定当前未提交实现不保留，回滚后由
+> `Ed:_render_line` 的 dry_run 统一承担，并移除 `vtext_dcol` /
+> `screen_to_text_dcol` / `_sync_text_from_screen`。
+
+### 坐标模型
+
+- **文本坐标**：`doc:line()` / `doc:column()` / `doc:offset()`，编辑的
+  权威坐标。
+- **屏幕坐标**：`Ed.cursor_row` / `Ed.cursor_col`，画光标和纵向运动的
+  权威坐标。两个坐标系同等重要，没有“谁只是缓存”的说法。
+
+### dry_run
+
+- `Ed:_render_line(line_idx, row, col, dry_run, target_scol, ...)` 是 Ed
+  私有方法，也是唯一行走：
+  - 行内样式与 vtext 来自 `tree:styled(lo, lo + linelen + 1)`，不依赖
+    `self._spans`；
+  - `dry_run=true` 与真实渲染**同一 run 流**，区别只有两点：
+    1. 不写 cell；
+    2. 一旦发生 Doc 更新就立即 return。
+  - `dry_run=true and not text_dirty`：直接 return（没有要同步的东西）。
+  - `dry_run=false` 且 `text_dirty` 为真时：**同样在行走中更新 Doc**，
+    更新后继续渲染，并在光标行顺带记录 `cursor_col`（text→screen）。
+  - `cursor_col` 落在 hint 内则推到 hint 后，不更新 Doc、不 return，
+    继续行走（dry_run 与真实渲染都执行）。
+- 仅需要同步（访问器场景）时，对 `screen_line` 调用
+  `Ed:_render_line(..., true, cursor_col)`；不需要整屏 `render()`。
+
+### lazy sync
+
+- `j/k`（以及未来 wrap 类移动）只更新 `cursor_row/col`，置
+  `text_dirty = true`，不立即改 `doc`。
+- `render()` **不单独 pre-sync**：逐行调用 `_render_line` 时，若该行是
+  光标行且 `text_dirty`，行走中同步 Doc 并继续绘制；同步后
+  `text_dirty = false`。
+- Ed 提供访问器：
+  ```lua
+  Ed:text_line()
+  Ed:text_col()
+  Ed:text_offset()
+  ```
+  若 `text_dirty` 为真，访问器直接调用
+  `Ed:_render_line(line, 0, true, cursor_col)` 同步后再返回。
+- 外部代码不得直接读 `doc:line()/column()/offset()` 作为光标状态；
+  一律走 Ed 访问器。
+- 内部路径同样不得在 `text_dirty` 时直接读/写 `doc`：key handler、
+  `docedit`、`set_vtext`、LSP `tick/poll` 回调等都要先同步或改走访问器；
+  不能依赖“每键后 render”来掩盖。
+
+### 测试覆盖
+
+- `j/k` 无 hint：屏幕列保持、文本列正确。
+- `j/k` 有 hint：跳过 hint，光标不落在 hint 内部。
+- INSERT 临时状态：在 hint 前 `a` 后向下，光标落在 hint 首字符。
+- 行尾/空行 clamp：目标屏幕列超过行宽时文本列 clamp 到行尾。
+- 读访问器强制 sync：`dispatch("j")` 后不 render，直接 `e:text_col()`
+  应返回正确新文本列。
+- 连按 `j` 不 render：第二次 `j` 基于 `cursor_row/col` 而非旧 doc。
+- `w/b/h/l` 跳过 hint 文本（左右两个方向都要测）。
+
+## 历史
+
+### 早期规划（class 化 + 注册表 + 可测试性）
+
+- 最初 editor.lua 是简单 demo（约 866 行），全局单例 `tk_instance`，
+  命令靠 if/elseif 链。
+- 规划：正规化 class 写法、LuaLS 标注、注册表 API、多实例依赖注入、
+  Term 类封装 termfeed。
+- 已实施并演进：`Ed` class + 注册表已落地；`Term` 类未单独建，改用
+  鸭子类型 `term` 表 + 实例字段 `tf`。
+- spantree/highlighter/LSP 是后续新增，早期规划未覆盖。
+
+### 渲染/坐标演进
+
+- 早期 `text_byte_to_dcol` / `text_dcol_to_byte` 在 Lua 侧；cellgrid
+  坐标族 C 化后改为 `g:cols` / `g:byte`。
+- 早期 vtext 拼接循环在 editor 层；spantree 落地后 vtext 入树，
+  `merge_layers` 由 `styled()` 取代。

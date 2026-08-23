@@ -322,7 +322,7 @@ Parser：`parse/parse_with_options(progress)/set_included_ranges/set_language`
   `doc:buffer(vid)` 才返回 committed 版本快照
 
 **编辑通知接线痛点**：
-- point 换算需 `doc:seek`（移动光标）——notify_edit 内要保存/恢复
+- point 换算需 `doc:seek`（移动光标）——on_edit 内要保存/恢复
 - 编辑路径分散（n.x/backspace/delete/Enter/Tab/open_line/insert_key/
   undo/redo/:e）——**收敛为 `Ed:docedit` 单漏斗** + undo/redo/:e 全量
   reset（重建树）——原型可接受，未来可 diff

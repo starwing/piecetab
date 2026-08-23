@@ -435,7 +435,8 @@ just lua/ts   # 获取/编译 lua/grammar/*.so，构建 treesitter.so + luajit/t
 ## 测试
 
 测试以极小扇出（4）配合 ASan/UBSan 运行以逼树分裂，并有 lcov 覆盖率
-构建。所有库均保持 **100% 行/函数覆盖**与约 90% 分支覆盖。
+构建。所有库均保持 **100% 行/函数覆盖**，分支覆盖目标 **95%**
+（覆盖构建使用 `-DNDEBUG`，assert 分支不纳入统计）。
 
 ```sh
 # C 测试（每库一个 runner）

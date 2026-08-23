@@ -4,9 +4,11 @@
 ---@class cellgrid.Grid
 ---Terminal cell grid with dual-buffer diff rendering.
 ---
----Coordinate convention: grid rows/cols are 0-based. The string-slice
----arguments to `cols`/`byte`/`next`/`putstring` use Lua's 1-based
----`string.sub` view, so converting between a 0-based byte offset from
+---Coordinate convention: grid rows/cols are 0-based. Every string-slice
+---parameter set `(s, i?, j?)` on `cols`/`byte`/`next`/`putstring` is
+---exactly `string.sub(s, i, j)`: 1-based, inclusive, negative indices
+---count from the end, out-of-range indices are clamped, and `i > j`
+---yields an empty slice. Converting between a 0-based byte offset from
 ---piecetab/spantree and a 1-based slice offset is the caller's glue.
 local Grid
 
@@ -108,7 +110,8 @@ function Grid:tabstop() end
 ---split on the first argument: `cols(s, i?, j?)` (c = 0) or
 ---`cols(c, s, i?, j?)`. A prefix width is `cols(s, 1, off)`; an empty
 ---range yields 0. i/j accept negative indices (string.sub style,
----counted from the end).
+---counted from the end) and are clamped to `[1, #s]`; an `i > j`
+---slice is empty.
 ---@param s string  UTF-8 text
 ---@param i? integer 1-based start byte (default 1)
 ---@param j? integer 1-based end byte, inclusive (default #text)
@@ -120,8 +123,12 @@ function Grid:cols(s, i, j) end
 ---the sub `s[i..j]`, not the full text) of the character whose display
 ---range contains column c+col: scans chars within the slice, clamps
 ---back to the char start when the column lands inside a tab or wide
----char; col < 0 and empty ranges clamp to the slice start (1). Two
----call forms, split on the SECOND argument:
+---char; col < 0 and empty ranges clamp to the slice start (1). When
+---col is at or beyond the slice's total display width, the scan runs
+---off the end and returns one past the slice end (i.e. `#s + 1` in
+---slice coordinates) — callers can rely on this as a "past end"
+---sentinel instead of pre-checking the width. Two call forms, split on
+---the SECOND argument:
 ---`byte(col, s, i?, j?)` (c = 0) or `byte(c, col, s, i?, j?)`.
 ---@param s   string  UTF-8 text
 ---@param col integer target display column (relative to c)

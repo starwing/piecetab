@@ -796,6 +796,18 @@ local function diag_update(self, p)
   self.opts.diag.set(spans)
 end
 
+-- semantic tokenType name -> style attr table (unknown ignored; diag
+-- is the fallback underline attr via attrmap.diag)
+local LSP_ATTRS = {
+  comment = { fg = 245 },
+  string = { fg = 114 },
+  keyword = { fg = 207 },
+  number = { fg = 215 },
+  ["function"] = { fg = 81 },
+  method = { fg = 81 },
+  diag = { underline = true },
+}
+
 -- file extension -> LSP language id (nil: unsupported)
 local EXT_LANG = { c = "c", h = "c", lua = "lua" }
 
@@ -944,6 +956,53 @@ function Client:start_file(path, argv)
   local root = path:match("^(.*)/") or "."
   return self:start(argv, "file://" .. path, Client.langid(path),
     "file://" .. root)
+end
+
+--- Attach a Client to an editor.Ed (duck-typed). The editor keeps only
+-- Ed:lsp_start; all callbacks and style mapping live here.
+--- @param ed table  editor.Ed-compatible instance
+--- @param opts? {silent?: boolean, argv?: string[]}
+--- @return boolean
+function lsp.attach(ed, opts)
+  opts = opts or {}
+  local c = Client.new({
+    get_text = function()
+      ed:_render_line(ed.cursor_row, true)
+      return ed.doc:dump()
+    end,
+    get_line = function(lnum)
+      ed:_render_line(ed.cursor_row, true)
+      return ed.doc:readat(ed.doc:lineoffset(lnum),
+        ed.doc:linelen(lnum, true))
+    end,
+    offset_pos = function(off)
+      ed:_render_line(ed.cursor_row, true)
+      return ed.doc:linecol(off)
+    end,
+    on_status = function(state, why)
+      if state == "exited" and not opts.silent then
+        ed.msg = "lsp: " .. state
+          .. (why and " (" .. why .. ")" or "")
+      end
+    end,
+    attrmap = LSP_ATTRS,
+    vtext = {
+      set = function(line, list) ed:set_vtext(line, list) end,
+      clear = function() ed:clear_vtexts() end,
+    },
+    sem = {
+      set = function(spans) ed:set_sem(spans) end,
+      clear = function() ed.tree:clear("sem") end,
+    },
+    diag = {
+      set = function(spans) ed:set_diag(spans) end,
+      clear = function() ed.tree:clear("diag") end,
+    },
+  })
+  ed.lsp = c
+  local ok = c:start_file(ed.filename, opts.argv)
+  if not ok then ed.lsp = nil end
+  return ok
 end
 
 -- Idle work (main-loop timeouts): refresh inlay hints once typing has

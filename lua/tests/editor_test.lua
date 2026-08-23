@@ -128,7 +128,7 @@ function TestSkeleton:testUndoSwitchSyncsLsp()
   }
   e.doc:commit()
   e.doc:seek("set", 0)
-  e:docedit(0, "X")
+  e:doc_edit(0, "X")
   e.doc:commit()
   e:dispatch("u")
   lu.assertEquals(switch_edits[1], { off = 0, del = 1, text = "" })
@@ -218,9 +218,9 @@ end
 
 function TestNormal:testJAndK()
   self.e:dispatch("j")
-  lu.assertEquals(self.e.doc:line(), 1)
+  lu.assertEquals(self.e:text_line(), 1)
   self.e:dispatch("k")
-  lu.assertEquals(self.e.doc:line(), 0)
+  lu.assertEquals(self.e:text_line(), 0)
 end
 
 function TestNormal:testWordMotions()
@@ -570,10 +570,11 @@ function TestUtf8:testJKeepsDisplayCol()
   -- "你好" is 4 display columns wide; line end at byte col 6; j to "world"
   -- keeps display col 4 -> byte col 4
   self.e.doc:seek("set", 6)
+  self.e.cursor_col = 4 -- display col for the "你好" end
   self.e:dispatch("j")
-  lu.assertEquals(self.e.doc:column(), 4)
+  lu.assertEquals(self.e:text_col(), 4)
   self.e:dispatch("k")
-  lu.assertEquals(self.e.doc:column(), 6)
+  lu.assertEquals(self.e:text_col(), 6)
 end
 
 function TestUtf8:testHLongLineWindow()
@@ -705,7 +706,7 @@ function TestSyntax:testEditUpdatesHighlight()
   e:open_language("c")
   frame(e)
   e.doc:seek("set", 17) -- 'r' of "return"
-  e:docedit(1, "")
+  e:doc_edit(1, "")
 
   frame(e)
   local _, st = e.grid:cell(0, 21) -- content col 17 ("eturn" start)
@@ -777,9 +778,9 @@ TestLayers = {}
 local function make_pieces(content)
   local e = make_ed(content)
   e.doc:seek("set", 4)
-  e:docedit(0, "XY") -- split into 2 pieces
+  e:doc_edit(0, "XY") -- split into 2 pieces
   e.doc:seek("set", 8)
-  e:docedit(0, "Z")  -- split into 3 pieces
+  e:doc_edit(0, "Z")  -- split into 3 pieces
   e.show_pieces = true
   return e
 end
@@ -824,7 +825,7 @@ function TestLayers:testLayeredCompose()
   local e = make_ed("int x\n")
   e:open_language("c")
   e.doc:seek("set", 4)
-  e:docedit(0, "Q")
+  e:doc_edit(0, "Q")
   e.show_pieces = true
   frame(e)
   local bg = e.comp:intern(Ed.ATTR_GRAY_BG)
@@ -842,7 +843,7 @@ end
 function TestLayers:testPieceAcrossLineBoundary()
   local e = make_ed("aaaa\nbbbb\n")
   e.doc:seek("set", 3)
-  e:docedit(0, "XY")
+  e:doc_edit(0, "XY")
   e.show_pieces = true
   frame(e)
   local _, st = e.grid:cell(0, 4)  -- 'a' col 0 (piece 1, plain)
@@ -861,7 +862,7 @@ function TestLayers:testMergeLayersUnsetPassesThrough()
   local e = make_ed('char *s = "aaaa";\n')
   e:open_language("c")
   e.doc:seek("set", 12) -- at the opening quote
-  e:docedit(0, "XY")
+  e:doc_edit(0, "XY")
   e.show_pieces = true
   frame(e)
   local _, st = e.grid:cell(0, 4)   -- 'c' of char (piece 1, plain): keyword
@@ -913,7 +914,7 @@ function TestVisual:testThreeLayerCompose()
   local e = make_ed('char *s = "aaaa";\n')
   e:open_language("c")
   e.doc:seek("set", 12)
-  e:docedit(0, "XY")
+  e:doc_edit(0, "XY")
   e.doc:seek("set", 12) -- on 'X' (piece 2, inside string literal)
   e:dispatch("v")
   e:dispatch("l")
@@ -1060,45 +1061,88 @@ function TestVtext:testSetAndClear()
   lu.assertEquals(#vtext_spans(self.e, 0), 0)
 end
 
-function TestVtext:testVtextDcolNormalSkipsHint()
-  -- normal: hint-start byte shows past the injection (col 0 + "int:" 4)
-  lu.assertEquals(self.e:vtext_dcol(0, 0, false), 4)
-  -- byte 1 ('e') shifts too
-  lu.assertEquals(self.e:vtext_dcol(0, 1, false), 5)
+function TestVtext:testHintDefaultStyleHasBackground()
+  frame(self.e)
+  local col = math.max(3, tostring(self.e.doc:breaks()):len()) + 1
+  local _, st = self.e.grid:cell(0, col)
+  assert_style(self.e, st, Ed.ATTR_HINT)
 end
 
-function TestVtext:testVtextDcolInsertGap()
+function TestVtext:testRenderRecordsCursorCol()
+  -- non-dry render_line records text→screen col for the cursor line
+  self.e:set_vtext(0, { { off = 0, text = "int:" } })
+  self.e.doc:seek("set", 0)
+  frame(self.e)
+  lu.assertEquals(self.e.cursor_col, 4)
+  self.e.doc:seek("set", 1)
+  frame(self.e)
+  lu.assertEquals(self.e.cursor_col, 5)
+end
+
+function TestVtext:testRenderRecordsInsertGapCol()
   -- insert gap: hint-start byte maps onto the hint's first char
-  -- (append: input lands before the hint)
-  lu.assertEquals(self.e:vtext_dcol(0, 0, true), 0)
+  self.e.doc:seek("set", 0)
+  self.e.mode = "INSERT"
+  frame(self.e)
+  lu.assertEquals(self.e.cursor_col, 0)
 end
 
-function TestVtext:testScreenToTextDcol()
-  lu.assertEquals(self.e:screen_to_text_dcol(0, 4), 0) -- screen 4 = text 0
-  lu.assertEquals(self.e:screen_to_text_dcol(0, 5), 1) -- screen 5 = text 1
-  lu.assertEquals(self.e:screen_to_text_dcol(1, 7), 7) -- no vtext: identity
-end
-
-function TestVtext:testScreenToTextDcolSkipsHint()
-  -- a screen col inside a hint maps to the first text col after it
-  -- (Neovim coladvance: the cursor skips over injected text), so j never
-  -- lands on a cell the hint covers
+function TestVtext:testTextColDryRunSkipsHint()
+  -- dry_run via accessor: screen col inside/after a hint maps past it
   self.e:set_vtext(0, { { off = 2, text = "ZZ" } })
-  lu.assertEquals(self.e:screen_to_text_dcol(0, 1), 1) -- before hint
-  lu.assertEquals(self.e:screen_to_text_dcol(0, 2), 2) -- hint start: past it
-  lu.assertEquals(self.e:screen_to_text_dcol(0, 3), 2) -- inside the hint
-  lu.assertEquals(self.e:screen_to_text_dcol(0, 4), 2) -- first text cell after
-  lu.assertEquals(self.e:screen_to_text_dcol(0, 5), 3) -- past it: off by width
+  self.e.cursor_row = 0
+  self.e.cursor_col = 4                 -- first text cell after the hint
+  self.e.text_dirty = true
+  lu.assertEquals(self.e:text_col(), 2) -- byte 3 ('l'), 0-based col 2
+  lu.assertEquals(self.e.text_dirty, false)
+end
+
+function TestVtext:testTextColAccessorSyncsDirty()
+  -- lazy accessor contract: reading text coords materializes doc cursor
+  self.e.cursor_row = 1
+  self.e.cursor_col = 2
+  self.e.text_dirty = true
+  lu.assertEquals(self.e:text_col(), 2) -- line 1 "world", no hints
+  lu.assertEquals(self.e.doc:line(), 1)
+  lu.assertEquals(self.e.text_dirty, false)
 end
 
 function TestVtext:testJKKeepsScreenCol()
   -- line 0 injected, line 1 not: j keeps screen col 4 (Neovim semantics)
   self.e:set_vtext(0, { { off = 0, text = "int:" } })
   self.e.doc:seek("set", 0)
+  self.e.cursor_col = 4                 -- screen col for text col 0 (hint at start)
   self.e:dispatch("j")
-  lu.assertEquals(self.e.doc:column(), 4) -- line 1 text col 4 = screen col 4
+  lu.assertEquals(self.e:text_col(), 4) -- line 1 text col 4 = screen col 4
   self.e:dispatch("k")
-  lu.assertEquals(self.e.doc:column(), 0) -- back to line 0 byte 0 (screen col 4)
+  lu.assertEquals(self.e:text_col(), 0) -- back to line 0 byte 0 (screen col 4)
+end
+
+function TestVtext:testLeftRightSkipHint()
+  -- hint at start: l/h move by text chars, skipping injected cells
+  self.e:set_vtext(0, { { off = 0, text = "int:" } })
+  self.e.doc:seek("set", 0)
+  self.e.cursor_col = 4
+  keystroke(self.e, "l")
+  lu.assertEquals(self.e.doc:column(), 1)
+  lu.assertEquals(self.e.cursor_col, 5)
+  keystroke(self.e, "h")
+  lu.assertEquals(self.e.doc:column(), 0)
+  lu.assertEquals(self.e.cursor_col, 4)
+end
+
+function TestVtext:testWordSkipHint()
+  -- w/b move by text words, skipping injected cells
+  local e = make_ed("hello world\n")
+  e:set_vtext(0, { { off = 0, text = "int:" } })
+  e.doc:seek("set", 0)
+  e.cursor_col = 4
+  keystroke(e, "w")
+  lu.assertEquals(e.doc:column(), 6) -- 'w'
+  lu.assertEquals(e.cursor_col, 10)
+  keystroke(e, "b")
+  lu.assertEquals(e.doc:column(), 0)
+  lu.assertEquals(e.cursor_col, 4)
 end
 
 function TestVtext:testInsertDownKeepsGapColumn()
@@ -1114,17 +1158,17 @@ function TestVtext:testEditShiftsHints()
   -- edits through the docedit funnel splice the tree: the hint stays
   -- bound to its char and shifts with it
   self.e.doc:seek("set", 0)
-  self.e:docedit(0, "x") -- insert before 'h': hint stays on 'h'
+  self.e:doc_edit(0, "x") -- insert before 'h': hint stays on 'h'
   lu.assertEquals(vtext_spans(self.e, 0)[1].off, 1)
   self.e.doc:seek("set", 0)
-  self.e:docedit(1, "") -- delete 'x' back
+  self.e:doc_edit(1, "") -- delete 'x' back
   lu.assertEquals(vtext_spans(self.e, 0)[1].off, 0)
 end
 
 function TestVtext:testDeleteBoundCharDrops()
   -- deleting the bound char removes the hint (the segment dies with it)
   self.e.doc:seek("set", 0)
-  self.e:docedit(1, "") -- delete 'h', range [0,1) covers the bound char
+  self.e:doc_edit(1, "") -- delete 'h', range [0,1) covers the bound char
   lu.assertEquals(#vtext_spans(self.e, 0), 0)
 end
 
@@ -1132,7 +1176,7 @@ function TestVtext:testCrossLineEditShifts()
   -- a cross-line edit splices the tree: the vtext layer survives (the
   -- old implementation cleared every slot; the tree shifts segments)
   self.e.doc:seek("set", 0)
-  self.e:docedit(0, "a\nb")
+  self.e:doc_edit(0, "a\nb")
   local spans = vtext_spans(self.e, 1)
   lu.assertEquals(#spans, 1)
   lu.assertEquals(spans[1].off, 1) -- still bound to 'h' on line 1
@@ -1141,10 +1185,90 @@ end
 function TestVtext:testUndoShifts()
   -- undo splices the change hunks into the tree: the hint shifts back
   self.e.doc:seek("set", 0)
-  self.e:docedit(0, "x")
+  self.e:doc_edit(0, "x")
   self.e.doc:commit()
   self.e:dispatch("u")
   lu.assertEquals(vtext_spans(self.e, 0)[1].off, 0)
+end
+
+function TestVtext:testRenderSyncsDocAfterJK()
+  -- a rendered j must leave doc/cursor_row on the same line (no stale
+  -- sync from a non-cursor line during render)
+  local e = make_ed("one\ntwo\nthree\n")
+  keystroke(e, "j")
+  lu.assertEquals(e.doc:line(), 1)
+  lu.assertEquals(e.cursor_row, 1)
+  lu.assertIsFalse(e.text_dirty)
+end
+
+function TestVtext:testTabHintMapping()
+  -- tab expansion uses the screen column base; hint after a tab maps
+  -- dry_run inside the hint to the anchor byte
+  local e = make_ed("a\tb\n")
+  e:set_vtext(0, { { off = 2, text = "HH" } })
+  e.doc:seek("set", 2)
+  e.cursor_col = 6 -- screen col of 'b' (after HH)
+  frame(e)
+  lu.assertEquals(e.cursor_col, 6)
+  e.cursor_row = 0
+  e.cursor_col = 5 -- inside HH
+  e.text_dirty = true
+  lu.assertEquals(e:text_col(), 2)
+  lu.assertEquals(e.cursor_col, 6)
+end
+
+function TestVtext:testMultipleHints()
+  -- multiple hints on one line: each stays bound to its anchor and the
+  -- cursor skips every hint
+  local e = make_ed("abcdef\n")
+  e:set_vtext(0, { { off = 1, text = "AA" }, { off = 4, text = "BB" } })
+  e.doc:seek("set", 1)
+  e.cursor_col = 3 -- screen col of 'b' (after AA)
+  frame(e)
+  lu.assertEquals(e.cursor_col, 3)
+  e.doc:seek("set", 4)
+  e.cursor_col = 8 -- screen col of 'e' (after BB)
+  frame(e)
+  lu.assertEquals(e.cursor_col, 8)
+  -- dry run inside the first hint maps to its anchor 'b'
+  e.cursor_row = 0
+  e.cursor_col = 2
+  e.text_dirty = true
+  lu.assertEquals(e:text_col(), 1)
+  lu.assertEquals(e.cursor_col, 3)
+end
+
+function TestVtext:testEolHintCursorBeforeHint()
+  -- Neovim model: a hint attached to the newline keeps the EOL cursor on
+  -- the last character (before the hint), not after it.
+  local e = make_ed("hello\nworld\n")
+  e:set_vtext(0, { { off = 5, text = "<EOL>" } })
+  e.doc:seek("set", 5) -- EOL
+  e.cursor_col = 10
+  frame(e)
+  lu.assertEquals(e.cursor_col, 5) -- before <EOL>
+  -- dry run inside/after the hint also clamps to EOL and moves to before it
+  for _, c in ipairs({ 5, 7, 10, 12 }) do
+    e.cursor_row = 0
+    e.cursor_col = c
+    e.text_dirty = true
+    lu.assertEquals(e:text_col(), 5)
+    lu.assertEquals(e.cursor_col, 5)
+  end
+end
+
+function TestVtext:testEolHintInsertBeforeHint()
+  -- Neovim model: pressing a at the last char inserts before the EOL
+  -- hint; the hint stays attached to the (shifted) newline.
+  local e = make_ed("hello\nworld\n")
+  e:set_vtext(0, { { off = 5, text = "<EOL>" } })
+  e.doc:seek("set", 4) -- last char 'o'
+  e:dispatch("a")
+  e:dispatch("X")
+  e:dispatch("<Escape>")
+  e.doc:seek("set", 0)
+  lu.assertEquals(e.doc:read("*a"), "helloX\nworld\n")
+  lu.assertEquals(vtext_spans(e, 0)[1].off, 6) -- still on the newline
 end
 
 -- sem/diag full-snapshot layers: rendered through the tree's styled
@@ -1171,7 +1295,7 @@ function TestTreeLayers:testSemEditShift()
   local e = make_ed("int x;\n")
   e:set_sem({ { offset = 0, length = 3, attr = { fg = 207 } } })
   e.doc:seek("set", 0)
-  e:docedit(0, "ab")
+  e:doc_edit(0, "ab")
   local spans = {}
   for off, len, _, id in e.tree:styled(0, e.tree:bytes()) do
     spans[#spans + 1] = { off, len, id }
@@ -1194,20 +1318,22 @@ function TestGoal:testJKKeepsGoalAcrossShortLine()
   local e = goal_ed()
   e.doc:seek("set", 0)
   e.doc:seek("cur", 10)
+  e.cursor_col = 10
   e:dispatch("j")
-  lu.assertEquals(e.doc:column(), 5)  -- "world" is short: clamp to its end
+  lu.assertEquals(e:text_col(), 5)  -- "world" is short: clamp to its end
   e:dispatch("j")
-  lu.assertEquals(e.doc:column(), 10) -- goal restored on the long line
+  lu.assertEquals(e:text_col(), 10) -- goal restored on the long line
 end
 
 function TestGoal:testJKKeepsGoalAcrossEmptyLine()
   local e = make_ed("long line here\n\nlong line here\n")
   e.doc:seek("set", 0)
   e.doc:seek("cur", 10)
+  e.cursor_col = 10
   e:dispatch("j")
-  lu.assertEquals(e.doc:column(), 0)  -- empty line: clamp to line start
+  lu.assertEquals(e:text_col(), 0)  -- empty line: clamp to line start
   e:dispatch("j")
-  lu.assertEquals(e.doc:column(), 10) -- goal restored
+  lu.assertEquals(e:text_col(), 10) -- goal restored
 end
 
 function TestGoal:testHorizontalMotionResetsGoal()
@@ -1216,10 +1342,12 @@ function TestGoal:testHorizontalMotionResetsGoal()
   local e = goal_ed()
   e.doc:seek("set", 0)
   e.doc:seek("cur", 10)
+  e.cursor_col = 10
   e:dispatch("j")
-  e:dispatch("h")
-  e:dispatch("j")
-  lu.assertEquals(e.doc:column(), 4) -- from col 4, not the stale goal 10
+  lu.assertEquals(e:text_col(), 5)
+  keystroke(e, "h") -- renders, so cursor_col becomes 4
+  keystroke(e, "j") -- from col 4, not the stale goal 10
+  lu.assertEquals(e.doc:column(), 4)
 end
 
 os.exit(lu.LuaUnit.run(), true)
