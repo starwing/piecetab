@@ -243,9 +243,10 @@ comment/function 样式）。`Ed:open_language(lang)` 可手动开启；编辑�
   仅关闭高亮。完整高亮需要 `libtree-sitter` 与 `lua/grammar` 下的编译
   语法文件。
 - **`lsp.lua`**：纯 Lua LSP 客户端，需要 `json` 绑定与 `luv`。文件配置
-  了对应 server 时会自动启动 LSP。
+  了对应 server 时会自动启动 LSP。UTF-16 换算优先使用 vendored
+  `lua-utf8`，缺失时回退 Lua 实现。
 - **仅测试需要**：`luaunit` 测试框架；部分编辑器/cellgrid/显示测试还
-  需要 `lua-utf8` rock（仅 PUC Lua）与 `tmux`。
+  需要 `tmux`。
 
 #### 安装 / 构建
 
@@ -381,7 +382,7 @@ just lua/ts   # 获取/编译 lua/grammar/*.so，构建 treesitter.so + luajit/t
 | `json`       | `lua/json.c`, `lua/json.d.lua`, `lua/yyjson/` | 基于 vendored yyjson 的纯 C 绑定（`decode`/`encode`/`array`/`object`/`null`/`type`） |
 | `treesitter` | `lua/treesitter.c`, `lua/treesitter.d.lua`    | 基于 `libtree-sitter` 的 C 绑定（parser/tree/query API）                             |
 | `lsp`        | `lua/lsp.lua`                                 | 纯 Lua LSP 客户端构建块；需要 `json` 与 `luv`                                        |
-| `lua-utf8`   | `lua/lua-utf8.d.lua`                          | 仅为 `lua-utf8` rock 的类型声明（meta）                                              |
+| `lua-utf8`   | `lua/lutf8lib.c`, `lua/unidata.h`, `lua/lua-utf8.d.lua`                | Vendored luautf8（C 模块 + 类型声明）                                               |
 
 构建/测试 recipe 位于 `lua/justfile`，以 `just lua/<name>` 运行（如
 `just lua/json`、`just lua/sp`、`just lua/ts`）。demo 的模块要求见

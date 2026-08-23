@@ -18,6 +18,10 @@
 
 #define CG_STATIC_API
 #include "cellgrid.h"
+
+# if __GNUC__
+#   define UD_STATIC static __attribute((unused))
+#endif
 #include "unidata.h"
 
 #define LCG_GRID_TYPE "cellgrid.Grid"
@@ -112,8 +116,9 @@ static int lcg_find(const range_table *t, size_t size, utfint ch) {
 static int lcgW_width(void *ud, int cp) {
     utfint ch = (utfint)cp;
     (void)ud;
-    if (lcg_find(zerowidth_table, lcgW_tablesize(zerowidth_table), ch))
+    if (lcg_find(unprintable_table, lcgW_tablesize(unprintable_table), ch))
         return 0;
+    if (lcg_find(compose_table, lcgW_tablesize(compose_table), ch)) return 0;
     if (lcg_find(doublewidth_table, lcgW_tablesize(doublewidth_table), ch))
         return 2;
     if (lcg_find(ambiwidth_table, lcgW_tablesize(ambiwidth_table), ch))

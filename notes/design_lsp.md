@@ -36,8 +36,8 @@ render 不发起任何 IO。
 **lspclient 依赖注入**（editor 无关，可测）：`get_text()`（didOpen 全
 文）、`get_line(lnum)`（UTF-16 换算行文本）、`offset_pos(off)`（字节
 offset → line, bytecol）、`on_status(state, why)`。editor 闭包接
-piecetab doc；测试接行表。**自足**：零 lua-utf8 依赖（UTF-8 遍历手写
-charlen，双运行时可测）。
+piecetab doc；测试接行表。**自足**：UTF-16 换算优先用 vendored
+lua-utf8，缺失时回退手写 charlen（双运行时可测）。
 
 ## 三、传输层定案（Task 2/3 终态，勿翻案）
 

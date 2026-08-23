@@ -256,15 +256,17 @@ enables it manually. Editing updates highlights incrementally.
   compatibility. The demo finds modules relative to the repo root:
   `./lua/?.so`, `./lua/luajit/?.so`, and `./lua/?.lua`.
 - **Required C modules**: `piecetab`, `cellgrid`, `termfeed`, `spantree`,
-  and `json` (yyjson binding). `json` is required by `lsp.lua`, which
-  `editor.lua` loads unconditionally.
+  `json` (yyjson binding), and `lua-utf8` (vendored luautf8). `json` is
+  required by `lsp.lua`, which `editor.lua` loads unconditionally.
 - **Optional `treesitter`**: `pcall(require, "treesitter")` is used, so the
   demo runs without it (highlighting is disabled). Full highlighting needs
   `libtree-sitter` and compiled grammars in `lua/grammar`.
 - **`lsp.lua`**: pure-Lua LSP client; requires the `json` binding and `luv`.
   LSP is started automatically when a server is configured for the file.
-- **Tests only**: `luaunit` for the Lua test harness; the `lua-utf8` rock
-  (PUC Lua only) and `tmux` for some editor/cellgrid/display tests.
+  UTF-16 conversion uses vendored `lua-utf8` when present, with a Lua
+  fallback otherwise.
+- **Tests only**: `luaunit` for the Lua test harness; `tmux` for some
+  editor/cellgrid/display tests.
 
 #### Install / build
 
@@ -408,7 +410,7 @@ vendored JSON binding:
 | `json`       | `lua/json.c`, `lua/json.d.lua`, `lua/yyjson/` | Pure C binding over vendored yyjson (`decode`/`encode`/`array`/`object`/`null`/`type`) |
 | `treesitter` | `lua/treesitter.c`, `lua/treesitter.d.lua`    | C binding over `libtree-sitter` (parser/tree/query APIs)                               |
 | `lsp`        | `lua/lsp.lua`                                 | Pure-Lua LSP client building blocks; requires `json` and `luv`                         |
-| `lua-utf8`   | `lua/lua-utf8.d.lua`                          | Type declarations only (meta) for the `lua-utf8` rock                                  |
+| `lua-utf8`   | `lua/lutf8lib.c`, `lua/unidata.h`, `lua/lua-utf8.d.lua`                | Vendored luautf8 (C module + type declarations)                                       |
 
 Build/test recipes live in `lua/justfile` and are run as `just lua/<name>`
 (e.g. `just lua/json`, `just lua/sp`, `just lua/ts`). See the

@@ -453,13 +453,13 @@ static int utH_mergewalk(ut_Merge *M) {
 }
 
 static int utH_compose(ut_State *S, ut_HunkCV a, ut_HunkCV b, ut_Hunk **out) {
-    int i, r = UT_OK, an = utV_len(a), bn = utV_len(b);
-    assert(S != NULL && out != NULL);
-    utV_init(*out);
-    if (bn == 0) {
-        for (i = 0; i < an && r == UT_OK; i++) r = utV_push(S, *out, a[i]);
-    } else if (an == 0) {
-        for (i = 0; i < bn && r == UT_OK; i++) r = utV_push(S, *out, b[i]);
+    int r = UT_OK, an = utV_len(a), bn = utV_len(b);
+    assert(S != NULL && out != NULL), utV_init(*out);
+    if (an == 0 && bn == 0) return UT_OK;
+    if (an == 0 || bn == 0) {
+        int n = an ? an : bn;
+        if ((r = utV_reserve(S, *out, n)) != UT_OK) return r;
+        memcpy(*out, an ? a : b, n * sizeof(ut_Hunk)), utV_hdr(*out)->len = n;
     } else {
         ut_Merge M;
         M.S = S, M.out = out, M.x2y = a, M.y2z = b, M.xoff = 0, M.zoff = 0;
@@ -469,10 +469,9 @@ static int utH_compose(ut_State *S, ut_HunkCV a, ut_HunkCV b, ut_Hunk **out) {
 }
 
 static int utH_invert(ut_State *S, ut_HunkCV h, ut_Hunk **out) {
-    ut_Hunk  inv;
     unsigned i, len;
-    assert(S != NULL && out != NULL);
-    utV_init(*out);
+    ut_Hunk  inv;
+    assert(S != NULL && out != NULL), utV_init(*out);
     for (i = 0, len = utV_len(h); i < len; i++) {
         inv.pa = h[i].ca, inv.ca = h[i].pa;
         inv.pdel = h[i].cins, inv.cins = h[i].pdel;
@@ -567,9 +566,9 @@ typedef struct ut_DX {
 
 static int utD_calc(ut_DX *X, ut_Vid fn, ut_Vid tn) {
     ut_State *S = X->T->S;
-    ut_Vid    v;
     ut_Hunk  *next, *inv;
     int       r, i;
+    ut_Vid    v;
     if (X->hasfrom || X->hasto)
         utOK(utH_normalize(X->T, &X->fresh, 0, utV_len(X->T->journal)), 0);
     /* four-phase compose: [inv(fresh)] + fn→anc⁻¹ + anc→tn + [fresh] */

@@ -7,6 +7,7 @@
 local lsp = {}
 local json = require("json")
 local luv = require("luv")
+local utf8 = require("lua-utf8")
 
 local RPC = {}
 local M = { __index = RPC }
@@ -272,32 +273,18 @@ lsp.IO = IO
 local Protocol = {}
 local PM = { __index = Protocol }
 
--- UTF-8 char length from its lead byte (continuation bytes skipped).
---- @param b integer
---- @return integer
-local function charlen(b)
-  if b < 0xc0 then return 1 end
-  if b < 0xe0 then return 2 end
-  if b < 0xf0 then return 3 end
-  return 4
-end
-
 -- Byte offset within a UTF-8 line -> UTF-16 code unit column.
 -- BMP chars (incl. CJK) are 1 unit; only 4-byte supplementary-plane
--- chars (emoji) are 2. Counting lead bytes needs no decode.
--- TODO(C): column math family candidate (cellgrid), same as editor's
--- text_byte_to_dcol — promote both together after bench evidence.
+-- chars (emoji) are 2. Uses vendored lua-utf8 codepoint scanning; the
+-- protocol-only part stays out of Doc.
 --- @param text string
 --- @param byte integer
 --- @return integer
 function Protocol.text_byte_to_utf16(text, byte)
   local units = 0
-  local i = 1
-  local blen = math.min(byte, #text)
-  while i <= blen do
-    local n = charlen(text:byte(i))
-    units = units + (n == 4 and 2 or 1)
-    i = i + n
+  for i, cp in utf8.codes(text) do
+    if i > byte then break end
+    units = units + (cp > 0xFFFF and 2 or 1)
   end
   return units
 end
@@ -594,7 +581,7 @@ local CM = { __index = function(self, key)
   return Client[key]
 end }
 
--- ---- internals (module-private; see Protocol section for charlen)
+-- ---- internals (module-private; UTF-16 conversion via lua-utf8)
 
 -- UTF-16 unit column -> byte offset within a UTF-8 line. BMP chars are
 -- 1 unit; 4-byte supplementary chars (emoji) are 2; trailing units
@@ -603,14 +590,15 @@ end }
 --- @param units integer
 --- @return integer
 local function utf16_to_byte(text, units)
-  local i = 1
-  local blen = #text
-  while i <= blen and units > 0 do
-    local n = charlen(text:byte(i))
-    units = units - (n == 4 and 2 or 1)
-    i = i + n
+  if units == 0 then return 0 end
+  for start, cp in utf8.codes(text) do
+    local u = cp > 0xFFFF and 2 or 1
+    if units <= u then
+      return (utf8.next(text, start) or #text + 1) - 1
+    end
+    units = units - u
   end
-  return i - 1
+  return #text
 end
 
 -- Byte offset of each line start (line 0 = 0) from the full doc text.

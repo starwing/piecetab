@@ -139,8 +139,10 @@
   `_render_line` 单次 styled 遍历 + 屏幕列 tab 已落地；剩余
   lsp.lua UTF-16 换算族仍待评估；评估以“让 Lua 层写得更顺手”为主要
   标准，负载只作参考
-- **lsp.lua UTF-16 换算族**：与 cellgrid 家族合并评估（原 plan_cols
-  Step 4 暂缓）；目标是给 Lua 层一个更顺手的 UTF-16 ↔ 字节换算原语
+- **lsp.lua UTF-16 换算族**：已 vendored luautf8 并接入（`lua/lutf8lib.c`
+  直接放 `lua/` 目录，与 `lua/cellgrid.c` 共用 `lua/unidata.h`，lsp.lua
+  硬 `require("lua-utf8")`，无回退）；剩余 per-line 批量映射与
+  `line_offset` 去全文档扫描
 - **editor 读行不要整行读**：渲染路径已按 run 按需读；剩余 word motion
   等整行读取可改为按需/前缀读，避免大行全量拷贝
 

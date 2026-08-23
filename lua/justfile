@@ -33,12 +33,19 @@ LUAJIT_INC := `
     exit 0
 `
 
-build mod: (build-lua mod)
+build mod:
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA_INC }} -DNDEBUG -O2 {{ LDF }} -o {{ mod }}.so {{ mod }}.c
+
+build-jit mod:
+    mkdir -p luajit
     {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} -DNDEBUG -O2 {{ LDF }} -o luajit/{{ mod }}.so {{ mod }}.c
 
-build-lua mod:
+build-utf8:
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA_INC }} -DNDEBUG -O2 {{ LDF }} -o lua-utf8.so lutf8lib.c
+
+build-utf8-jit:
     mkdir -p luajit
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA_INC }} -DNDEBUG -O2 {{ LDF }} -o {{ mod }}.so {{ mod }}.c
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} -DNDEBUG -O2 {{ LDF }} -o luajit/lua-utf8.so lutf8lib.c
 
 # debug + ASAN build of a binding module: `just lua/dbg spantree` then
 # run with `lua -e 'package.cpath="./?.so;./spantree_asan.so;"..package.cpath'`
@@ -53,19 +60,22 @@ pt *args='': (build "piecetab") (run "piecetab_test" args)
 cg *args='': (build "cellgrid") (run "cellgrid_test" args)
 tf *args='': (build "termfeed") (run "termfeed_test" args)
 json *args='': (build "json") (run "json_test" args)
-lsp *args='': (build "json") (run "lsp_test" args)
+utf8: build-utf8
+lsp *args='': (build "json") (build-utf8) (run "lsp_test" args)
 sp *args='': (build "spantree") (run "spantree_test" args)
 # tree-sitter is optional; add it with `just lua/build-ts` for highlighting.
 # Build the PUC Lua modules needed to run the editor demo (no tests).
-deps: (build-lua "piecetab") (build-lua "cellgrid") (build-lua "termfeed") (build-lua "json") (build-lua "spantree")
+deps: deps-lua deps-jit
+deps-lua: (build "piecetab") (build "cellgrid") (build "termfeed") (build "json") (build "spantree") build-utf8
+deps-jit: (build-jit "piecetab") (build-jit "cellgrid") (build-jit "termfeed") (build-jit "json") (build-jit "spantree") build-utf8-jit
 
-# editor demo needs lua-utf8 rock (PUC Lua only); json.so is required
+# editor demo builds vendored lua-utf8 (lutf8lib.c); json.so is required
 # by lsp.lua, which editor.lua loads optionally (pcall require)
-ed *args='': deps
+ed *args='': deps-lua
     lua tests/editor_test.lua {{ args }}
 # display integration tests: real terminal via tmux helper
 # (needs tmux in PATH; json.so is required by lsp.lua in the session)
-ed-tmux *args='': deps
+ed-tmux *args='': deps-lua
     lua tests/editor_tmux_test.lua {{ args }}
 
 # LuaLS formatting is LSP-only (no CLI flag); this recipe uses stylua as
