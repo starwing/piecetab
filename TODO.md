@@ -2,7 +2,9 @@
 
 > 当前状态（2026-08-23 更新）：linecache/piecetab/undotree Lua 绑定完成，
 > termfeed/cellgrid 孵化完成，tree-sitter 绑定集成，editor.lua 重写 +
-> 测试框架 + 真实语法高亮；**多层高亮已全部落地**，**spantree 已从储备
+> 整理完成（`_render_line` 单次 styled 遍历 + dry_run/lazy sync、tab
+> 按屏幕列、ATTR_* 直接挂 Ed、hl 仅依赖 Doc+ATTR、LSP 可选 attach）；
+> **多层高亮已全部落地**，**spantree 已从储备
 > 转为 editor.lua 的样式/层/vtext 基础设施**，**LSP 集成（semantic /
 > diag / inlay hints / undo 增量同步）已完成**，**bench 骨架 + PT/LC/SP
 > FANOUT 调优完成**。行覆盖 100%、分支覆盖目标 95%（覆盖构建用
@@ -104,6 +106,20 @@
       时先同步再绘制并记录 `cursor_col`。已移除 `vtext_dcol` /
       `screen_to_text_dcol` / `_sync_text_from_screen`。见
       `notes/design_editor.md` §九 + `notes/plans/plan_editor_cursor_sync.md`
+- [x] **单次 styled 遍历**：`_render_line(line_idx, dry_run, row, col)` 是
+      唯一渲染/坐标换算入口；直接 `tree:styled(lo, text_end+1)` 逐 run 产出，
+      不再有 viewport `_spans` 表 / `hl.line_segments` / 手拆 tab
+- [x] **tab 按屏幕列**：vtext hint 参与 tab 起点，`g:putstring` 直接展开
+      到下一 stop；tmux 测试 `testTabAfterHint` 已按此断言
+
+### editor.lua 整理（2026-08 完成）
+
+- [x] **ATTR_* 直接挂 Ed**：去掉“local 定义 + 文件尾再赋值”的重复；
+      `hl.new(doc, lang, ed)` 运行时读 `Ed.ATTR_*` 构造自身 attrs，
+      hl 仍不依赖 Ed 实例
+- [x] **LSP 可选 attach**：editor.lua 顶层 `pcall(require, "lsp")`，
+      `lsp.attach(ed, opts)` 由 lsp.lua 提供，editor 只留 `Ed:lsp_start`
+      薄入口
 
 ### 摩擦列表（2026-08，render_line 重构已确认）
 - ~~`tree:styled()` 混入 vtext~~ **已确认是设计信号，不是摩擦**：
@@ -120,18 +136,13 @@
 
 - **C 化评估（剩余部分）**：sc 已 C 化进 spantree，cellgrid 坐标族 /
   字符移动已 C 化，merge_layers 区间折叠已由 spantree `styled()` 完成；
-  剩余渲染管线（render_line 简化、vtext 坐标换算按屏幕列 tab）与
+  `_render_line` 单次 styled 遍历 + 屏幕列 tab 已落地；剩余
   lsp.lua UTF-16 换算族仍待评估；评估以“让 Lua 层写得更顺手”为主要
   标准，负载只作参考
-- **TODO(C) 剩余小项**：`Ed:_render_line` 直接走 `cg_putslice` 的屏幕列
-  tab 展开，去掉手拆 tab/fill；坐标换算已由 dry_run / `cursor_col` 记录
-  承担；lsp.lua UTF-16 换算族与 cellgrid 家族合并评估（原 plan_cols
-  Step 4 暂缓）
-- **spantree per-line styled cursor 候选**：用 Cursor / 行裁剪迭代替代
-  viewport spans 表 + hl.line_segments，逐行直接产出折叠 run，渲染循环
-  不再需要中间 spans 表
-- **editor 读行不要整行读**：渲染/坐标换算只需屏幕宽附近；按需读
-  `text_width * 3`（或屏幕宽），遇 UTF-8 截断再续读；避免大行全量拷贝
+- **lsp.lua UTF-16 换算族**：与 cellgrid 家族合并评估（原 plan_cols
+  Step 4 暂缓）；目标是给 Lua 层一个更顺手的 UTF-16 ↔ 字节换算原语
+- **editor 读行不要整行读**：渲染路径已按 run 按需读；剩余 word motion
+  等整行读取可改为按需/前缀读，避免大行全量拷贝
 
 ## 低优先级
 
