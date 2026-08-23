@@ -175,6 +175,104 @@ SP_STATIC void sp_dumptree(const sp_Tree *t, const char *tag) {
 }
 
 /* ================================================================ */
+/*  public-API tree construction helpers                             */
+/* ================================================================ */
+
+/* Build a tree from a flat (id, len) segment stream using only the
+ * public API.  The stream is terminated by a final 0-length pair
+ * (0, 0); ids and lens are passed as int for C89 varargs consistency.
+ * Adjacent same-id runs merge exactly as they would in any settled
+ * public-API tree. */
+SP_STATIC sp_Tree *sp_mkstreamV(sp_Tree *t, ...) {
+    sp_Cursor C;
+    va_list   ap;
+    size_t    total = 0, off = 0;
+    int       id, len;
+    assertok(t != NULL);
+    va_start(ap, t);
+    for (;;) {
+        (void)va_arg(ap, int);
+        len = va_arg(ap, int);
+        if (len == 0) break;
+        total += (size_t)len;
+    }
+    va_end(ap);
+    assertok(sp_seek(&C, t, 0) == SP_OK);
+    assertok(sp_append(&C, total) == SP_OK);
+    va_start(ap, t);
+    for (;;) {
+        id = va_arg(ap, int);
+        len = va_arg(ap, int);
+        if (len == 0) break;
+        assertok(sp_seek(&C, t, off) == SP_OK);
+        assertok(sp_fill(&C, (sp_Id)id, (size_t)len) == SP_OK);
+        off += (size_t)len;
+    }
+    va_end(ap);
+    return t;
+}
+
+/* Array form of sp_mkstreamV (no varargs size limits). */
+SP_STATIC sp_Tree *sp_mkstream(
+        sp_Tree *t, const sp_Id *ids, const size_t *lens, int n) {
+    sp_Cursor C;
+    size_t    total = 0, off = 0;
+    int       i;
+    assertok(t != NULL);
+    for (i = 0; i < n; ++i) total += lens[i];
+    assertok(sp_seek(&C, t, 0) == SP_OK);
+    assertok(sp_append(&C, total) == SP_OK);
+    for (i = 0; i < n; ++i) {
+        assertok(sp_seek(&C, t, off) == SP_OK);
+        assertok(sp_fill(&C, ids[i], lens[i]) == SP_OK);
+        off += lens[i];
+    }
+    return t;
+}
+
+/* Serialized stream assertion: expected string is compared to the
+ * tree's public segment stream (adjacent same-id runs merged). */
+#define sp_assertstream(S, t, expected)    \
+    do {                                   \
+        char __sp_buf[4096];               \
+        (void)(S);                         \
+        sp_serialtree((t), __sp_buf);      \
+        assertstreq(__sp_buf, (expected)); \
+    } while (0)
+
+/* Set namespace bit `ns` on the byte range [off, off+len) using only
+ * the public API: a temporary arbiter adds the bit while re-filling each
+ * existing segment with its own id.  Callers should pass whole segments
+ * (or whole leaf containers) so no segment is split. */
+typedef struct {
+    int ns;
+} sp_NsCfg;
+
+static sp_Id sp_ns_arb(void *ud, sp_Id id, sp_Id old, sp_Mask *mask) {
+    sp_NsCfg *c = (sp_NsCfg *)ud;
+    if (mask) (void)sp_addns(mask, c->ns);
+    return old ? old : id;
+}
+
+SP_STATIC void sp_setns(sp_Tree *t, size_t off, size_t len, int ns) {
+    sp_Cursor C;
+    sp_NsCfg  cfg;
+    size_t    end = off + len;
+    cfg.ns = ns;
+    sp_setarbiter(t, sp_ns_arb, &cfg);
+    while (off < end) {
+        size_t seglen = 0, take;
+        sp_Id  id;
+        assertok(sp_seek(&C, t, off) == SP_OK);
+        id = sp_style(&C, &seglen, NULL);
+        take = seglen < end - off ? seglen : end - off;
+        assertok(sp_fill(&C, id, take) == SP_OK);
+        off += take;
+    }
+    sp_setarbiter(t, NULL, NULL);
+}
+
+/* ================================================================ */
 /*  tree construction helpers (leafV / innerV / treeV)               */
 /*  leafV takes (id, len) pairs, zero length terminates; ids are     */
 /*  size_t so varargs are type-consistent                             */

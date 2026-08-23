@@ -2,7 +2,7 @@
 
 **English** | [中文](spantree.zh.md)
 
-> Single-header C89 library that stores **final rendered coloring** as a
+> Single-header C89 library that stores **result ids** as a
 > full-coverage partition of byte spans: every byte belongs to exactly one
 > span `(len > 0, sp_Id)`. Prefix `sp_`. It shares the B+ tree skeleton and
 > pool allocator style of `piecetab.h`/`linecache.h`, but stores only byte
@@ -279,7 +279,9 @@ int sp_clear(sp_Tree *T, int ns, sp_Id id);
   Returns `SP_OK`, `SP_ERRPARAM`, or `SP_ERRMEM`.
 - **`sp_clear`**: prunes by namespace: for every span whose namespace set
   contains `ns`, calls the arbiter once and writes back the result (id 0
-  clears the mask). Matching leaf containers are processed in bulk;
+  clears the mask). `id` is usually an operation id: it tells the arbiter
+  which id to remove from namespace `ns`. Matching leaf containers are
+  processed in bulk;
   non-matching leaves are not visited — this is the reason `sp_clear` exists
   as a separate operation. `ns` must be in `1..SP_MASK_BITS`;
   `id == SP_NONE` is rejected. Returns `SP_OK` or `SP_ERRPARAM`.
@@ -341,7 +343,9 @@ All editing functions return `SP_OK`, `SP_ERRPARAM`, or `SP_ERRMEM`. On
   into `(len > 0, id)` runs. There are no zero-length marks, no byte-gap
   semantics, and no extmark-style point identities. Sparse coloring is just a
   large id-0 span.
-- **No COW**: spantree is a frame-buffer-like final result store. It does
+- **No COW**: spantree is a frame-buffer-like result-id store (the id may
+  be a final rendered result or a handle to a blend list; the tree does not
+  interpret it). It does
   not snapshot, does not hold content, and does not need versioning.
 - **B+ tree skeleton**: shares the piecetab/linecache structure: embedded
   root, pool allocation, byte metrics, split/merge/stitch operations.

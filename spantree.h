@@ -263,17 +263,17 @@ static sp_Mask spM_sumns(const sp_Node *n)
 static void spM_remask(sp_Node *p, int i, int k)
 { if (k) p->mask[i] = spM_sumns(p->children[i]); }
 
-static int spM_check(const sp_Mask *m, int ns)
-{ return m != NULL && ns >= 1 && ns <= (int)SP_MASK_BITS; }
+static int spM_check(int ns)
+{ return ns >= 1 && ns <= (int)SP_MASK_BITS; }
 
 SP_API int sp_addns(sp_Mask *m, int ns)
-{ return spM_check(m, ns) ? (*m |= spM_bit(ns), SP_OK) : SP_ERRPARAM; }
+{ return m && spM_check(ns) ? (*m |= spM_bit(ns), SP_OK) : SP_ERRPARAM; }
 
 SP_API int sp_delns(sp_Mask *m, int ns)
-{ return spM_check(m, ns) ? (*m &= ~spM_bit(ns), SP_OK) : SP_ERRPARAM; }
+{ return m && spM_check(ns) ? (*m &= ~spM_bit(ns), SP_OK) : SP_ERRPARAM; }
 
 SP_API int sp_hasns(const sp_Mask *m, int ns)
-{ return spM_check(m, ns) && (*m & spM_bit(ns)) != 0; }
+{ return m && spM_check(ns) && (*m & spM_bit(ns)) != 0; }
 /* clang-format on */
 
 static sp_Id spA_born(sp_Tree *T, sp_Id id, sp_Mask *pm) {
@@ -342,6 +342,9 @@ static void spM_up(sp_Cursor *C, int l, sp_Delta db) {
 /* clang-format off */
 SP_API void sp_setarbiter(sp_Tree *t, sp_Arbiterf *cb, void *ud)
 { if (t) t->arb = cb, t->aud = ud; }
+
+static sp_Id spN_none(size_t *plen)
+{ return (void)(plen && (*plen = 0)), SP_NONE; }
 /* clang-format on */
 
 SP_API size_t sp_bytes(const sp_Tree *t) { return t ? t->bytes : 0; }
@@ -485,80 +488,67 @@ SP_API sp_Id sp_style(sp_Cursor *C, size_t *plen, sp_Mask *pmask) {
     sp_Node *p;
     int      i;
     if (pmask) *pmask = 0;
-    if (C == NULL || C->tree == NULL)
-        return (void)(plen && (*plen = 0)), SP_NONE;
+    if (!C || !C->tree || spK_bytes(C) == 0) return spN_none(plen);
     i = spK_idx(C, p = spK_parent(C, spK_levels(C)), spK_levels(C));
-    if (spK_bytes(C) == 0 || C->poff >= p->bytes[i])
-        return (void)(plen && (*plen = 0)), SP_NONE;
+    if (C->poff >= p->bytes[i]) return spN_none(plen);
     if (plen) *plen = p->bytes[i] - C->poff;
     if (pmask) *pmask = p->mask[i];
     return spL_id(p, i);
 }
 
-static int spF_findslot(sp_Node *p, int i, int d, sp_Mask bit, size_t *pbc) {
+static int spN_findslot(sp_Node *p, int i, int d, sp_Mask bit, size_t *pbc) {
     for (; i >= 0 && i < spN_cc(p) && bit && !(p->mask[i] & bit); i += d)
         *pbc += p->bytes[i];
     return i;
 }
 
 SP_API sp_Id sp_next(sp_Cursor *C, int ns, size_t *plen) {
-    sp_Mask  bit;
-    sp_Node *p;
+    sp_Mask  bit = ns ? spM_bit(ns) : 0;
     int      i, l;
     size_t   bc;
-    if (C == NULL || C->tree == NULL)
-        return (void)(plen && (*plen = 0)), SP_NONE;
-    if (ns < 0 || ns > (int)SP_MASK_BITS)
-        return (void)(plen && (*plen = 0)), SP_NONE;
-    bit = ns ? spM_bit(ns) : 0;
+    sp_Node *p;
+    if (C == NULL || C->tree == NULL) return spN_none(plen);
+    if (spK_bytes(C) == 0 || (ns && !spM_check(ns))) return spN_none(plen);
     l = spK_levels(C), i = spK_idx(C, p = spK_parent(C, l), l);
-    if (spK_bytes(C) == 0 || C->poff >= p->bytes[i])
-        return (void)(plen && (*plen = 0)), SP_NONE;
+    if (C->poff >= p->bytes[i]) return spN_none(plen);
     bc = p->bytes[i];
-    while ((i = spF_findslot(p, i + 1, 1, bit, &bc)) == spN_cc(p)) {
-        if (--l < 0) return spK_locend(C), (void)(plen && (*plen = 0)), SP_NONE;
+    while ((i = spN_findslot(p, i + 1, 1, bit, &bc)) == spN_cc(p)) {
+        if (--l < 0) return spK_locend(C), spN_none(plen);
         i = spK_idx(C, p = spK_parent(C, l), l);
     }
     C->paths[l] = &p->children[i];
     for (; ++l <= spK_levels(C); C->paths[l] = &p->children[i])
-        i = spF_findslot(p = spK_parent(C, l), 0, 1, bit, &bc);
+        i = spN_findslot(p = spK_parent(C, l), 0, 1, bit, &bc);
     assert(!bit || (p->mask[i] & bit)), C->off += bc, C->poff = 0;
     return (void)(plen && (*plen = p->bytes[i])), spL_id(p, i);
 }
 
-static sp_Id spK_lochead(sp_Cursor *C, size_t *plen) {
+static void spK_lochead(sp_Cursor *C) {
     sp_Node *p = &C->tree->root;
     int      l;
     C->off = C->poff = 0;
     for (l = 0; l < spK_levels(C); ++l) p = *(C->paths[l] = &p->children[0]);
-    if (plen) *plen = p->bytes[0];
-    return C->paths[l] = &p->children[0], spL_id(p, 0);
+    C->paths[l] = &p->children[0];
 }
 
 SP_API sp_Id sp_prev(sp_Cursor *C, int ns, size_t *plen) {
-    sp_Mask  bit;
-    sp_Node *p;
-    int      i, l;
+    sp_Mask  bit = ns ? spM_bit(ns) : 0;
     size_t   bc = 0;
-    if (C == NULL || C->tree == NULL)
-        return (void)(plen && (*plen = 0)), SP_NONE;
-    if (ns < 0 || ns > (int)SP_MASK_BITS)
-        return (void)(plen && (*plen = 0)), SP_NONE;
-    bit = ns ? spM_bit(ns) : 0;
-    if (spK_bytes(C) == 0) return (void)(plen && (*plen = 0)), SP_NONE;
+    int      i, l;
+    sp_Node *p;
+    if (C == NULL || C->tree == NULL) return spN_none(plen);
+    if (spK_bytes(C) == 0 || (ns && !spM_check(ns))) return spN_none(plen);
     l = spK_levels(C), i = spK_idx(C, p = spK_parent(C, l), l);
     if (C->poff > 0 && (!bit || (p->mask[i] & bit)))
         return (void)(plen && (*plen = C->poff)), C->poff = 0, spL_id(p, i);
-    if (C->off == 0) return (C->poff = 0), (void)(plen && (*plen = 0)), SP_NONE;
-    while ((i = spF_findslot(p, i - 1, -1, bit, &bc)) < 0) {
-        if (--l < 0)
-            return assert(bit), spK_lochead(C, NULL),
-                   (void)(plen && (*plen = 0)), SP_NONE;
+    if (C->off == 0) return (C->poff = 0), spN_none(plen);
+    while ((i = spN_findslot(p, i - 1, -1, bit, &bc)) < 0) {
+        if (--l < 0) return assert(bit), spK_lochead(C), spN_none(plen);
         i = spK_idx(C, p = spK_parent(C, l), l);
     }
     C->paths[l] = &p->children[i];
     for (; ++l <= spK_levels(C); C->paths[l] = &p->children[i])
-        p = spK_parent(C, l), i = spF_findslot(p, spN_cc(p) - 1, -1, bit, &bc);
+        p = spK_parent(C, l), i = spN_findslot(p, spN_cc(p) - 1, -1, bit, &bc);
     assert(!bit || (p->mask[i] & bit)), C->off -= bc + p->bytes[i], C->poff = 0;
     return (void)(plen && (*plen = p->bytes[i])), spL_id(p, i);
 }
@@ -1005,7 +995,7 @@ SP_API int sp_splice(sp_Cursor *C, size_t del, size_t ins) {
 
 /* fill */
 
-static int spI_fillrt(sp_Cursor *C, sp_Id id, size_t len, sp_Mask m) {
+static int spF_fillrt(sp_Cursor *C, sp_Id id, size_t len, sp_Mask m) {
     sp_Node *rt = C->tree->S->rt, *p;
     int      i, rtcc = rt->child_count;
     if (spK_bytes(C) > 0) {
@@ -1058,8 +1048,8 @@ static int spF_filterleaf(sp_Cursor *C, size_t len, sp_Id in, int right) {
     if (assert(rlen > 0), left > 0) spA_born(C->tree, oid, NULL);
     rt->child_count = 0, p->bytes[i] = rlen;
     spM_up(C, l - 1, -(sp_Delta)(left + len)), C->poff = 0;
-    if (left > 0) spI_fillrt(C, oid, left, om);
-    spI_fillrt(C, nid, len, m), spF_appendrt(C, rt);
+    if (left > 0) spF_fillrt(C, oid, left, om);
+    spF_fillrt(C, nid, len, m), spF_appendrt(C, rt);
     if (right) spK_seamleaf(C, 0);
     return spM_up(C, l - 1, 0), 0;
 }
@@ -1201,8 +1191,8 @@ static int spF_appendvirt(sp_Cursor *C, sp_Id id, size_t len) {
     sp_Id    nid = spA_born(C->tree, id, &m);
     if (cc = spN_cc(p), old > 0) C->off += p->bytes[cc - 1];
     rt->child_count = 0, C->poff = 0, C->paths[l] = &p->children[cc];
-    if (pad) spI_fillrt(C, 0, pad, 0);
-    spI_fillrt(C, nid, len, m), C->off = spK_bytes(C);
+    if (pad) spF_fillrt(C, 0, pad, 0);
+    spF_fillrt(C, nid, len, m), C->off = spK_bytes(C);
     spF_appendrt(C, rt), l = spK_levels(C);
     p = spK_parent(C, l), cc = spN_cc(p) - 1, C->paths[l] = &p->children[cc];
     return (C->poff = p->bytes[cc], C->off = spK_bytes(C) - C->poff), 0;
@@ -1212,8 +1202,7 @@ SP_API int sp_fill(sp_Cursor *C, sp_Id id, size_t len) {
     sp_Cursor R;
     sp_Node  *p;
     int       r, i, fl;
-    if (!C || !C->tree) return SP_ERRPARAM;
-    if (id == SP_NONE) return SP_ERRPARAM;
+    if (!C || !C->tree || id == SP_NONE) return SP_ERRPARAM;
     if (len == 0) return SP_OK;
     r = spP_reserve(C->tree->S, &C->tree->S->nodes, 6 * spK_levels(C) + 7);
     if (r != SP_OK) return r;
@@ -1258,8 +1247,7 @@ SP_API int sp_clear(sp_Tree *T, int ns, sp_Id id) {
     sp_Cursor C;
     sp_Mask   bit;
     sp_Id     sid;
-    if (T == NULL || ns < 1 || ns > (int)SP_MASK_BITS) return SP_ERRPARAM;
-    if (id == SP_NONE) return SP_ERRPARAM;
+    if (T == NULL || !spM_check(ns) || id == SP_NONE) return SP_ERRPARAM;
     bit = spM_bit(ns), sp_seek(&C, T, 0), sid = sp_style(&C, NULL, NULL);
     for (; sid != SP_NONE; sid = sp_next(&C, ns, NULL))
         spC_clearnode(&C, bit, id);

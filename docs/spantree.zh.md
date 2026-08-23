@@ -2,7 +2,7 @@
 
 [English](spantree.md) | **中文**
 
-> 单头文件 C89 库，保存**最终渲染染色**的全覆盖字节 span 分区：每个字节
+> 单头文件 C89 库，保存**结果 id** 的全覆盖字节 span 分区：每个字节
 > 恰好属于一个 `(len > 0, sp_Id)` 段。前缀 `sp_`。与 `piecetab.h`/
 > `linecache.h` 共用 B+ 树骨架与池分配风格，但只存字节长度与属性 id——
 > 不存文本内容，也没有 COW 快照。
@@ -251,7 +251,8 @@ int sp_clear(sp_Tree *T, int ns, sp_Id id);
   `len == 0` 无操作；`id == SP_NONE` 拒绝。越过树尾写入时先用 id-0
   段补齐空隙。返回 `SP_OK`、`SP_ERRPARAM` 或 `SP_ERRMEM`。
 - **`sp_clear`**：按 namespace 剪枝清除：对 mask 含 `ns` 的每个 span
-  调用一次 arbiter 并写回（id 0 时清 mask）。匹配的叶容器批量处理；
+  调用一次 arbiter 并写回（id 0 时清 mask）。`id` 通常是一个操作 id，
+  用途是通知 arbiter 删除 ns 中的某个 id。匹配的叶容器批量处理；
   不匹配的叶不访问——这正是 `sp_clear` 独立存在的理由。`ns` 必须在
   `1..SP_MASK_BITS`；`id == SP_NONE` 拒绝。返回 `SP_OK` 或
   `SP_ERRPARAM`。
@@ -305,7 +306,8 @@ int sp_remove(sp_Cursor *L, sp_Cursor *R);
 - **全覆盖 span 模型**：树是 `[0, sp_bytes)` 的 `(len > 0, id)` 段分区。
   没有零长标记、没有字节缝语义、没有 extmark 式点身份。稀疏染色就是
   大段 id 0。
-- **无 COW**：spantree 是帧缓冲性质的最终结果存储。不快照、不存内容、
+- **无 COW**：spantree 是帧缓冲性质的结果 id 存储（id 可以是最终渲染
+  结果，也可以是混合列表句柄；树不解释 id）。不快照、不存内容、
   不需要版本。
 - **B+ 树骨架**：与 piecetab/linecache 同构：内嵌 root、池分配、字节
   度量、split/merge/stitch。
