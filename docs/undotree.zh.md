@@ -25,7 +25,7 @@ typedef void *ut_Alloc(void *ud, void *p, size_t osize, size_t nsize);
 ```
 
 realloc 语义。`p=NULL, osize=0` 时分配新块；`nsize=0` 时释放 `p`。
-默认 `utS_defallocf` 封装 `realloc`，失败则 `abort()`。
+默认分配器封装 `realloc`，失败则 `abort()`。
 
 ### ut_State — 内存上下文
 
@@ -42,7 +42,7 @@ typedef struct ut_State ut_State;
 typedef void ut_Cleaner(void *ud, ut_Payload *p);
 ```
 
-`ut_deltree`（及 `utN_freechildren`）释放每个节点前调用此回调处理其 payload。
+`ut_deltree`（及内部子节点释放辅助函数）释放每个节点前调用此回调处理其 payload。
 通过 `ut_setcleaner` 注册。
 
 ### ut_Payload — 不透明版本快照
@@ -160,11 +160,7 @@ UT_API void ut_unrecord(ut_Tree *T, unsigned n);
 
 ### ut_freshcount
 
-```c
-#define ut_freshcount(T) ((T) ? (int)utV_len((T)->journal) : 0)
-```
-
-未提交 journal 条目数。
+返回未提交 journal 条目数（`T` 为 NULL 时返回 0）。
 
 ### ut_discard
 

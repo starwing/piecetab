@@ -515,7 +515,7 @@ family. It uses public-API cases, deterministic structural corpora
 ```sh
 just bench/all     # Print the current benchmark summary table
 just bench/smoke   # Quick smoke run
-just bench/sweep   # Full PT_FANOUT sweep 4..63 (64 excluded: ptM_mask(64) is UB)
+just bench/sweep   # Full PT_FANOUT sweep 4..63 (64 excluded: all-ones mask (64) is UB)
 just bench/confirm # Focused multi-seed confirmation sweep
 just bench/plot    # Plot JSON results (needs matplotlib; falls back to CSV/Markdown)
 ```

@@ -150,7 +150,7 @@ int lc_markbreak(lc_Cursor *C, unsigned len);
   - Empty tree: directly builds a single-line tree with `len`
   - After return, `C` is positioned at the start of the new line after the break (`col=0`, `lnu+=1`, `loff`/`off/nu` updated)
 
-**Semantics**: The line break is placed at `lc_offset(C) + len`, splitting the line at that byte boundary. The cursor ends at the beginning of the line *after* the break (offset = original offset + len, col = 0). When the cursor is in the trailing virtual region (beyond tree tail), `lc_markbreak` calls `lcB_oneline` to build a single-line tree, **pinning** the virtual column as actual content — the trailing position becomes a real line.
+**Semantics**: The line break is placed at `lc_offset(C) + len`, splitting the line at that byte boundary. The cursor ends at the beginning of the line *after* the break (offset = original offset + len, col = 0). When the cursor is in the trailing virtual region (beyond tree tail), `lc_markbreak` uses an internal single-line tree build path, **pinning** the virtual column as actual content — the trailing position becomes a real line.
 - `lc_clearbreaks`: Deletes all line breaks within `len` bytes from the cursor position (segments are joined into one line). Equivalent to the `lc_splice(C, len, len)` macro. The cursor ends up at column position within the merged line.
   - A macro wrapper around `lc_splice`. Parameter validation is delegated to `lc_splice`.
 
@@ -172,7 +172,7 @@ int lc_remove(lc_Cursor *L, lc_Cursor *R);
 
 **Return values**: `LC_OK` (success or no-op), `LC_ERRPARAM` (invalid parameters). After the operation, R is invalidated (tree structure changed); L points to the deletion point.
 
-**Implementation**: Same-leaf calls `lcD_rmleaf`; cross-leaf calls `lcD_rmrange` (three-phase method: trim→cut→stitch). Internal `lcP_reserve` pre-allocation guarantees no OOM.
+**Implementation**: Same-leaf and cross-leaf deletions are handled internally (three-phase method: trim→cut→stitch). Internal pool pre-allocation guarantees no OOM.
 
 ### lc_splice — Interval Delete/Insert Bytes
 
@@ -184,7 +184,7 @@ int lc_splice(lc_Cursor *C, size_t del, unsigned ins);
 
 **Behavior**:
 - Cursor in trailing region: `C->col += ins` returns immediately
-- Delete + insert bytes: internal `lc_advance` + `lc_remove` handles deletion, then `lcD_addbytes` adds back the inserted bytes. If the tree becomes empty after deletion, the tree is reset.
+- Delete + insert bytes: internal `lc_advance` + `lc_remove` handles deletion, then uses the direct byte-append path to add back the inserted bytes. If the tree becomes empty after deletion, the tree is reset.
 - Insert bytes only: if the cursor is within a valid line, `leaf->bytes[C->lnu] += ins` lengthens the current line; `C->col += ins` moves the cursor.
 
 **Return values**: `LC_OK` (success), `LC_ERRPARAM` (invalid parameters). The deletion path is guaranteed OOM-free by `lc_remove`'s pre-allocation.
@@ -197,7 +197,7 @@ int lc_splice(lc_Cursor *C, size_t del, unsigned ins);
 int lc_append(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud);
 ```
 
-**Behavior**: If `sc == NULL`, does not go through the split/insert flow — directly appends `e` bytes to the current line at the cursor position (equivalent to `lcD_addbytes`), `C->col += e`, metrics propagated. This fast path is for pure byte appends without newlines.
+**Behavior**: If `sc == NULL`, does not go through the split/insert flow — directly appends `e` bytes to the current line at the cursor position (equivalent to the direct byte-append path), `C->col += e`, metrics propagated. This fast path is for pure byte appends without newlines.
 
 If `sc != NULL`, splits the current line at the cursor position, scanner output is appended after the split point, then the right-side data is stitched back into the tree. `e` is the trailing incomplete-line bytes (added back only after stitching completes); the scanner returns 0 to signal the end.
 
@@ -207,7 +207,7 @@ If `sc != NULL`, splits the current line at the cursor position, scanner output 
 
 **Flow**: cutleaf splits the tree → [append scanner lines, findroom expands] loop → stitch joins → fixsource replenishes `rm` → adds back `e`
 
-**Return values**: `LC_OK`, `LC_ERRPARAM`, `LC_ERRMEM`. On OOM, the tree is fully restored to the pre-cutleaf state via `lcB_rollback`.
+**Return values**: `LC_OK`, `LC_ERRPARAM`, `LC_ERRMEM`. On OOM, the tree is fully restored to the pre-cutleaf state via `rollback`.
 
 **Constraint**: When the tree has no data (`root.child_count == 0` and `levels == 0`), `lc_append` is equivalent to an initial fill — scanner behavior is identical to `lc_scan`, and `e` must still be added back at the end.
 
@@ -221,7 +221,7 @@ int lc_insert(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud);
 
 **Equivalent to**: `lc_append(C, e, sc, ud)` + `lc_advance(C, -(total bytes of new text))`.
 
-**Return values**: Same as `lc_append` — `LC_OK`, `LC_ERRPARAM`, `LC_ERRMEM`. On OOM, the tree is fully restored to the pre-cutleaf state via `lcB_rollback`.
+**Return values**: Same as `lc_append` — `LC_OK`, `LC_ERRPARAM`, `LC_ERRMEM`. On OOM, the tree is fully restored to the pre-cutleaf state via `rollback`.
 
 ---
 
@@ -245,7 +245,7 @@ root (depth 0..15)
 1. **Leaves have no `child_count`** — the effective line count is determined by the parent's `breaks[i]`. Leaves only store line byte lengths, constrained by the LC_LEAF_FANOUT upper bound.
 2. **Dual metrics (bytes + breaks)** — each internal node stores two cumulative arrays, enabling O(log n) bidirectional navigation between byte offsets and line numbers.
 3. **Embedded root** — `lc_Cache.root` is a value, not a pointer, saving one allocation and preventing the root from being freed independently.
-4. **No parent pointers** — the cursor maintains the ancestor path via `paths[]`. All upward propagation (`lcM_up`) relies on this array.
+4. **No parent pointers** — the cursor maintains the ancestor path via `paths[]`. All upward propagation (`metric propagation`) relies on this array.
 5. **Line length ≥ 1** — every value in the tree's `bytes` array is at least 1 (the newline character itself occupies 1 byte); zero-length lines are not supported.
 
 ### Cursor Field Encoding
@@ -282,23 +282,23 @@ The virtual line design allows the cursor to operate outside the text, eliminati
 
 Each page is `LC_PAGE_SIZE` bytes, allocating objects of `sizeof(lc_Node)` or `sizeof(lc_Leaf)`. A free list (`freed`) recycles freed objects. `S->nodes` and `S->leaves` are managed independently.
 
-`lcP_reserve(n)` guarantees at least `n` available objects in the pool (including the freelist), used for transactions — pre-allocation at the stitch entry ensures no OOM throughout the entire process.
+Pool pre-allocation guarantees at least `n` available objects in the pool (including the freelist), used for transactions — pre-allocation at the stitch entry ensures no OOM throughout the entire process.
 
 ---
 
 ## 4. Core Algorithm Notes
 
-### 1. Onion-Layer Stitch (lcD_stitchnode)
+### 1. Onion-Layer Stitch (stitchnode)
 
 stitchnode is the most intricate algorithm in linecache — onion-order `for (k=0; k≤levels; ++k)` where `k` is the onion layer (k=0=leaf layer, k=levels=root layer), and `kl = levels - k` is the tree level corresponding to rt[k].
 
-**Fixed point**: each round first copies (`m = min(rtcc, FANOUT-pcc)`) to fill the current parent node, `lcM_up` updates ancestor metrics. If all are moved (`m == rtcc`) and not at root layer → skip the repair phase for this layer. Otherwise, enter the repair block executing foldnode + findroom to build a new chain for remaining data.
+**Fixed point**: each round first copies (`m = min(rtcc, FANOUT-pcc)`) to fill the current parent node, metric propagation updates ancestor metrics. If all are moved (`m == rtcc`) and not at root layer → skip the repair phase for this layer. Otherwise, enter the repair block executing foldnode + findroom to build a new chain for remaining data.
 
-**kl==0 safety net**: the root layer always enters repair — regardless of whether earlier layers have been processed, at kl==0 foldnode is forced → if root has only one child, shrink the root. The loop condition `k <= lcK_levels(C)` dynamically adapts to root shrinking.
+**kl==0 safety net**: the root layer always enters repair — regardless of whether earlier layers have been processed, at kl==0 foldnode is forced → if root has only one child, shrink the root. The loop condition `k <= tree levels` dynamically adapts to root shrinking.
 
 **Deferred effect of d**: d records "number of right-side child nodes awaiting repair", set at the end of the current round and consumed by backwardnode in the **next round**. This is because the new findroom chain is built on the right, and its underfill requires the current round's foldnode to finish repairing before C can be moved back to that position.
 
-### 2. Three-Phase Interval Deletion (lcD_rmrange)
+### 2. Three-Phase Interval Deletion
 
 L/R dual cursors delimit the deletion interval; the operation proceeds in three phases:
 1. **Find fork + trim edges**: Find the first level where `L->paths[l] != R->paths[l]`. `trimright(L)` deletes from L's leaf to the right; `trimleft(R)` deletes from R's leaf to the left.
@@ -327,30 +327,30 @@ When `dl==0`/`dn==0`, `db==0`/balancenode returns 0 and exits early, so by the t
 
 When C is originally on the left, `mid` leaves one extra segment for the left side, and vice versa. This ensures the leaf/node pointed to by the cursor is never the relocation destination from the right side.
 
-### 5. lcB_rollback — OOM Rollback
+### 5. rollback — OOM Rollback
 
-When `lc_append` encounters OOM at any phase, `lcB_rollback` fully restores the tree to the state after `lcB_cutleaf`. Steps:
+When `lc_append` encounters OOM at any phase, `rollback` fully restores the tree to the state after `cutleaf`. Steps:
 1. **Descend root**: Loop `for(k=levels; k>sl; --k)` clears the extra levels added by findroom rootpush, lowering the root back to `sC`'s levels.
 2. **Merge split-point leaf**: `rt[0].children[0]` is copied back into the left-half leaf `bytes[C->lnu]`.
-3. **Stitch rt**: Onion-order stitches all right-sibling subtrees from `rt[]` back. Net metric delta is propagated via `lcM_up`.
+3. **Stitch rt**: Onion-order stitches all right-sibling subtrees from `rt[]` back. Net metric delta is propagated via `metric propagation`.
 
-Relies on stitch's transactional nature: because OOM inside stitch is prevented by the entry-point `lcP_reserve`, rollback never executes after stitch succeeds (if append/findroom has already failed, rollback is taken directly; if failure occurs after stitch... theoretically impossible).
+Relies on stitch's transactional nature: because OOM inside stitch is prevented by entry-point pool pre-allocation, rollback never executes after stitch succeeds (if append/findroom has already failed, rollback is taken directly; if failure occurs after stitch... theoretically impossible).
 
 ### 6. fixsource — rm Positioning and Replenishment
 
 - `sC` is the cursor snapshot after cutleaf, preserving split-point leaf information
-- `lcK_levels(S) - sl` is the level delta from rootpush during stitch; sC's old path must be shifted down by `k` levels
+- The level delta from rootpush during stitch is `tree levels - sl`; sC's old path must be shifted down by `k` levels
 - Newly added levels are filled with the full left-side path (`sp[l] = &parent(sC, l)->children[0]`); the old root layer `paths[0]` offset is restored
-- `lcK_leaf(sC)->bytes[sC->lnu] += rm; lcM_up(sC, sl, rm, 0)` replenishes the metric
+- The split-point leaf's line length is replenished by `rm`, and metrics are propagated upward
 
 ### 7. Full-Leaf Parent Fill Logic in lc_scan Bulk Loading
 
-`lcB_append` returns 1 when `pcc == LC_FANOUT && li == LC_LEAF_FANOUT` (parent full and last leaf full). The `lc_scan` loop responds to this signal:
+The append helper returns 1 when `pcc == LC_FANOUT && li == LC_LEAF_FANOUT` (parent full and last leaf full). The `lc_scan` loop responds to this signal:
 - First searches bottom-up for the first non-full level `l`
-- `lcD_makechain(C, l, levels, 0)` builds a chain of empty nodes
+- An internal node-chain builder creates a chain of empty nodes
 - Continues to the next append round, filling scanner output into the new chain
 
-`lcP_reserve` pre-allocates nodes before makechain; on OOM, safely returns `LC_ERRMEM`.
+Pool pre-allocation pre-allocates nodes before makechain; on OOM, safely returns `LC_ERRMEM`.
 
 ---
 

@@ -76,7 +76,7 @@ typedef void *sp_Alloc(void *ud, void *ptr, size_t osize, size_t nsize);
 ```
 
 realloc 语义。`ptr=NULL, osize=0` 分配新块；`nsize=0` 释放 `ptr`。
-默认 `spS_defallocf` 封装 `realloc`，失败时 `abort()`。向 `sp_open`
+默认分配器封装 `realloc`，失败时 `abort()`。向 `sp_open`
 传 `NULL` 使用默认分配器。
 
 ### sp_Arbiterf — 混合回调
@@ -114,9 +114,73 @@ typedef sp_Id sp_Arbiterf(void *ud, sp_Id id, sp_Id old, sp_Mask *mask);
 
 ---
 
-## 三、公共 API
+## 三、混合模型
 
-### 3.1 生命周期
+### 一个 id，多层属性
+
+spantree 的目标是为每个需要它的字符**廉价地存储多层字符属性**。树本身
+每个字节段只存一个 `sp_Id`，那一个 id 怎么能代表多层？答案是通过混合：
+arbiter 把多个输入 id 合并成一个新 id，这个新 id 就是“任意多层组合”的
+句柄。
+
+### id 的含义
+
+树不解释 id。在宿主应用中，`sp_Id` 可以对应：
+
+- 一个实际属性（`attr`），或
+- 一个要施加到属性上的操作。
+
+当 arbiter 合并两个 id 时（`ret <- id + old`），一个通常实用的实现
+会先从外部环境（通过 `ud` 传入）查询 `id` 和 `old` 各自对应的 attr
+对象，然后生成一个带有 parent 信息的新 attr 对象（即混合结果），再为
+这个 attr 对象分配一个新 id 并建立关联，最后返回这个新 id。
+
+混合结果如何存储完全由使用者决定：
+
+- 可以直接存储最终 attr：这样 `sp_style` / `sp_next` / `sp_prev`
+  等读取函数返回合并后的 id 后，调用方立刻能得到最终 attr 并直接渲染；
+- 也可以只存储来源（或同时存储来源与最终 attr）：这样读取时可以重建
+  所有原始来源，并在读取时再混合一次。
+
+具体实现案例可以参考 `spantree.c` 中的 Lua 绑定。
+
+如果你需要和 Lua 绑定一样提供类似 Neovim extmark 的语义——查询时要
+返回这个字符上曾经混合过的所有 id——你需要在 arbiter 中维护 id 的生命
+周期。通常的维护方式如下（伪代码）：
+
+```text
+arb(ud, in, old, mask):
+    ret = in && old ? merge(in, old) : (in ? in : 0)
+    if (ret != 0) refcnt[ret] += 1   /* +1 先于 −1；ret == old 两笔抵消 */
+    if (old != 0) refcnt[old] -= 1
+    return ret
+```
+
+库保证：只要一个 id 仍可能被树引用（合法 id），它的 refcnt 就不会降到
+0；因此当某个 id 的 refcnt 为 0 时，说明它已不再被任何地方引用，可以
+安全回收这个 id 及其关联的 attr 对象。
+
+操作 id 同理：在混合回调里先查询该 id 对应的 attr，再执行相应操作——
+例如删除其中某个 parent，或统一修改 attr 中的某个属性。
+
+### namespace 语义
+
+namespace 只有 `SP_MASK_BITS` 个（64 或 32，取决于 `size_t`）。库**不**
+关心 id 与 ns 的关系，这个映射完全由混合回调自行处理。库只保证：如果
+混合回调把某个 id 标记为属于 namespace `ns`，那么 `sp_next(ns)` /
+`sp_prev(ns)` 就能访问到携带该 id 的段。具体如何分配、组合、清除 ns，
+是混合函数的职责。
+
+### spantree 与临时 spanvec 的分工
+
+Lua 绑定实现了一个简化版、基于数组的 `spanvec`，用于 ephemeral
+namespace（大于 `SP_MASK_BITS` 的 ns）。任何文本修改都会直接清空这些
+层，因此**不随编辑漂移**。所以 spantree 只用于需要随文本漂移存储的
+属性；任何只在本帧渲染需要的段，都走 `spanvec`。
+
+## 四、公共 API
+
+### 4.1 生命周期
 
 ```c
 sp_State *sp_open(sp_Alloc *allocf, void *ud);
@@ -128,7 +192,7 @@ void      sp_close(sp_State *S);
 - **`sp_close`**：释放节点池与状态结构。`S == NULL` 无操作。**不会释放
   树**——请先对每棵剩余树调用 `sp_freetree`。
 
-### 3.2 树生命周期
+### 4.2 树生命周期
 
 ```c
 sp_Tree *sp_newtree(sp_State *S);
@@ -140,7 +204,7 @@ size_t   sp_bytes(const sp_Tree *T);
 - **`sp_freetree`**：清除全部节点并释放树结构。`T == NULL` 无操作。
 - **`sp_bytes`**：span 覆盖的总字节数。`NULL` 返回 0。
 
-### 3.3 混合与 Namespace
+### 4.3 混合与 Namespace
 
 ```c
 void sp_setarbiter(sp_Tree *T, sp_Arbiterf *cb, void *ud);
@@ -155,7 +219,7 @@ int  sp_hasns(const sp_Mask *mask, int ns);
   返回 `SP_OK`；`mask` 为 `NULL` 或 `ns` 越界时返回 `SP_ERRPARAM`。
 - **`sp_hasns`**：`mask` 含 `ns` 返回 1，否则 0。非法参数返回 0。
 
-### 3.4 游标导航
+### 4.4 游标导航
 
 ```c
 int  sp_seek(sp_Cursor *C, sp_Tree *T, size_t off);
@@ -175,7 +239,7 @@ int  sp_advance(sp_Cursor *C, sp_Delta d);
 
 导航函数均返回 `SP_OK` 或 `SP_ERRPARAM`。
 
-### 3.5 标记
+### 4.5 标记
 
 ```c
 int sp_fill(sp_Cursor *C, sp_Id id, size_t len);
@@ -192,7 +256,7 @@ int sp_clear(sp_Tree *T, int ns, sp_Id id);
   `1..SP_MASK_BITS`；`id == SP_NONE` 拒绝。返回 `SP_OK` 或
   `SP_ERRPARAM`。
 
-### 3.6 读取
+### 4.6 读取
 
 ```c
 sp_Id sp_style(sp_Cursor *C, size_t *plen, sp_Mask *pmask);
@@ -213,7 +277,7 @@ sp_Id sp_prev(sp_Cursor *C, int ns, size_t *plen);
 消费循环：`seek(0)` → `sp_style`（预查当前段）→ `sp_next(ns)`（步进）。
 因 `sp_next` 是 exclusive 且落段头，循环不会死锁。
 
-### 3.7 编辑
+### 4.7 编辑
 
 ```c
 int sp_splice(sp_Cursor *C, size_t del, size_t ins);
@@ -236,7 +300,7 @@ int sp_remove(sp_Cursor *L, sp_Cursor *R);
 
 ---
 
-## 四、数据结构要点
+## 五、数据结构要点
 
 - **全覆盖 span 模型**：树是 `[0, sp_bytes)` 的 `(len > 0, id)` 段分区。
   没有零长标记、没有字节缝语义、没有 extmark 式点身份。稀疏染色就是
@@ -250,6 +314,7 @@ int sp_remove(sp_Cursor *L, sp_Cursor *R);
   全树扫描。
 - **arbiter 单层**：混合策略完全外置。树零格式知识，只存 id 并调用
   arbiter；arbiter 可在自己的 id 空间编码操作符、attr 与写者身份。
+  完整混合模型见[第 3 节](#三混合模型)。
 - **无 gravity**：重力由操作决定而非存于标记：`sp_append` 继承左、
   `sp_insert` 继承右、`sp_remove` 只缩段。
 - **游标纪律**：游标不停留在树中段尾；唯一段尾位置是树尾（虚拟区）。

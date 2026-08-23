@@ -472,7 +472,7 @@ just lua/ts-lines  # treesitter 未覆盖行
 ```sh
 just bench/all     # 输出当前基准摘要表
 just bench/smoke   # 快速冒烟运行
-just bench/sweep   # 完整 PT_FANOUT 扫描 4..63（64 排除：ptM_mask(64) 是 UB）
+just bench/sweep   # 完整 PT_FANOUT 扫描 4..63（64 排除：全 1 掩码 (64) 是 UB）
 just bench/confirm # 多 seed 确认扫描
 just bench/plot    # 绘制 JSON 结果（需要 matplotlib；无则回退 CSV/Markdown）
 ```

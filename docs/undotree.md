@@ -26,7 +26,7 @@ typedef void *ut_Alloc(void *ud, void *p, size_t osize, size_t nsize);
 ```
 
 realloc semantics. `p=NULL, osize=0` = allocate new; `nsize=0` = free `p`.
-Default `utS_defallocf` wraps `realloc`, aborts on failure.
+Default allocator wraps `realloc`, aborts on failure.
 
 ### ut_State — Memory Context
 
@@ -43,7 +43,7 @@ and the `scratch` buffer used by `ut_diff`/`ut_hunks`.
 typedef void ut_Cleaner(void *ud, ut_Payload *p);
 ```
 
-Called by `ut_deltree` (and `utN_freechildren`) for each node's payload
+Called by `ut_deltree` (and the internal child-freeing helper) for each node's payload
 before the node is freed. Set via `ut_setcleaner`.
 
 ### ut_Payload — Opaque Version Snapshot
@@ -169,11 +169,7 @@ No-op if `T` is NULL.
 
 ### ut_freshcount
 
-```c
-#define ut_freshcount(T) ((T) ? (int)utV_len((T)->journal) : 0)
-```
-
-Number of uncommitted journal entries.
+Returns the number of uncommitted journal entries (0 when `T` is NULL).
 
 ### ut_discard
 

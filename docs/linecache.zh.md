@@ -150,7 +150,7 @@ int lc_markbreak(lc_Cursor *C, unsigned len);
   - 空树时：直接以 `len` 建立单行树
   - 返回后 `C` 定位断后新行之首（`col=0`, `lnu+=1`, `loff`/`off/nu` 已更新）
 
-**语义**: 断点落于 `lc_offset(C) + len` 字节边界，`len` 为断点前行长（含 `\n`）。游标结束于断点*之后*的行首（偏移量 = 原偏移量 + len，列 = 0）。当游标在 trailing 虚拟区（超越树尾）时，`lc_markbreak` 调用 `lcB_oneline` 构建单行树，将虚拟列号**定格**为实际内容——trailing 位置变为真实行。
+**语义**: 断点落于 `lc_offset(C) + len` 字节边界，`len` 为断点前行长（含 `\n`）。游标结束于断点*之后*的行首（偏移量 = 原偏移量 + len，列 = 0）。当游标在 trailing 虚拟区（超越树尾）时，`lc_markbreak` 使用内部单行树构建路径，将虚拟列号**定格**为实际内容——trailing 位置变为真实行。
 - `lc_clearbreaks`: 删除从游标位置起 `len` 字节内的所有行断点（各段连接为一行）。等价于 `lc_splice(C, len, len)` 的宏。游标位于合并后行之 col 位置。
   - `lc_splice` 的宏包装。参数校验委托给 `lc_splice`。
 
@@ -171,7 +171,7 @@ int lc_remove(lc_Cursor *L, lc_Cursor *R);
 
 **返回值**: `LC_OK`（成功或 no-op），`LC_ERRPARAM`（参数非法）。操作后 R 失效（树结构已变），L 指向删除点。
 
-**实现**: 同叶调用 `lcD_rmleaf`，跨叶调用 `lcD_rmrange`（三段法：trim→cut→stitch）。内部 `lcP_reserve` 预分配保证不 OOM。
+**实现**: 同叶与跨叶删除均由内部处理（三段法：trim→cut→stitch）。内部池预分配保证不 OOM。
 
 ### lc_splice — 区间删除/插入字节
 
@@ -183,7 +183,7 @@ int lc_splice(lc_Cursor *C, size_t del, unsigned ins);
 
 **行为**:
 - 游标在 trailing 区域: `C->col += ins` 直接返回
-- 删+补字节: 内部 `lc_advance` + `lc_remove` 处理删除，再 `lcD_addbytes` 加回插入字节。删除后若树已空，重置树。
+- 删+补字节: 内部 `lc_advance` + `lc_remove` 处理删除，再经直接字节追加路径加回插入字节。删除后若树已空，重置树。
 - 插入字节: 若游标在有效行内，`leaf->bytes[C->lnu] += ins` 加长当前行；`C->col += ins` 移动游标。
 
 **返回值**: `LC_OK`（成功），`LC_ERRPARAM`（参数非法）。删除路径由 `lc_remove` 的预分配保证不 OOM。
@@ -196,7 +196,7 @@ int lc_splice(lc_Cursor *C, size_t del, unsigned ins);
 int lc_append(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud);
 ```
 
-**行为**: 若 `sc == NULL`，不走裂行/插入流程——直接在游标位置追加 `e` 字节至当前行（等价于 `lcD_addbytes`），`C->col += e`，度量传播。此 fast path 用于纯字节追加，不含换行。
+**行为**: 若 `sc == NULL`，不走裂行/插入流程——直接在游标位置追加 `e` 字节至当前行（等价于直接字节追加路径），`C->col += e`，度量传播。此 fast path 用于纯字节追加，不含换行。
 
 若 `sc != NULL`，则在游标位置裂开当前行，scanner 输出追加于裂点之后，再将右侧数据缝合回树。`e` 为不完整行尾缀字节（缝合完毕后才加回），scanner 返回 0 表示结束。
 
@@ -206,7 +206,7 @@ int lc_append(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud);
 
 **流程**: cutleaf 裂树 → [append scanner 行, findroom 扩容] 循环 → stitch 缝合 → fixsource 补 `rm` → 加回 `e`
 
-**返回值**: `LC_OK`, `LC_ERRPARAM`, `LC_ERRMEM`。OOM 时通过 `lcB_rollback` 完整恢复树至 cutleaf 前状态。
+**返回值**: `LC_OK`, `LC_ERRPARAM`, `LC_ERRMEM`。OOM 时通过 `回滚` 完整恢复树至 cutleaf 前状态。
 
 **约束**: 树无数据 (`root.child_count == 0` 且 `levels == 0`) 时 `lc_append` 等价于首次填充——scanner 行为与 `lc_scan` 等同，`e` 仍需最后加回。
 
@@ -220,7 +220,7 @@ int lc_insert(lc_Cursor *C, unsigned e, lc_Scanner *sc, void *ud);
 
 **等价于**: `lc_append(C, e, sc, ud)` + `lc_advance(C, -(新文本总字节数))`。
 
-**返回值**: 同 `lc_append` — `LC_OK`, `LC_ERRPARAM`, `LC_ERRMEM`。OOM 时通过 `lcB_rollback` 完整恢复树至 cutleaf 前状态。
+**返回值**: 同 `lc_append` — `LC_OK`, `LC_ERRPARAM`, `LC_ERRMEM`。OOM 时通过 `回滚` 完整恢复树至 cutleaf 前状态。
 
 ---
 
@@ -244,7 +244,7 @@ root (深度 0..15)
 1. **叶无 `child_count`** — 有效行数由父 `breaks[i]` 决定。叶仅存储各行字节长度，约束来自 LC_LEAF_FANOUT 上限。
 2. **度量双计 (bytes + breaks)** — 每内部节点存储两个累积数组，允许 O(log n) 字节偏移↔行号双向导航。
 3. **嵌入 root** — `lc_Cache.root` 是值而非指针，省一次分配且不允许 root 被单独释放。
-4. **无 parent 指针** — 游标经 `paths[]` 维护祖先路径。所有向上传播 (`lcM_up`) 皆依赖此数组。
+4. **无 parent 指针** — 游标经 `paths[]` 维护祖先路径。所有向上传播 (`度量传播`) 皆依赖此数组。
 5. **行长度 ≥ 1** — 树内 `bytes` 数组的每个值至少为 1（换行符自身占 1 字节），不支持零长行。
 
 ### 游标字段编码
@@ -281,23 +281,23 @@ line   = nu + lnu
 
 每页 `LC_PAGE_SIZE` 字节，分配 `sizeof(lc_Node)` 或 `sizeof(lc_Leaf)` 的对象。空闲链表 (`freed`) 回收已释放对象。`S->nodes` 与 `S->leaves` 独立管理。
 
-`lcP_reserve(n)` 保证池中至少有 `n` 个可用对象（含 freelist），用于事务——stitch 入口的预分配保证全程不 OOM。
+池预分配保证池中至少有 `n` 个可用对象（含 freelist），用于事务——stitch 入口的预分配保证全程不 OOM。
 
 ---
 
 ## 四、核心算法要点
 
-### 1. 洋葱序缝合 (lcD_stitchnode)
+### 1. 洋葱序缝合 (stitchnode)
 
 stitchnode 是 linecache 最精巧的算法——洋葱序 `for (k=0; k≤levels; ++k)` 中 `k` 为洋葱层 (k=0=叶层, k=levels=根层)，`kl = levels - k` 为 rt[k] 对应树中层级。
 
-**不动点**: 每轮首复制 (`m = min(rtcc, FANOUT-pcc)`) 填当前父节点，`lcM_up` 更新祖先度量。若全部搬完 (`m == rtcc`) 且非根层 → 跳过本层修复。否则进入修复块执行 foldnode + findroom 为剩余数据建新链。
+**不动点**: 每轮首复制 (`m = min(rtcc, FANOUT-pcc)`) 填当前父节点，度量传播更新祖先度量。若全部搬完 (`m == rtcc`) 且非根层 → 跳过本层修复。否则进入修复块执行 foldnode + findroom 为剩余数据建新链。
 
-**kl==0 保底**: 根层永远进入修复——无论之前各层是否已处理，kl==0 处强制 foldnode → root仅一子则缩根。循环条件 `k <= lcK_levels(C)` 动态适应缩根。
+**kl==0 保底**: 根层永远进入修复——无论之前各层是否已处理，kl==0 处强制 foldnode → root仅一子则缩根。循环条件 `k <= 树层级` 动态适应缩根。
 
 **d 的延迟生效**: d 用于记录"待修复右侧子节点数"，当前轮末尾设值，**下一轮** backwardnode 才消耗。因 findroom 新链建在右侧、其 underfill 需本轮的 foldnode 修复后才能将 C 回退至此位置。
 
-### 2. 三段法区间删除 (lcD_rmrange)
+### 2. 三段法区间删除
 
 L/R 双游标界定删除区间，操作分三段:
 1. **求分岔+修边**: 找 `L->paths[l] != R->paths[l]` 的首层。`trimright(L)` 删 L 叶右侧、`trimleft(R)` 删 R 叶左侧。
@@ -327,30 +327,30 @@ L/R 双游标界定删除区间，操作分三段:
 C 在原左侧时 `mid` 多留一个段给左侧，反之亦然。保证游标指向的叶/节点永不为
 右侧的搬迁目的地。
 
-### 5. lcB_rollback — OOM 回滚
+### 5. 回滚 — OOM 回滚
 
-`lc_append` 在任何阶段 OOM 时通过 `lcB_rollback` 完整恢复树至 `lcB_cutleaf` 之后状态。步骤:
+`lc_append` 在任何阶段 OOM 时通过 `回滚` 完整恢复树至 `裂叶` 之后状态。步骤:
 1. **降根**: 循环 `for(k=levels; k>sl; --k)` 清除 findroom rootpush 增加的层，将 root 降回 `sC` 的 levels
 2. **合并裂点叶**: `rt[0].children[0]` 拷贝回左半叶 `bytes[C->lnu]`
-3. **缝合 rt**: 洋葱序将 `rt[]` 中右侧兄弟子树全部缝回。net 度量差量以 `lcM_up` 传播
+3. **缝合 rt**: 洋葱序将 `rt[]` 中右侧兄弟子树全部缝回。net 度量差量以 `度量传播` 传播
 
-依赖 `stitch` 的事务性: 因为 `stitch` 内部 OOM 在入口 `lcP_reserve` 已被阻止，rollback 在 stitch 之后不会执行（若此前 append/findroom 已失败则直接 rollback; 若 stitch 之后失败... 理论上不可能失败）。
+依赖 `stitch` 的事务性: 因为 `stitch` 内部 OOM 在入口池预分配已被阻止，rollback 在 stitch 之后不会执行（若此前 append/findroom 已失败则直接 rollback; 若 stitch 之后失败... 理论上不可能失败）。
 
 ### 6. fixsource — rm 定位与补写
 
 - `sC` 为 cutleaf 后的游标快照，保存裂点叶信息
-- `lcK_levels(S) - sl` 为 stitch 中 rootpush 增加的层级差，sC 旧路径需下移 `k` 位
+- stitch 中 rootpush 增加的层级差为 `树层级 - sl`，sC 旧路径需下移 `k` 位
 - 新增层级填全量左侧路径 (`sp[l] = &parent(sC, l)->children[0]`)，旧根层 `paths[0]` 偏移恢复
-- `lcK_leaf(sC)->bytes[sC->lnu] += rm; lcM_up(sC, sl, rm, 0)` 补回度量
+- 裂点叶的行长补回 `rm`，并向上传播度量
 
 ### 7. lc_scan 批量加载中的满叶父 fill 逻辑
 
-`lcB_append` 返回 1 当 `pcc == LC_FANOUT && li == LC_LEAF_FANOUT`（父满且末叶满）。`lc_scan` 循环响应此信号:
+append 辅助函数返回 1 当 `pcc == LC_FANOUT && li == LC_LEAF_FANOUT`（父满且末叶满）。`lc_scan` 循环响应此信号:
 - 先自底向上寻首个非满层 `l`
-- `lcD_makechain(C, l, levels, 0)` 建空节点链
+- 内部节点链构建器建出空节点链
 - 继续下一轮 append，将 scanner 输出填入新链
 
-`lcP_reserve` 在 makechain 前预分配节点，OOM 时安全返回 `LC_ERRMEM`。
+池预分配在 makechain 前预分配节点，OOM 时安全返回 `LC_ERRMEM`。
 
 ---
 

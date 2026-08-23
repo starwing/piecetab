@@ -14,12 +14,12 @@
 
 ### Error Codes
 
-| Macro         | Value        | Meaning                                  |
-| ------------- | ------------ | ---------------------------------------- |
-| `SP_OK`       | 0            | Success                                  |
-| `SP_ERRPARAM` | -1           | Null pointer or out-of-range parameter   |
-| `SP_ERRMEM`   | -2           | Memory allocation failure                |
-| `SP_NONE`     | `~(sp_Id)0`  | End-of-iteration sentinel (never a valid id) |
+| Macro         | Value       | Meaning                                      |
+| ------------- | ----------- | -------------------------------------------- |
+| `SP_OK`       | 0           | Success                                      |
+| `SP_ERRPARAM` | -1          | Null pointer or out-of-range parameter       |
+| `SP_ERRMEM`   | -2          | Memory allocation failure                    |
+| `SP_NONE`     | `~(sp_Id)0` | End-of-iteration sentinel (never a valid id) |
 
 ### sp_State — Memory Context
 
@@ -81,7 +81,7 @@ typedef void *sp_Alloc(void *ud, void *ptr, size_t osize, size_t nsize);
 ```
 
 realloc semantics. `ptr=NULL, osize=0` allocates a new block; `nsize=0`
-frees `ptr`. The default `spS_defallocf` wraps `realloc` and aborts on
+frees `ptr`. The default allocator wraps `realloc` and aborts on
 failure. Pass `NULL` to `sp_open` to use the default.
 
 ### sp_Arbiterf — Blending Callback
@@ -111,20 +111,96 @@ cause false negatives (the tree does not validate it).
 
 ## 2. Configuration Macros
 
-| Symbol          | Default | Meaning                                  |
-| --------------- | ------- | ---------------------------------------- |
-| `SP_FANOUT`     | 34      | Max children per node (must be ≥ 4)      |
-| `SP_PAGE_SIZE`  | 65536   | Pool allocator page size                 |
+| Symbol          | Default | Meaning                                                                      |
+| --------------- | ------- | ---------------------------------------------------------------------------- |
+| `SP_FANOUT`     | 34      | Max children per node (must be ≥ 4)                                          |
+| `SP_PAGE_SIZE`  | 65536   | Pool allocator page size                                                     |
 | `SP_MAX_LEVEL`  | 16      | Max tree depth / cursor path array size (see [max_levels.md](max_levels.md)) |
-| `SP_STATIC_API` | —       | When defined, all `SP_API` functions become static |
+| `SP_STATIC_API` | —       | When defined, all `SP_API` functions become static                           |
 
 `SP_FANOUT >= 4` is enforced by a static assertion.
 
 ---
 
-## 3. Public API
+## 3. Blending Model
 
-### 3.1 Lifecycle
+### One id, many layers
+
+spantree exists to cheaply store multiple layers of character attributes for
+every character that needs them. The tree itself stores only one `sp_Id` per
+byte run, so how does a single id represent many layers? Through blending:
+the arbiter turns several incoming ids into one merged id, and that id is a
+handle for an arbitrarily rich combination of layers.
+
+### What an id means
+
+The tree does not interpret ids. In the host application, an `sp_Id` may
+stand for either:
+
+- an actual attribute (`attr`), or
+- an operation to apply to an attribute.
+
+When the arbiter merges two ids (`ret <- id + old`), a typical useful
+implementation first looks up the attr objects for `id` and `old` from
+external state passed through `ud`, then creates a new attr object carrying
+parent information — the blend result — allocates a new id for it, associates
+the two, and returns that id.
+
+How the blend result is stored is up to the host:
+
+- Store the final attr directly: when `sp_style` / `sp_next` / `sp_prev`
+  return the merged id, the caller immediately gets the final attr and can
+  render it.
+- Store only the sources (or both sources and the final attr): the caller
+  can rebuild every original source later and re-blend at read time.
+
+See the Lua binding in `spantree.c` for a concrete implementation.
+
+If, like the Lua binding, you need Neovim-style extmark semantics — a query
+must return every id that has ever been blended onto this character — you
+need to maintain id lifetimes in the arbiter. A common pattern is
+(pseudocode):
+
+```text
+arb(ud, in, old, mask):
+    ret = in && old ? merge(in, old) : (in ? in : 0)
+    if (ret != 0) refcnt[ret] += 1   /* +1 before −1; ret == old cancels out */
+    if (old != 0) refcnt[old] -= 1
+    return ret
+```
+
+The library guarantees that a legal id — one still reachable from the tree —
+never has its refcnt drop to 0. So once any id's refcnt reaches 0, it is no
+longer referenced anywhere and can be reclaimed together with its associated
+attr object.
+
+Operation ids work the same way: inside the blending callback you first look
+up the id's attribute, then perform the corresponding operation — for
+example removing one of the recorded parents, or uniformly changing one
+property across the attribute.
+
+### Namespace semantics
+
+There are only `SP_MASK_BITS` namespaces (64 or 32, depending on `size_t`).
+The library does **not** define any relationship between ids and namespaces;
+that mapping is entirely the arbiter's responsibility. The library only
+guarantees that if the arbiter marks an id as belonging to namespace `ns`,
+then `sp_next(ns)` / `sp_prev(ns)` can visit the segments carrying that id.
+How namespaces are assigned, combined, or cleared is up to the blending
+function.
+
+### spantree vs ephemeral spanvec
+
+The Lua binding implements a simplified, array-based `spanvec` for ephemeral
+namespaces (namespace ids above `SP_MASK_BITS`). Any text modification
+clears these layers immediately, so they do **not** drift with edits.
+Therefore spantree is for attributes that must follow text as it is edited;
+segments needed only for the current frame's rendering should go through
+`spanvec` instead.
+
+## 4. Public API
+
+### 4.1 Lifecycle
 
 ```c
 sp_State *sp_open(sp_Alloc *allocf, void *ud);
@@ -137,7 +213,7 @@ void      sp_close(sp_State *S);
   is a no-op. **It does not free trees** — call `sp_freetree` on every
   remaining tree first.
 
-### 3.2 Tree Lifecycle
+### 4.2 Tree Lifecycle
 
 ```c
 sp_Tree *sp_newtree(sp_State *S);
@@ -152,7 +228,7 @@ size_t   sp_bytes(const sp_Tree *T);
 - **`sp_bytes`**: total number of bytes covered by the spans. Returns 0 for
   `NULL`.
 
-### 3.3 Blending and Namespaces
+### 4.3 Blending and Namespaces
 
 ```c
 void sp_setarbiter(sp_Tree *T, sp_Arbiterf *cb, void *ud);
@@ -169,7 +245,7 @@ int  sp_hasns(const sp_Mask *mask, int ns);
 - **`sp_hasns`**: returns 1 if `mask` contains `ns`, 0 otherwise. Returns 0
   for invalid arguments.
 
-### 3.4 Cursor Navigation
+### 4.4 Cursor Navigation
 
 ```c
 int  sp_seek(sp_Cursor *C, sp_Tree *T, size_t off);
@@ -189,7 +265,7 @@ int  sp_advance(sp_Cursor *C, sp_Delta d);
 
 All navigation functions return `SP_OK` or `SP_ERRPARAM`.
 
-### 3.5 Marking
+### 4.5 Marking
 
 ```c
 int sp_fill(sp_Cursor *C, sp_Id id, size_t len);
@@ -208,7 +284,7 @@ int sp_clear(sp_Tree *T, int ns, sp_Id id);
   as a separate operation. `ns` must be in `1..SP_MASK_BITS`;
   `id == SP_NONE` is rejected. Returns `SP_OK` or `SP_ERRPARAM`.
 
-### 3.6 Reading
+### 4.6 Reading
 
 ```c
 sp_Id sp_style(sp_Cursor *C, size_t *plen, sp_Mask *pmask);
@@ -234,7 +310,7 @@ Consumption pattern: `seek(0)` → `sp_style` (peek current) → `sp_next(ns)`
 (step). Because `sp_next` is exclusive and lands on segment heads, this loop
 cannot livelock.
 
-### 3.7 Editing
+### 4.7 Editing
 
 ```c
 int sp_splice(sp_Cursor *C, size_t del, size_t ins);
@@ -259,7 +335,7 @@ All editing functions return `SP_OK`, `SP_ERRPARAM`, or `SP_ERRMEM`. On
 
 ---
 
-## 4. Data Structure Notes
+## 5. Data Structure Notes
 
 - **Full-coverage span model**: the tree is a partition of `[0, sp_bytes)`
   into `(len > 0, id)` runs. There are no zero-length marks, no byte-gap
@@ -275,6 +351,7 @@ All editing functions return `SP_OK`, `SP_ERRPARAM`, or `SP_ERRMEM`. On
 - **Arbiter single layer**: blending policy is fully external. The tree has
   zero format knowledge; it only stores ids and calls the arbiter. The
   arbiter can encode operators, attrs, and writer identity in its id space.
+  See [§3](#3-blending-model) for the full blending model.
 - **No gravity**: gravity is decided by the operation, not stored in marks:
   `sp_append` inherits left, `sp_insert` inherits right, `sp_remove` only
   shrinks spans.
