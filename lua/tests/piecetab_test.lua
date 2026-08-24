@@ -645,7 +645,7 @@ function TestDoc:testUndoCallbackReplays()
 end
 
 function TestDoc:testUndoCallbackMultiHunk()
-    -- two scattered edits in one commit: hunks keep sequential offsets
+    -- two scattered edits in one commit: hunks are fed in reverse raw-pa order
     local d = pt.doc("abcdef")
     d:commit()
     d:seek("set", 1); d:write("X") -- journal (1,0,1)
@@ -677,7 +677,7 @@ function TestDoc:testUndoCallbackFresh()
 end
 
 function TestDoc:testRedoCallback()
-    -- redo(f): forward hunks, inserted text read from the child buffer
+    -- redo(f): reverse raw-pa hunks, inserted text read from the child buffer
     local d = pt.doc("abcdef")
     d:commit()
     d:seek("set", 1); d:write("XY"); d:commit() -- "aXYbcdef"
@@ -688,6 +688,277 @@ function TestDoc:testRedoCallback()
     end)
     lu.assertEquals(d:dump(), "aXYbcdef")
     lu.assertEquals(apply_edits("abcdef", edits), "aXYbcdef")
+end
+
+function TestDoc:testUndoCallbackDiffReverseRaw()
+    -- Regression: version/switch multi-hunk must also be reverse raw-pa.
+    local d = pt.doc("abcdef")
+    d:commit()
+    d:seek("set", 1); d:write("X")
+    d:seek("set", 5); d:write("Y")
+    d:commit()
+    local calls = {}
+    d:undo(function(off, del, text)
+        calls[#calls + 1] = { off = off, del = del, text = text }
+    end)
+    lu.assertEquals(d:dump(), "abcdef")
+    lu.assertEquals(calls, {
+        { off = 5, del = 1, text = "" },
+        { off = 1, del = 1, text = "" },
+    })
+end
+
+function TestDoc:testUndoCallbackFreshReverseRaw()
+    -- Regression: fresh multi-hunk must be fed in reverse raw-pa order,
+    -- not forward sequential order. Source: aXbcdYef -> abcdef.
+    local d = pt.doc("abcdef")
+    d:commit()
+    d:seek("set", 1); d:write("X")
+    d:seek("set", 5); d:write("Y")
+    local calls = {}
+    d:undo(function(off, del, text)
+        calls[#calls + 1] = { off = off, del = del, text = text }
+    end)
+    lu.assertEquals(d:dump(), "abcdef")
+    lu.assertEquals(calls, {
+        { off = 5, del = 1, text = "" },
+        { off = 1, del = 1, text = "" },
+    })
+end
+
+function TestDoc:testUndoCallbackSwitchSeesSourceBuffer()
+    -- Regression: switch-segment callback must run while doc still points
+    -- at the source buffer ("abc"), not the destination ("c").
+    -- view_prefix only exposes [0, off+del), so read that prefix.
+    local d = pt.doc("c")
+    d:commit()
+    d:seek("set", 0); d:write("ab"); d:commit()
+    local seen
+    d:undo(function(off, del, text)
+        seen = d:readat(0, off + del)
+    end)
+    lu.assertEquals(seen, "ab")
+end
+
+function TestDoc:testUndoCallbackTwoSegmentsSeeIntermediate()
+    -- Regression: fresh callback sees live buffer; switch callback must
+    -- see the clean commit buffer after fresh is dropped, not destination.
+    local d = pt.doc("c")
+    d:commit()
+    d:seek("set", 0); d:write("ab"); d:commit()
+    d:seek("set", 1); d:write("X")
+    local seen = {}
+    d:undo(function(off, del, text)
+        seen[#seen + 1] = d:readat(0, off + del)
+    end)
+    lu.assertEquals(seen, { "aX", "ab" })
+end
+
+function TestDoc:testViewPrefixReadOnlyInsideCallback()
+    -- While a hunk callback is running, the document is a read-only view.
+    local d = pt.doc("c")
+    d:commit()
+    d:seek("set", 0); d:write("ab"); d:commit()
+    d:seek("set", 1); d:write("X")
+    local checked = false
+    d:undo(function(off, del, text)
+        lu.assertErrorMsgContains("read-only",
+            function() d:write("Z") end)
+        lu.assertErrorMsgContains("read-only",
+            function() d:remove(1) end)
+        checked = true
+    end)
+    lu.assertIsTrue(checked)
+end
+
+function TestDoc:testViewPrefixOutOfRangeInsideCallback()
+    -- Reads past the current hunk prefix must fail.
+    local d = pt.doc("c")
+    d:commit()
+    d:seek("set", 0); d:write("ab"); d:commit()
+    d:seek("set", 1); d:write("X")
+    local checked = false
+    d:undo(function(off, del, text)
+        lu.assertErrorMsgContains("outside view prefix",
+            function() d:readat(0, off + del + 1) end)
+        lu.assertErrorMsgContains("outside view prefix",
+            function() d:linecol(off + del + 1) end)
+        checked = true
+    end)
+    lu.assertIsTrue(checked)
+end
+
+function TestDoc:testViewPrefixLinecolInsideCallback()
+    -- The synced linecache can answer line/col inside the exposed prefix.
+    local d = pt.doc("c")
+    d:commit()
+    d:seek("set", 0); d:write("ab"); d:commit()
+    d:seek("set", 1); d:write("X")
+    local calls = {}
+    d:undo(function(off, del, text)
+        calls[#calls + 1] = { { d:linecol(0) }, { d:linecol(off) } }
+    end)
+    lu.assertEquals(calls, {
+        { { 0, 0 }, { 0, 1 } }, -- fresh: aXbc, prefix to X
+        { { 0, 0 }, { 0, 0 } }, -- switch: abc, prefix to start
+    })
+end
+
+function TestDoc:testViewPrefixLineoffsetInsideCallback()
+    -- linecache is pre-synced to the prefix before callbacks, so
+    -- lineoffset works without re-entering docsync (multi-line source,
+    -- prefix covers the newline).
+    local d = pt.doc("abc")
+    d:commit()
+    d:seek("set", 1); d:write("\n"); d:commit()
+    local calls = {}
+    d:undo(function(off, del, text)
+        calls[#calls + 1] = { d:lineoffset(0), d:lineoffset(1) }
+    end)
+    lu.assertEquals(calls, { { 0, 2 } })
+end
+
+function TestDoc:testViewPrefixCallbackLinecolDoesNotClobberHunks()
+    -- Probe: a line query inside a hunk callback must not re-enter
+    -- docsync, because that overwrites the hunk vector currently being
+    -- iterated. Pre-syncing to the prefix keeps subsequent callbacks
+    -- intact across multiple fresh hunks.
+    local d = pt.doc("")
+    d:commit()
+    d:write("xyz"); d:commit()
+    d:seek("set", 1); d:write("A")
+    d:seek("set", 3); d:remove(1)
+    local calls = {}
+    d:undo(function(off, del, text)
+        local line, col = d:linecol(off)
+        calls[#calls + 1] = { off, del, text, line, col }
+    end)
+    lu.assertEquals(calls, {
+        { 3, 0, "z", 0, 3 },
+        { 1, 1, "", 0, 1 },
+        { 0, 3, "", 0, 0 },
+    })
+    lu.assertEquals(d:dump(), "")
+end
+
+function TestDoc:testViewPrefixFullDocAccessErrors()
+    -- APIs that ask for the whole document are outside the prefix view.
+    local d = pt.doc("c")
+    d:commit()
+    d:seek("set", 0); d:write("ab"); d:commit()
+    local checked = false
+    d:undo(function(off, del, text)
+        lu.assertErrorMsgContains("outside view prefix",
+            function() d:breaks() end)
+        checked = true
+    end)
+    lu.assertIsTrue(checked)
+end
+
+function TestDoc:testViewPrefixCharlenOutOfRange()
+    local d = pt.doc("c")
+    d:commit()
+    d:seek("set", 0); d:write("ab"); d:commit()
+    d:seek("set", 1); d:write("X")
+    local checked = false
+    d:undo(function(off, del, text)
+        lu.assertErrorMsgContains("outside view prefix",
+            function() d:charlen(off + del) end)
+        checked = true
+    end)
+    lu.assertIsTrue(checked)
+end
+
+function TestDoc:testViewPrefixReadlineOutOfRange()
+    local d = pt.doc("c")
+    d:commit()
+    d:seek("set", 0); d:write("ab"); d:commit()
+    d:seek("set", 1); d:write("X")
+    d:seek("set", 0)
+    local checked = false
+    d:undo(function(off, del, text)
+        lu.assertErrorMsgContains("outside view prefix",
+            function() d:read() end)
+        checked = true
+    end)
+    lu.assertIsTrue(checked)
+end
+
+function TestDoc:testViewPrefixPieceOutOfRange()
+    -- switch callback: source "abc" is one piece longer than prefix 2.
+    local d = pt.doc("c")
+    d:commit()
+    d:seek("set", 0); d:write("ab"); d:commit()
+    d:seek("set", 0)
+    local checked = false
+    d:undo(function(off, del, text)
+        lu.assertErrorMsgContains("outside view prefix",
+            function() d:piece("next") end)
+        checked = true
+    end)
+    lu.assertIsTrue(checked)
+end
+
+function TestDoc:testViewPrefixAdvancecharsOutOfRange()
+    local d = pt.doc("c")
+    d:commit()
+    d:seek("set", 0); d:write("ab"); d:commit()
+    d:seek("set", 1); d:write("X")
+    d:seek("set", 0)
+    local checked = false
+    d:undo(function(off, del, text)
+        lu.assertErrorMsgContains("outside view prefix",
+            function() d:advancechars(10) end)
+        checked = true
+    end)
+    lu.assertIsTrue(checked)
+end
+
+function TestDoc:testViewPrefixSeekOutOfRange()
+    local d = pt.doc("c")
+    d:commit()
+    d:seek("set", 0); d:write("ab"); d:commit()
+    d:seek("set", 1); d:write("X")
+    local checked = false
+    d:undo(function(off, del, text)
+        lu.assertErrorMsgContains("outside view prefix",
+            function() d:seek("set", off + del + 1) end)
+        checked = true
+    end)
+    lu.assertIsTrue(checked)
+end
+
+function TestDoc:testViewPrefixSeekNumericOutOfRange()
+    local d = pt.doc("c")
+    d:commit()
+    d:seek("set", 0); d:write("ab"); d:commit()
+    d:seek("set", 1); d:write("X")
+    d:seek("set", 0)
+    local checked = false
+    d:undo(function(off, del, text)
+        lu.assertErrorMsgContains("outside view prefix",
+            function() d:seek(off + del + 1) end)
+        checked = true
+    end)
+    lu.assertIsTrue(checked)
+end
+
+function TestDoc:testViewPrefixResetAfterCallbackError()
+    -- A Lua error inside a hunk callback must not leave view_prefix set.
+    local d = pt.doc("c")
+    d:commit()
+    d:seek("set", 0); d:write("ab"); d:commit()
+    d:seek("set", 1); d:write("X")
+    local ok, err = pcall(function()
+        d:undo(function()
+            error("boom")
+        end)
+    end)
+    lu.assertFalse(ok)
+    lu.assertStrContains(err, "boom")
+    -- prefix is cleared: normal writes work again.
+    d:seek("set", 0)
+    d:write("Y")
 end
 
 function TestDoc:testUndoCallbackVidStillWorks()
@@ -715,6 +986,18 @@ function TestDoc:testUndoCallbackVid()
     lu.assertEquals(d:dump(), "aXYbcdef")
     lu.assertEquals(#edits, 1)
     lu.assertEquals(apply_edits(before, edits), "aXYbcdef")
+end
+
+function TestDoc:testVersion()
+    local d = pt.doc("abc")
+    lu.assertIsNumber(d:version())
+    lu.assertTrue(d:version() >= 1)
+end
+
+function TestDoc:testPieceInvalidOp()
+    local d = pt.doc("abc")
+    lu.assertErrorMsgContains("invalid piece operation",
+        function() d:piece("bad") end)
 end
 
 function TestDoc:testBufferExport()
@@ -1243,8 +1526,9 @@ function TestDoc:testLineoffsetOutOfRange()
     local d = pt.doc("a\nb")
     lu.assertErrorMsgContains("line number out of range",
         function() d:lineoffset(2) end)
+    -- negative line must be rejected before reaching docsync
     lu.assertErrorMsgContains("line number out of range",
-        function() d:lineoffset(-1) end)
+        function() d:lineoffset(-2) end)
 end
 
 function TestDoc:testLineoffsetReadonly()
@@ -1435,6 +1719,9 @@ function TestDoc:testSeekLineOutOfRange()
     local d = pt.doc("a\nb")
     lu.assertErrorMsgContains("line out of range",
         function() d:seek("line", 999) end)
+    -- negative line must be rejected before reaching docsync
+    lu.assertErrorMsgContains("line number must be non-negative",
+        function() d:seek("line", -1) end)
 end
 
 function TestDoc:testLineLenOutOfRange()

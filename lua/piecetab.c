@@ -111,6 +111,7 @@ static lpt_State *lpt_state(lua_State *L) {
 #define LPT_CURSOR_TYPE "piecetab.Cursor"
 #define LPT_DOC_TYPE    "piecetab.Doc"
 #define LPT_ITER_TYPE   "piecetab.PieceIter"
+#define LPT_NOPREFIX    (~(size_t)0)
 
 /* piece iterator userdata: owns a retained tree ref, cursor built from it */
 typedef struct lpt_PieceIter {
@@ -125,12 +126,25 @@ typedef struct lpt_Doc {
     lc_Cache *lc;    /* linecache; doc owns it, never destroyed */
     ut_Vid    lcvid; /* lc aligned to this commit node, NULL=empty */
     int       lck;   /* journal entries consumed by lc */
+
+    size_t view_prefix; /* LPT_NOPREFIX = full view, else exclusive end */
 } lpt_Doc;
 
 /* clang-format off */
 static lpt_Doc *lpt_checkdoc(lua_State *L, int idx)
 { return (lpt_Doc *)luaL_checkudata(L, idx, LPT_DOC_TYPE); }
 /* clang-format on */
+
+static void lpt_checkreadonly(lua_State *L, lpt_Doc *d) {
+    if (d->view_prefix == LPT_NOPREFIX) return;
+    luaL_error(L, "piecetab: document is read-only in view prefix");
+}
+
+static void lpt_checkprefix(lua_State *L, lpt_Doc *d, size_t end) {
+    if (d->view_prefix == LPT_NOPREFIX) return;
+    if (end <= d->view_prefix) return;
+    luaL_error(L, "piecetab: access outside view prefix");
+}
 
 static int lpt_checkerror(lua_State *L, int err) {
     assert(err != PT_ERRPARAM);
@@ -493,28 +507,58 @@ static void lpt_hunktext(lua_State *L, pt_Buffer b, size_t pos, size_t len) {
     luaL_pushresult(&B);
 }
 
-static void lpt_hunkcb(lua_State *L, int cb, pt_Buffer b, ut_HunkCV h, int n) {
-    ptrdiff_t shift = 0;
-    int       i;
+typedef struct lpt_HunkCtx {
+    lua_State *L;
+    lpt_Doc   *d;
+    int        cb;
+    pt_Buffer  b;
+} lpt_HunkCtx;
+
+/* clang-format off */
+static lpt_HunkCtx lpt_hunkctx(lua_State *L, lpt_Doc *d, int cb, pt_Buffer b)
+{ lpt_HunkCtx x; x.L = L, x.d = d, x.cb = cb, x.b = b; return x; }
+/* clang-format on */
+
+static int lpt_fillcache(lc_Cache *lc, pt_Buffer b, size_t tol, size_t tob) {
+    lpt_ScanCtx ctx;
+    if (lc_bytes(lc) >= tob) return LC_OK;
+    ctx.cur_line = lc_breaks(lc);
+    ctx.max_line = tol == LPT_UNL ? tol : tol + 1, ctx.end = tob;
+    pt_seek(&ctx.C, b, lc_bytes(lc));
+    return lc_scan(lc, lpt_scanline, &ctx);
+}
+
+static void lpt_callhunkcb(lpt_HunkCtx x, ut_HunkCV h, int n) {
+    size_t     end = n ? h[n - 1].pa + h[n - 1].pdel : 0;
+    lua_State *L = x.L;
+    int        i, r;
     /* b must sit on the hunks' child side: the committed buffer for
        fresh hunks, the switched-to buffer for version hunks. */
-    for (i = 0; i < n; ++i) {
-        /* sequential coordinate: never ca — inverted hunks break it */
-        size_t off = h[i].pa + (size_t)shift;
-        shift += (ptrdiff_t)h[i].cins - (ptrdiff_t)h[i].pdel;
-        lua_pushvalue(L, cb);
-        lua_pushinteger(L, (lua_Integer)off);
+    if (n == 0) return;
+    lpt_checkerror(L, lpt_fillcache(x.d->lc, pt_buffer(&x.d->C), LPT_UNL, end));
+    for (i = n - 1; i >= 0; --i) {
+        lua_pushvalue(L, x.cb);
+        lua_pushinteger(L, (lua_Integer)h[i].pa);
         lua_pushinteger(L, (lua_Integer)h[i].pdel);
-        lpt_hunktext(L, b, h[i].ca, h[i].cins);
-        lua_call(L, 3, 0);
+        lpt_hunktext(L, x.b, h[i].ca, h[i].cins);
+        x.d->view_prefix = h[i].pa + h[i].pdel;
+        r = lua_pcall(L, 3, 0, 0);
+        x.d->view_prefix = LPT_NOPREFIX;
+        if (r != LUA_OK) lua_error(L);
     }
 }
 
-static int lpt_docsync(lpt_Doc *d, size_t tol, size_t tob) {
-    pt_Buffer   b = pt_buffer(&d->C);
-    ut_Vid      cur = ut_current(d->ut);
-    lpt_ScanCtx ctx;
-    int         r;
+static int lpt_docsync(lua_State *L, lpt_Doc *d, size_t tol, size_t tob) {
+    pt_Buffer b = pt_buffer(&d->C);
+    ut_Vid    cur = ut_current(d->ut);
+    int       r;
+    assert(tol != LPT_UNL || tob != LPT_UNL);
+    if (d->view_prefix != LPT_NOPREFIX) {
+        if (tob == LPT_UNL || tob > d->view_prefix)
+            luaL_error(L, "piecetab: access outside view prefix");
+        assert(d->lcvid == ut_current(d->ut) && d->lck == ut_freshcount(d->ut));
+        return 0;
+    }
     if ((r = ut_diff(d->ut, d->lcvid, cur)) < 0) return r;
     if ((r = lpt_hunkapply(d->lc, ut_hunks(d->ut, NULL), r, b)) < 0) return r;
     d->lcvid = cur;
@@ -522,10 +566,7 @@ static int lpt_docsync(lpt_Doc *d, size_t tol, size_t tob) {
     if ((r = ut_freshdiff(d->ut, d->lck, ut_freshcount(d->ut))) < 0) return r;
     if ((r = lpt_hunkapply(d->lc, ut_hunks(d->ut, NULL), r, b)) < 0) return r;
     d->lck = ut_freshcount(d->ut);
-    ctx.cur_line = lc_breaks(d->lc);
-    ctx.max_line = tol == LPT_UNL ? tol : tol + 1, ctx.end = tob;
-    pt_seek(&ctx.C, b, lc_bytes(d->lc));
-    return lc_scan(d->lc, lpt_scanline, &ctx);
+    return lpt_fillcache(d->lc, b, tol, tob);
 }
 
 static int Ldoc_gc(lua_State *L) {
@@ -569,6 +610,7 @@ static lpt_Doc *lpt_newdoc(lua_State *L, pt_Buffer b) {
     d->lc = lc_newcache(S->LS);
     if (!d->lc) luaL_error(L, "piecetab: out of memory");
     pt_seek(&d->C, b, 0), d->lck = 0, d->lcvid = ut_root(d->ut);
+    d->view_prefix = LPT_NOPREFIX;
     lua_createtable(L, 0, 0);
     lua_pushinteger(L, (lua_Integer)pt_version(b));
     lua_pushlightuserdata(L, (void *)ut_root(d->ut));
@@ -593,7 +635,7 @@ static int Lpt_doc(lua_State *L) {
 
 static size_t lpt_docbreaks(lua_State *L, lpt_Doc *d, size_t lnum) {
     size_t br;
-    lpt_checkerror(L, lpt_docsync(d, lnum, -1));
+    lpt_checkerror(L, lpt_docsync(L, d, lnum, -1));
     br = lc_breaks(d->lc);
     if (lc_bytes(d->lc) < pt_bytes(pt_buffer(&d->C))) ++br;
     return luaL_argcheck(L, lnum <= br, 3, "line out of range"), br;
@@ -629,8 +671,11 @@ static int lpt_seekpos(lua_State *L, lpt_Doc *d, const char *whence) {
         if (off < 0) n = (size_t)(-off) >= n ? 0 : n - (size_t)(-off);
         if (off > 0) n = (size_t)off;
         pt_locate(&d->C, n);
-    } else if (whence[0] == 'l')
+    } else if (whence[0] == 'l') {
+        luaL_argcheck(L, off >= 0, 3, "line number must be non-negative");
         lpt_seeklinecol(L, d, (size_t)off, (int)luaL_optinteger(L, 4, 0));
+    }
+    lpt_checkprefix(L, d, pt_offset(&d->C));
     return lua_pushinteger(L, (lua_Integer)pt_offset(&d->C)), 1;
 }
 
@@ -641,13 +686,15 @@ static int Ldoc_seek(lua_State *L) {
     if (t == LUA_TNUMBER) {
         lua_Integer off = lua_tointeger(L, 2);
         luaL_argcheck(L, off >= 0, 2, "offset must be non-negative");
-        return pt_locate(&d->C, (size_t)off), lua_settop(L, 2), 1;
+        lpt_checkprefix(L, d, (size_t)off), pt_locate(&d->C, (size_t)off);
+        return lua_settop(L, 2), 1;
     }
     return lpt_seekpos(L, d, luaL_checkstring(L, 2));
 }
 
 static int lpt_readbytes(lua_State *L, lpt_Doc *d, size_t len) {
     if (len == 0) return lua_pushliteral(L, ""), 1;
+    lpt_checkprefix(L, d, pt_offset(&d->C) + len);
     if (pt_offset(&d->C) >= pt_bytes(pt_buffer(&d->C)))
         return lua_pushliteral(L, ""), 0;
     return lpt_readstring(L, &d->C, len) ? 1 : 0;
@@ -661,14 +708,16 @@ static int lpt_readline(lua_State *L, lpt_Doc *d, int wantnl) {
     if (src == NULL) return lua_pushliteral(L, ""), 0;
     luaL_buffinit(L, &B);
     for (; src; src = pt_next(C, &len)) {
+        size_t base = pt_offset(C);
         for (i = 0; i < len && src[i] != '\n';) {
             char  *buf = luaL_prepbuffer(&B);
             size_t k;
             for (k = 0; k < LUAL_BUFFERSIZE && i < len && src[i] != '\n'; k++)
-                buf[k] = src[i++];
+                lpt_checkprefix(L, d, base + i + 1), buf[k] = src[i++];
             luaL_addsize(&B, k);
         }
         if (i < len) {
+            lpt_checkprefix(L, d, base + i + 1);
             if (wantnl) luaL_prepbuffer(&B)[0] = '\n';
             pt_advance(C, (pt_Delta)(i + 1));
             return luaL_addsize(&B, (size_t)wantnl), luaL_pushresult(&B), 1;
@@ -681,9 +730,9 @@ static void lpt_readall(lua_State *L, lpt_Doc *d) {
     size_t total = pt_bytes(pt_buffer(&d->C));
     size_t off = pt_offset(&d->C);
     if (off >= total)
-        lua_pushliteral(L, "");
+        lpt_checkprefix(L, d, off), lua_pushliteral(L, "");
     else
-        lpt_readstring(L, &d->C, total - off);
+        lpt_checkprefix(L, d, total), lpt_readstring(L, &d->C, total - off);
 }
 
 static int lpt_read(lua_State *L, lpt_Doc *d, int first) {
@@ -722,16 +771,18 @@ static int Ldoc_readat(lua_State *L) {
     size_t      total = pt_bytes(pt_buffer(&d->C));
     pt_Cursor   C;
     luaL_argcheck(L, off >= 0, 2, "offset must be non-negative");
+    lpt_checkprefix(L, d, (size_t)off);
     if ((size_t)off >= total) return lua_pushliteral(L, ""), 1;
     cnt = luaL_optinteger(L, 3, (lua_Integer)(total - (size_t)off));
     luaL_argcheck(L, cnt >= 0, 3, "length must be non-negative");
+    lpt_checkprefix(L, d, (size_t)(off + cnt));
     pt_seek(&C, pt_buffer(&d->C), off);
     return lpt_readstring(L, &C, (size_t)cnt);
 }
 
 static int Ldoc_insert(lua_State *L) {
     lpt_Doc    *d = lpt_checkdoc(L, 1);
-    size_t      len, off = pt_offset(&d->C);
+    size_t      len, off = (lpt_checkreadonly(L, d), pt_offset(&d->C));
     int         r;
     const char *s = lpt_toliteral(L, 2, &len, &d->C);
     if (len == 0) return lua_settop(L, 1), 1;
@@ -743,7 +794,7 @@ static int Ldoc_insert(lua_State *L) {
 static int Ldoc_edit(lua_State *L) {
     lpt_Doc    *d = lpt_checkdoc(L, 1);
     lua_Integer del = luaL_checkinteger(L, 2);
-    size_t      len, off = pt_offset(&d->C);
+    size_t      len, off = (lpt_checkreadonly(L, d), pt_offset(&d->C));
     const char *s = luaL_checklstring(L, 3, &len);
     int         r;
     luaL_argcheck(L, del >= 0, 2, "amount must be non-negative");
@@ -764,7 +815,7 @@ static int lpt_docedit(lpt_Doc *d, size_t del, const char *s, size_t len) {
 static int Ldoc_write(lua_State *L) {
     lpt_Doc    *d = lpt_checkdoc(L, 1);
     size_t      len;
-    const char *s = lpt_toliteral(L, 2, &len, &d->C);
+    const char *s = (lpt_checkreadonly(L, d), lpt_toliteral(L, 2, &len, &d->C));
     if (len == 0) return lua_settop(L, 1), 1;
     lpt_checkerror(L, lpt_docedit(d, 0, s, len));
     return lua_settop(L, 1), 1;
@@ -774,7 +825,7 @@ static int Ldoc_splice(lua_State *L) {
     lpt_Doc    *d = lpt_checkdoc(L, 1);
     lua_Integer del = luaL_checkinteger(L, 2);
     size_t      len;
-    const char *s = lpt_toliteral(L, 3, &len, &d->C);
+    const char *s = (lpt_checkreadonly(L, d), lpt_toliteral(L, 3, &len, &d->C));
     luaL_argcheck(L, del >= 0, 2, "amount must be non-negative");
     lpt_checkerror(L, lpt_docedit(d, (size_t)del, s, len));
     return lua_settop(L, 1), 1;
@@ -783,6 +834,7 @@ static int Ldoc_splice(lua_State *L) {
 static int Ldoc_remove(lua_State *L) {
     lpt_Doc    *d = lpt_checkdoc(L, 1);
     lua_Integer n = luaL_checkinteger(L, 2);
+    lpt_checkreadonly(L, d);
     luaL_argcheck(L, n >= 0, 2, "amount must be non-negative");
     lpt_checkerror(L, lpt_docedit(d, (size_t)n, NULL, 0));
     return lua_settop(L, 1), 1;
@@ -796,7 +848,7 @@ static int Ldoc_offset(lua_State *L) {
 static int Ldoc_column(lua_State *L) {
     lpt_Doc  *d = lpt_checkdoc(L, 1);
     lc_Cursor C;
-    lpt_checkerror(L, lpt_docsync(d, LPT_UNL, pt_offset(&d->C)));
+    lpt_checkerror(L, lpt_docsync(L, d, LPT_UNL, pt_offset(&d->C)));
     assert(d->lc), lc_seek(&C, d->lc, pt_offset(&d->C));
     return lua_pushinteger(L, (lua_Integer)lc_col(&C)), 1;
 }
@@ -804,7 +856,7 @@ static int Ldoc_column(lua_State *L) {
 static int Ldoc_line(lua_State *L) {
     lpt_Doc  *d = lpt_checkdoc(L, 1);
     lc_Cursor C;
-    lpt_checkerror(L, lpt_docsync(d, LPT_UNL, pt_offset(&d->C)));
+    lpt_checkerror(L, lpt_docsync(L, d, LPT_UNL, pt_offset(&d->C)));
     assert(d->lc), lc_seek(&C, d->lc, pt_offset(&d->C));
     return lua_pushinteger(L, (lua_Integer)lc_line(&C)), 1;
 }
@@ -816,16 +868,16 @@ static int Ldoc_linelen(lua_State *L) {
     lc_Cursor   C;
     size_t      br, lnum, llen;
     if (nu >= 0) {
-        lpt_checkerror(L, lpt_docsync(d, nu + 1, LPT_UNL));
+        lpt_checkerror(L, lpt_docsync(L, d, nu + 1, LPT_UNL));
         br = lc_breaks(d->lc), lnum = (size_t)nu;
         luaL_argcheck(L, lnum <= br, 2, "line number out of range");
         if (lnum < br) lc_seekline(&C, d->lc, lnum);
         if (lnum == br) lc_seek(&C, d->lc, pt_bytes(pt_buffer(&d->C)));
         last = lnum == br;
     } else {
-        lpt_checkerror(L, lpt_docsync(d, LPT_UNL, pt_offset(&d->C)));
+        lpt_checkerror(L, lpt_docsync(L, d, LPT_UNL, pt_offset(&d->C)));
         assert(d->lc), lc_seek(&C, d->lc, pt_offset(&d->C));
-        lpt_checkerror(L, lpt_docsync(d, lc_line(&C) + 1, LPT_UNL));
+        lpt_checkerror(L, lpt_docsync(L, d, lc_line(&C) + 1, LPT_UNL));
         last = lc_line(&C) == lc_breaks(d->lc);
         if (last) lc_seek(&C, d->lc, pt_bytes(pt_buffer(&d->C)));
     }
@@ -875,6 +927,7 @@ static int Ldoc_advancechars(lua_State *L) {
     pt_Cursor  *C = &d->C;
     if (delta > 0) lpt_checkerror(L, lpt_forwardchars(C, delta));
     if (delta < 0) lpt_checkerror(L, lpt_backwardchars(C, -delta));
+    lpt_checkprefix(L, d, pt_offset(&d->C));
     return lua_pushinteger(L, (lua_Integer)pt_offset(&d->C)), 1;
 }
 
@@ -890,11 +943,14 @@ static int Ldoc_charlen(lua_State *L) {
         o = luaL_checkinteger(L, 2);
         luaL_argcheck(L, o >= 0, 2, "offset must be non-negative");
         off = (size_t)o, pt_seek(&C, pt_buffer(&d->C), off);
-        s = pt_piece(&C, NULL), assert(s);
+        s = pt_piece(&C, NULL);
     }
+    lpt_checkprefix(L, d, off);
     if (off >= total) return lua_pushinteger(L, 0), 1;
-    n = lpt_utf8len((unsigned char)s[0]);
+    n = (assert(s), lpt_utf8len((unsigned char)s[0]));
     n = total - off < n ? total - off : n;
+    if (d->view_prefix != LPT_NOPREFIX && off + n > d->view_prefix)
+        luaL_error(L, "piecetab: access outside view prefix");
     return lua_pushinteger(L, (lua_Integer)n), 1;
 }
 
@@ -903,12 +959,14 @@ static int Ldoc_lineoffset(lua_State *L) {
     lua_Integer nu = luaL_checkinteger(L, 2);
     lc_Cursor   C;
     size_t      br, lnum, off;
-    lpt_checkerror(L, lpt_docsync(d, nu + 1, LPT_UNL));
+    luaL_argcheck(L, nu >= 0, 2, "line number out of range");
+    if (d->view_prefix == LPT_NOPREFIX)
+        lpt_checkerror(L, lpt_docsync(L, d, nu + 1, LPT_UNL));
     br = lc_breaks(d->lc), lnum = (size_t)nu;
     luaL_argcheck(L, lnum <= br, 2, "line number out of range");
     if (lnum < br) lc_seekline(&C, d->lc, lnum);
     off = lnum < br ? lc_lineoffset(&C) : lc_bytes(d->lc);
-    return lua_pushinteger(L, (lua_Integer)off), 1;
+    return lpt_checkprefix(L, d, off), lua_pushinteger(L, (lua_Integer)off), 1;
 }
 
 static int Ldoc_linecol(lua_State *L) {
@@ -918,7 +976,8 @@ static int Ldoc_linecol(lua_State *L) {
     size_t      total = pt_bytes(pt_buffer(&d->C));
     luaL_argcheck(L, off >= 0, 2, "offset must be non-negative");
     if ((size_t)off > total) off = (lua_Integer)total;
-    lpt_checkerror(L, lpt_docsync(d, LPT_UNL, (size_t)off));
+    lpt_checkprefix(L, d, (size_t)off);
+    lpt_checkerror(L, lpt_docsync(L, d, LPT_UNL, (size_t)off));
     assert(d->lc), lc_seek(&C, d->lc, (size_t)off);
     lua_pushinteger(L, (lua_Integer)lc_line(&C));
     return lua_pushinteger(L, (lua_Integer)lc_col(&C)), 2;
@@ -926,9 +985,8 @@ static int Ldoc_linecol(lua_State *L) {
 
 static int Ldoc_breaks(lua_State *L) {
     lpt_Doc *d = lpt_checkdoc(L, 1);
-    size_t   total, trailing = 0;
-    lpt_checkerror(L, lpt_docsync(d, LPT_UNL, LPT_UNL));
-    total = pt_bytes(pt_buffer(&d->C));
+    size_t   trailing = 0, total = pt_bytes(pt_buffer(&d->C));
+    lpt_checkerror(L, lpt_docsync(L, d, LPT_UNL, total));
     if (lc_bytes(d->lc) < total) trailing = 1;
     return lua_pushinteger(L, (lua_Integer)(lc_breaks(d->lc) + trailing)), 1;
 }
@@ -956,7 +1014,7 @@ static int Ldoc_commit(lua_State *L) {
     pt_Buffer b;
     ut_Vid    n;
     size_t    off;
-    if (!ut_freshcount(d->ut)) {
+    if (lpt_checkreadonly(L, d), !ut_freshcount(d->ut)) {
         b = (pt_Buffer)ut_payload(ut_current(d->ut));
         return lua_pushinteger(L, (lua_Integer)pt_version(b)), 1;
     }
@@ -986,14 +1044,15 @@ static int lpt_switch(lua_State *L, lpt_Doc *d, ut_Vid dst) {
     int       r, cb, hn;
     ut_HunkCV h;
     if (!dst) return lpt_pushvid(L, src);
+    cb = lua_isfunction(L, 2) ? 2 : lua_isfunction(L, 3) ? 3 : 0;
+    if (cb) lpt_checkerror(L, lpt_docsync(L, d, LPT_UNL, 0));
     if ((hn = ut_diff(d->ut, src, dst)) < 0) lpt_checkerror(L, hn);
     pos = ut_mapoffset(d->ut, pos), h = ut_hunks(d->ut, NULL);
+    if (cb) lpt_callhunkcb(lpt_hunkctx(L, d, cb, b), h, hn);
     r = lpt_hunkapply(d->lc, h, hn, b);
     if (r != LC_OK) lpt_checkerror(L, r);
     d->lcvid = dst, d->lck = 0, ut_switch(d->ut, dst);
     pt_seek(&d->C, b, pos);
-    cb = lua_isfunction(L, 2) ? 2 : lua_isfunction(L, 3) ? 3 : 0;
-    if (cb) lpt_hunkcb(L, cb, pt_buffer(&d->C), h, hn);
     return lpt_pushvid(L, dst);
 }
 
@@ -1008,8 +1067,9 @@ static void lpt_dropfresh(lua_State *L, lpt_Doc *d, int cb) {
     pt_Buffer b = (pt_Buffer)ut_payload(src);
     size_t    pos = pt_offset(&d->C);
     int       r, fc = ut_freshcount(d->ut);
+    if (cb) lpt_checkerror(L, lpt_docsync(L, d, LPT_UNL, 0));
     if ((r = ut_freshdiff(d->ut, fc, 0)) < 0) lpt_checkerror(L, r);
-    if (cb) lpt_hunkcb(L, cb, b, ut_hunks(d->ut, NULL), r);
+    if (cb) lpt_callhunkcb(lpt_hunkctx(L, d, cb, b), ut_hunks(d->ut, NULL), r);
     pos = ut_mapoffset(d->ut, pos);
     if (d->lck) {
         if (d->lck != fc && (r = ut_freshdiff(d->ut, d->lck, 0)) < 0)
@@ -1024,7 +1084,9 @@ static void lpt_dropfresh(lua_State *L, lpt_Doc *d, int cb) {
 static int Ldoc_undo(lua_State *L) {
     lpt_Doc *d = lpt_checkdoc(L, 1);
     ut_Vid   dst, src = ut_current(d->ut);
-    int      cb = lua_isfunction(L, 2) ? 2 : lua_isfunction(L, 3) ? 3 : 0;
+    int      cb;
+    lpt_checkreadonly(L, d);
+    cb = lua_isfunction(L, 2) ? 2 : lua_isfunction(L, 3) ? 3 : 0;
     if (ut_freshcount(d->ut)) lpt_dropfresh(L, d, cb);
     dst = cb == 2 ? ut_parent(src) : lpt_checkvid(L, 2, 1, ut_parent(src));
     if (!dst || dst == src) return lpt_pushvid(L, src);
@@ -1033,21 +1095,21 @@ static int Ldoc_undo(lua_State *L) {
 
 static int Ldoc_redo(lua_State *L) {
     lpt_Doc *d = lpt_checkdoc(L, 1);
-    if (ut_freshcount(d->ut))
+    if (lpt_checkreadonly(L, d), ut_freshcount(d->ut))
         luaL_error(L, "piecetab: cannot time-travel with uncommitted changes");
     return lpt_switch(L, d, ut_firstchild(ut_current(d->ut)));
 }
 
 static int Ldoc_earlier(lua_State *L) {
     lpt_Doc *d = lpt_checkdoc(L, 1);
-    if (ut_freshcount(d->ut))
+    if (lpt_checkreadonly(L, d), ut_freshcount(d->ut))
         luaL_error(L, "piecetab: cannot time-travel with uncommitted changes");
     return lpt_switch(L, d, ut_older(ut_current(d->ut)));
 }
 
 static int Ldoc_later(lua_State *L) {
     lpt_Doc *d = lpt_checkdoc(L, 1);
-    if (ut_freshcount(d->ut))
+    if (lpt_checkreadonly(L, d), ut_freshcount(d->ut))
         luaL_error(L, "piecetab: cannot time-travel with uncommitted changes");
     return lpt_switch(L, d, ut_younger(ut_current(d->ut)));
 }
@@ -1070,6 +1132,7 @@ static int Ldoc_dump(lua_State *L) {
     size_t    total = pt_bytes(pt_buffer(&d->C));
     pt_Cursor C;
     if (total == 0) return lua_pushliteral(L, ""), 1;
+    lpt_checkprefix(L, d, total);
     return pt_seek(&C, pt_buffer(&d->C), 0), lpt_readstring(L, &C, total);
 }
 
@@ -1087,6 +1150,7 @@ static int Ldoc_piece(lua_State *L) {
         luaL_argerror(
                 L, 2,
                 "invalid piece operation (expected 'len', 'next', or 'prev')");
+    lpt_checkprefix(L, d, pt_offset(&d->C) + len);
     return lua_pushinteger(L, (lua_Integer)len), 1;
 }
 

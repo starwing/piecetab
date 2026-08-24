@@ -295,12 +295,17 @@ function Doc:commit() end
 function Doc:version() end
 
 ---Undo to a previous version. Discards any uncommitted edits.
----With `f`, calls `f(off, del, text)` once per change hunk, in
----application order: `off` is the byte offset in the document before
----that hunk applies (sequential coordinates), `text` the inserted
----bytes; replaying the calls on the pre-undo text reproduces the
----post-undo text. Fresh (uncommitted) hunks are fed before version
----hunks. `f` must not read the document.
+---With `f`, calls `f(off, del, text)` once per change hunk in reverse
+---application order (larger offsets first). `off` is the raw byte offset
+---in that segment's source document; `text` is the inserted bytes.
+---Replaying the calls in the given order on the pre-jump text reproduces
+---the post-jump text. Fresh (uncommitted) hunks are fed before version
+---hunks. During each callback the doc remains at that segment's source
+---document and is a read-only prefix view limited to `[0, off+del)`;
+---`linecol`, `readat`, `charlen`, and `lineoffset` can be used to
+---convert offsets in that source (`linelen` is not available in the
+---prefix view: it requests unbounded sync). Writes and out-of-prefix
+---reads error.
 ---@param vid? integer|fun(off: integer, del: integer, text: string)
 ---  target version id (default: parent version), or the hunk callback
 ---@param f? fun(off: integer, del: integer, text: string)

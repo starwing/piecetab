@@ -268,8 +268,17 @@ append 的 off 同样取当前光标（pt_append 在光标处插入，非文档�
 | `seek("line", n)`                | tlines = n          |
 | `line()` / `column()`            | tbytes = offset + 1 |
 | `linelen(n)`                     | tlines = n + 1      |
-| `breaks()`                       | 全量                |
+| `breaks()`                       | tbytes = pt_bytes（全量，以实际字节数为界） |
 | `lines()` / read 族 / seek 字节类 / 编辑 | **不触发**          |
+
+> **回调前按 prefix 预追平**：`lpt_switch`/`lpt_dropfresh` 在调用 hunk
+> 回调前先 `lpt_docsync(LPT_UNL, 0)`，只同步版本/fresh 锚点，不扫描。
+> 真正的 prefix 装载在 `lpt_callhunkcb` 内：以最后一个 hunk 的
+> `pa+pdel` 为上界，`lpt_fillcache` 从当前 source buffer 填充 linecache
+> 到该 prefix。回调内不再触发 `lpt_docsync` 的实际同步（会覆盖正在迭代
+> 的 hunk 向量）；prefix 分支的 assert 保证此时 linecache 已追到当前
+> fresh/current。`linecol`/`lineoffset` 直接使用已追平的 linecache。
+> `linelen`/`breaks` 仍拒绝无限上界。
 
 ```
 lpt_docsync(L, d, tbytes, tlines):
@@ -329,6 +338,13 @@ lpt_docsync(L, d, tbytes, tlines):
   5. pt_seek(&d->C, ut_payload(current), pos)
   6. 若目标 vid ≠ current → ut_diff(src, dst) → hunkapply → ut_switch
      → lcvid = dst, lck = 0
+
+> **回调前按 prefix 预追平**：`lpt_switch`/`lpt_dropfresh` 不再全量
+> `lpt_docsync(LPT_UNL, LPT_UNL)`，只先 `lpt_docsync(LPT_UNL, 0)` 同步
+> 版本/fresh 锚点；`lpt_callhunkcb` 内再以最后一个 hunk 的 `pa+pdel`
+> 为界填充 linecache。回调内禁止再触发 `lpt_docsync` 的实际同步（会覆盖
+> 正在迭代的 hunk 向量）；prefix 分支的 assert 保证此时 linecache 已追到
+> 当前 fresh/current。
 
 - **redo**（§5 Ldoc_redo）：
   1. 如有 fresh journal → 无操作（§5 定案）
