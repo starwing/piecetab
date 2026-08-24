@@ -18,6 +18,18 @@ end
 local lu = require "luaunit"
 local tmux = require "tmux"
 
+-- tree-sitter is optional: the styled assertions below only make sense
+-- when the binding and the Lua grammar are present. Skip them after a
+-- clean build / on CI hosts that do not build tree-sitter yet.
+local has_treesitter = pcall(function()
+  local ts = require "treesitter"
+  ts.require("lua")
+end)
+
+local function skip_without_treesitter()
+  lu.skipIf(not has_treesitter, "tree-sitter not available")
+end
+
 -- short-lived temp files in TMPDIR: os.tmpname() returns a unique path
 -- per call; contents are (over)written by tmux.new's io.open(path, "w").
 -- The ".lua" suffix makes tree-sitter highlight the edited file (the
@@ -456,6 +468,7 @@ function TestDisplay:testTabAfterHint()
 end
 
 function TestDisplay:testTsSyntaxHighlight()
+  skip_without_treesitter()
   -- tree-sitter colors are the base layer: keyword/function/comment/
   -- string all render with their ATTR_* colors when no LSP semantic
   -- tokens are advertised.
@@ -470,6 +483,7 @@ function TestDisplay:testTsSyntaxHighlight()
 end
 
 function TestDisplay:testLspSemDoesNotWipeTs()
+  skip_without_treesitter()
   -- Mixed highlighting: LSP semantic tokens paint variable/comment, but
   -- the tree-sitter keyword `local` must stay visible through the sem
   -- layer. The long comment (>64 bytes) is the end-to-end regression
