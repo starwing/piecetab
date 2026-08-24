@@ -761,6 +761,7 @@ local function h_write(self, out)
     if not seen[line] then self.opts.vtext.set(line, nil) end
   end
   self.hint_lines = seen
+  self.opts.request_repaint()
 end
 
 -- inlayHint response: null/err -> bounded delayed retries (8, then
@@ -829,6 +830,7 @@ local function diag_update(self, p)
   end
   self.diag = { version = v or cur, spans = spans }
   self.opts.diag.set(spans)
+  self.opts.request_repaint()
 end
 
 -- semantic tokenType name -> style attr table (unknown ignored; diag
@@ -906,6 +908,7 @@ end
 function Client.new(opts)
   opts.now_fn = opts.now_fn or function() return luv.hrtime() / 1e9 end
   opts.on_status = opts.on_status or function() end
+  opts.request_repaint = opts.request_repaint or function() end
   opts.viewport_fn = opts.viewport_fn
       or function() return { top = 0, rows = 1e9 } end
   opts.attrmap = opts.attrmap or {}
@@ -932,7 +935,10 @@ function Client:start(argv, uri, langid, root)
     get_text = self.opts.get_text,
     get_line = self.opts.get_line,
     offset_pos = self.opts.offset_pos,
-    on_status = self.opts.on_status,
+    on_status = function(state, why)
+      self.opts.request_repaint()
+      self.opts.on_status(state, why)
+    end,
   })
   self.proto = p
   p:on("textDocument/publishDiagnostics", function(params)
@@ -947,6 +953,7 @@ function Client:start(argv, uri, langid, root)
     self.opts.sem.clear()
     self.opts.diag.clear()
     self.opts.vtext.clear()
+    self.opts.request_repaint()
     return false
   end
   return true
@@ -959,6 +966,7 @@ function Client:stop()
   self.opts.sem.clear()
   self.opts.diag.clear()
   self.opts.vtext.clear()
+  self.opts.request_repaint()
 end
 
 -- Mark caches dirty and reset the hint debounce/retry budget.
@@ -1049,6 +1057,9 @@ function lsp.attach(ed, opts)
             .. (why and " (" .. why .. ")" or "")
       end
     end,
+    request_repaint = function()
+      ed.repaint = true
+    end,
     attrmap = LSP_ATTRS,
     vtext = {
       set = function(line, list) ed:set_vtext(line, list) end,
@@ -1070,11 +1081,12 @@ function lsp.attach(ed, opts)
   return ok
 end
 
--- Idle work (main-loop timeouts): refresh inlay hints once typing has
--- stopped (debounce), the viewport moved, or a null retry is due.
--- Continuous typing never requests; the stale-response guard (doc
--- version) stays as belt-and-braces against races.
+-- Idle work (main-loop timeouts): pump the transport, then refresh
+-- inlay hints once typing has stopped (debounce), the viewport moved,
+-- or a null retry is due. Continuous typing never requests; the
+-- stale-response guard (doc version) stays as belt-and-braces.
 function Client:tick()
+  self:poll()
   local p = self.proto
   if not (p and p.state == "running") then return end
   if not (p.capabilities.inlayHintProvider and not self.hint_pending) then return end
@@ -1126,6 +1138,7 @@ function Client:post_render()
       self.opts.sem.set(span_decode(result.data, cap.legend,
         self.opts.attrmap, self.opts))
       sem.dirty = false
+      self.opts.request_repaint()
     end
   end)
 end

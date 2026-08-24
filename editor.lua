@@ -185,6 +185,7 @@ end
 ---@field show_pieces boolean  piece-boundary visualization layer
 ---@field sel_start integer?  visual-mode selection anchor
 ---@field clip string?  unnamed register (yank buffer)
+---@field repaint boolean  whether a repaint is needed
 local Ed            = {}
 
 -- attribute field tables (interned into grid style handles by sc)
@@ -548,6 +549,7 @@ do
     self.text_dirty = false
     self.log = edlog
     self.done = false
+    self.repaint = false
     self.tf = assert(tf.new())
     self.tf:setflag(tf.FLAG_DELBS)
     self.esc_timeout = (term and term.esc_timeout) or 50
@@ -719,7 +721,6 @@ do
   --- Idle work (called on main-loop timeouts): delegate to the LSP
   -- client (hint refresh scheduling lives there).
   function Ed:tick()
-    self:_render_line(self.cursor_row, true)
     if self.lsp then self.lsp:tick() end
   end
 
@@ -951,7 +952,9 @@ do
     return col + dc
   end
 
-  function Ed:render()
+  --- @param force? boolean
+  function Ed:render(force)
+    if not force and not self.repaint then return end
     self:write("\27[?25l") -- hide cursor
     local rows, cols = self:size()
     local visrows = rows - 1
@@ -1053,6 +1056,7 @@ do
 
     -- after render: delegate refresh work (semantic tokens) to the client
     if self.lsp then self.lsp:post_render() end
+    self.repaint = false
   end
 
   function Ed:render_status(rows, cols, cur_line, cur_col, cur_off)
@@ -1172,12 +1176,15 @@ local function main(argv)
 
   -- Catch exit signals (raw mode: no signals, but just in case)
   local ok, err = pcall(function()
+    e:render(true)              -- initial frame (also lets LSP post_render kick off)
     while not e.done do
-      if e.lsp then e.lsp:poll() end
-      e:render()
-      local key = e:getkey(100) -- 100ms idle slice for tick()
-      if key then e:dispatch(key) end
+      local key = e:getkey(100) -- idle slice for LSP ticks
+      if key then
+        e:dispatch(key)
+        e.repaint = true -- always repaint after a key (cursor moves, edits, etc)
+      end
       e:tick()
+      e:render()
     end
   end)
 

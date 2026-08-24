@@ -71,7 +71,7 @@ end
 
 -- Render one frame, return captured byte stream (accumulates in e.term.s).
 local function frame(e)
-  e:render()
+  e:render(true)
   return e.term.s
 end
 
@@ -1283,7 +1283,7 @@ function TestTreeLayers:testSemDiagStyled()
     length = 2,
     attr = { underline = true, severity = 1 }
   } })
-  e:render()
+  e:render(true)
   local _, st = e.grid:cell(0, 4)  -- content col 0 ('i'): sem only
   assert_style(e, st, { fg = 207 })
   local _, st2 = e.grid:cell(0, 5) -- content col 1 ('n'): both fold
