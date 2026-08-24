@@ -5588,4 +5588,163 @@ TEST(mouse_x10_raw) {
     tf_free(&S);
 }
 
+/* --- Phase 12bb: public-API branch coverage additions --- */
+
+TEST(branch_unknown_csi_colon) {
+    tf_State S;
+    tf_Key   key;
+    int      r;
+    tf_init(&S, NULL, NULL);
+    /* \x1b[:2u -> UNKNOWN_CSI (colon before digits) */
+    r = feed_seq(&S, &key, "\x1b[:2u", 5);
+    asserteq(r, TF_OK);
+    asserteq(key.type, TF_TYPE_UNKNOWN_CSI);
+    tf_free(&S);
+}
+
+TEST(branch_kitty_cp_bounds) {
+    tf_State S;
+    tf_Key   key;
+    tf_init(&S, NULL, NULL);
+    /* cp=0: text is skipped, key stays UNICODE 97 */
+    asserteq(feed_seq(&S, &key, "\x1b[97;2;0u", 9), TF_OK);
+    asserteq(key.type, TF_TYPE_UNICODE);
+    asserteq(key.d.codepoint, 97);
+    tf_free(&S);
+
+    /* cp>0x10FFFF: text is skipped, key stays UNICODE 97 */
+    tf_init(&S, NULL, NULL);
+    asserteq(feed_seq(&S, &key, "\x1b[97;2;1114112u", 15), TF_OK);
+    asserteq(key.type, TF_TYPE_UNICODE);
+    asserteq(key.d.codepoint, 97);
+    tf_free(&S);
+}
+
+TEST(branch_csi_full_final) {
+    tf_State S;
+    tf_Key   key;
+    char     seq[128];
+    int      i, p = 0, r;
+    tf_init(&S, NULL, NULL);
+    seq[p++] = '\x1b';
+    seq[p++] = '[';
+    for (i = 0; i < 63; ++i) seq[p++] = '1';
+    seq[p++] = 'x';
+    /* 63 param bytes + final byte: dispatch while buffer is exactly full */
+    r = feed_seq(&S, &key, seq, (size_t)p);
+    asserteq(r, TF_OK);
+    asserteq(key.type, TF_TYPE_UNKNOWN_CSI);
+    tf_free(&S);
+}
+
+TEST(branch_mouse_decode) {
+    tf_Key key;
+    int    ev, btn, line, col;
+    memset(&key, 0, sizeof(key));
+    key.type = TF_TYPE_MOUSE;
+
+    /* negative button: pure>=0 false */
+    key.d.mouse.btn = -1;
+    asserteq(tf_mouse(&key, &ev, &btn, &line, &col), TF_OK);
+    asserteq(ev, TF_EVENT_UNKNOWN);
+    asserteq(btn, 0);
+
+    /* button 4 raw code: pure>=64 false -> unknown */
+    key.d.mouse.btn = 4;
+    asserteq(tf_mouse(&key, &ev, &btn, &line, &col), TF_OK);
+    asserteq(ev, TF_EVENT_UNKNOWN);
+    asserteq(btn, 0);
+}
+
+TEST(branch_position_modereport_nulls) {
+    tf_Key key;
+    int    line, init, mode, val;
+    memset(&key, 0, sizeof(key));
+    key.type = TF_TYPE_POSITION;
+    key.d.pos.line = 1;
+    key.d.pos.col = 2;
+    asserteq(tf_position(&key, &line, NULL), TF_ERRPARAM);
+
+    memset(&key, 0, sizeof(key));
+    key.type = TF_TYPE_MODEREPORT;
+    key.d.modereport.initial = 0;
+    key.d.modereport.mode = 1;
+    key.d.modereport.value = 2;
+    asserteq(tf_modereport(&key, &init, NULL, &val), TF_ERRPARAM);
+    asserteq(tf_modereport(&key, &init, &mode, NULL), TF_ERRPARAM);
+}
+
+TEST(branch_fmt_lowerspace_level5) {
+    tf_Key key;
+    char   buf[64];
+    memset(&key, 0, sizeof(key));
+    key.type = TF_TYPE_KEYSYM;
+    key.d.sym = TF_SYM_LEVEL5_SHIFT;
+    tf_format(buf, sizeof(buf), &key, TF_FMT_LOWERSPACE);
+    assertstreq(buf, "level5 shift");
+}
+
+TEST(branch_fmt_caretctrl_extra) {
+    tf_Key key;
+    char   buf[64];
+    memset(&key, 0, sizeof(key));
+
+    /* CARETCTRL without CTRL: caret branch false */
+    key.type = TF_TYPE_UNICODE;
+    key.d.codepoint = 'a';
+    key.modifiers = TF_MOD_SHIFT;
+    tf_format(buf, sizeof(buf), &key, TF_FMT_CARETCTRL | TF_FMT_WRAPBRACKET);
+    assertstreq(buf, "<S-a>");
+
+    /* CARETCTRL + CTRL + uppercase: cp>='a' false */
+    key.d.codepoint = 'A';
+    key.modifiers = TF_MOD_CTRL;
+    tf_format(buf, sizeof(buf), &key, TF_FMT_CARETCTRL | TF_FMT_WRAPBRACKET);
+    assertstreq(buf, "<^A>");
+
+    /* CARETCTRL + CTRL + '{': cp>='a' true, cp<='z' false */
+    key.d.codepoint = '{';
+    key.modifiers = TF_MOD_CTRL;
+    tf_format(buf, sizeof(buf), &key, TF_FMT_CARETCTRL | TF_FMT_WRAPBRACKET);
+    assertstreq(buf, "<^{>");
+}
+
+TEST(branch_parse_modspace) {
+    tf_Key key;
+    int    n;
+
+    /* modifier followed by space */
+    n = tf_parse("<C x>", &key);
+    asserteq(n, 5);
+    asserteq(key.type, TF_TYPE_UNICODE);
+    asserteq(key.d.codepoint, 'x');
+    asserteq(key.modifiers, TF_MOD_CTRL);
+
+    /* leading space before modifiers */
+    n = tf_parse("< C-x>", &key);
+    asserteq(n, 6);
+    asserteq(key.d.codepoint, 'x');
+    asserteq(key.modifiers, TF_MOD_CTRL);
+
+    /* leading dash before modifiers */
+    n = tf_parse("< -C-x>", &key);
+    asserteq(n, 7);
+    asserteq(key.d.codepoint, 'x');
+    asserteq(key.modifiers, TF_MOD_CTRL);
+}
+
+TEST(branch_parse_f_trailing) {
+    tf_Key key;
+    /* <F1x> -> F-number has trailing non-digit */
+    asserteq(tf_parse("<F1x>", &key), -1);
+}
+
+TEST(branch_parse_empty_unclosed) {
+    tf_Key key;
+    /* empty key name */
+    asserteq(tf_parse("<>", &key), -1);
+    /* missing closing '>' */
+    asserteq(tf_parse("<F1", &key), -1);
+}
+
 #include "termfeed_test.gen.inc"

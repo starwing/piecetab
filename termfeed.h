@@ -593,7 +593,7 @@ static void tfD_canon(tf_Key *key, int b, int keepc0) {
     else if (b == 0x7f)
         tfK_keysym(key, TF_SYM_DELETE);
     else {
-        b += 0x40, tfK_codepoint(key, b >= 'A' && b <= 'Z' ? b + 0x20 : b);
+        assert(b >= 0), tfK_codepoint(key, (b += 0x40) <= 'Z' ? b + 0x20 : b);
         key->modifiers = TF_MOD_CTRL;
     }
 }
@@ -993,8 +993,8 @@ static void tfM_csi(const tf_State *S, tf_Key *key, int rel)
 /* CSI main dispatch */
 
 static int tfC_cmd(const tf_State *S, int final) {
-    int i, cmd = final, b = tfB(S->buf[0]);
-    if (S->buf_len > 0 && b >= 0x3C && b <= 0x3F) cmd |= b << 8;
+    int i, cmd = final, b = (assert(S->buf_len), tfB(S->buf[0]));
+    if (b >= 0x3C && b <= 0x3F) cmd |= b << 8;
     for (i = 0; i < S->buf_len; ++i)
         if (b = tfB(S->buf[i]), b >= 0x20 && b <= 0x2F) return cmd | (b << 16);
     return cmd;
@@ -1596,8 +1596,7 @@ static int tfK_parseplain(const char *str, tf_Key *key) {
     int ulen = str[0] ? tfU_utf8len(tfB(str[0])) : 0;
     if (ulen <= 0) return -1;
     tfK_utf8(key, str, ulen);
-    if (key->d.codepoint == 0xFFFD && ulen > 1) return -1;
-    return ulen;
+    return key->d.codepoint == 0xFFFD ? -1 : ulen;
 }
 
 static int tfK_parsecaret(const char **ps, int mods, tf_Key *key) {
