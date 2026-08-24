@@ -1,4 +1,4 @@
-/* sp_fuzz.c — seeded random-op stress for spantree (fanout 4). The
+/* sp_fuzz.c -- seeded random-op stress for spantree (fanout 4). The
  * full-tree check runs every FZ_CHECK ops in fuzz mode (O(tree size)
  * per call would be quadratic) and every op in replay mode; the op
  * log lands in /tmp/sp_oplog.txt so a crash replays with

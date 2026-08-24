@@ -4,7 +4,7 @@
 
 #include "tests.h"
 
-/* ─── pool drain helpers (ut_Pool specific) ─── */
+/* --- pool drain helpers (ut_Pool specific) --- */
 
 typedef struct {
     void *chain;
@@ -239,7 +239,7 @@ TEST(record_oom_journal) {
     ut_close(S);
 }
 
-/* T9: normalize via commit — two journal entries merge to one hunk */
+/* T9: normalize via commit -- two journal entries merge to one hunk */
 TEST(normalize_merge) {
     ut_State      *S = ut_open(NULL, NULL);
     ut_Tree       *T = ut_newtree(S, NULL);
@@ -247,7 +247,7 @@ TEST(normalize_merge) {
     const ut_Hunk *h;
     size_t         hn;
 
-    /* adjacent inserts should merge: (0,0,5) + (5,0,3) → (0,0,8) one hunk */
+    /* adjacent inserts should merge: (0,0,5) + (5,0,3) -> (0,0,8) one hunk */
     ut_record(T, 0, 0, 5);
     ut_record(T, 5, 0, 3);
     v = ut_commit(T, NULL);
@@ -261,7 +261,7 @@ TEST(normalize_merge) {
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T10: normalize delete+insert — 2 hunks (gap between regions) */
+/* T10: normalize delete+insert -- 2 hunks (gap between regions) */
 TEST(normalize_overlap) {
     ut_State      *S = ut_open(NULL, NULL);
     ut_Tree       *T = ut_newtree(S, NULL);
@@ -286,7 +286,7 @@ TEST(normalize_overlap) {
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T11: invert — H ∘ inv(H) ≡ empty */
+/* T11: invert -- H o inv(H) == empty */
 TEST(invert_identity) {
     ut_State      *S = ut_open(NULL, NULL);
     ut_Tree       *T = ut_newtree(S, NULL);
@@ -294,7 +294,7 @@ TEST(invert_identity) {
     const ut_Hunk *h;
     size_t         hn;
 
-    /* c1: (5,2,7), c2: empty commit on root → diff from c1 to c2 */
+    /* c1: (5,2,7), c2: empty commit on root -> diff from c1 to c2 */
     ut_record(T, 5, 2, 7);
     c1 = ut_commit(T, NULL);
     ut_switch(T, ut_root(T));
@@ -314,7 +314,7 @@ TEST(invert_identity) {
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T12: compose — A∘B chain */
+/* T12: compose -- AoB chain */
 TEST(compose_assoc) {
     ut_State      *S = ut_open(NULL, NULL);
     ut_Tree       *T = ut_newtree(S, NULL);
@@ -323,7 +323,7 @@ TEST(compose_assoc) {
     const ut_Hunk *h;
     size_t         hn;
 
-    /* chain: root → c1 (3,0,5) → c2 (2,3,1) */
+    /* chain: root -> c1 (3,0,5) -> c2 (2,3,1) */
     ut_record(T, 3, 0, 5);
     c1 = ut_commit(T, NULL);
     ut_record(T, 2, 3, 1);
@@ -341,7 +341,7 @@ TEST(compose_assoc) {
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T13: diff same version → 0 hunks */
+/* T13: diff same version -> 0 hunks */
 TEST(diff_identity) {
     ut_State *S = ut_open(NULL, NULL);
     ut_Tree  *T = ut_newtree(S, NULL);
@@ -374,7 +374,7 @@ TEST(diff_fresh) {
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T15: no-op compose — insert then delete same bytes → 0 hunks */
+/* T15: no-op compose -- insert then delete same bytes -> 0 hunks */
 TEST(compose_noop) {
     ut_State      *S = ut_open(NULL, NULL);
     ut_Tree       *T = ut_newtree(S, NULL);
@@ -393,7 +393,7 @@ TEST(compose_noop) {
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T16: compose — B before A (emitY2Z in mergewalk body) */
+/* T16: compose -- B before A (emitY2Z in mergewalk body) */
 TEST(compose_emit_b) {
     ut_State      *S = ut_open(NULL, NULL);
     ut_Tree       *T = ut_newtree(S, NULL);
@@ -417,7 +417,7 @@ TEST(compose_emit_b) {
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T17: compose — A before B (emitX2Y in mergewalk body) */
+/* T17: compose -- A before B (emitX2Y in mergewalk body) */
 TEST(compose_emit_a) {
     ut_State      *S = ut_open(NULL, NULL);
     ut_Tree       *T = ut_newtree(S, NULL);
@@ -440,14 +440,14 @@ TEST(compose_emit_a) {
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T18: OOM — ut_commit normalize failure */
+/* T18: OOM -- ut_commit normalize failure */
 TEST(commit_oom_normalize) {
     int       oom = 3; /* state + tree + journal push */
     ut_State *S = ut_open(&oom_alloc, &oom);
     ut_Tree  *T = ut_newtree(S, NULL);
     assertok(T != NULL);
     ut_record(T, 0, 1, 1);
-    /* compose in normalize needs alloc → OOM */
+    /* compose in normalize needs alloc -> OOM */
     asserteq(ut_commit(T, NULL), NULL);
     asserteq(ut_current(T), ut_root(T)); /* tree unchanged */
     ut_deltree(S, T), ut_close(S);
@@ -456,7 +456,7 @@ TEST(commit_oom_normalize) {
 /* T19: ut_commit utN_alloc OOM via drained pool (empty journal, direct node
  * alloc) */
 TEST(commit_oom_pool) {
-    int       oom = 2; /* state+tree_page=2, node_pool page drained→OOM */
+    int       oom = 2; /* state+tree_page=2, node_pool page drained->OOM */
     ut_State *S = ut_open(&oom_alloc, &oom);
     ut_Drain  nd = ut_drainpool(&S->node_pool);
     ut_Tree  *T = ut_newtree(S, NULL);
@@ -467,22 +467,22 @@ TEST(commit_oom_pool) {
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T20: OOM — ut_diff invert fresh failure (phase 1) */
+/* T20: OOM -- ut_diff invert fresh failure (phase 1) */
 TEST(diff_oom_invert) {
     int       oom = 4; /* state+tree+journal+normalize compose */
     ut_State *S = ut_open(&oom_alloc, &oom);
     ut_Tree  *T = ut_newtree(S, NULL);
     assertok(T != NULL);
     ut_record(T, 10, 3, 7);
-    /* diff from fresh: normalize succeeds, invert alloc from oom → UT_ERRMEM */
+    /* diff from fresh: normalize succeeds, invert alloc from oom -> UT_ERRMEM */
     assertok(ut_diff(T, ut_freshvid(S), ut_root(T)) < 0);
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T21: OOM during ut_diff — compose fails between two siblings across LCA */
+/* T21: OOM during ut_diff -- compose fails between two siblings across LCA */
 TEST(diff_oom_compose) {
-    int oom = 7; /* state+tpage+jp+norm+np+norm2 → 6 for commits,
-                    diff needs 7th → OOM */
+    int oom = 7; /* state+tpage+jp+norm+np+norm2 -> 6 for commits,
+                    diff needs 7th -> OOM */
     ut_State *S = ut_open(&oom_alloc, &oom);
     ut_Tree  *T = ut_newtree(S, NULL);
     ut_Vid    c1, c2;
@@ -569,7 +569,7 @@ TEST(hunks_current) {
     const ut_Hunk *h;
     size_t         hn;
 
-    /* without any commit, root has NULL hunk list → 0 hunks */
+    /* without any commit, root has NULL hunk list -> 0 hunks */
     h = ut_hunks(T, &hn);
     asserteq(hn, 0);
     asserteq(h, NULL);
@@ -891,7 +891,7 @@ TEST(cleaner_params) {
     (void)g_cleaner;
 }
 
-/* T38: mergewalk A tail loop — A has 2 hunks, B consumed first */
+/* T38: mergewalk A tail loop -- A has 2 hunks, B consumed first */
 TEST(mergewalk_taila) {
     ut_State      *S = ut_open(NULL, NULL);
     ut_Tree       *T = ut_newtree(S, NULL);
@@ -899,10 +899,10 @@ TEST(mergewalk_taila) {
     const ut_Hunk *h;
     size_t         hn;
 
-    /* cur=[{100,3,0}], single=[{200,0,5}] → emitX2Y → next has 2 hunks */
+    /* cur=[{100,3,0}], single=[{200,0,5}] -> emitX2Y -> next has 2 hunks */
     ut_record(T, 100, 3, 0);
     ut_record(T, 200, 0, 5);
-    /* cur has 2 hunks: [{100,3,0},{200,0,5}], single=[{0,1,0}] → B before all A
+    /* cur has 2 hunks: [{100,3,0},{200,0,5}], single=[{0,1,0}] -> B before all A
      */
     ut_record(T, 0, 1, 0);
     v = ut_commit(T, NULL);
@@ -933,7 +933,7 @@ TEST(mergewalk_taila) {
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T39: cross-branch diff — diff between grandchild and sibling branch */
+/* T39: cross-branch diff -- diff between grandchild and sibling branch */
 TEST(diff_cross) {
     ut_State      *S = ut_open(NULL, NULL);
     ut_Tree       *T = ut_newtree(S, NULL);
@@ -942,17 +942,17 @@ TEST(diff_cross) {
     const ut_Hunk *h;
     size_t         hn;
 
-    /* branch 1: root → c1 (insert at 5) → gc (delete at 0) */
+    /* branch 1: root -> c1 (insert at 5) -> gc (delete at 0) */
     ut_record(T, 5, 0, 3);
     c1 = ut_commit(T, NULL);
     ut_record(T, 0, 2, 0);
     gc = ut_commit(T, NULL);
-    /* branch 2: root → c2 (insert at 10) */
+    /* branch 2: root -> c2 (insert at 10) */
     ut_switch(T, root);
     ut_record(T, 10, 0, 4);
     c2 = ut_commit(T, NULL);
-    /* diff gc vs c2: traverses up phase2 (gc→c1→root) then down phase3
-     * (root→c2) */
+    /* diff gc vs c2: traverses up phase2 (gc->c1->root) then down phase3
+     * (root->c2) */
     assertok(ut_diff(T, gc, c2) >= 0);
     h = ut_hunks(T, &hn);
     (void)c1, (void)h;
@@ -973,7 +973,7 @@ TEST(diff_empty_node) {
     c1 = ut_commit(T, NULL);
     ut_switch(T, root);
     c2 = ut_commit(T, NULL); /* empty hunk list */
-    /* diff from c1 (has hunks) to c2 (no hunks): phase2 inv→compose with empty
+    /* diff from c1 (has hunks) to c2 (no hunks): phase2 inv->compose with empty
      */
     assertok(ut_diff(T, c1, c2) >= 0);
     h = ut_hunks(T, &hn);
@@ -990,7 +990,7 @@ TEST(diff_identity_extra) {
     ut_record(T, 0, 1, 2);
     c = ut_commit(T, NULL);
     (void)c;
-    /* diff root→root, no fresh → phase2+3 skip (fn==anc, tn==anc) */
+    /* diff root->root, no fresh -> phase2+3 skip (fn==anc, tn==anc) */
     asserteq(ut_diff(T, root, root), 0);
     ut_deltree(S, T), ut_close(S);
 }
@@ -1015,7 +1015,7 @@ TEST(commit_oom_reserve) {
     /* record with 2 entries to force mergewalk (both non-empty) */
     ut_record(T, 0, 3, 5);
     ut_record(T, 100, 1, 0);
-    /* compose(cur with 1 hunk, single) → mergewalk needs reserve → OOM */
+    /* compose(cur with 1 hunk, single) -> mergewalk needs reserve -> OOM */
     asserteq(ut_commit(T, NULL), NULL);
     asserteq(ut_current(T), ut_root(T));
     ut_deltree(S, T), ut_close(S);
@@ -1054,22 +1054,22 @@ TEST(invert_empty) {
     c = ut_commit(T, NULL);
     /* switch to root (no journal) */
     ut_switch(T, root);
-    /* diff(freshvid→root): hasfrom=true, hasto=false. fresh normalizes empty
-     * journal → NULL cur. invert(NULL) → empty hunk vector. Then compose with
+    /* diff(freshvid->root): hasfrom=true, hasto=false. fresh normalizes empty
+     * journal -> NULL cur. invert(NULL) -> empty hunk vector. Then compose with
      * root's hunks. */
     asserteq(ut_diff(T, ut_freshvid(S), root), 0);
     (void)c;
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T46: diff from empty-hunk node → phase2 invert empty */
+/* T46: diff from empty-hunk node -> phase2 invert empty */
 TEST(invert_node_empty) {
     ut_State *S = ut_open(NULL, NULL);
     ut_Tree  *T = ut_newtree(S, NULL);
     ut_Vid    root = ut_root(T);
     ut_Vid    c1, c2;
 
-    /* root → c1 (has hunks) → c2 (empty commit, h=NULL) */
+    /* root -> c1 (has hunks) -> c2 (empty commit, h=NULL) */
     ut_record(T, 5, 2, 3);
     c1 = ut_commit(T, NULL);
     c2 = ut_commit(T, NULL); /* empty: no prior record, h=NULL */
@@ -1080,12 +1080,12 @@ TEST(invert_node_empty) {
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T47: many records → trigger utV_grow_ while loop multiple times */
+/* T47: many records -> trigger utV_grow_ while loop multiple times */
 TEST(many_records) {
     ut_State *S = ut_open(NULL, NULL);
     ut_Tree  *T = ut_newtree(S, NULL);
     int       i;
-    /* push 20 entries: initial cap=4, grows 4→6→9→13→19→28, multiple while iter
+    /* push 20 entries: initial cap=4, grows 4->6->9->13->19->28, multiple while iter
      */
     for (i = 0; i < 20; i++) ut_record(T, (size_t)i, 1, 2);
     asserteq(ut_freshcount(T), 20);
@@ -1102,12 +1102,12 @@ TEST(commit_oom_mergewalk) {
     /* need two records so compose enters mergewalk (both non-empty) */
     ut_record(T, 0, 3, 5);
     ut_record(T, 100, 1, 2);
-    /* 4 allocs: state, tree, jp, jp→ OOM on compose reserve */
+    /* 4 allocs: state, tree, jp, jp-> OOM on compose reserve */
     asserteq(ut_commit(T, NULL), NULL);
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T49: diff multi-level → phase2+3 traversals */
+/* T49: diff multi-level -> phase2+3 traversals */
 TEST(diff_multilevel) {
     ut_State      *S = ut_open(NULL, NULL);
     ut_Tree       *T = ut_newtree(S, NULL);
@@ -1116,14 +1116,14 @@ TEST(diff_multilevel) {
     const ut_Hunk *h;
     size_t         hn;
 
-    /* chain: root → c1 → c2 → c3 */
+    /* chain: root -> c1 -> c2 -> c3 */
     ut_record(T, 0, 1, 2);
     c1 = ut_commit(T, NULL);
     ut_record(T, 10, 2, 0);
     c2 = ut_commit(T, NULL);
     ut_record(T, 20, 0, 5);
     c3 = ut_commit(T, NULL);
-    /* diff c3 to root: phase2: c3→c2→c1→root (3 levels up, invert at each) */
+    /* diff c3 to root: phase2: c3->c2->c1->root (3 levels up, invert at each) */
     assertok(ut_diff(T, c3, root) >= 0);
     h = ut_hunks(T, &hn);
     (void)c1, (void)c2, (void)h;
@@ -1187,10 +1187,10 @@ TEST(switch_params) {
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T53: ut_diff compose failure in D_calc phase2 — c1→c2 diff, OOM during
+/* T53: ut_diff compose failure in D_calc phase2 -- c1->c2 diff, OOM during
  * invert+compose */
 TEST(diff_oom_compose2) {
-    int oom = 6; /* state+tpage+jp+norm+np+norm2→commits ok, diff invert→OOM */
+    int oom = 6; /* state+tpage+jp+norm+np+norm2->commits ok, diff invert->OOM */
     ut_State *S = ut_open(&oom_alloc, &oom);
     ut_Tree  *T = ut_newtree(S, NULL);
     ut_Vid    c1, c2;
@@ -1222,18 +1222,18 @@ TEST(mergewalk_tailb) {
     ut_record(T, 0, 0, 5);
     ut_record(T, 200, 2, 0);
     c2 = ut_commit(T, NULL);
-    /* diff(c1, c2): phase2 invert c1→1 hunk, phase3 compose with c2→2 hunks */
-    /* A=1 hunk (inv), B=2 hunks → A consumed, B tail loop enters */
+    /* diff(c1, c2): phase2 invert c1->1 hunk, phase3 compose with c2->2 hunks */
+    /* A=1 hunk (inv), B=2 hunks -> A consumed, B tail loop enters */
     assertok(ut_diff(T, c1, c2) >= 0);
     h = ut_hunks(T, &hn);
     (void)c1, (void)c2, (void)h;
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T55: OOM during invert in utD_calc phase2 — chain diff, invert node h fails
+/* T55: OOM during invert in utD_calc phase2 -- chain diff, invert node h fails
  */
 TEST(diff_oom_invert2) {
-    int       oom = 5; /* state+tpage+jp+norm+np→commit ok, diff invert→OOM */
+    int       oom = 5; /* state+tpage+jp+norm+np->commit ok, diff invert->OOM */
     ut_State *S = ut_open(&oom_alloc, &oom);
     ut_Tree  *T = ut_newtree(S, NULL);
     ut_Vid    c;
@@ -1245,10 +1245,10 @@ TEST(diff_oom_invert2) {
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T56: utD_calc OOM in compose during phase2 — c1→c2 sibling diff, reserve or
+/* T56: utD_calc OOM in compose during phase2 -- c1->c2 sibling diff, reserve or
  * mergewalk OOM */
 TEST(diff_oom_phase2_compose) {
-    int oom = 7; /* state+tpage+jp+norm+np+norm2→commits ok, diff compose→OOM */
+    int oom = 7; /* state+tpage+jp+norm+np+norm2->commits ok, diff compose->OOM */
     ut_State *S = ut_open(&oom_alloc, &oom);
     ut_Tree  *T = ut_newtree(S, NULL);
     ut_Vid    c1, c2;
@@ -1272,7 +1272,7 @@ TEST(emitcross_neg) {
     const ut_Hunk *h;
     size_t         hn;
 
-    /* insert 3 at 0, then delete 5 at 0 → overlap, surv = 3-5 = -2 < 0 */
+    /* insert 3 at 0, then delete 5 at 0 -> overlap, surv = 3-5 = -2 < 0 */
     ut_record(T, 0, 0, 3);
     ut_record(T, 0, 5, 0);
     v = ut_commit(T, NULL);
@@ -1304,13 +1304,13 @@ TEST(freechildren_deep) {
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T59: ut_younger / ut_older — single deep chain */
+/* T59: ut_younger / ut_older -- single deep chain */
 TEST(younger_older_chain) {
     ut_State *S = ut_open(NULL, NULL);
     ut_Tree  *T = ut_newtree(S, NULL);
     ut_Vid    root = ut_root(T), c1, c2, c3;
 
-    /* root → c1 → c2 → c3 */
+    /* root -> c1 -> c2 -> c3 */
     ut_record(T, 0, 1, 1);
     c1 = ut_commit(T, NULL);
     ut_record(T, 0, 1, 1);
@@ -1331,13 +1331,13 @@ TEST(younger_older_chain) {
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T60: ut_younger / ut_older — branches (no grandchildren) */
+/* T60: ut_younger / ut_older -- branches (no grandchildren) */
 TEST(younger_older_branch) {
     ut_State *S = ut_open(NULL, NULL);
     ut_Tree  *T = ut_newtree(S, NULL);
     ut_Vid    root = ut_root(T), c1, c2, c3;
 
-    /* root → c1(oldest), c2(middle), c3(youngest) */
+    /* root -> c1(oldest), c2(middle), c3(youngest) */
     c1 = ut_commit(T, NULL);
     ut_switch(T, root);
     c2 = ut_commit(T, NULL);
@@ -1356,13 +1356,13 @@ TEST(younger_older_branch) {
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T61: ut_younger / ut_older — branch with grandchild */
+/* T61: ut_younger / ut_older -- branch with grandchild */
 TEST(younger_older_grandchild) {
     ut_State *S = ut_open(NULL, NULL);
     ut_Tree  *T = ut_newtree(S, NULL);
     ut_Vid    root = ut_root(T), c1, gc, c2, c3;
 
-    /* root → c1(oldest,有子gc), c2(middle), c3(youngest) */
+    /* root -> c1(oldest,has child gc), c2(middle), c3(youngest) */
     c1 = ut_commit(T, NULL);
     gc = ut_commit(T, NULL);
     ut_switch(T, root);
@@ -1402,9 +1402,9 @@ TEST(deltree_params) {
     ut_close(S);
 }
 
-/* T65: D_calc fresh normalize OOM — diff fresh→root, normalize fails */
+/* T65: D_calc fresh normalize OOM -- diff fresh->root, normalize fails */
 TEST(diff_oom_dcalc_normalize) {
-    int oom = 3; /* state+tree_page+jp → counter reaches 0 during normalize */
+    int oom = 3; /* state+tree_page+jp -> counter reaches 0 during normalize */
     ut_State *S = ut_open(&oom_alloc, &oom);
     ut_Tree  *T = ut_newtree(S, NULL);
     assertok(T);
@@ -1413,9 +1413,9 @@ TEST(diff_oom_dcalc_normalize) {
     ut_deltree(S, T), ut_close(S);
 }
 
-/* T66: utH_invert push OOM via diff — invert fresh vec alloc fails */
+/* T66: utH_invert push OOM via diff -- invert fresh vec alloc fails */
 TEST(diff_oom_invert_push) {
-    int oom = 4; /* state+tpage+jp+norm→counter 0 after norm, invert→OOM */
+    int oom = 4; /* state+tpage+jp+norm->counter 0 after norm, invert->OOM */
     ut_State *S = ut_open(&oom_alloc, &oom);
     ut_Tree  *T = ut_newtree(S, NULL);
     assertok(T);
@@ -1438,7 +1438,7 @@ TEST(mapoffset_nodiff) {
     ut_deltree(S, T), ut_close(S);
 }
 
-/* mapoffset: diff two identical nodes → empty result */
+/* mapoffset: diff two identical nodes -> empty result */
 TEST(mapoffset_empty) {
     ut_State *S = ut_open(NULL, NULL);
     ut_Tree  *T = ut_newtree(S, NULL);
@@ -1591,7 +1591,7 @@ TEST(mapoffset_multi_insert_delete) {
     assertok(ut_diff(T, root, ut_current(T)) >= 0);
     asserteq(ut_mapoffset(T, 1), 1);   /* before all */
     asserteq(ut_mapoffset(T, 4), 9);   /* between insert and delete */
-    asserteq(ut_mapoffset(T, 5), 10);  /* in delete region → ca */
+    asserteq(ut_mapoffset(T, 5), 10);  /* in delete region -> ca */
     asserteq(ut_mapoffset(T, 10), 13); /* after all */
     ut_deltree(S, T), ut_close(S);
 }
@@ -1649,7 +1649,7 @@ TEST(mapoffset_fresh_backward_splice) {
     ut_record(T, 10, 2, 4);             /* del 2, ins 4 at 10 */
     asserteq(ut_freshdiff(T, 1, 0), 1); /* inverted */
     asserteq(ut_mapoffset(T, 10), 10);  /* cursor at edit start */
-    asserteq(ut_mapoffset(T, 14), 12);  /* cursor after splice → ca+cins */
+    asserteq(ut_mapoffset(T, 14), 12);  /* cursor after splice -> ca+cins */
     ut_deltree(S, T), ut_close(S);
 }
 
@@ -1658,7 +1658,7 @@ TEST(mapoffset_zero) {
     ut_State *S = ut_open(NULL, NULL);
     ut_Tree  *T = ut_newtree(S, NULL);
     ut_Vid    root = ut_root(T);
-    /* no diff: offset 0 → 0 */
+    /* no diff: offset 0 -> 0 */
     asserteq(ut_mapoffset(T, 0), 0);
     /* insert at 0 */
     ut_record(T, 0, 0, 3), ut_commit(T, NULL);
@@ -1669,13 +1669,13 @@ TEST(mapoffset_zero) {
     T = ut_newtree(S, NULL), root = ut_root(T);
     ut_record(T, 0, 3, 0), ut_commit(T, NULL);
     asserteq(ut_diff(T, root, ut_current(T)), 1);
-    asserteq(ut_mapoffset(T, 0), 0); /* in delete region → ca=0 */
+    asserteq(ut_mapoffset(T, 0), 0); /* in delete region -> ca=0 */
     ut_deltree(S, T);
     /* replace at 0 */
     T = ut_newtree(S, NULL), root = ut_root(T);
     ut_record(T, 0, 2, 5), ut_commit(T, NULL);
     asserteq(ut_diff(T, root, ut_current(T)), 1);
-    asserteq(ut_mapoffset(T, 0), 0); /* in replace region → ca=0 */
+    asserteq(ut_mapoffset(T, 0), 0); /* in replace region -> ca=0 */
     ut_deltree(S, T), ut_close(S);
 }
 

@@ -1,4 +1,4 @@
-/* sp_tests.h — spantree-specific test utilities.
+/* sp_tests.h -- spantree-specific test utilities.
  *
  * Shared by spantree test sources (multi-FANOUT).  Public utilities
  * (runner, asserts, allocators) live in tests.h; only spantree-specific
@@ -13,7 +13,7 @@
 
 SP_STATIC void sp_dumptree(const sp_Tree *t, const char *tag);
 
-/* sp_drainpool / sp_refillpool — detach the entire freelist (with its
+/* sp_drainpool / sp_refillpool -- detach the entire freelist (with its
  * count) so the next spP_alloc must take the page-alloc path (combine
  * with oom_alloc cnt=0 to force failure). Refill splices the detached
  * chain back in front of anything freed meanwhile. */
@@ -39,7 +39,7 @@ SP_STATIC void sp_refillpool(sp_Pool *p, sp_Drain d) {
 /* tree invariant checker: byte sums consistent, child counts within
  * fanout bounds (root exempt from the half-minimum), no zero-length
  * segments in a settled tree. Returns the subtree byte sum (0 also
- * signals failure — a legal node cannot sum to 0) and the OR of the
+ * signals failure -- a legal node cannot sum to 0) and the OR of the
  * leaf masks so parents verify bytes[i]/mask[i] without a second pass. */
 
 SP_STATIC size_t sp_checknode(
@@ -357,7 +357,7 @@ SP_STATIC sp_Id spA_nscount(void *ud, sp_Id id, sp_Id old, sp_Mask *mask) {
 }
 
 /* collect every segment whose leaf mask holds bit (full scan with
- * internal mask access — the differential ground truth) */
+ * internal mask access -- the differential ground truth) */
 SP_STATIC int sp_ns_collect(
         sp_Tree *t, sp_Mask bit, sp_Id *ids, size_t *lens, int max) {
     sp_Cursor C;

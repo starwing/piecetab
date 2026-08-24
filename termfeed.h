@@ -276,7 +276,7 @@ struct tf_State {
     tf_Reader  *reader; /* current reader (tf_feed) */
     void       *reader_ud;
 
-    /* tf_waitkey: read target, injected via tf_feed — standard chunk
+    /* tf_waitkey: read target, injected via tf_feed -- standard chunk
      * path, not a separate input source */
     tf_WaitCtx wait;
 };
@@ -762,7 +762,7 @@ static int tfC_modifykey(tf_Key *key, int mods, int code) {
 }
 
 static int tfC_funckey(const tf_State *S, tf_Key *key) {
-    /* xterm CSI 11-34 → F number (unmapped slots keep n) */
+    /* xterm CSI 11-34 -> F number (unmapped slots keep n) */
     static const int fkeymap[] = {1,  2,  3,  4,  5,  16, 6,  7,
                                   8,  9,  10, 22, 11, 12, 13, 14,
                                   27, 15, 16, 30, 17, 18, 19, 20};
@@ -785,7 +785,7 @@ static int tfC_funckey(const tf_State *S, tf_Key *key) {
 
 /* kitty CSI u */
 
-/* kitty keyboard protocol: codepoint → key mapping. */
+/* kitty keyboard protocol: codepoint -> key mapping. */
 #define TF_KITTYKEYS(X)                           \
     X(9, TF_SYM_TAB, KEYSYM)                      \
     X(13, TF_SYM_ENTER, KEYSYM)                   \
@@ -1662,7 +1662,7 @@ TF_API int tf_waitkey(tf_State *S, int fd, int timeout_ms, tf_Key *key) {
         int pr;
         if ((r = tf_readkey(S, key)) != TF_NONE && r != TF_AGAIN) return r;
         pr = poll(&pfd, 1, timeout_ms < 0 ? -1 : timeout_ms);
-        /* timeout: r encodes partial (AGAIN → flush) vs clean (NONE) */
+        /* timeout: r encodes partial (AGAIN -> flush) vs clean (NONE) */
         if (!pr) return r == TF_AGAIN ? tf_flush(S, key) : TF_AGAIN;
         if (pr < 0 && errno != EINTR) return TF_ERRPARAM;
         if (pr < 0) continue; /* EINTR: poll again */

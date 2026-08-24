@@ -1,4 +1,4 @@
-/* tests/tests.h — shared C test utilities, stb style (C89)
+/* tests/tests.h -- shared C test utilities, stb style (C89)
  *
  * Test source layout:
  *   #include "tests.h"
@@ -28,10 +28,10 @@
 #define test_log(...) fprintf(stderr, __VA_ARGS__)
 #define test_lu(x)    ((unsigned long)(x))
 
-/* TEST(name) — define a test function: static void test_##name(void) */
+/* TEST(name) -- define a test function: static void test_##name(void) */
 #define TEST(name) static void test_##name(void)
 
-/* asserteq — abort if (a) != (b); ptrdiff_t holds pointer values whole,
+/* asserteq -- abort if (a) != (b); ptrdiff_t holds pointer values whole,
  * unlike long (32-bit on LLP64 MSVC, which truncates and warns C4311) */
 #define asserteq(a, b)                                                 \
     do {                                                               \
@@ -44,7 +44,7 @@
         }                                                              \
     } while (0)
 
-/* assertok — abort if (e) is false */
+/* assertok -- abort if (e) is false */
 #define assertok(e)                                               \
     do {                                                          \
         if (!(e)) {                                               \
@@ -53,7 +53,7 @@
         }                                                         \
     } while (0)
 
-/* assertstreq — abort if strcmp(a, b) != 0 */
+/* assertstreq -- abort if strcmp(a, b) != 0 */
 #define assertstreq(a, b)                                                  \
     do {                                                                   \
         const char *_sa = (a), *_sb = (b);                                 \
@@ -65,7 +65,7 @@
         }                                                                  \
     } while (0)
 
-/* check — for invariant-checker helpers: log and return 0 on failure */
+/* check -- for invariant-checker helpers: log and return 0 on failure */
 #define check(e, ...)                              \
     do {                                           \
         if (!(e)) return test_log(__VA_ARGS__), 0; \
@@ -88,7 +88,7 @@ TEST_STATIC void *test_alloc(void *ud, void *p, size_t osize, size_t nsize) {
     return np;
 }
 
-/* test_byte — build a UTF-8 byte from a constant; the variable parameter
+/* test_byte -- build a UTF-8 byte from a constant; the variable parameter
  * keeps MSVC's C4310 (constant truncation cast) from firing. */
 TEST_STATIC char test_byte(int v) { return (char)v; }
 
@@ -104,7 +104,7 @@ TEST_STATIC void *oom_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
     return realloc(ptr, nsize);
 }
 
-/* counting allocators — track live bytes so tests can assert no leaks */
+/* counting allocators -- track live bytes so tests can assert no leaks */
 
 typedef struct {
     long live;
@@ -143,7 +143,7 @@ typedef struct {
     void (*fn)(void);
 } test_entry;
 
-/* test_run — no args: run all; args: prefix match, '@' = first only,
+/* test_run -- no args: run all; args: prefix match, '@' = first only,
  * '?' = optional (not found is not an error) */
 int test_run(
         const char *banner, const test_entry *entries, int argc, char *argv[]) {

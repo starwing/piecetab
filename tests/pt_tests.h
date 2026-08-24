@@ -1,4 +1,4 @@
-/* pt_tests.h — piecetab-specific test utilities.
+/* pt_tests.h -- piecetab-specific test utilities.
  *
  * Shared by piecetab test sources and fuzz tools. Public utilities
  * (runner, asserts, allocators) live in tests.h; only piecetab-specific
@@ -11,7 +11,7 @@
 #include "piecetab.h"
 #include "tests.h"
 
-/* pt_localfill — fill pool freelist with count objects from a local buffer.
+/* pt_localfill -- fill pool freelist with count objects from a local buffer.
  *   pool->freed is set to point to the first object in buf.
  *   buf must hold count * pool->obj_size bytes.
  *   Caller must ensure buf outlives the pool usage. */
@@ -29,7 +29,7 @@ PT_STATIC void pt_localfill(pt_Pool *pool, void **op, void *buf, size_t count) {
     ptP_stat(pool->live_obj += count);
 }
 
-/* pt_drainpool / pt_refillpool — detach the entire freelist (with its
+/* pt_drainpool / pt_refillpool -- detach the entire freelist (with its
  * count) so the next ptP_alloc must take the page-alloc path (combine
  * with oom_alloc cnt=0 to force failure).  Refill splices the detached
  * chain back in front of anything freed meanwhile. */

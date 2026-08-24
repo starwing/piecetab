@@ -1,4 +1,4 @@
-/* lc_tests.h — linecache-specific test utilities.
+/* lc_tests.h -- linecache-specific test utilities.
  *
  * Shared by lc_test4.c / lc_test8.c (multi-FANOUT).  Public utilities
  * (runner, asserts, allocators) live in tests.h; only linecache-specific
@@ -14,7 +14,7 @@
 LC_STATIC void lc_dumptree(const lc_Cache *c, const char *tag);
 LC_STATIC void lc_dumpcursor(const lc_Cursor *C, const char *tag);
 
-/* lc_localfill — fill pool freelist with count objects from a local buffer.
+/* lc_localfill -- fill pool freelist with count objects from a local buffer.
  *   pool->freed is set to point to the first object in buf.
  *   buf must hold count * pool->obj_size bytes.
  *   Caller must ensure buf outlives the pool usage. */
@@ -32,7 +32,7 @@ LC_STATIC void lc_localfill(lc_Pool *pool, void **op, void *buf, size_t count) {
     lcP_stat(pool->live_obj += count);
 }
 
-/* lc_Drain / lc_drainpool / lc_refillpool — detach the entire freelist
+/* lc_Drain / lc_drainpool / lc_refillpool -- detach the entire freelist
  * (with its count) so the next lcP_alloc takes the page-alloc path.
  * Refill splices the detached chain back in front of anything freed
  * meanwhile. */
@@ -55,7 +55,7 @@ LC_STATIC void lc_refillpool(lc_Pool *p, lc_Drain d) {
     p->freed = d.chain, p->freed_obj += d.count;
 }
 
-/* lc_restorepages — merge saved page chain in front of pool's current
+/* lc_restorepages -- merge saved page chain in front of pool's current
  * pages, so pages allocated during a test are not leaked.
  * Each page stores its next link at page + LC_PAGE_SIZE - sizeof(void *). */
 LC_STATIC void lc_restorepages(lc_Pool *p, void *saved) {
@@ -406,7 +406,7 @@ LC_STATIC lc_Cache *cacheV(lc_State *S, unsigned levels, lc_Node *root) {
 #define lc_nonnull(x) (assert((x) != NULL), (x))
 
 /* ================================================================ */
-/*  lc_asserttree — build expected tree and compare                    */
+/*  lc_asserttree -- build expected tree and compare                    */
 /* ================================================================ */
 
 #define lc_asserttree(c, lvls, ...)                                      \

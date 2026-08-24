@@ -308,7 +308,7 @@ CG_API int cg_begin(cg_Grid *G, int top, int rows, int cols) {
         return G->off = 0, G->all_dirty = 1, G->scroll = 0, CG_OK;
     G->off = (G->off - delta + G->rows) % G->rows;
     /* rows the scroll leaves physically blank: blank cur+back so diff
-     * redraws them fully — skip never matches an empty back row */
+     * redraws them fully -- skip never matches an empty back row */
     if (delta > 0)
         for (row = 0; row < delta; ++row) cgF_blankrow(G, row);
     else

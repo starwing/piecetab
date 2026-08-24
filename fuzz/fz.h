@@ -1,4 +1,4 @@
-/* fz.h — shared fuzz scaffolding: seeded RNG, op-log line io and the
+/* fz.h -- shared fuzz scaffolding: seeded RNG, op-log line io and the
  * op table (X-macro rows + FZ_TABLE() helpers).
  *
  * The op log is the crash-reproduction contract: the fuzz writes each

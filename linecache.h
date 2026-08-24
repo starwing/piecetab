@@ -166,7 +166,7 @@ struct lc_Node {
     size_t   bytes[LC_FANOUT];    /* cumulative bytes per child subtree */
     size_t   breaks[LC_FANOUT];   /* cumulative breaks per child subtree */
     lc_Node *children[LC_FANOUT]; /* Leaf* at leaf level, Node* otherwise */
-    unsigned short child_count;   /* number of valid children (≤ LC_FANOUT) */
+    unsigned short child_count;   /* number of valid children (<= LC_FANOUT) */
 };
 
 struct lc_Cache {

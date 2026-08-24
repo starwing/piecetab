@@ -114,7 +114,7 @@ static int lyy_pushval(lua_State *L, yyjson_val *val, int depth) {
     return 1;
 }
 
-/* error names (mirror yyjson_read_code, yyjson.h) — X macro: one
+/* error names (mirror yyjson_read_code, yyjson.h) -- X macro: one
  * definition feeds the pusherror switch; #name gives the literal */
 #define LY_ERRORS(X)           \
     X(1, invalid_parameter)    \

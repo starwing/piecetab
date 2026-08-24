@@ -9,7 +9,7 @@
 #include "sp_tests.h"
 #include "tests.h"
 
-/* spantree tests: fanout-8 — larger fanout shifts the split/merge
+/* spantree tests: fanout-8 -- larger fanout shifts the split/merge
  * thresholds (FANOUT/2 = 4), reaching branch combinations that a
  * fanout-4 tree cannot (balance-at-boundary, full-neighbor folds).
  * Tree shapes here are built with leafV/innerV/treeV, so levels and

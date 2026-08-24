@@ -1,4 +1,4 @@
-/* lc_fuzz.c — seeded random-op stress for linecache (fanout 4). Every
+/* lc_fuzz.c -- seeded random-op stress for linecache (fanout 4). Every
  * op runs the full tree and cursor invariant checks; the op log lands
  * in /tmp/lc_oplog.txt so a crash replays with "replay <path>".
  *

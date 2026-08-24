@@ -887,7 +887,7 @@ TEST(diff_scroll) {
 
 TEST(diff_scroll_expose_sd) {
     /* viewport up (delta>0, SD): top row is physically blank after the
-     * scroll — every cell must be redrawn, even those matching back */
+     * scroll -- every cell must be redrawn, even those matching back */
     cg_Grid g;
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 1, 3, 6);
@@ -910,7 +910,7 @@ TEST(diff_scroll_expose_sd) {
 
 TEST(diff_scroll_expose_su) {
     /* viewport down (delta<0, SU): bottom row is physically blank after
-     * the scroll — every cell must be redrawn */
+     * the scroll -- every cell must be redrawn */
     cg_Grid g;
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 3, 6);
@@ -1168,7 +1168,7 @@ static void cc_init(cg_Grid *g, int wide, int ts) {
     if (ts > 1) cg_settabstop(g, ts);
 }
 
-#define ZH "\xe4\xb8\xad" /* 中 (CJK, width 2 via cw_double) */
+#define ZH "\xe4\xb8\xad" /* zhong (CJK, width 2 via cw_double) */
 #define A2 "\xc3\x80"     /* U+0080 (width 2 via cw_double) */
 
 TEST(cols_ascii) {
@@ -1346,7 +1346,7 @@ TEST(next_wide) {
     cg_Slice s = SL(ZH "a");
     cg_Grid  g;
     cc_init(&g, 1, 4);
-    asserteq(cg_next(&g, 0, &s), 2); /* 中: width 2, 3 bytes */
+    asserteq(cg_next(&g, 0, &s), 2); /* zhong: width 2, 3 bytes */
     asserteq(s.s - SL(ZH "a").s, 3);
     asserteq(cg_next(&g, 0, &s), 1);
     cg_free(&g);

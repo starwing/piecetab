@@ -48,7 +48,7 @@
 #endif
 
 /* lua_geti is 5.3+; 5.1/5.2 (and LuaJIT) emulate via gettable so
- * metatable __index fires — style tables may be dynamic proxies */
+ * metatable __index fires -- style tables may be dynamic proxies */
 #if LUA_VERSION_NUM >= 503
 # define lua53_geti lua_geti
 #else
@@ -273,7 +273,7 @@ static int Lgrid_top(lua_State *L)
 { return lua_pushinteger(L, cg_top(lcg_check(L, 1))), 1; }
 /* clang-format on */
 
-/* ===== Diff rendering (shared: fd>=0→write, fd=-1→luaL_Buffer) ===== */
+/* ===== Diff rendering (shared: fd>=0->write, fd=-1->luaL_Buffer) ===== */
 
 #define LCG_KEY_CUP "cursor_address"
 #define LCG_KEY_CSR "change_scroll_region"
@@ -333,8 +333,8 @@ static int lcg_output(lcg_Diff *d, const char *buf, int len) {
     } while (0)
 
 static int lcg_scroll(cg_Diff *D, int top, int bot, int n) {
-    /* n = viewport delta (cg_begin): n>0 = viewport up → content down (rin),
-     * n<0 = viewport down → content up (indn) */
+    /* n = viewport delta (cg_begin): n>0 = viewport up -> content down (rin),
+     * n<0 = viewport down -> content up (indn) */
     lcg_Diff *d = (lcg_Diff *)D;
     lcg_writef(d, d->csr_fmt, top, bot);
     if (n > 0)

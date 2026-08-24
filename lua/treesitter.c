@@ -152,7 +152,7 @@ static int lts_pushnode(lua_State *L, int treeidx, TSNode node) {
      * share the id of the plain root). The high bit marks the key space:
      * lts_retrieve caches bare pointers in the same box, and a node id
      * (root nodes live inside the tree allocation) can alias a tree
-     * pointer — without the mark the two caches collide. */
+     * pointer -- without the mark the two caches collide. */
     const void *nodeid = (const void *)((((ptrdiff_t)node.id | 1)
                                          + ts_node_start_byte(node))
                                         | ((ptrdiff_t)1
@@ -166,7 +166,7 @@ static int lts_pushnode(lua_State *L, int treeidx, TSNode node) {
         lua_pushvalue(L, -2);       /* 4: tree copy */
         lua_setuservalue(L, -2);    /* ud.uservalue = tree */
     } else {
-        /* cache hit: refresh TSNode and uservalue unconditionally —
+        /* cache hit: refresh TSNode and uservalue unconditionally --
          * idempotent for the same tree, and fixes stale entries when a
          * deleted tree's address (hence node id) was reused */
         *(TSNode *)lua_touserdata(L, -1) = node;

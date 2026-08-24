@@ -1,4 +1,4 @@
-/* pt_fuzz.c — seeded random-op stress for piecetab (fanout 4). Every
+/* pt_fuzz.c -- seeded random-op stress for piecetab (fanout 4). Every
  * op runs the tree and cursor invariant checks; the op log lands in
  * /tmp/pt_oplog.txt so a crash replays with "replay <path>".
  *
@@ -8,7 +8,7 @@
  * o->op = rnd % 100 maps through the op table below (weights sum to
  * 100). COMMIT freezes the dirty tree into the held buffer (the caller
  * owns the reference), ROLLBACK drops the edits back to the fork source
- * and COMPACT rebuilds the held buffer — compaction only applies to a
+ * and COMPACT rebuilds the held buffer -- compaction only applies to a
  * committed tree, so commit/rollback/compact form a transient state
  * machine: while the cursor holds no tree (after commit/rollback) the
  * next op seeks back to the held buffer. The cursor expectation is

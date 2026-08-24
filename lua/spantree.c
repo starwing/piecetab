@@ -200,7 +200,7 @@ typedef struct lst_Cur {
 
 /* ================================================================== */
 /* stV_ block: malloc-backed vec (port of undotree.h utV_, lua_Alloc */
-/* -> malloc/realloc/free). Shared by cp/sv/lst — keeps cp/sv free of */
+/* -> malloc/realloc/free). Shared by cp/sv/lst -- keeps cp/sv free of */
 /* any Lua allocf dependency; memory lives in the owning state and is */
 /* freed whole by its __gc. OOM returns -1, callers luaL_error.      */
 /* ================================================================== */
@@ -298,9 +298,9 @@ static int lst_checkerror(lua_State *L, int r) {
 }
 
 /* ================================================================== */
-/* cp_ block: compositor library — attr intern + ns registry + op  */
+/* cp_ block: compositor library -- attr intern + ns registry + op  */
 /* space + composite id system. Public API cp_*, internal cpX_*   */
-/* (design_spantree_lua.md §3.6). One cp_State per Compositor     */
+/* (design_spantree_lua.md sec.3.6). One cp_State per Compositor     */
 /* userdata; vecs are stV_ (malloc, zero Lua allocf).             */
 /* ================================================================== */
 
@@ -850,9 +850,9 @@ static cp_Attr cp_foldattr(lua_State *L, cp_State *S, cp_NSAttr *rt, size_t b,
 }
 
 /* ================================================================== */
-/* sv_ block: minispan library — flat segment vec per ephemeral ns    */
+/* sv_ block: minispan library -- flat segment vec per ephemeral ns    */
 /* (ordered, disjoint, adjacent ids differ; no mask, no B+ structure).*/
-/* Public API sv_*, internal svX_* (§3.6). The vec is stV_ (malloc,   */
+/* Public API sv_*, internal svX_* (sec.3.6). The vec is stV_ (malloc,   */
 /* zero Lua allocf); segment count = stV_len(S). Writers take the vec */
 /* handle sv_List * (grow reallocs the handle), readers sv_Span *.   */
 /* ================================================================== */

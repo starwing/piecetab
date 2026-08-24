@@ -13,7 +13,7 @@
 #include "tests.h"
 
 /* spantree tests: fanout-4 forces splits/merges on small inputs.
- * Skeleton — tests added per implementation block
+ * Skeleton -- tests added per implementation block
  * (notes/plans/spantree_impl.md). */
 
 /* state: open/newtree/freetree/close lifecycle; pool stats drain to zero. */
@@ -2794,8 +2794,8 @@ TEST(remove_mergeleft_gap) {
 
 /* mergeleft whose left-neighbor chain ends underfilled at the fork's
  * first child: the chain node must fold rightward into the cursor's
- * container parent (foldnode checks the cursor child — the healthy
- * sibling — and no-ops; regression: the cc=1 survivor broke the
+ * container parent (foldnode checks the cursor child -- the healthy
+ * sibling -- and no-ops; regression: the cc=1 survivor broke the
  * half-full invariant) */
 TEST(remove_mergeleft_foldfirst) {
     sp_State *S = sp_open(NULL, NULL);

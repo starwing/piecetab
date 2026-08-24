@@ -4,7 +4,7 @@
 
 #include "tests.h"
 
-/* ─── allocators ─── */
+/* --- allocators --- */
 
 /* fills newly-grown tail with 0xA5 so uninitialized bytes are detectable */
 static void *fill_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
@@ -19,7 +19,7 @@ static void *fill_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
     return ptr;
 }
 
-/* ─── mock reader ─── */
+/* --- mock reader --- */
 
 typedef struct {
     const char *data;
@@ -56,7 +56,7 @@ static int feed_seq(tf_State *S, tf_Key *key, const char *seq, size_t len) {
     return r;
 }
 
-/* ─── Phase 0: lifecycle ─── */
+/* --- Phase 0: lifecycle --- */
 
 TEST(lifecycle) {
     tf_State S;
@@ -67,7 +67,7 @@ TEST(lifecycle) {
     asserteq(S.buf_len, 0);
     tf_free(&S);
 
-    /* default allocator: alloc=NULL → uses realloc internally */
+    /* default allocator: alloc=NULL -> uses realloc internally */
     tf_init(&S, NULL, NULL);
     tf_free(&S);
 
@@ -99,7 +99,7 @@ TEST(flags) {
     tf_free(&S);
 }
 
-/* ─── Phase 1: params ─── */
+/* --- Phase 1: params --- */
 
 TEST(feed_params) {
     tf_State S;
@@ -141,7 +141,7 @@ TEST(flush_params) {
 
     tf_init(&S, NULL, NULL);
 
-    /* flush IDLE → empty key */
+    /* flush IDLE -> empty key */
     asserteq(tf_flush(&S, &key), TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_NONE);
@@ -149,7 +149,7 @@ TEST(flush_params) {
     tf_free(&S);
 }
 
-/* ─── Phase 1: IDLE state ─── */
+/* --- Phase 1: IDLE state --- */
 
 TEST(idle_printable) {
     tf_State S;
@@ -194,7 +194,7 @@ TEST(idle_c0_default) {
 
     tf_init(&S, NULL, NULL);
 
-    /* 0x00 → Ctrl+Space (KEYSYM SPACE + CTRL) */
+    /* 0x00 -> Ctrl+Space (KEYSYM SPACE + CTRL) */
     r = feed_byte(&S, &key, 0x00);
     asserteq(r, TF_OK);
     if (key.type != TF_TYPE_KEYSYM) {
@@ -204,21 +204,21 @@ TEST(idle_c0_default) {
     asserteq((long)key.d.sym, (long)TF_SYM_SPACE);
     asserteq(key.modifiers, TF_MOD_CTRL);
 
-    /* 0x09 → TAB */
+    /* 0x09 -> TAB */
     r = feed_byte(&S, &key, 0x09);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_TAB);
     asserteq(key.modifiers, 0);
 
-    /* 0x0d → ENTER */
+    /* 0x0d -> ENTER */
     r = feed_byte(&S, &key, 0x0d);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_ENTER);
     asserteq(key.modifiers, 0);
 
-    /* 0x1b → ESCAPE state (no key output, returns TF_AGAIN) */
+    /* 0x1b -> ESCAPE state (no key output, returns TF_AGAIN) */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     asserteq(S.state, TF_STATE_ESCAPE);
@@ -245,32 +245,32 @@ TEST(idle_c0_default) {
         tf_free(&S2);
     }
 
-    /* 0x1c → Ctrl+\ (UNICODE + CTRL, as-is) */
+    /* 0x1c -> Ctrl+\ (UNICODE + CTRL, as-is) */
     r = feed_byte(&S, &key, 0x1c);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, '\\');
     asserteq(key.modifiers, TF_MOD_CTRL);
 
-    /* 0x1d → Ctrl+] */
+    /* 0x1d -> Ctrl+] */
     r = feed_byte(&S, &key, 0x1d);
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, ']');
     asserteq(key.modifiers, TF_MOD_CTRL);
 
-    /* 0x1e → Ctrl+^ */
+    /* 0x1e -> Ctrl+^ */
     r = feed_byte(&S, &key, 0x1e);
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, '^');
     asserteq(key.modifiers, TF_MOD_CTRL);
 
-    /* 0x1f → Ctrl+_ */
+    /* 0x1f -> Ctrl+_ */
     r = feed_byte(&S, &key, 0x1f);
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, '_');
     asserteq(key.modifiers, TF_MOD_CTRL);
 
-    /* 0x7f → DEL */
+    /* 0x7f -> DEL */
     r = feed_byte(&S, &key, 0x7f);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
@@ -328,7 +328,7 @@ TEST(idle_none) {
     int      r;
 
     tf_init(&S, NULL, NULL);
-    /* feed empty data → TF_NONE */
+    /* feed empty data -> TF_NONE */
     {
         MockReader mr;
         mr.data = NULL, mr.len = 0, mr.called = 0;
@@ -340,7 +340,7 @@ TEST(idle_none) {
     tf_free(&S);
 }
 
-/* ─── Phase 1: ESCAPE state ─── */
+/* --- Phase 1: ESCAPE state --- */
 
 TEST(escape_basic) {
     tf_State S;
@@ -349,7 +349,7 @@ TEST(escape_basic) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b + 'x' → UNICODE('x') + ALT */
+    /* \x1b + 'x' -> UNICODE('x') + ALT */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     asserteq(S.state, TF_STATE_ESCAPE);
@@ -360,7 +360,7 @@ TEST(escape_basic) {
     asserteq(key.modifiers, TF_MOD_ALT);
     asserteq(S.state, TF_STATE_IDLE);
 
-    /* \x1b + 0x01 → Ctrl+'a' + ALT */
+    /* \x1b + 0x01 -> Ctrl+'a' + ALT */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 0x01);
@@ -368,7 +368,7 @@ TEST(escape_basic) {
     asserteq(key.d.codepoint, 'a');
     asserteq(key.modifiers, TF_MOD_CTRL | TF_MOD_ALT);
 
-    /* \x1b + 0x09 → TAB + ALT */
+    /* \x1b + 0x09 -> TAB + ALT */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 0x09);
@@ -377,7 +377,7 @@ TEST(escape_basic) {
     asserteq((long)key.d.sym, (long)TF_SYM_TAB);
     asserteq(key.modifiers, TF_MOD_ALT);
 
-    /* \x1b + 0x0d → ENTER + ALT */
+    /* \x1b + 0x0d -> ENTER + ALT */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 0x0d);
@@ -386,7 +386,7 @@ TEST(escape_basic) {
     asserteq((long)key.d.sym, (long)TF_SYM_ENTER);
     asserteq(key.modifiers, TF_MOD_ALT);
 
-    /* \x1b + 0x7f → DEL + ALT */
+    /* \x1b + 0x7f -> DEL + ALT */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 0x7f);
@@ -405,7 +405,7 @@ TEST(escape_alt) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b\x1b + 'x' → same as \x1b + 'x' = 'x' + ALT */
+    /* \x1b\x1b + 'x' -> same as \x1b + 'x' = 'x' + ALT */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 0x1b);
@@ -429,14 +429,14 @@ TEST(escape_csi_ss3_cs) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b + '[' → CSI state */
+    /* \x1b + '[' -> CSI state */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, '[');
     asserteq(r, TF_AGAIN);
     asserteq(S.state, TF_STATE_CSI);
 
-    /* \x1b + 'O' → SS3 state */
+    /* \x1b + 'O' -> SS3 state */
     tf_init(&S, NULL, NULL);
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
@@ -444,7 +444,7 @@ TEST(escape_csi_ss3_cs) {
     asserteq(r, TF_AGAIN);
     asserteq(S.state, TF_STATE_SS3);
 
-    /* \x1b + ']' → CS_OSC state */
+    /* \x1b + ']' -> CS_OSC state */
     tf_init(&S, NULL, NULL);
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
@@ -452,7 +452,7 @@ TEST(escape_csi_ss3_cs) {
     asserteq(r, TF_AGAIN);
     asserteq(S.state, TF_STATE_CS_OSC);
 
-    /* \x1b + 'P' → CS_DCS state */
+    /* \x1b + 'P' -> CS_DCS state */
     tf_init(&S, NULL, NULL);
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
@@ -460,7 +460,7 @@ TEST(escape_csi_ss3_cs) {
     asserteq(r, TF_AGAIN);
     asserteq(S.state, TF_STATE_CS_DCS);
 
-    /* \x1b + '_' → CS_APC state */
+    /* \x1b + '_' -> CS_APC state */
     tf_init(&S, NULL, NULL);
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
@@ -471,7 +471,7 @@ TEST(escape_csi_ss3_cs) {
     tf_free(&S);
 }
 
-/* test: ESCAPE + CSI sequence → state transitions and bytes */
+/* test: ESCAPE + CSI sequence -> state transitions and bytes */
 TEST(escape_chunk) {
     tf_State S;
     tf_Key   key;
@@ -479,22 +479,22 @@ TEST(escape_chunk) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b → ESCAPE state */
+    /* \x1b -> ESCAPE state */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     asserteq(S.state, TF_STATE_ESCAPE);
 
-    /* '[' → CSI state */
+    /* '[' -> CSI state */
     r = feed_byte(&S, &key, '[');
     asserteq(r, TF_AGAIN);
     asserteq(S.state, TF_STATE_CSI);
 
-    /* '1' → CSI accumulating (no final yet) */
+    /* '1' -> CSI accumulating (no final yet) */
     r = feed_byte(&S, &key, '1');
     asserteq(r, TF_AGAIN);
     asserteq(S.state, TF_STATE_CSI);
 
-    /* 'A' → final: dispatch → UP key */
+    /* 'A' -> final: dispatch -> UP key */
     r = feed_byte(&S, &key, 'A');
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
@@ -510,7 +510,7 @@ TEST(escape_chunk) {
     tf_free(&S);
 }
 
-/* ─── Phase 1: flush ─── */
+/* --- Phase 1: flush --- */
 
 TEST(flush_escape) {
     tf_State S;
@@ -523,7 +523,7 @@ TEST(flush_escape) {
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
 
-    /* flush → ESC key */
+    /* flush -> ESC key */
     r = tf_flush(&S, &key);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
@@ -541,7 +541,7 @@ TEST(flush_escape_alt) {
     int      r;
     tf_init(&S, NULL, NULL);
 
-    /* \x1b\x1b → ESCAPE with alt_pending */
+    /* \x1b\x1b -> ESCAPE with alt_pending */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 0x1b);
@@ -549,7 +549,7 @@ TEST(flush_escape_alt) {
     asserteq(S.state, TF_STATE_ESCAPE);
     asserteq(S.pending_mod, TF_MOD_ALT);
 
-    /* flush → ALT+ESC */
+    /* flush -> ALT+ESC */
     r = tf_flush(&S, &key);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
@@ -568,14 +568,14 @@ TEST(flush_csi_stub) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b[ → CSI */
+    /* \x1b[ -> CSI */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, '[');
     asserteq(r, TF_AGAIN);
     asserteq(S.state, TF_STATE_CSI);
 
-    /* flush CSI → ALT+[ (empty buf → straight to IDLE) */
+    /* flush CSI -> ALT+[ (empty buf -> straight to IDLE) */
     r = tf_flush(&S, &key);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -586,7 +586,7 @@ TEST(flush_csi_stub) {
     tf_free(&S);
 }
 
-/* ─── Phase 2: CSI cursor keys ─── */
+/* --- Phase 2: CSI cursor keys --- */
 
 TEST(csi_cursor) {
     tf_State S;
@@ -627,7 +627,7 @@ TEST(csi_cursor) {
     tf_free(&S);
 }
 
-/* ─── Phase 2: CSI modifiers ─── */
+/* --- Phase 2: CSI modifiers --- */
 
 TEST(csi_modifiers) {
     tf_State S;
@@ -636,7 +636,7 @@ TEST(csi_modifiers) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b[1;2A → Shift+UP */
+    /* \x1b[1;2A -> Shift+UP */
     r = feed_seq(&S, &key, "\x1b[1;2A", 6);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
@@ -644,7 +644,7 @@ TEST(csi_modifiers) {
     asserteq(key.modifiers, TF_MOD_SHIFT);
     asserteq(key.event, TF_EVENT_PRESS);
 
-    /* \x1b[1;5A → Ctrl+UP */
+    /* \x1b[1;5A -> Ctrl+UP */
     r = feed_seq(&S, &key, "\x1b[1;5A", 6);
     asserteq(r, TF_OK);
     asserteq((long)key.d.sym, (long)TF_SYM_UP);
@@ -653,7 +653,7 @@ TEST(csi_modifiers) {
     tf_free(&S);
 }
 
-/* ─── Phase 2: shift-tab ─── */
+/* --- Phase 2: shift-tab --- */
 
 TEST(csi_shifttab) {
     tf_State S;
@@ -662,7 +662,7 @@ TEST(csi_shifttab) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b[Z → Shift+TAB (default shift) */
+    /* \x1b[Z -> Shift+TAB (default shift) */
     r = feed_seq(&S, &key, "\x1b[Z", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
@@ -670,7 +670,7 @@ TEST(csi_shifttab) {
     asserteq(key.modifiers, TF_MOD_SHIFT);
     asserteq(key.event, TF_EVENT_PRESS);
 
-    /* \x1b[1;5Z → Shift+TAB + Ctrl */
+    /* \x1b[1;5Z -> Shift+TAB + Ctrl */
     r = feed_seq(&S, &key, "\x1b[1;5Z", 6);
     asserteq(r, TF_OK);
     asserteq((long)key.d.sym, (long)TF_SYM_TAB);
@@ -680,7 +680,7 @@ TEST(csi_shifttab) {
     tf_free(&S);
 }
 
-/* ─── Phase 2: func/editing keys ─── */
+/* --- Phase 2: func/editing keys --- */
 
 TEST(csi_funckey) {
     tf_State S;
@@ -689,111 +689,111 @@ TEST(csi_funckey) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b[3~ → DELETE */
+    /* \x1b[3~ -> DELETE */
     r = feed_seq(&S, &key, "\x1b[3~", 4);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_DELETE);
 
-    /* \x1b[1~ → FIND */
+    /* \x1b[1~ -> FIND */
     r = feed_seq(&S, &key, "\x1b[1~", 4);
     asserteq(r, TF_OK);
     asserteq((long)key.d.sym, (long)TF_SYM_FIND);
 
-    /* \x1b[5~ → PAGEUP */
+    /* \x1b[5~ -> PAGEUP */
     r = feed_seq(&S, &key, "\x1b[5~", 4);
     asserteq(r, TF_OK);
     asserteq((long)key.d.sym, (long)TF_SYM_PAGEUP);
 
-    /* \x1b[6~ → PAGEDOWN */
+    /* \x1b[6~ -> PAGEDOWN */
     r = feed_seq(&S, &key, "\x1b[6~", 4);
     asserteq(r, TF_OK);
     asserteq((long)key.d.sym, (long)TF_SYM_PAGEDOWN);
 
-    /* \x1b[7~ → HOME */
+    /* \x1b[7~ -> HOME */
     r = feed_seq(&S, &key, "\x1b[7~", 4);
     asserteq(r, TF_OK);
     asserteq((long)key.d.sym, (long)TF_SYM_HOME);
 
-    /* \x1b[8~ → END */
+    /* \x1b[8~ -> END */
     r = feed_seq(&S, &key, "\x1b[8~", 4);
     asserteq(r, TF_OK);
     asserteq((long)key.d.sym, (long)TF_SYM_END);
 
-    /* \x1b[11~ → F1 */
+    /* \x1b[11~ -> F1 */
     r = feed_seq(&S, &key, "\x1b[11~", 5);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_FUNCTION);
     asserteq(key.d.number, 1);
 
-    /* \x1b[12~ → F2 */
+    /* \x1b[12~ -> F2 */
     r = feed_seq(&S, &key, "\x1b[12~", 5);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_FUNCTION);
     asserteq(key.d.number, 2);
 
-    /* \x1b[15~ → F5 */
+    /* \x1b[15~ -> F5 */
     r = feed_seq(&S, &key, "\x1b[15~", 5);
     asserteq(key.type, TF_TYPE_FUNCTION);
     asserteq(key.d.number, 5);
 
-    /* \x1b[17~ → F6 */
+    /* \x1b[17~ -> F6 */
     r = feed_seq(&S, &key, "\x1b[17~", 5);
     asserteq(key.d.number, 6);
 
-    /* \x1b[18~ → F7 */
+    /* \x1b[18~ -> F7 */
     r = feed_seq(&S, &key, "\x1b[18~", 5);
     asserteq(key.d.number, 7);
 
-    /* \x1b[19~ → F8 */
+    /* \x1b[19~ -> F8 */
     r = feed_seq(&S, &key, "\x1b[19~", 5);
     asserteq(key.d.number, 8);
 
-    /* \x1b[20~ → F9 */
+    /* \x1b[20~ -> F9 */
     r = feed_seq(&S, &key, "\x1b[20~", 5);
     asserteq(key.d.number, 9);
 
-    /* \x1b[21~ → F10 */
+    /* \x1b[21~ -> F10 */
     r = feed_seq(&S, &key, "\x1b[21~", 5);
     asserteq(key.d.number, 10);
 
-    /* \x1b[23~ → F11 */
+    /* \x1b[23~ -> F11 */
     r = feed_seq(&S, &key, "\x1b[23~", 5);
     asserteq(key.d.number, 11);
 
-    /* \x1b[24~ → F12 */
+    /* \x1b[24~ -> F12 */
     r = feed_seq(&S, &key, "\x1b[24~", 5);
     asserteq(key.d.number, 12);
 
-    /* \x1b[28~ → F15 */
+    /* \x1b[28~ -> F15 */
     r = feed_seq(&S, &key, "\x1b[28~", 5);
     asserteq(key.d.number, 15);
 
-    /* \x1b[29~ → F16 */
+    /* \x1b[29~ -> F16 */
     r = feed_seq(&S, &key, "\x1b[29~", 5);
     asserteq(key.d.number, 16);
 
-    /* \x1b[32~ → F18 */
+    /* \x1b[32~ -> F18 */
     r = feed_seq(&S, &key, "\x1b[32~", 5);
     asserteq(key.d.number, 18);
 
-    /* \x1b[34~ → F20 */
+    /* \x1b[34~ -> F20 */
     r = feed_seq(&S, &key, "\x1b[34~", 5);
     asserteq(key.d.number, 20);
 
-    /* \x1b[27;5;97~ → Ctrl+'a' (modifyOtherKeys) */
+    /* \x1b[27;5;97~ -> Ctrl+'a' (modifyOtherKeys) */
     r = feed_seq(&S, &key, "\x1b[27;5;97~", 10);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, 'a');
     asserteq(key.modifiers, TF_MOD_CTRL);
 
-    /* \x1b[27;99~ → modifyOtherKeys with invalid code → UNKNOWN_CSI */
+    /* \x1b[27;99~ -> modifyOtherKeys with invalid code -> UNKNOWN_CSI */
     r = feed_seq(&S, &key, "\x1b[27;99~", 8);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNKNOWN_CSI);
 
-    /* \x1b[42~ → FUNCTION 42 (default) */
+    /* \x1b[42~ -> FUNCTION 42 (default) */
     r = feed_seq(&S, &key, "\x1b[42~", 5);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_FUNCTION);
@@ -818,13 +818,13 @@ TEST(csi_funckey) {
     r = feed_seq(&S, &key, "\x1b[33~", 5);
     asserteq(key.d.number, 19);
 
-    /* \x1b[0~ → FUNCTION 0 (below FIND range) */
+    /* \x1b[0~ -> FUNCTION 0 (below FIND range) */
     r = feed_seq(&S, &key, "\x1b[0~", 5);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_FUNCTION);
     asserteq(key.d.number, 0);
 
-    /* \x1b[~ → UNKNOWN_CSI (empty function key arg) */
+    /* \x1b[~ -> UNKNOWN_CSI (empty function key arg) */
     r = feed_seq(&S, &key, "\x1b[~", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNKNOWN_CSI);
@@ -832,7 +832,7 @@ TEST(csi_funckey) {
     tf_free(&S);
 }
 
-/* ─── Phase 2: event sub-parameters ─── */
+/* --- Phase 2: event sub-parameters --- */
 
 TEST(csi_event) {
     tf_State S;
@@ -841,7 +841,7 @@ TEST(csi_event) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b[1;2:3~ → DELETE + Shift + RELEASE */
+    /* \x1b[1;2:3~ -> DELETE + Shift + RELEASE */
     r = feed_seq(&S, &key, "\x1b[1;2:3~", 8);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
@@ -849,22 +849,22 @@ TEST(csi_event) {
     asserteq(key.modifiers, TF_MOD_SHIFT);
     asserteq(key.event, TF_EVENT_RELEASE);
 
-    /* \x1b[1;2:2~ → REPEAT */
+    /* \x1b[1;2:2~ -> REPEAT */
     r = feed_seq(&S, &key, "\x1b[1;2:2~", 8);
     asserteq(r, TF_OK);
     asserteq(key.event, TF_EVENT_REPEAT);
 
-    /* \x1b[1;2:9~ → invalid event → UNKNOWN_CSI */
+    /* \x1b[1;2:9~ -> invalid event -> UNKNOWN_CSI */
     r = feed_seq(&S, &key, "\x1b[1;2:9~", 8);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNKNOWN_CSI);
 
-    /* event=1 explicit → PRESS */
+    /* event=1 explicit -> PRESS */
     r = feed_seq(&S, &key, "\x1b[1;2:1~", 8);
     asserteq(r, TF_OK);
     asserteq(key.event, TF_EVENT_PRESS);
 
-    /* field leading char in 0x3A-0x40 skipped: \x1b[1;>2~ → SHIFT+FIND */
+    /* field leading char in 0x3A-0x40 skipped: \x1b[1;>2~ -> SHIFT+FIND */
     r = feed_seq(&S, &key, "\x1b[1;>2~", 8);
     asserteq(r, TF_OK);
     asserteq((long)key.d.sym, (long)TF_SYM_FIND);
@@ -873,7 +873,7 @@ TEST(csi_event) {
     tf_free(&S);
 }
 
-/* ─── Phase 2: position report ─── */
+/* --- Phase 2: position report --- */
 
 TEST(csi_position) {
     tf_State S;
@@ -882,7 +882,7 @@ TEST(csi_position) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b[?1;2R → POSITION(1,2) */
+    /* \x1b[?1;2R -> POSITION(1,2) */
     r = feed_seq(&S, &key, "\x1b[?1;2R", 7);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_POSITION);
@@ -893,7 +893,7 @@ TEST(csi_position) {
     tf_free(&S);
 }
 
-/* ─── Phase 2: kitty report ─── */
+/* --- Phase 2: kitty report --- */
 
 TEST(csi_kitty) {
     tf_State S;
@@ -902,14 +902,14 @@ TEST(csi_kitty) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b[?u → KITTYREPORT (no params) */
+    /* \x1b[?u -> KITTYREPORT (no params) */
     r = feed_seq(&S, &key, "\x1b[?u", 4);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KITTYREPORT);
     asserteq(key.d.number, -1);
     asserteq(key.event, TF_EVENT_PRESS);
 
-    /* \x1b[?1u → KITTYREPORT with flags=1 */
+    /* \x1b[?1u -> KITTYREPORT with flags=1 */
     r = feed_seq(&S, &key, "\x1b[?1u", 5);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KITTYREPORT);
@@ -919,7 +919,7 @@ TEST(csi_kitty) {
     tf_free(&S);
 }
 
-/* ─── Phase 2: mode report ─── */
+/* --- Phase 2: mode report --- */
 
 TEST(csi_modereport) {
     tf_State S;
@@ -928,7 +928,7 @@ TEST(csi_modereport) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b[1$y → ANSI mode report: mode=1 */
+    /* \x1b[1$y -> ANSI mode report: mode=1 */
     r = feed_seq(&S, &key, "\x1b[1$y", 5);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_MODEREPORT);
@@ -937,7 +937,7 @@ TEST(csi_modereport) {
     asserteq(key.d.modereport.value, -1);
     asserteq(key.event, TF_EVENT_PRESS);
 
-    /* \x1b[?1;2$y → DEC mode report */
+    /* \x1b[?1;2$y -> DEC mode report */
     r = feed_seq(&S, &key, "\x1b[?1;2$y", 8);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_MODEREPORT);
@@ -949,7 +949,7 @@ TEST(csi_modereport) {
     tf_free(&S);
 }
 
-/* ─── Phase 2: CSI params edge cases ─── */
+/* --- Phase 2: CSI params edge cases --- */
 
 TEST(csi_params) {
     tf_State S;
@@ -958,7 +958,7 @@ TEST(csi_params) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b[;2A → UP + modifier 2 (empty first field → arg1=-1→dflt 1??) */
+    /* \x1b[;2A -> UP + modifier 2 (empty first field -> arg1=-1->dflt 1??) */
     /* Actually empty arg1 means arg1 defaults to -1 for nargs counting,
      * but cursor key handler doesn't check arg1; it uses tfD_event
      * which gets modifiers from arg2 */
@@ -967,7 +967,7 @@ TEST(csi_params) {
     asserteq((long)key.d.sym, (long)TF_SYM_UP);
     asserteq(key.modifiers, TF_MOD_SHIFT);
 
-    /* \x1b[A with alt_pending (\x1b\x1b[A) → UP + ALT */
+    /* \x1b[A with alt_pending (\x1b\x1b[A) -> UP + ALT */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 0x1b);
@@ -977,20 +977,20 @@ TEST(csi_params) {
     asserteq((long)key.d.sym, (long)TF_SYM_UP);
     asserteq(key.modifiers, TF_MOD_ALT);
 
-    /* non-digit inside param field: \x1b[1;2<3A → UP + SHIFT
+    /* non-digit inside param field: \x1b[1;2<3A -> UP + SHIFT
      * (arg2 stops at '<') */
     r = feed_seq(&S, &key, "\x1b[1;2<3A", 8);
     asserteq(r, TF_OK);
     asserteq((long)key.d.sym, (long)TF_SYM_UP);
     asserteq(key.modifiers, TF_MOD_SHIFT);
 
-    /* non-digit in sub-param: \x1b[1;2:3<4A → UP, arg2=2 */
+    /* non-digit in sub-param: \x1b[1;2:3<4A -> UP, arg2=2 */
     r = feed_seq(&S, &key, "\x1b[1;2:3<4A", 10);
     asserteq(r, TF_OK);
     asserteq((long)key.d.sym, (long)TF_SYM_UP);
     asserteq(key.modifiers, TF_MOD_SHIFT);
 
-    /* \x1b\x1bOA → ALT+UP (SS3 dispatch merges alt_pending) */
+    /* \x1b\x1bOA -> ALT+UP (SS3 dispatch merges alt_pending) */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 0x1b);
@@ -1003,7 +1003,7 @@ TEST(csi_params) {
     tf_free(&S);
 }
 
-/* ─── Phase 3: SS3 cursor keys ─── */
+/* --- Phase 3: SS3 cursor keys --- */
 
 TEST(ss3_cursor) {
     tf_State S;
@@ -1037,7 +1037,7 @@ TEST(ss3_cursor) {
     asserteq(r, TF_OK);
     asserteq((long)key.d.sym, (long)TF_SYM_END);
 
-    /* \x1bOE → BEGIN */
+    /* \x1bOE -> BEGIN */
     r = feed_seq(&S, &key, "\x1bOE", 3);
     asserteq(r, TF_OK);
     asserteq((long)key.d.sym, (long)TF_SYM_BEGIN);
@@ -1045,7 +1045,7 @@ TEST(ss3_cursor) {
     tf_free(&S);
 }
 
-/* ─── Phase 3: SS3 function keys ─── */
+/* --- Phase 3: SS3 function keys --- */
 
 TEST(ss3_func) {
     tf_State S;
@@ -1077,7 +1077,7 @@ TEST(ss3_func) {
     tf_free(&S);
 }
 
-/* ─── Phase 3: SS3 KP keys ─── */
+/* --- Phase 3: SS3 KP keys --- */
 
 TEST(ss3_kp) {
     tf_State S;
@@ -1140,7 +1140,7 @@ TEST(ss3_kp) {
     tf_free(&S);
 }
 
-/* ─── Phase 3: SS3 CONVERTKP ─── */
+/* --- Phase 3: SS3 CONVERTKP --- */
 
 TEST(ss3_convertkp) {
     tf_State S;
@@ -1150,49 +1150,49 @@ TEST(ss3_convertkp) {
     tf_init(&S, NULL, NULL);
     tf_setflag(&S, TF_FLAG_CONVERTKP);
 
-    /* KPMULT → '*' */
+    /* KPMULT -> '*' */
     r = feed_seq(&S, &key, "\x1bOj", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, '*');
 
-    /* KPPLUS → '+' */
+    /* KPPLUS -> '+' */
     r = feed_seq(&S, &key, "\x1bOk", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, '+');
 
-    /* KPMINUS → '-' */
+    /* KPMINUS -> '-' */
     r = feed_seq(&S, &key, "\x1bOm", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, '-');
 
-    /* KPDIV → '/' */
+    /* KPDIV -> '/' */
     r = feed_seq(&S, &key, "\x1bOo", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, '/');
 
-    /* KPPERIOD → '.' */
+    /* KPPERIOD -> '.' */
     r = feed_seq(&S, &key, "\x1bOn", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, '.');
 
-    /* KPCOMMA → ',' */
+    /* KPCOMMA -> ',' */
     r = feed_seq(&S, &key, "\x1bOl", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, ',');
 
-    /* KPEQUALS → '=' */
+    /* KPEQUALS -> '=' */
     r = feed_seq(&S, &key, "\x1bOX", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, '=');
 
-    /* KP0 → '0' */
+    /* KP0 -> '0' */
     r = feed_seq(&S, &key, "\x1bOp", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -1204,7 +1204,7 @@ TEST(ss3_convertkp) {
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_UP);
 
-    /* unknown final with CONVERTKP: kpconvert fails → ALT+O peel */
+    /* unknown final with CONVERTKP: kpconvert fails -> ALT+O peel */
     r = feed_seq(&S, &key, "\x1bOG", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -1216,7 +1216,7 @@ TEST(ss3_convertkp) {
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, 'G');
 
-    /* KPENTER → still KPENTER (no conversion) */
+    /* KPENTER -> still KPENTER (no conversion) */
     r = feed_seq(&S, &key, "\x1bOM", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
@@ -1225,7 +1225,7 @@ TEST(ss3_convertkp) {
     tf_free(&S);
 }
 
-/* ─── Phase 3: SS3 unknown → REPLAY_BUF ─── */
+/* --- Phase 3: SS3 unknown -> REPLAY_BUF --- */
 
 TEST(ss3_unknown) {
     tf_State S;
@@ -1234,21 +1234,21 @@ TEST(ss3_unknown) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1bOG → first key: ALT+O */
+    /* \x1bOG -> first key: ALT+O */
     /* feed ['G'] separately because \x1bO is consumed first */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 'O');
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 'G');
-    /* 'G' is not a valid SS3 final → ALT+O produced, REPLAY_BUF(1) */
+    /* 'G' is not a valid SS3 final -> ALT+O produced, REPLAY_BUF(1) */
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, 'O');
     asserteq(key.modifiers, TF_MOD_ALT);
     asserteq(S.replay, 1);
 
-    /* next read → REPLAY_BUF outputs 'G' */
+    /* next read -> REPLAY_BUF outputs 'G' */
     r = tf_readkey(&S, &key);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -1258,7 +1258,7 @@ TEST(ss3_unknown) {
     tf_free(&S);
 }
 
-/* ─── Phase 3: X10 mouse ─── */
+/* --- Phase 3: X10 mouse --- */
 
 TEST(mouse_x10) {
     tf_State S;
@@ -1271,13 +1271,13 @@ TEST(mouse_x10) {
     r = feed_seq(&S, &key, "\x1b[M\x20\x22\x23", 6);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_MOUSE);
-    asserteq(key.d.mouse.btn, 0);  /* code=0x20 → code-0x20=0, btn=0 */
+    asserteq(key.d.mouse.btn, 0);  /* code=0x20 -> code-0x20=0, btn=0 */
     asserteq(key.d.mouse.col, 2);  /* 0x22-0x20=2 */
     asserteq(key.d.mouse.line, 3); /* 0x23-0x20=3 */
     asserteq(key.d.mouse.release, 0);
 
     /* X10 with modifiers: btn=1, shift (btn with mod bit 0x04) */
-    /* code = 0x24 → btn=0, mods=(0x24&0x1c)>>2=(0x04)>>2=1=SHIFT */
+    /* code = 0x24 -> btn=0, mods=(0x24&0x1c)>>2=(0x04)>>2=1=SHIFT */
     r = feed_seq(&S, &key, "\x1b[M\x24\x21\x21", 6);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_MOUSE);
@@ -1288,7 +1288,7 @@ TEST(mouse_x10) {
     tf_free(&S);
 }
 
-/* ─── Phase 3: X10 mouse across chunks ─── */
+/* --- Phase 3: X10 mouse across chunks --- */
 
 TEST(mouse_x10_chunk) {
     tf_State S;
@@ -1303,7 +1303,7 @@ TEST(mouse_x10_chunk) {
     asserteq(S.state, TF_STATE_MOUSE_X10);
     asserteq(S.buf_len, 1); /* buf[0] = 'M', raw to follow */
 
-    /* feed byte 1 → MOUSE_X10: raw at buf[1], still need 2 more */
+    /* feed byte 1 -> MOUSE_X10: raw at buf[1], still need 2 more */
     r = feed_byte(&S, &key, 0x20);
     asserteq(r, TF_AGAIN);
     asserteq(S.buf_len, 2);
@@ -1313,7 +1313,7 @@ TEST(mouse_x10_chunk) {
     asserteq(r, TF_AGAIN);
     asserteq(S.buf_len, 3);
 
-    /* feed byte 3 → complete, decode mouse */
+    /* feed byte 3 -> complete, decode mouse */
     r = feed_byte(&S, &key, 0x22);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_MOUSE);
@@ -1324,7 +1324,7 @@ TEST(mouse_x10_chunk) {
     tf_free(&S);
 }
 
-/* ─── Phase 3: rxvt mouse ─── */
+/* --- Phase 3: rxvt mouse --- */
 
 TEST(mouse_rxvt) {
     tf_State S;
@@ -1333,7 +1333,7 @@ TEST(mouse_rxvt) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b[32;5;8M → rxvt: code=32, col=5, line=8 */
+    /* \x1b[32;5;8M -> rxvt: code=32, col=5, line=8 */
     r = feed_seq(&S, &key, "\x1b[32;5;8M", 9);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_MOUSE);
@@ -1344,7 +1344,7 @@ TEST(mouse_rxvt) {
     tf_free(&S);
 }
 
-/* ─── Phase 3: X10 mouse across chunks with alt_pending ─── */
+/* --- Phase 3: X10 mouse across chunks with alt_pending --- */
 
 TEST(mouse_x10_chunkalt) {
     tf_State S;
@@ -1353,14 +1353,14 @@ TEST(mouse_x10_chunkalt) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b\x1b → alt_pending=1, then [M in 2-byte chunk → X10 state */
+    /* \x1b\x1b -> alt_pending=1, then [M in 2-byte chunk -> X10 state */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     asserteq(S.pending_mod, TF_MOD_ALT);
 
-    /* [M → first byte goes to CSI, 'M' dispatch → X10, S->n<3 → MOUSE_X10 */
+    /* [M -> first byte goes to CSI, 'M' dispatch -> X10, S->n<3 -> MOUSE_X10 */
     r = feed_seq(&S, &key, "[M", 2);
     asserteq(r, TF_AGAIN);
     asserteq(S.state, TF_STATE_MOUSE_X10);
@@ -1382,7 +1382,7 @@ TEST(mouse_x10_chunkalt) {
     tf_free(&S);
 }
 
-/* ─── Phase 3: SGR mouse ─── */
+/* --- Phase 3: SGR mouse --- */
 
 TEST(mouse_sgr) {
     tf_State S;
@@ -1391,7 +1391,7 @@ TEST(mouse_sgr) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b[<0;5;8M → SGR press: code=0, col=5, line=8 */
+    /* \x1b[<0;5;8M -> SGR press: code=0, col=5, line=8 */
     r = feed_seq(&S, &key, "\x1b[<0;5;8M", 9);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_MOUSE);
@@ -1399,7 +1399,7 @@ TEST(mouse_sgr) {
     asserteq(key.d.mouse.line, 8);
     asserteq(key.d.mouse.release, 0);
 
-    /* \x1b[<0;5;8m → SGR release */
+    /* \x1b[<0;5;8m -> SGR release */
     r = feed_seq(&S, &key, "\x1b[<0;5;8m", 9);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_MOUSE);
@@ -1408,7 +1408,7 @@ TEST(mouse_sgr) {
     tf_free(&S);
 }
 
-/* ─── Phase 3: SS3 unknown prefix byte ─── */
+/* --- Phase 3: SS3 unknown prefix byte --- */
 
 TEST(ss3_unknownprefix) {
     tf_State S;
@@ -1417,7 +1417,7 @@ TEST(ss3_unknownprefix) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1bO + '0' (not a final byte) → ALT+O, '0' in REPLAY_BUF */
+    /* \x1bO + '0' (not a final byte) -> ALT+O, '0' in REPLAY_BUF */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 'O');
@@ -1437,7 +1437,7 @@ TEST(ss3_unknownprefix) {
     asserteq(key.d.codepoint, '0');
     asserteq(S.state, TF_STATE_IDLE);
 
-    /* \x1bO + 0xfe → ALT+O, 0xfe in REPLAY_BUF → 0xFFFD */
+    /* \x1bO + 0xfe -> ALT+O, 0xfe in REPLAY_BUF -> 0xFFFD */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 'O');
@@ -1447,7 +1447,7 @@ TEST(ss3_unknownprefix) {
     asserteq(key.d.codepoint, 'O');
     asserteq(key.modifiers, TF_MOD_ALT);
     asserteq(S.replay, 1);
-    /* replay: high byte → 0xFFFD */
+    /* replay: high byte -> 0xFFFD */
     r = tf_readkey(&S, &key);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -1456,7 +1456,7 @@ TEST(ss3_unknownprefix) {
     tf_free(&S);
 }
 
-/* ─── Phase 3: X10 mouse with alt_pending ─── */
+/* --- Phase 3: X10 mouse with alt_pending --- */
 
 TEST(mouse_x10_alt) {
     tf_State S;
@@ -1465,7 +1465,7 @@ TEST(mouse_x10_alt) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b\x1b[M\x20\x21\x22 → ALT + MOUSE (via alt_pending) */
+    /* \x1b\x1b[M\x20\x21\x22 -> ALT + MOUSE (via alt_pending) */
     /* feed \x1b\x1b first to set alt_pending */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
@@ -1486,7 +1486,7 @@ TEST(mouse_x10_alt) {
     tf_free(&S);
 }
 
-/* ─── Phase 2+3: unknown CSI ─── */
+/* --- Phase 2+3: unknown CSI --- */
 
 TEST(csi_unknown) {
     tf_State S;
@@ -1495,19 +1495,19 @@ TEST(csi_unknown) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b[999@ → UNKNOWN_CSI (final '@' not recognized) */
+    /* \x1b[999@ -> UNKNOWN_CSI (final '@' not recognized) */
     r = feed_seq(&S, &key, "\x1b[999@", 7);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNKNOWN_CSI);
 
-    /* plain \x1b[R → F3 */
+    /* plain \x1b[R -> F3 */
     r = feed_seq(&S, &key, "\x1b[R", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_FUNCTION);
     asserteq(key.d.number, 3);
     asserteq(key.event, TF_EVENT_PRESS);
 
-    /* control byte in param area short-circuits: \x1b[\x01A → UP */
+    /* control byte in param area short-circuits: \x1b[\x01A -> UP */
     r = feed_seq(
             &S, &key,
             "\x1b[\x01"
@@ -1520,7 +1520,7 @@ TEST(csi_unknown) {
     tf_free(&S);
 }
 
-/* ─── Phase 4: Control String ─── */
+/* --- Phase 4: Control String --- */
 
 TEST(cs_osc) {
     tf_State S;
@@ -1528,7 +1528,7 @@ TEST(cs_osc) {
     int      r, len;
     tf_init(&S, NULL, NULL);
 
-    /* OSC \x1b]0;title\a → OSC key, tf_string=="0;title" */
+    /* OSC \x1b]0;title\a -> OSC key, tf_string=="0;title" */
     r = feed_seq(&S, &key, "\x1b]0;title\x07", 11);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_OSC);
@@ -1564,7 +1564,7 @@ TEST(cs_st) {
     asserteq(len, 2);
     asserteq(memcmp(tf_string(&S, &len), "ab", 2), 0);
 
-    /* ESC content inside OSC: \x1b]abc\x1b\ → content "abc" */
+    /* ESC content inside OSC: \x1b]abc\x1b\ -> content "abc" */
     /* The \x1b before \ is appended, then ST detection removes it. */
     tf_free(&S);
     tf_init(&S, NULL, NULL);
@@ -1575,7 +1575,7 @@ TEST(cs_st) {
     asserteq(memcmp(tf_string(&S, &len), "abc", 3), 0);
     tf_free(&S);
 
-    /* content is exactly ESC: \x1b]\x1b\ → empty OSC (cs_len drops to 0) */
+    /* content is exactly ESC: \x1b]\x1b\ -> empty OSC (cs_len drops to 0) */
     tf_init(&S, NULL, NULL);
     r = feed_seq(&S, &key, "\x1b]\x1b\x5c", 4);
     asserteq(r, TF_OK);
@@ -1624,16 +1624,16 @@ TEST(cs_cross) {
     asserteq(r, TF_AGAIN);
     asserteq(S.state, TF_STATE_CS_OSC);
 
-    /* feed 'x' → cs_buf alloc, AGAIN */
+    /* feed 'x' -> cs_buf alloc, AGAIN */
     r = feed_byte(&S, &key, 'x');
     asserteq(r, TF_AGAIN);
     asserteq(S.state, TF_STATE_CS_OSC);
 
-    /* feed 'y' → AGAIN */
+    /* feed 'y' -> AGAIN */
     r = feed_byte(&S, &key, 'y');
     asserteq(r, TF_AGAIN);
 
-    /* feed BEL → complete */
+    /* feed BEL -> complete */
     r = feed_byte(&S, &key, 0x07);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_OSC);
@@ -1649,7 +1649,7 @@ TEST(cs_alt) {
     int      r;
     tf_init(&S, NULL, NULL);
 
-    /* \x1b\x1b]test\a → OSC + ALT */
+    /* \x1b\x1b]test\a -> OSC + ALT */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 0x1b);
@@ -1712,7 +1712,7 @@ TEST(cs_params) {
     tf_free(&S);
 }
 
-/* ─── Phase 5: UTF-8 decode ─── */
+/* --- Phase 5: UTF-8 decode --- */
 
 TEST(utf8_decode) {
     tf_State S;
@@ -1720,7 +1720,7 @@ TEST(utf8_decode) {
     int      r;
     tf_init(&S, NULL, NULL);
 
-    /* 2-byte: Ã = 0xC3 0x80 → U+00C0 */
+    /* 2-byte: A-tilde = 0xC3 0x80 -> U+00C0 */
     r = feed_seq(&S, &key, "\xc3\x80", 2);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -1729,7 +1729,7 @@ TEST(utf8_decode) {
     asserteq((unsigned char)key.utf8[1], 0x80);
     asserteq(key.utf8[2], '\0');
 
-    /* 3-byte: € = 0xE2 0x82 0xAC → U+20AC */
+    /* 3-byte: Euro = 0xE2 0x82 0xAC -> U+20AC */
     r = feed_seq(&S, &key, "\xe2\x82\xac", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -1739,7 +1739,7 @@ TEST(utf8_decode) {
     asserteq((unsigned char)key.utf8[2], 0xAC);
     asserteq(key.utf8[3], '\0');
 
-    /* 2-byte: ¡ = 0xC2 0xA1 → U+00A1 */
+    /* 2-byte: ! = 0xC2 0xA1 -> U+00A1 */
     r = feed_seq(&S, &key, "\xc2\xa1", 2);
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, 0xA1);
@@ -1754,7 +1754,7 @@ TEST(utf8_chunk) {
     int      r;
     tf_init(&S, NULL, NULL);
 
-    /* cross-chunk 2-byte: C3 80 → À */
+    /* cross-chunk 2-byte: C3 80 -> A-grave */
     r = feed_byte(&S, &key, 0xC3);
     asserteq(r, TF_AGAIN);
     asserteq(S.state, TF_STATE_UTF8);
@@ -1767,7 +1767,7 @@ TEST(utf8_chunk) {
     asserteq(key.d.codepoint, 0xC0);
     asserteq(S.state, TF_STATE_IDLE);
 
-    /* cross-chunk 3-byte: E2 82 AC → € */
+    /* cross-chunk 3-byte: E2 82 AC -> Euro */
     r = feed_byte(&S, &key, 0xE2);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 0x82);
@@ -1784,7 +1784,7 @@ TEST(utf8_invalid) {
     int      r;
     tf_init(&S, NULL, NULL);
 
-    /* overlong 2-byte: C0 80 → FFFD */
+    /* overlong 2-byte: C0 80 -> FFFD */
     r = feed_seq(&S, &key, "\xc0\x80", 2);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -1794,42 +1794,42 @@ TEST(utf8_invalid) {
     asserteq((unsigned char)key.utf8[2], 0xBD);
     asserteq(key.utf8[3], '\0');
 
-    /* overlong 2-byte: C1 BF → FFFD */
+    /* overlong 2-byte: C1 BF -> FFFD */
     r = feed_seq(&S, &key, "\xc1\xbf", 2);
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, 0xFFFD);
 
-    /* surrogate: ED A0 80 → FFFD */
+    /* surrogate: ED A0 80 -> FFFD */
     r = feed_seq(&S, &key, "\xed\xa0\x80", 3);
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, 0xFFFD);
 
-    /* invalid continuation byte: C3 40 → FFFD */
+    /* invalid continuation byte: C3 40 -> FFFD */
     r = feed_seq(&S, &key, "\xc3\x40", 2);
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, 0xFFFD);
 
-    /* invalid lead byte: 0xFE → FFFD */
+    /* invalid lead byte: 0xFE -> FFFD */
     r = feed_byte(&S, &key, 0xFE);
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, 0xFFFD);
 
-    /* invalid lead byte: 0xFF → FFFD */
+    /* invalid lead byte: 0xFF -> FFFD */
     r = feed_byte(&S, &key, 0xFF);
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, 0xFFFD);
 
-    /* standalone continuation: 0x80 → FFFD */
+    /* standalone continuation: 0x80 -> FFFD */
     r = feed_byte(&S, &key, 0x80);
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, 0xFFFD);
 
-    /* 0xFFFE (EF BF BE) → FFFD */
+    /* 0xFFFE (EF BF BE) -> FFFD */
     r = feed_seq(&S, &key, "\xef\xbf\xbe", 3);
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, 0xFFFD);
 
-    /* 0xFFFF (EF BF BF) → FFFD */
+    /* 0xFFFF (EF BF BF) -> FFFD */
     r = feed_seq(&S, &key, "\xef\xbf\xbf", 3);
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, 0xFFFD);
@@ -1843,7 +1843,7 @@ TEST(utf8_alt) {
     int      r;
     tf_init(&S, NULL, NULL);
 
-    /* \x1b + UTF-8 lead (one-shot): C3 80 → ALT+À */
+    /* \x1b + UTF-8 lead (one-shot): C3 80 -> ALT+A-grave */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_seq(&S, &key, "\xc3\x80", 2);
@@ -1853,7 +1853,7 @@ TEST(utf8_alt) {
     asserteq(key.modifiers, TF_MOD_ALT);
     asserteq(S.state, TF_STATE_IDLE);
 
-    /* \x1b + UTF-8 lead (cross-chunk): C3 then 80 → ALT+À */
+    /* \x1b + UTF-8 lead (cross-chunk): C3 then 80 -> ALT+A-grave */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 0xC3);
@@ -1866,7 +1866,7 @@ TEST(utf8_alt) {
     asserteq(key.modifiers, TF_MOD_ALT);
     asserteq(S.state, TF_STATE_IDLE);
 
-    /* \x1b\x1b + UTF-8 → ALT+À (alt_pending merge) */
+    /* \x1b\x1b + UTF-8 -> ALT+A-grave (alt_pending merge) */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 0x1b);
@@ -1878,7 +1878,7 @@ TEST(utf8_alt) {
     asserteq(key.modifiers, TF_MOD_ALT);
     asserteq(S.pending_mod, 0);
 
-    /* \x1b\x1b + UTF-8 → ALT+À (cross-chunk with alt_pending=1) */
+    /* \x1b\x1b + UTF-8 -> ALT+A-grave (cross-chunk with alt_pending=1) */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 0x1b);
@@ -1912,7 +1912,7 @@ TEST(utf8_params) {
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, 0xFE);
 
-    /* IDLE: 0x80 → FFFD now (was raw byte before Phase 5) */
+    /* IDLE: 0x80 -> FFFD now (was raw byte before Phase 5) */
     tf_init(&S, NULL, NULL);
     r = feed_byte(&S, &key, 0x81);
     asserteq(r, TF_OK);
@@ -1928,7 +1928,7 @@ TEST(utf8_456) {
     int      r;
     tf_init(&S, NULL, NULL);
 
-    /* 4-byte: F0 90 8D 88 → U+10348 */
+    /* 4-byte: F0 90 8D 88 -> U+10348 */
     r = feed_seq(&S, &key, "\xf0\x90\x8d\x88", 4);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -1936,7 +1936,7 @@ TEST(utf8_456) {
     asserteq((unsigned char)key.utf8[0], 0xF0);
     asserteq((unsigned char)key.utf8[3], 0x88);
 
-    /* 5-byte: F8 88 80 80 80 → min valid 5-byte (U+200000) */
+    /* 5-byte: F8 88 80 80 80 -> min valid 5-byte (U+200000) */
     r = feed_seq(&S, &key, "\xf8\x88\x80\x80\x80", 5);
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, 0x200000);
@@ -1955,7 +1955,7 @@ TEST(utf8_456) {
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, 0x200000);
 
-    /* 6-byte: FC 84 80 80 80 80 → min valid 6-byte (U+4000000) */
+    /* 6-byte: FC 84 80 80 80 80 -> min valid 6-byte (U+4000000) */
     r = feed_seq(&S, &key, "\xfc\x84\x80\x80\x80\x80", 6);
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, 0x4000000);
@@ -2034,7 +2034,7 @@ TEST(cs_allocfree) {
     char     buf[128];
     tf_init(&S, test_alloc, NULL);
 
-    /* OSC with custom allocator → cs_buf allocated via test_alloc */
+    /* OSC with custom allocator -> cs_buf allocated via test_alloc */
     r = feed_seq(&S, &key, "\x1b]hello\x07", 9);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_OSC);
@@ -2070,7 +2070,7 @@ TEST(cs_allocfree) {
         r = feed_seq(&S, &key, buf, 64);
         asserteq(r, TF_AGAIN);
 
-        /* 65th byte triggers realloc → OOM */
+        /* 65th byte triggers realloc -> OOM */
         r = feed_byte(&S, &key, 'Y');
         asserteq(r, TF_ERRMEM);
         asserteq(S.state, TF_STATE_IDLE);
@@ -2105,7 +2105,7 @@ TEST(cs_nul) {
     tf_free(&S);
 }
 
-/* ─── mock terminfo lookup ─── */
+/* --- mock terminfo lookup --- */
 
 typedef struct {
     const char *name;
@@ -2120,7 +2120,7 @@ static const char *ti_lookup(void *ud, const char *name) {
     return NULL;
 }
 
-/* ─── Phase 6: trie tests ─── */
+/* --- Phase 6: trie tests --- */
 
 TEST(trie_match) {
     tf_State S;
@@ -2130,7 +2130,7 @@ TEST(trie_match) {
     tf_init(&S, NULL, NULL);
     tf_load(&S, ti_lookup, tbl);
 
-    /* \x1b\x7f → BACKSPACE via trie (DSA would give DEL+ALT) */
+    /* \x1b\x7f -> BACKSPACE via trie (DSA would give DEL+ALT) */
     r = feed_seq(&S, &key, "\x1b\x7f", 2);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
@@ -2149,14 +2149,14 @@ TEST(trie_singlebyte) {
     tf_init(&S, NULL, NULL);
     tf_load(&S, ti_lookup, tbl);
 
-    /* lone 0x7f → BACKSPACE via trie (DSA would give DEL) */
+    /* lone 0x7f -> BACKSPACE via trie (DSA would give DEL) */
     r = feed_seq(&S, &key, "\x7f", 1);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_BACKSPACE);
     asserteq(key.modifiers, 0);
 
-    /* 0x08 → BACKSPACE via trie (DSA would give CTRL+'h') */
+    /* 0x08 -> BACKSPACE via trie (DSA would give CTRL+'h') */
     tf_free(&S);
     tf_init(&S, NULL, NULL);
     tbl[0].seq = "\x08";
@@ -2197,7 +2197,7 @@ TEST(trie_fallback) {
     tf_init(&S, NULL, NULL);
     tf_load(&S, ti_lookup, tbl);
 
-    /* \x1b[A → DSA: UP (trie has no match for \x1bA) */
+    /* \x1b[A -> DSA: UP (trie has no match for \x1bA) */
     r = feed_seq(&S, &key, "\x1b[A", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
@@ -2216,7 +2216,7 @@ TEST(trie_aftermatch) {
     tf_init(&S, NULL, NULL);
     tf_load(&S, ti_lookup, tbl);
 
-    /* \x1b\x7fx → BACKSPACE, then 'x' (no misalignment) */
+    /* \x1b\x7fx -> BACKSPACE, then 'x' (no misalignment) */
     mr.data = data, mr.len = 3, mr.called = 0;
     tf_feed(&S, mock_reader, &mr);
     r = tf_readkey(&S, &key);
@@ -2238,7 +2238,7 @@ TEST(trie_nolookup) {
     int      r;
     tf_init(&S, NULL, NULL);
 
-    /* no lookup → everything works via DSA */
+    /* no lookup -> everything works via DSA */
     r = feed_seq(&S, &key, "\x1b[A", 3);
     asserteq(r, TF_OK);
     asserteq((long)key.d.sym, (long)TF_SYM_UP);
@@ -2283,7 +2283,7 @@ TEST(trie_shifted) {
     tf_init(&S, NULL, NULL);
     tf_load(&S, ti_lookup, tbl);
 
-    /* \x1b[Z → Shift+TAB via trie */
+    /* \x1b[Z -> Shift+TAB via trie */
     r = feed_seq(&S, &key, "\x1b[Z", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
@@ -2301,13 +2301,13 @@ TEST(trie_fkeybreak) {
     tf_init(&S, NULL, NULL);
     tf_load(&S, ti_lookup, tbl);
 
-    /* key_f1 loaded, f2 missing → only f1 matches */
+    /* key_f1 loaded, f2 missing -> only f1 matches */
     r = feed_seq(&S, &key, "\x1bOP", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_FUNCTION);
     asserteq(key.d.number, 1);
 
-    /* key_f2 not loaded → DSA handles \x1bOQ as SS3 F2 */
+    /* key_f2 not loaded -> DSA handles \x1bOQ as SS3 F2 */
     r = feed_seq(&S, &key, "\x1bOQ", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_FUNCTION);
@@ -2347,7 +2347,7 @@ TEST(trie_oom) {
     }
 }
 
-/* ─── Phase 7: flush tests ─── */
+/* --- Phase 7: flush tests --- */
 
 TEST(flush_csi_full) {
     tf_State S;
@@ -2356,7 +2356,7 @@ TEST(flush_csi_full) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b[1;2 → CSI partial, flush */
+    /* \x1b[1;2 -> CSI partial, flush */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, '[');
@@ -2369,7 +2369,7 @@ TEST(flush_csi_full) {
     asserteq(r, TF_AGAIN);
     asserteq(S.state, TF_STATE_CSI);
 
-    /* flush → ALT+[ + REPLAY_BUF of "1;2" */
+    /* flush -> ALT+[ + REPLAY_BUF of "1;2" */
     r = tf_flush(&S, &key);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -2404,7 +2404,7 @@ TEST(replay_escape) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b[1;\x1b → CSI partial with ESC inside params, flush → replay */
+    /* \x1b[1;\x1b -> CSI partial with ESC inside params, flush -> replay */
     mr.data = "\x1b[1;\x1b", mr.len = 5, mr.called = 0;
     tf_feed(&S, mock_reader, &mr);
     r = tf_readkey(&S, &key);
@@ -2415,7 +2415,7 @@ TEST(replay_escape) {
     asserteq(key.modifiers, TF_MOD_ALT);
     asserteq(S.replay, 3);
 
-    /* replay re-parses "1;\x1b": '1', ';' plain, then ESC → ESCAPE state */
+    /* replay re-parses "1;\x1b": '1', ';' plain, then ESC -> ESCAPE state */
     r = tf_readkey(&S, &key);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -2432,7 +2432,7 @@ TEST(replay_escape) {
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_ESCAPE);
 
-    /* \eO + 'G' → ALT+O, 'G' re-parsed plain */
+    /* \eO + 'G' -> ALT+O, 'G' re-parsed plain */
     mr.data = "\x1bOG", mr.len = 3, mr.called = 0;
     tf_feed(&S, mock_reader, &mr);
     r = tf_readkey(&S, &key);
@@ -2454,14 +2454,14 @@ TEST(flush_ss3) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1bO → SS3, flush */
+    /* \x1bO -> SS3, flush */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 'O');
     asserteq(r, TF_AGAIN);
     asserteq(S.state, TF_STATE_SS3);
 
-    /* flush → ALT+O, no replay */
+    /* flush -> ALT+O, no replay */
     r = tf_flush(&S, &key);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -2479,7 +2479,7 @@ TEST(flush_cs) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b]abc → CS_OSC partial, flush */
+    /* \x1b]abc -> CS_OSC partial, flush */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, ']');
@@ -2492,7 +2492,7 @@ TEST(flush_cs) {
     asserteq(r, TF_AGAIN);
     asserteq(S.state >= TF_STATE_CS_DCS && S.state <= TF_STATE_CS_APC, 1);
 
-    /* flush → ALT+] + IDLE re-parse of "abc" */
+    /* flush -> ALT+] + IDLE re-parse of "abc" */
     r = tf_flush(&S, &key);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -2512,7 +2512,7 @@ TEST(flush_cs) {
     asserteq(key.d.codepoint, 'c');
     asserteq(S.state, TF_STATE_IDLE);
 
-    /* \x1b] (no content) → flush → ALT+] only, straight IDLE */
+    /* \x1b] (no content) -> flush -> ALT+] only, straight IDLE */
     tf_free(&S);
     tf_init(&S, NULL, NULL);
     r = feed_byte(&S, &key, 0x1b);
@@ -2526,7 +2526,7 @@ TEST(flush_cs) {
     asserteq(key.modifiers, TF_MOD_ALT);
     asserteq(S.state, TF_STATE_IDLE);
 
-    /* \x1bPabc → CS_DCS, flush → ALT+P + REPLAY */
+    /* \x1bPabc -> CS_DCS, flush -> ALT+P + REPLAY */
     tf_free(&S);
     tf_init(&S, NULL, NULL);
     r = feed_byte(&S, &key, 0x1b);
@@ -2542,7 +2542,7 @@ TEST(flush_cs) {
     asserteq(tf_readkey(&S, &key), TF_OK);
     asserteq(key.d.codepoint, 'a');
 
-    /* \x1b_abc → CS_APC, flush → ALT+_ + REPLAY */
+    /* \x1b_abc -> CS_APC, flush -> ALT+_ + REPLAY */
     tf_free(&S);
     tf_init(&S, NULL, NULL);
     r = feed_byte(&S, &key, 0x1b);
@@ -2568,7 +2568,7 @@ TEST(flush_utf8) {
 
     tf_init(&S, NULL, NULL);
 
-    /* cross-chunk UTF-8: lead byte only → flush → FFFD */
+    /* cross-chunk UTF-8: lead byte only -> flush -> FFFD */
     r = feed_byte(&S, &key, 0xC3);
     asserteq(r, TF_AGAIN);
     asserteq(S.state, TF_STATE_UTF8);
@@ -2589,12 +2589,12 @@ TEST(flush_mousex10) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b[M → MOUSE_X10 (no raw bytes yet), flush */
+    /* \x1b[M -> MOUSE_X10 (no raw bytes yet), flush */
     r = feed_seq(&S, &key, "\x1b[M", 3);
     asserteq(r, TF_AGAIN);
     asserteq(S.state, TF_STATE_MOUSE_X10);
 
-    /* flush → ALT+[ + REPLAY_BUF ("M" prepended, buf empty here) */
+    /* flush -> ALT+[ + REPLAY_BUF ("M" prepended, buf empty here) */
     r = tf_flush(&S, &key);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -2606,7 +2606,7 @@ TEST(flush_mousex10) {
     r = tf_readkey(&S, &key);
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, 'M');
-    /* buf had no raw bytes → after 'M', straight to IDLE */
+    /* buf had no raw bytes -> after 'M', straight to IDLE */
     asserteq(S.state, TF_STATE_IDLE);
 
     tf_free(&S);
@@ -2619,7 +2619,7 @@ TEST(flush_mousex10_raw) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b[M + 1 raw byte → MOUSE_X10 (1 raw byte in buf) */
+    /* \x1b[M + 1 raw byte -> MOUSE_X10 (1 raw byte in buf) */
     r = feed_seq(&S, &key, "\x1b[M", 3);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 0x20);
@@ -2627,7 +2627,7 @@ TEST(flush_mousex10_raw) {
     asserteq(S.state, TF_STATE_MOUSE_X10);
     asserteq(S.buf_len, 2); /* 'M' + 1 raw byte */
 
-    /* flush → ALT+[ + REPLAY_BUF("M" + 0x20) */
+    /* flush -> ALT+[ + REPLAY_BUF("M" + 0x20) */
     r = tf_flush(&S, &key);
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, '[');
@@ -2639,10 +2639,10 @@ TEST(flush_mousex10_raw) {
     asserteq(key.d.codepoint, 'M');
     asserteq(S.replay, 1); /* REPLAY_BUF: 1 raw byte pending */
 
-    /* replay raw byte → UNICODE(0x20) */
+    /* replay raw byte -> UNICODE(0x20) */
     r = tf_readkey(&S, &key);
     asserteq(r, TF_OK);
-    asserteq(key.type, TF_TYPE_UNICODE); /* 0x20 < 0x7F → UNICODE */
+    asserteq(key.type, TF_TYPE_UNICODE); /* 0x20 < 0x7F -> UNICODE */
     asserteq(key.d.codepoint, 0x20);
     asserteq(S.state, TF_STATE_IDLE);
 
@@ -2656,7 +2656,7 @@ TEST(flush_replay) {
 
     tf_init(&S, NULL, NULL);
 
-    /* flush during replay (replay pending, state IDLE) → no-op */
+    /* flush during replay (replay pending, state IDLE) -> no-op */
     S.replay = 2;
     r = tf_flush(&S, &key);
     asserteq(r, TF_OK);
@@ -2673,7 +2673,7 @@ TEST(flush_escapealt_csi) {
 
     tf_init(&S, NULL, NULL);
 
-    /* \x1b\x1b[1 → flush → ALT+[ (alt_pending consumed in flush) */
+    /* \x1b\x1b[1 -> flush -> ALT+[ (alt_pending consumed in flush) */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 0x1b);
@@ -2709,25 +2709,25 @@ TEST(replay_seq) {
     S.buf[TF_MAX_BUFLEN - 1] = 'b';
     S.buf_len = 0;
 
-    /* 'a' → UNICODE('a') */
+    /* 'a' -> UNICODE('a') */
     r = tf_readkey(&S, &key);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, 'a');
 
-    /* 0x80 → 0xFFFD */
+    /* 0x80 -> 0xFFFD */
     r = tf_readkey(&S, &key);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, 0xFFFD);
 
-    /* 'b' → UNICODE('b') */
+    /* 'b' -> UNICODE('b') */
     r = tf_readkey(&S, &key);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, 'b');
 
-    /* after last byte → IDLE */
+    /* after last byte -> IDLE */
     asserteq(S.state, TF_STATE_IDLE);
 
     tf_free(&S);
@@ -2760,7 +2760,7 @@ TEST(trie_load_params) {
     tf_State S;
     tf_init(&S, NULL, NULL);
 
-    /* tf_load with NULL → TF_ERRPARAM, no crash, trie untouched */
+    /* tf_load with NULL -> TF_ERRPARAM, no crash, trie untouched */
     asserteq(tf_load(NULL, ti_lookup, NULL), TF_ERRPARAM);
     asserteq(tf_load(&S, NULL, NULL), TF_ERRPARAM);
     asserteq(S.root == NULL, 1);
@@ -2772,7 +2772,7 @@ TEST(trie_load_params) {
         asserteq(S.root != NULL, 1);
     }
 
-    /* full F1-F63 table → all keys loaded */
+    /* full F1-F63 table -> all keys loaded */
     {
         static char nb[63][16];
         TILookup    fk[64];
@@ -2793,7 +2793,7 @@ TEST(trie_load_params) {
     tf_free(&S);
 }
 
-/* ─── Phase 6+7: combined trie + flush ─── */
+/* --- Phase 6+7: combined trie + flush --- */
 
 TEST(trie_withalt) {
     tf_State S;
@@ -2803,7 +2803,7 @@ TEST(trie_withalt) {
     tf_init(&S, NULL, NULL);
     tf_load(&S, ti_lookup, tbl);
 
-    /* \x1b\x1b\x7f → BACKSPACE + ALT (alt_pending merged) */
+    /* \x1b\x1b\x7f -> BACKSPACE + ALT (alt_pending merged) */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
     r = feed_byte(&S, &key, 0x1b);
@@ -2856,13 +2856,13 @@ TEST(trie_expand) {
     tf_init(&S, NULL, NULL);
     tf_load(&S, ti_lookup, tbl);
 
-    /* \x1bOP → F1 (first byte after \x1b = 'O') */
+    /* \x1bOP -> F1 (first byte after \x1b = 'O') */
     r = feed_seq(&S, &key, "\x1bOP", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_FUNCTION);
     asserteq(key.d.number, 1);
 
-    /* \x1b[A → UP (first byte after \x1b = '[' - expands extent left) */
+    /* \x1b[A -> UP (first byte after \x1b = '[' - expands extent left) */
     r = feed_seq(&S, &key, "\x1b[A", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
@@ -2938,7 +2938,7 @@ TEST(trie_prefix) {
     tf_free(&S);
 }
 
-/* ─── Phase 8: canonicalise flags ─── */
+/* --- Phase 8: canonicalise flags --- */
 
 TEST(canon_delbs) {
     tf_State S;
@@ -2948,21 +2948,21 @@ TEST(canon_delbs) {
     tf_init(&S, NULL, NULL);
     tf_setflag(&S, TF_FLAG_DELBS);
 
-    /* 0x7f → BACKSPACE (DELBS on) */
+    /* 0x7f -> BACKSPACE (DELBS on) */
     r = feed_byte(&S, &key, 0x7f);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_BACKSPACE);
     asserteq(key.modifiers, 0);
 
-    /* 0x08 → still Ctrl+H (DELBS does not affect 0x08) */
+    /* 0x08 -> still Ctrl+H (DELBS does not affect 0x08) */
     r = feed_byte(&S, &key, 0x08);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, 'h');
     asserteq(key.modifiers, TF_MOD_CTRL);
 
-    /* DELBS off: 0x7f → DEL */
+    /* DELBS off: 0x7f -> DEL */
     tf_init(&S, NULL, NULL);
     r = feed_byte(&S, &key, 0x7f);
     asserteq(r, TF_OK);
@@ -2990,14 +2990,14 @@ TEST(canon_spacesym) {
     tf_init(&S, NULL, NULL);
     tf_setflag(&S, TF_FLAG_SPACESYMBOL);
 
-    /* 0x20 → SPACE keysym */
+    /* 0x20 -> SPACE keysym */
     r = feed_byte(&S, &key, 0x20);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_SPACE);
     asserteq(key.modifiers, 0);
 
-    /* SPACESYMBOL off: 0x20 → UNICODE(0x20) */
+    /* SPACESYMBOL off: 0x20 -> UNICODE(0x20) */
     tf_init(&S, NULL, NULL);
     r = feed_byte(&S, &key, 0x20);
     asserteq(r, TF_OK);
@@ -3041,7 +3041,7 @@ TEST(canon_convertkp) {
     tf_free(&S);
 }
 
-/* ─── Phase 8: sym name table ─── */
+/* --- Phase 8: sym name table --- */
 
 TEST(symname_basic) {
     asserteq(tf_name((int)TF_SYM_NONE), NULL);
@@ -3111,14 +3111,14 @@ TEST(symname_kp) {
 }
 
 TEST(symname_oob) {
-    /* out of bounds → NULL */
+    /* out of bounds -> NULL */
     asserteq(tf_name(-1), NULL);
     asserteq(tf_name(TF_SYM_COUNT), NULL);
     asserteq(tf_name(9999), NULL);
 }
 
 TEST(sym_lookup) {
-    /* tf_sym: name → sym index */
+    /* tf_sym: name -> sym index */
     asserteq(tf_sym("Backspace"), (int)TF_SYM_BACKSPACE);
     asserteq(tf_sym("Tab"), (int)TF_SYM_TAB);
     asserteq(tf_sym("Enter"), (int)TF_SYM_ENTER);
@@ -3132,7 +3132,7 @@ TEST(sym_lookup) {
     asserteq(tf_sym("kEnter"), (int)TF_SYM_KPENTER);
     asserteq(tf_sym("kPlus"), (int)TF_SYM_KPPLUS);
 
-    /* not found → -1 */
+    /* not found -> -1 */
     asserteq(tf_sym("NoSuchKey"), -1);
     asserteq(tf_sym(""), -1);
     asserteq(tf_sym(NULL), -1);
@@ -3160,7 +3160,7 @@ TEST(sym_roundtrip) {
     }
 }
 
-/* ─── Phase 9: tf_format ─── */
+/* --- Phase 9: tf_format --- */
 
 TEST(fmt_basic) {
     tf_Key key;
@@ -3191,7 +3191,7 @@ TEST(fmt_basic) {
     asserteq(n, 1);
     assertstreq(buf, "a");
 
-    /* invalid sym value → empty name, no crash */
+    /* invalid sym value -> empty name, no crash */
     key.type = TF_TYPE_KEYSYM;
     key.d.sym = (tf_Sym)9999;
     n = tf_format(buf, sizeof(buf), &key, TF_FMT_WRAPBRACKET);
@@ -3205,24 +3205,24 @@ TEST(fmt_mods) {
 
     memset(&key, 0, sizeof(key));
 
-    /* C-x → <C-x> (default: no SPACEMOD) */
+    /* C-x -> <C-x> (default: no SPACEMOD) */
     key.type = TF_TYPE_UNICODE;
     key.d.codepoint = 'x';
     key.modifiers = TF_MOD_CTRL;
     tf_format(buf, sizeof(buf), &key, 0);
     assertstreq(buf, "<C-x>");
 
-    /* S-A-C-x → <S-M-C-x> (default: ALTISMETA) */
+    /* S-A-C-x -> <S-M-C-x> (default: ALTISMETA) */
     key.modifiers = TF_MOD_SHIFT | TF_MOD_ALT | TF_MOD_CTRL;
     tf_format(buf, sizeof(buf), &key, 0);
     assertstreq(buf, "<S-M-C-x>");
 
-    /* D-x → <D-x> */
+    /* D-x -> <D-x> */
     key.modifiers = TF_MOD_SUPER;
     tf_format(buf, sizeof(buf), &key, 0);
     assertstreq(buf, "<D-x>");
 
-    /* T-x → <T-x> */
+    /* T-x -> <T-x> */
     key.modifiers = TF_MOD_META;
     tf_format(buf, sizeof(buf), &key, 0);
     assertstreq(buf, "<T-x>");
@@ -3232,17 +3232,17 @@ TEST(fmt_mods) {
     tf_format(buf, sizeof(buf), &key, TF_FMT_WRAPBRACKET);
     assertstreq(buf, "<C-x>");
 
-    /* CARETCTRL: C-x → ^X */
+    /* CARETCTRL: C-x -> ^X */
     key.modifiers = TF_MOD_CTRL;
     tf_format(buf, sizeof(buf), &key, TF_FMT_CARETCTRL | TF_FMT_WRAPBRACKET);
     assertstreq(buf, "<^X>");
 
-    /* LONGMOD: C-x → Control-x */
+    /* LONGMOD: C-x -> Control-x */
     key.modifiers = TF_MOD_CTRL;
     tf_format(buf, sizeof(buf), &key, TF_FMT_LONGMOD | TF_FMT_WRAPBRACKET);
     assertstreq(buf, "<Control-x>");
 
-    /* ALTISMETA: A- → M- */
+    /* ALTISMETA: A- -> M- */
     key.modifiers = TF_MOD_ALT;
     tf_format(buf, sizeof(buf), &key, TF_FMT_ALTISMETA | TF_FMT_WRAPBRACKET);
     assertstreq(buf, "<M-x>");
@@ -3254,20 +3254,20 @@ TEST(fmt_spacing) {
 
     memset(&key, 0, sizeof(key));
 
-    /* SPACEMOD: C-x → C x */
+    /* SPACEMOD: C-x -> C x */
     key.type = TF_TYPE_UNICODE;
     key.d.codepoint = 'x';
     key.modifiers = TF_MOD_CTRL;
     tf_format(buf, sizeof(buf), &key, TF_FMT_WRAPBRACKET | TF_FMT_SPACEMOD);
     assertstreq(buf, "<C x>");
 
-    /* LOWERMOD: D-C-X → d-c-X (default: no LOWERMOD means uppercase mods) */
+    /* LOWERMOD: D-C-X -> d-c-X (default: no LOWERMOD means uppercase mods) */
     key.modifiers = TF_MOD_CTRL | TF_MOD_SUPER;
     key.d.codepoint = 'X';
     tf_format(buf, sizeof(buf), &key, TF_FMT_WRAPBRACKET);
     assertstreq(buf, "<D-C-X>");
 
-    /* LOWERSPACE: PageUp → page up */
+    /* LOWERSPACE: PageUp -> page up */
     key.type = TF_TYPE_KEYSYM;
     key.d.sym = TF_SYM_PAGEUP;
     key.modifiers = 0;
@@ -3281,31 +3281,31 @@ TEST(fmt_kitty) {
 
     memset(&key, 0, sizeof(key));
 
-    /* KEYSYM Escape → <Escape> */
+    /* KEYSYM Escape -> <Escape> */
     key.type = TF_TYPE_KEYSYM;
     key.d.sym = TF_SYM_ESCAPE;
     tf_format(buf, sizeof(buf), &key, TF_FMT_WRAPBRACKET);
     assertstreq(buf, "<Escape>");
 
-    /* FUNCTION 13 → <F13> */
+    /* FUNCTION 13 -> <F13> */
     key.type = TF_TYPE_FUNCTION;
     key.d.number = 13;
     tf_format(buf, sizeof(buf), &key, TF_FMT_WRAPBRACKET);
     assertstreq(buf, "<F13>");
 
-    /* KEYSYM KP0 → <k0> */
+    /* KEYSYM KP0 -> <k0> */
     key.type = TF_TYPE_KEYSYM;
     key.d.sym = TF_SYM_KP0;
     tf_format(buf, sizeof(buf), &key, TF_FMT_WRAPBRACKET);
     assertstreq(buf, "<k0>");
 
-    /* KEYSYM LEVEL5SHIFT → <Level5Shift> */
+    /* KEYSYM LEVEL5SHIFT -> <Level5Shift> */
     key.type = TF_TYPE_KEYSYM;
     key.d.sym = TF_SYM_LEVEL5_SHIFT;
     tf_format(buf, sizeof(buf), &key, TF_FMT_WRAPBRACKET);
     assertstreq(buf, "<Level5Shift>");
 
-    /* KEYSYM KPLEFT → <kLeft> */
+    /* KEYSYM KPLEFT -> <kLeft> */
     key.type = TF_TYPE_KEYSYM;
     key.d.sym = TF_SYM_KPLEFT;
     tf_format(buf, sizeof(buf), &key, TF_FMT_WRAPBRACKET);
@@ -3406,38 +3406,38 @@ TEST(fmt_params) {
     asserteq(n, TF_ERRPARAM);
 }
 
-/* ─── Phase 9: tf_parse ─── */
+/* --- Phase 9: tf_parse --- */
 
 TEST(parse_basic) {
     tf_Key key;
     int    n;
 
-    /* <C-x> → Ctrl+'x' */
+    /* <C-x> -> Ctrl+'x' */
     n = tf_parse("<C-x>", &key);
     asserteq(n, 5);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, 'x');
     asserteq(key.modifiers, TF_MOD_CTRL);
 
-    /* <Escape> → KEYSYM ESCAPE */
+    /* <Escape> -> KEYSYM ESCAPE */
     n = tf_parse("<Escape>", &key);
     asserteq(n, 8);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_ESCAPE);
 
-    /* <F1> → FUNCTION 1 */
+    /* <F1> -> FUNCTION 1 */
     n = tf_parse("<F1>", &key);
     asserteq(n, 4);
     asserteq(key.type, TF_TYPE_FUNCTION);
     asserteq(key.d.number, 1);
 
-    /* <F63> → FUNCTION 63 */
+    /* <F63> -> FUNCTION 63 */
     n = tf_parse("<F63>", &key);
     asserteq(n, 5);
     asserteq(key.type, TF_TYPE_FUNCTION);
     asserteq(key.d.number, 63);
 
-    /* <F99> out of range → parse fails (falls through to char check) */
+    /* <F99> out of range -> parse fails (falls through to char check) */
     n = tf_parse("<F99>", &key);
     asserteq(n, -1);
 }
@@ -3458,7 +3458,7 @@ TEST(parse_mods) {
     asserteq(key.d.codepoint, 'x');
     asserteq(key.modifiers, TF_MOD_SUPER | TF_MOD_META);
 
-    /* <M-Left> → M=ALT + Left */
+    /* <M-Left> -> M=ALT + Left */
     n = tf_parse("<M-Left>", &key);
     asserteq(n, 8);
     asserteq(key.type, TF_TYPE_KEYSYM);
@@ -3472,7 +3472,7 @@ TEST(parse_mods) {
     asserteq((long)key.d.sym, (long)TF_SYM_TAB);
     asserteq(key.modifiers, TF_MOD_CTRL | TF_MOD_SHIFT);
 
-    /* double separator: <S--x> → Shift + 'x' */
+    /* double separator: <S--x> -> Shift + 'x' */
     n = tf_parse("<S--x>", &key);
     asserteq(n, 6);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -3538,46 +3538,46 @@ TEST(parse_kitty) {
     tf_Key key;
     int    n;
 
-    /* <Esc> → TF_SYM_ESCAPE (kitty name maps to sym) */
+    /* <Esc> -> TF_SYM_ESCAPE (kitty name maps to sym) */
     n = tf_parse("<Esc>", &key);
     asserteq(n, 5);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_ESCAPE);
 
-    /* <BS> → TF_SYM_BACKSPACE */
+    /* <BS> -> TF_SYM_BACKSPACE */
     n = tf_parse("<BS>", &key);
     asserteq(n, 4);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_BACKSPACE);
 
-    /* <CR> → TF_SYM_ENTER */
+    /* <CR> -> TF_SYM_ENTER */
     n = tf_parse("<CR>", &key);
     asserteq(n, 4);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_ENTER);
 
-    /* <k0> → TF_SYM_KP0 (kitty keypad name alias) */
+    /* <k0> -> TF_SYM_KP0 (kitty keypad name alias) */
     n = tf_parse("<k0>", &key);
     asserteq(n, 4);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_KP0);
 
-    /* <Del> → TF_SYM_DELETE (Vim name alias) */
+    /* <Del> -> TF_SYM_DELETE (Vim name alias) */
     n = tf_parse("<Del>", &key);
     asserteq(n, 5);
     asserteq((long)key.d.sym, (long)TF_SYM_DELETE);
 
-    /* <kPoint> → TF_SYM_KPPERIOD */
+    /* <kPoint> -> TF_SYM_KPPERIOD */
     n = tf_parse("<kPoint>", &key);
     asserteq(n, 8);
     asserteq((long)key.d.sym, (long)TF_SYM_KPPERIOD);
 
-    /* <kLeft> → TF_SYM_KPLEFT (primary name) */
+    /* <kLeft> -> TF_SYM_KPLEFT (primary name) */
     n = tf_parse("<kLeft>", &key);
     asserteq(n, 7);
     asserteq((long)key.d.sym, (long)TF_SYM_KPLEFT);
 
-    /* <CapsLock> → TF_SYM_CAPSLOCK */
+    /* <CapsLock> -> TF_SYM_CAPSLOCK */
     n = tf_parse("<CapsLock>", &key);
     asserteq(n, 10);
     asserteq((long)key.d.sym, (long)TF_SYM_CAPSLOCK);
@@ -3587,14 +3587,14 @@ TEST(parse_nobracket) {
     tf_Key key;
     int    n;
 
-    /* plain 'a' → UNICODE 'a' */
+    /* plain 'a' -> UNICODE 'a' */
     n = tf_parse("a", &key);
     asserteq(n, 1);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, 'a');
     asserteq(key.modifiers, 0);
 
-    /* multi-byte UTF-8: 'é' (0xC3 0xA9) */
+    /* multi-byte UTF-8: 'e' (0xC3 0xA9) */
     n = tf_parse("\xc3\xa9", &key);
     asserteq(n, 2);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -3605,28 +3605,28 @@ TEST(parse_fail) {
     tf_Key key;
     int    n;
 
-    /* single letter without separator is a key name: <S> → 'S' (no modifier) */
+    /* single letter without separator is a key name: <S> -> 'S' (no modifier) */
     n = tf_parse("<S>", &key);
     asserteq(n, 3);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, 'S');
     asserteq(key.modifiers, 0);
 
-    /* invalid: <c-x> — lowercase c not a modifier */
+    /* invalid: <c-x> -- lowercase c not a modifier */
     n = tf_parse("<c-x>", &key);
     asserteq(n, -1);
 
-    /* <C> → key name 'C' (modifier requires a separator) */
+    /* <C> -> key name 'C' (modifier requires a separator) */
     n = tf_parse("<C>", &key);
     asserteq(n, 3);
     asserteq(key.d.codepoint, 'C');
     asserteq(key.modifiers, 0);
 
-    /* <^A without closing '>' → fail */
+    /* <^A without closing '>' -> fail */
     n = tf_parse("<^A", &key);
     asserteq(n, -1);
 
-    /* overlong UTF-8 in plain string → FFFD + fail */
+    /* overlong UTF-8 in plain string -> FFFD + fail */
     n = tf_parse("\xc0\xaf", &key);
     asserteq(n, -1);
 
@@ -3732,13 +3732,13 @@ TEST(parse_bracketchar) {
     asserteq(n, -1);
 }
 
-/* ─── Phase 10: Kitty CSI u ─── */
+/* --- Phase 10: Kitty CSI u --- */
 
 TEST(kitty_basic) {
     tf_State S;
     tf_Key   key;
     tf_init(&S, NULL, NULL);
-    /* \x1b[97u → 'a' */
+    /* \x1b[97u -> 'a' */
     asserteq(feed_seq(&S, &key, "\x1b[97u", 5), TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, 'a');
@@ -3752,7 +3752,7 @@ TEST(kitty_modifiers) {
     tf_State S;
     tf_Key   key;
     tf_init(&S, NULL, NULL);
-    /* \x1b[97;2u → 'a' + SHIFT */
+    /* \x1b[97;2u -> 'a' + SHIFT */
     asserteq(feed_seq(&S, &key, "\x1b[97;2u", 7), TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, 'a');
@@ -3765,14 +3765,14 @@ TEST(kitty_event) {
     tf_State S;
     tf_Key   key;
     tf_init(&S, NULL, NULL);
-    /* \x1b[97;5:2u → 'a' + CTRL + REPEAT */
+    /* \x1b[97;5:2u -> 'a' + CTRL + REPEAT */
     asserteq(feed_seq(&S, &key, "\x1b[97;5:2u", 9), TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, 'a');
     asserteq(key.modifiers, TF_MOD_CTRL);
     asserteq(key.event, TF_EVENT_REPEAT);
 
-    /* default event (no colon) → PRESS */
+    /* default event (no colon) -> PRESS */
     tf_init(&S, NULL, NULL);
     asserteq(feed_seq(&S, &key, "\x1b[97;2u", 7), TF_OK);
     asserteq(key.event, TF_EVENT_PRESS);
@@ -3783,7 +3783,7 @@ TEST(kitty_event_fail) {
     tf_State S;
     tf_Key   key;
     tf_init(&S, NULL, NULL);
-    /* \x1b[97;1:9u → UNKNOWN_CSI (invalid event) */
+    /* \x1b[97;1:9u -> UNKNOWN_CSI (invalid event) */
     asserteq(feed_seq(&S, &key, "\x1b[97;1:9u", 9), TF_OK);
     asserteq(key.type, TF_TYPE_UNKNOWN_CSI);
     tf_free(&S);
@@ -3793,7 +3793,7 @@ TEST(kitty_alts) {
     tf_State S;
     tf_Key   key;
     tf_init(&S, NULL, NULL);
-    /* \x1b[97:65;2u → 'a' + SHIFT (alts ignored) */
+    /* \x1b[97:65;2u -> 'a' + SHIFT (alts ignored) */
     asserteq(feed_seq(&S, &key, "\x1b[97:65;2u", 10), TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, 'a');
@@ -3807,7 +3807,7 @@ TEST(kitty_text) {
     tf_Key   key;
     int      slen;
     tf_init(&S, NULL, NULL);
-    /* \x1b[97;2;65u → 'a' + SHIFT + text "A" */
+    /* \x1b[97;2;65u -> 'a' + SHIFT + text "A" */
     asserteq(feed_seq(&S, &key, "\x1b[97;2;65u", 10), TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, 'a');
@@ -3825,7 +3825,7 @@ TEST(kitty_text_multi) {
     tf_Key   key;
     int      slen;
     tf_init(&S, NULL, NULL);
-    /* \x1b[65;1;99:100u → 'A' + text "cd" */
+    /* \x1b[65;1;99:100u -> 'A' + text "cd" */
     asserteq(feed_seq(&S, &key, "\x1b[65;1;99:100u", 14), TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, 'A');
@@ -3842,7 +3842,7 @@ TEST(kitty_func) {
     tf_State S;
     tf_Key   key;
     tf_init(&S, NULL, NULL);
-    /* \x1b[57344u → KEYSYM ESCAPE (kitty functional key) */
+    /* \x1b[57344u -> KEYSYM ESCAPE (kitty functional key) */
     asserteq(feed_seq(&S, &key, "\x1b[57344u", 8), TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_ESCAPE);
@@ -3854,49 +3854,49 @@ TEST(kitty_map) {
     tf_Key   key;
     tf_init(&S, NULL, NULL);
 
-    /* C0 codepoint: \e[27u → KEYSYM ESCAPE */
+    /* C0 codepoint: \e[27u -> KEYSYM ESCAPE */
     asserteq(feed_seq(&S, &key, "\x1b[27u", 5), TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_ESCAPE);
 
-    /* \e[9u → TAB */
+    /* \e[9u -> TAB */
     asserteq(feed_seq(&S, &key, "\x1b[9u", 5), TF_OK);
     asserteq((long)key.d.sym, (long)TF_SYM_TAB);
 
-    /* \e[13u → ENTER */
+    /* \e[13u -> ENTER */
     asserteq(feed_seq(&S, &key, "\x1b[13u", 5), TF_OK);
     asserteq((long)key.d.sym, (long)TF_SYM_ENTER);
 
-    /* \e[127u → BACKSPACE (kitty backspace key, not DEL) */
+    /* \e[127u -> BACKSPACE (kitty backspace key, not DEL) */
     asserteq(feed_seq(&S, &key, "\x1b[127u", 6), TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_BACKSPACE);
 
-    /* kitty Delete key with modifier: \e[57349;2u → DELETE + SHIFT */
+    /* kitty Delete key with modifier: \e[57349;2u -> DELETE + SHIFT */
     asserteq(feed_seq(&S, &key, "\x1b[57349;2u", 10), TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_DELETE);
     asserteq(key.modifiers, TF_MOD_SHIFT);
 
-    /* F13: \e[57376u → FUNCTION 13 */
+    /* F13: \e[57376u -> FUNCTION 13 */
     asserteq(feed_seq(&S, &key, "\x1b[57376u", 8), TF_OK);
     asserteq(key.type, TF_TYPE_FUNCTION);
     asserteq(key.d.number, 13);
 
-    /* KP0: \e[57399u → KEYSYM KP0 */
+    /* KP0: \e[57399u -> KEYSYM KP0 */
     asserteq(feed_seq(&S, &key, "\x1b[57399u", 8), TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_KP0);
 
-    /* kLeft: \e[57417u → KEYSYM KPLEFT */
+    /* kLeft: \e[57417u -> KEYSYM KPLEFT */
     asserteq(feed_seq(&S, &key, "\x1b[57417u", 8), TF_OK);
     asserteq((long)key.d.sym, (long)TF_SYM_KPLEFT);
 
-    /* media key: \e[57428u → KEYSYM MEDIAPLAY */
+    /* media key: \e[57428u -> KEYSYM MEDIAPLAY */
     asserteq(feed_seq(&S, &key, "\x1b[57428u", 8), TF_OK);
     asserteq((long)key.d.sym, (long)TF_SYM_MEDIA_PLAY);
 
-    /* modifier key: \e[57454u → KEYSYM LEVEL5SHIFT */
+    /* modifier key: \e[57454u -> KEYSYM LEVEL5SHIFT */
     asserteq(feed_seq(&S, &key, "\x1b[57454u", 8), TF_OK);
     asserteq((long)key.d.sym, (long)TF_SYM_LEVEL5_SHIFT);
 
@@ -3912,7 +3912,7 @@ TEST(ss3_altreplay) {
     tf_State S;
     tf_Key   key;
     tf_init(&S, NULL, NULL);
-    /* \x1bOG (unknown SS3) → ALT+O, then G replayed */
+    /* \x1bOG (unknown SS3) -> ALT+O, then G replayed */
     asserteq(feed_seq(&S, &key, "\x1bOG", 3), TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, 'O');
@@ -3927,7 +3927,7 @@ TEST(csi_altprefix) {
     tf_State S;
     tf_Key   key;
     tf_init(&S, NULL, NULL);
-    /* \x1b\x1b[A → ALT+UP (alt_pending merged at CSI dispatch) */
+    /* \x1b\x1b[A -> ALT+UP (alt_pending merged at CSI dispatch) */
     asserteq(feed_byte(&S, &key, 0x1b), TF_AGAIN);
     asserteq(feed_byte(&S, &key, 0x1b), TF_AGAIN);
     asserteq(feed_seq(&S, &key, "[A", 2), TF_OK);
@@ -3941,7 +3941,7 @@ TEST(kitty_empty_cp) {
     tf_State S;
     tf_Key   key;
     tf_init(&S, NULL, NULL);
-    /* \x1b[;2u → UNKNOWN_CSI (empty codepoint) */
+    /* \x1b[;2u -> UNKNOWN_CSI (empty codepoint) */
     asserteq(feed_seq(&S, &key, "\x1b[;2u", 5), TF_OK);
     asserteq(key.type, TF_TYPE_UNKNOWN_CSI);
     tf_free(&S);
@@ -3951,14 +3951,14 @@ TEST(kitty_widecp) {
     tf_State S;
     tf_Key   key;
     tf_init(&S, NULL, NULL);
-    /* \x1b[233u → 'é' (U+00E9, 2-byte UTF-8) */
+    /* \x1b[233u -> 'e' (U+00E9, 2-byte UTF-8) */
     asserteq(feed_seq(&S, &key, "\x1b[233u", 7), TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, 233);
     asserteq(key.modifiers, 0);
     assertstreq(key.utf8, "\xc3\xa9");
 
-    /* \x1b[0x1F600u → emoji (4-byte UTF-8, kitty uses decimal) */
+    /* \x1b[0x1F600u -> emoji (4-byte UTF-8, kitty uses decimal) */
     tf_init(&S, NULL, NULL);
     asserteq(feed_seq(&S, &key, "\x1b[128512u", 9), TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -4053,7 +4053,7 @@ TEST(kitty_params) {
     tf_free(&S);
 }
 
-/* ─── Phase 11: waitkey ─── */
+/* --- Phase 11: waitkey --- */
 
 #if !defined(_WIN32)
 #include <signal.h>
@@ -4081,7 +4081,7 @@ TEST(waitkey_escape) {
     int      pfd[2], r;
     (void)pipe(pfd);
     tf_init(&S, NULL, NULL);
-    /* lone ESC byte: partial sequence, reader drains → flush on timeout */
+    /* lone ESC byte: partial sequence, reader drains -> flush on timeout */
     write(pfd[1], "\x1b", 1);
     r = tf_waitkey(&S, pfd[0], 20, &key);
     asserteq(r, TF_OK);
@@ -4114,7 +4114,7 @@ TEST(waitkey_eintr_stale) {
     write(pfd[1], "a", 1);
     close(pfd[1]);
     /* stale EINTR from a prior interrupted poll: poll succeeds (r > 0)
-     * but errno still reads EINTR — must not skip the readable fd */
+     * but errno still reads EINTR -- must not skip the readable fd */
     errno = EINTR;
     r = tf_waitkey(&S, pfd[0], 500, &key);
     asserteq(r, TF_OK);
@@ -4132,14 +4132,14 @@ TEST(waitkey_params) {
     asserteq(tf_waitkey(&S, -1, 0, &key), TF_ERRPARAM);
     asserteq(tf_waitkey(&S, 0, 0, NULL), TF_ERRPARAM);
 
-    /* invalid fd → read error → TF_ERRPARAM */
+    /* invalid fd -> read error -> TF_ERRPARAM */
     asserteq(tf_waitkey(&S, 9999, 0, &key), TF_ERRPARAM);
 
     /* tf_string NULL plen / S */
     asserteq(tf_string(&S, NULL) == NULL, 1);
     asserteq(tf_string(NULL, NULL) == NULL, 1);
 
-    /* closed pipe → EOF → TF_NONE */
+    /* closed pipe -> EOF -> TF_NONE */
     {
         int      fds[2];
         tf_State S2;
@@ -4217,7 +4217,7 @@ TEST(waitkey_infinite) {
 }
 
 /* waitkey surplus bytes live in the parser's chunk (wait buffer); tf_feed
- * switches the source and discards the unconsumed chunk — the caller must
+ * switches the source and discards the unconsumed chunk -- the caller must
  * re-feed them, the new reader's data follows */
 TEST(waitkey_feed_discard) {
     tf_State   S;
@@ -4324,7 +4324,7 @@ TEST(waitkey_params) {
 }
 #endif
 
-/* ─── Phase 11: mouse interpretation ─── */
+/* --- Phase 11: mouse interpretation --- */
 
 TEST(mouse_press) {
     tf_Key key;
@@ -4372,25 +4372,25 @@ TEST(mouse_scroll) {
     memset(&key, 0, sizeof(key));
     key.type = TF_TYPE_MOUSE;
 
-    /* scroll up: code 64 → btn 4 */
+    /* scroll up: code 64 -> btn 4 */
     key.d.mouse.btn = 64;
     asserteq(tf_mouse(&key, &ev, &btn, &line, &col), TF_OK);
     asserteq(ev, TF_EVENT_PRESS);
     asserteq(btn, 4);
 
-    /* scroll down: code 65 → btn 5 */
+    /* scroll down: code 65 -> btn 5 */
     key.d.mouse.btn = 65;
     asserteq(tf_mouse(&key, &ev, &btn, &line, &col), TF_OK);
     asserteq(ev, TF_EVENT_PRESS);
     asserteq(btn, 5);
 
-    /* scroll left: code 66 → btn 6 */
+    /* scroll left: code 66 -> btn 6 */
     key.d.mouse.btn = 66;
     asserteq(tf_mouse(&key, &ev, &btn, &line, &col), TF_OK);
     asserteq(ev, TF_EVENT_PRESS);
     asserteq(btn, 6);
 
-    /* scroll right: code 67 → btn 7 */
+    /* scroll right: code 67 -> btn 7 */
     key.d.mouse.btn = 67;
     asserteq(tf_mouse(&key, &ev, &btn, &line, &col), TF_OK);
     asserteq(ev, TF_EVENT_PRESS);
@@ -4445,7 +4445,7 @@ TEST(mouse_params) {
     tf_Key key;
     int    ev, btn, line, col;
     memset(&key, 0, sizeof(key));
-    /* non-MOUSE type → returns 0 */
+    /* non-MOUSE type -> returns 0 */
     key.type = TF_TYPE_UNICODE;
     asserteq(tf_mouse(&key, &ev, &btn, &line, &col), TF_ERRPARAM);
     /* NULL pointers */
@@ -4457,7 +4457,7 @@ TEST(mouse_params) {
     asserteq(tf_mouse(&key, &ev, &btn, &line, NULL), TF_ERRPARAM);
 }
 
-/* ─── Phase 11: position / modereport ─── */
+/* --- Phase 11: position / modereport --- */
 
 TEST(position_basic) {
     tf_Key key;
@@ -4509,7 +4509,7 @@ TEST(modereport_params) {
     asserteq(tf_modereport(&key, NULL, &mode, &val), TF_ERRPARAM);
 }
 
-/* ─── Phase 11: tf_csi ─── */
+/* --- Phase 11: tf_csi --- */
 
 TEST(csi_basic) {
     tf_State S;
@@ -4534,7 +4534,7 @@ TEST(csi_basic) {
 }
 
 /* initial+final without parameters must yield 0 args (final is not a
- * parameter field) — \x1b[?c DA1, \x1b[?u kitty, \x1b[?1$y DEC */
+ * parameter field) -- \x1b[?c DA1, \x1b[?u kitty, \x1b[?1$y DEC */
 TEST(csi_noparams) {
     tf_State S;
     tf_Key   key;
@@ -4570,7 +4570,7 @@ TEST(csi_empty_params) {
     int      cmd;
     tf_init(&S, NULL, NULL);
 
-    /* \x1b[;2;x → empty first field → -1; final 'x' is not a field */
+    /* \x1b[;2;x -> empty first field -> -1; final 'x' is not a field */
     asserteq(feed_seq(&S, &key, "\x1b[;2;x", 6), TF_OK);
     asserteq(key.type, TF_TYPE_UNKNOWN_CSI);
 
@@ -4590,7 +4590,7 @@ TEST(csi_truncate) {
     int      cmd;
     tf_init(&S, NULL, NULL);
 
-    /* \x1b[1;2;3;4x → 4 fields, na=3 → truncated to 3 */
+    /* \x1b[1;2;3;4x -> 4 fields, na=3 -> truncated to 3 */
     asserteq(feed_seq(&S, &key, "\x1b[1;2;3;4x", 10), TF_OK);
     asserteq(key.type, TF_TYPE_UNKNOWN_CSI);
 
@@ -4610,7 +4610,7 @@ TEST(csiparse_params) {
     int      na;
     int      cmd, r;
     tf_init(&S, NULL, NULL);
-    /* no valid cmd → TF_ERRPARAM */
+    /* no valid cmd -> TF_ERRPARAM */
     na = 16;
     r = tf_csi(&S, args, na, &cmd);
     asserteq(r, TF_ERRPARAM);
@@ -4630,7 +4630,7 @@ TEST(csiparse_params) {
     asserteq(r, 0); /* final 'x' is not a parameter field */
     asserteq(cmd, 'x');
 
-    /* buf with params but no final (partial CSI) → no snapshot */
+    /* buf with params but no final (partial CSI) -> no snapshot */
     tf_init(&S, NULL, NULL);
     S.buf_len = 2;
     S.buf[0] = '1';
@@ -4658,7 +4658,7 @@ TEST(csi_with_sub) {
     int      cmd;
     tf_init(&S, NULL, NULL);
 
-    /* \x1b[1:2;3x → field 1 has sub-params, tf_csi only returns 1,3 */
+    /* \x1b[1:2;3x -> field 1 has sub-params, tf_csi only returns 1,3 */
     asserteq(feed_seq(&S, &key, "\x1b[1:2;3x", 8), TF_OK);
     asserteq(key.type, TF_TYPE_UNKNOWN_CSI);
 
@@ -4691,12 +4691,12 @@ TEST(writecp_utf8) {
     asserteq(n, 4);
     assertstreq(buf, "\xf0\x90\x80\x80");
 
-    /* >0x200000 → 0xFFFD replacement */
+    /* >0x200000 -> 0xFFFD replacement */
     n = tfK_writecp(buf, sizeof(buf), 0x200000);
     asserteq(n, 3);
     assertstreq(buf, "\xef\xbf\xbd");
 
-    /* 0xFFFD → direct encoding */
+    /* 0xFFFD -> direct encoding */
     n = tfK_writecp(buf, sizeof(buf), 0xFFFD);
     asserteq(n, 3);
     assertstreq(buf, "\xef\xbf\xbd");
@@ -4753,7 +4753,7 @@ TEST(format_nobracket) {
     key.d.codepoint = 'x';
     key.modifiers = TF_MOD_CTRL;
     n = tf_format(buf, sizeof(buf), &key, 0);
-    /* default: WRAPBRACKET, no SPACEMOD → "<C-x>" */
+    /* default: WRAPBRACKET, no SPACEMOD -> "<C-x>" */
     assertstreq(buf, "<C-x>");
 
     /* UNICODE + CTRL, no WRAPBRACKET: C-x (bare) */
@@ -4812,25 +4812,25 @@ TEST(parsemod_altmeta) {
     tf_Key key;
     int    n;
 
-    /* <A-x> → ALT + 'x' */
+    /* <A-x> -> ALT + 'x' */
     n = tf_parse("<A-x>", &key);
     asserteq(n, 5);
     asserteq(key.d.codepoint, 'x');
     asserteq(key.modifiers, TF_MOD_ALT);
 
-    /* <D-x> → SUPER + 'x' */
+    /* <D-x> -> SUPER + 'x' */
     n = tf_parse("<D-x>", &key);
     asserteq(n, 5);
     asserteq(key.d.codepoint, 'x');
     asserteq(key.modifiers, TF_MOD_SUPER);
 
-    /* <Alt-x> → ALT + 'x' (long form, lowercase) */
+    /* <Alt-x> -> ALT + 'x' (long form, lowercase) */
     n = tf_parse("<Alt-x>", &key);
     asserteq(n, 7);
     asserteq(key.d.codepoint, 'x');
     asserteq(key.modifiers, TF_MOD_ALT);
 
-    /* <Meta-x> → ALT + 'x' (long form, "Me" prefix) */
+    /* <Meta-x> -> ALT + 'x' (long form, "Me" prefix) */
     n = tf_parse("<Meta-x>", &key);
     asserteq(n, 8);
     asserteq(key.d.codepoint, 'x');
@@ -4893,7 +4893,7 @@ TEST(replay_bufmerge) {
     asserteq(key.d.codepoint, 'Y');
     asserteq(S.replay, 1);
 
-    /* consume third byte → IDLE */
+    /* consume third byte -> IDLE */
     r = tf_readkey(&S, &key);
     asserteq(r, TF_OK);
     asserteq(key.d.codepoint, 'Z');
@@ -4912,7 +4912,7 @@ TEST(feed_replay_clear) {
     memset(over, '1', sizeof(over));
     over[0] = 0x1b, over[1] = '[';
     over[66] = 'A'; /* chunk tail: must be dropped by tf_feed */
-    /* \x1b[ + 64×'1' overflows the CSI param buffer → ALT+[ + REPLAY */
+    /* \x1b[ + 64x'1' overflows the CSI param buffer -> ALT+[ + REPLAY */
     r = feed_seq(&S, &key, over, 67);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -4939,13 +4939,13 @@ TEST(parse_bracketadv) {
     tf_Key key;
     int    n;
 
-    /* <Left> → s++ on match (covers L2065) */
+    /* <Left> -> s++ on match (covers L2065) */
     n = tf_parse("<Left>", &key);
     asserteq(n, 6);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_LEFT);
 
-    /* <Down> → s++ on match */
+    /* <Down> -> s++ on match */
     n = tf_parse("<Down>", &key);
     asserteq(n, 6);
     asserteq(key.type, TF_TYPE_KEYSYM);
@@ -4992,10 +4992,10 @@ TEST(trie_leftexpand) {
     TILookup tbl[] = {
             {"key_clear",
              "\x1b"
-             "Z"}, /* inserted first → arr min='Z' */
+             "Z"}, /* inserted first -> arr min='Z' */
             {"key_end",
              "\x1b"
-             "A"}, /* later → left expand */
+             "A"}, /* later -> left expand */
             {NULL, NULL}};
     tf_init(&S, NULL, NULL);
     tf_load(&S, ti_lookup, tbl);
@@ -5056,7 +5056,7 @@ TEST(cs_oomfree) {
     int      r, i;
     char     buf[128];
 
-    /* default allocator: realloc fails → free cs_buf */
+    /* default allocator: realloc fails -> free cs_buf */
     /* We use oom_alloc to simulate failure after initial allocation */
     {
         int ec = 1; /* allow first alloc (64), fail realloc */
@@ -5065,7 +5065,7 @@ TEST(cs_oomfree) {
         asserteq(r, TF_AGAIN);
         r = feed_byte(&S, &key, ']');
         asserteq(r, TF_AGAIN);
-        /* first byte fills initial 64 → AG=AGAIN */
+        /* first byte fills initial 64 -> AG=AGAIN */
         for (i = 0; i < 64; i++) buf[i] = 'x';
         r = feed_seq(&S, &key, buf, 64);
         asserteq(r, TF_AGAIN);
@@ -5084,7 +5084,7 @@ TEST(kitty_textfield) {
     tf_Key   key;
     int      r;
 
-    /* kitty CSI with text field: 97;5:2;65u → cp=97, ev=REPEAT, text='A' */
+    /* kitty CSI with text field: 97;5:2;65u -> cp=97, ev=REPEAT, text='A' */
     tf_init(&S, NULL, NULL);
     r = feed_seq(&S, &key, "\x1b[97;5:2;65u", 12);
     asserteq(r, TF_OK);
@@ -5093,7 +5093,7 @@ TEST(kitty_textfield) {
     asserteq(key.d.codepoint, 97);
     tf_free(&S);
 
-    /* kitty release: 97;5:3u → cp=97, ev=RELEASE */
+    /* kitty release: 97;5:3u -> cp=97, ev=RELEASE */
     tf_init(&S, NULL, NULL);
     r = feed_seq(&S, &key, "\x1b[97;5:3u", 9);
     asserteq(r, TF_OK);
@@ -5149,7 +5149,7 @@ TEST(kitty_emptytext) {
     int      r;
     tf_init(&S, NULL, NULL);
 
-    /* kitty with empty text → empty cs_buf */
+    /* kitty with empty text -> empty cs_buf */
     r = feed_seq(&S, &key, "\x1b[?77429u", 9);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KITTYREPORT);
@@ -5162,19 +5162,19 @@ TEST(kitty_pua_utf8) {
     int      r;
     tf_init(&S, NULL, NULL);
 
-    /* plain UTF-8 PUA (kitty level 4 / raw text): 57399 → KP0 keysym */
+    /* plain UTF-8 PUA (kitty level 4 / raw text): 57399 -> KP0 keysym */
     r = feed_seq(&S, &key, "\xEE\x80\xB7", 3); /* U+E017 = 57399 */
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_KP0);
 
-    /* 57415 → KPEquals (U+E047) */
+    /* 57415 -> KPEquals (U+E047) */
     r = feed_seq(&S, &key, "\xEE\x81\x87", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_KPEQUALS);
 
-    /* 57364 → F1 function (U+E014) */
+    /* 57364 -> F1 function (U+E014) */
     r = feed_seq(&S, &key, "\xEE\x80\x94", 3);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_FUNCTION);
@@ -5197,7 +5197,7 @@ TEST(mouse_dispatch) {
     int      r;
     tf_init(&S, NULL, NULL);
 
-    /* CSI M without enough args → enters MOUSE_X10 state */
+    /* CSI M without enough args -> enters MOUSE_X10 state */
     /* CSI M is used for classic x10 mouse */
     r = feed_byte(&S, &key, 0x1b);
     asserteq(r, TF_AGAIN);
@@ -5240,7 +5240,7 @@ TEST(csi_utf8byte) {
     r = feed_byte(&S, &key, '[');
     asserteq(r, TF_AGAIN);
 
-    /* feed a byte >= 0x80 in CSI → transitions to UTF8 or triggers flush */
+    /* feed a byte >= 0x80 in CSI -> transitions to UTF8 or triggers flush */
     r = feed_byte(&S, &key, 0xC0); /* non-ASCII byte in CSI */
     (void)r;                       /* coverage only */
     tf_free(&S);
@@ -5251,14 +5251,14 @@ TEST(csi_utf8byte) {
 TEST(canon_ctrl) {
     tf_Key key;
 
-    /* Ctrl+Space (0x00) → KEYSYM SPACE + CTRL */
+    /* Ctrl+Space (0x00) -> KEYSYM SPACE + CTRL */
     memset(&key, 0, sizeof(key));
     tfD_canon(&key, 0x00, 0);
     asserteq(key.type, TF_TYPE_KEYSYM);
     asserteq((long)key.d.sym, (long)TF_SYM_SPACE);
     asserteq(key.modifiers, TF_MOD_CTRL);
 
-    /* Ctrl+? (0x7F = DEL) → KEYSYM DEL */
+    /* Ctrl+? (0x7F = DEL) -> KEYSYM DEL */
     memset(&key, 0, sizeof(key));
     tfD_canon(&key, 0x7F, 0);
     asserteq(key.type, TF_TYPE_KEYSYM);
@@ -5270,13 +5270,13 @@ TEST(canon_ctrl) {
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.d.codepoint, 'A');
 
-    /* nointerpret: Ctrl+C (0x03) → code = 0x43='C'+ctrl */
+    /* nointerpret: Ctrl+C (0x03) -> code = 0x43='C'+ctrl */
     memset(&key, 0, sizeof(key));
     tfD_canon(&key, 0x03, 0);
     asserteq(key.type, TF_TYPE_UNICODE);
     asserteq(key.modifiers, TF_MOD_CTRL);
 
-    /* 0x1c-0x1f range: 0x1c → '\' + ctrl */
+    /* 0x1c-0x1f range: 0x1c -> '\' + ctrl */
     memset(&key, 0, sizeof(key));
     tfD_canon(&key, 0x1c, 0);
     asserteq(key.type, TF_TYPE_UNICODE);
@@ -5309,7 +5309,7 @@ TEST(nextarg_edge) {
     /* subval: present / absent / empty sub */
     asserteq(tfC_subval("2:3x", 4, -1), 3);
     asserteq(tfC_subval("2x", 2, -1), -1);
-    asserteq(tfC_subval("2:x", 3, -1), -1); /* empty sub → dflt */
+    asserteq(tfC_subval("2:x", 3, -1), -1); /* empty sub -> dflt */
 
     /* empty first field: [;1x */
     r = feed_seq(&S, &key, "\x1b[;1x", 5);
@@ -5352,9 +5352,9 @@ TEST(nextarg_edge) {
     asserteq(r, TF_OK);
     f = NULL;
     assertok(tfC_nextarg(&S, &f, &len));
-    asserteq(tfC_fieldval(f, len, 0), 0); /* no digits → dflt */
+    asserteq(tfC_fieldval(f, len, 0), 0); /* no digits -> dflt */
 
-    /* intermediate first byte: field NULL → handler dflt paths */
+    /* intermediate first byte: field NULL -> handler dflt paths */
     r = feed_seq(&S, &key, "\x1b[$y", 5); /* modereport, no params */
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_MODEREPORT);
@@ -5372,7 +5372,7 @@ TEST(nextarg_edge) {
     asserteq(key.d.pos.line, 5);
     asserteq(key.d.pos.col, 0);
 
-    /* empty params → no fields */
+    /* empty params -> no fields */
     S.buf_len = 0;
     f = NULL;
     assertok(!tfC_nextarg(&S, &f, &len));
@@ -5388,14 +5388,14 @@ TEST(fkeynum_edge) {
     int      r;
 
     tf_init(&S, NULL, NULL);
-    /* F10 → feed CSI 10~ */
+    /* F10 -> feed CSI 10~ */
     r = feed_seq(&S, &key, "\x1b[10~", 5);
     asserteq(r, TF_OK);
     asserteq(key.type, TF_TYPE_FUNCTION);
     asserteq(key.d.number, 10);
     tf_free(&S);
 
-    /* F11 → CSI 23~ */
+    /* F11 -> CSI 23~ */
     tf_init(&S, NULL, NULL);
     r = feed_seq(&S, &key, "\x1b[23~", 5);
     asserteq(r, TF_OK);
@@ -5403,7 +5403,7 @@ TEST(fkeynum_edge) {
     asserteq(key.d.number, 11);
     tf_free(&S);
 
-    /* CSI 11;11~ → n=11, fkeynum returns 1 (F1) */
+    /* CSI 11;11~ -> n=11, fkeynum returns 1 (F1) */
     tf_init(&S, NULL, NULL);
     r = feed_seq(&S, &key, "\x1b[11;11~", 8);
     asserteq(r, TF_OK);
@@ -5411,7 +5411,7 @@ TEST(fkeynum_edge) {
     asserteq(key.d.number, 1); /* 11 maps to F1 */
     tf_free(&S);
 
-    /* F12 → CSI 24~ */
+    /* F12 -> CSI 24~ */
     tf_init(&S, NULL, NULL);
     r = feed_seq(&S, &key, "\x1b[24~", 5);
     asserteq(r, TF_OK);
@@ -5439,7 +5439,7 @@ TEST(csiarg_edge) {
     r = tf_csi(&S, args, na, &cmd);
     asserteq(r, 2);
     asserteq(cmd, 'x');
-    asserteq(args[0], -1); /* empty field → default -1 */
+    asserteq(args[0], -1); /* empty field -> default -1 */
     tf_free(&S);
 
     /* CSI with sub-params: get raw sub */
@@ -5464,10 +5464,10 @@ TEST(ss3_edge) {
     int      r;
     tf_init(&S, NULL, NULL);
 
-    /* SS3 O P → no default mapping (depends on trie) */
+    /* SS3 O P -> no default mapping (depends on trie) */
     r = feed_seq(&S, &key, "\x1bOP", 3);
     asserteq(r, TF_OK);
-    /* This should try SS3 lookup (ESC O → SS3 state) */
+    /* This should try SS3 lookup (ESC O -> SS3 state) */
     tf_free(&S);
 
     /* SS3 with lookup table */
@@ -5482,7 +5482,7 @@ TEST(ss3_edge) {
     asserteq(key.d.number, 3);
     tf_free(&S);
 
-    /* SS3 unknown: ESC O z → should not match any entry */
+    /* SS3 unknown: ESC O z -> should not match any entry */
     tf_init(&S, NULL, NULL);
     r = feed_seq(&S, &key, "\x1bOz", 3);
     asserteq(r, TF_OK);
@@ -5522,10 +5522,10 @@ TEST(trie_rightexpand) {
     TILookup tbl[] = {
             {"key_home",
              "\x1b"
-             "L"}, /* inserted first → arr min='L' */
+             "L"}, /* inserted first -> arr min='L' */
             {"key_end",
              "\x1b"
-             "Z"}, /* later → right expand */
+             "Z"}, /* later -> right expand */
             {NULL, NULL}};
     tf_init(&S, NULL, NULL);
     tf_load(&S, ti_lookup, tbl);
@@ -5553,7 +5553,7 @@ TEST(format_barename) {
     char   buf[64];
     memset(&key, 0, sizeof(key));
 
-    /* KEYSYM no modifiers, no WRAPBRACKET → just name */
+    /* KEYSYM no modifiers, no WRAPBRACKET -> just name */
     key.type = TF_TYPE_KEYSYM;
     key.d.sym = TF_SYM_ESCAPE;
     tf_format(buf, sizeof(buf), &key, TF_FMT_LOWERSPACE);
@@ -5580,7 +5580,7 @@ TEST(mouse_x10_raw) {
     int      r;
     tf_init(&S, NULL, NULL);
 
-    /* CSI M dispatch + raw bytes → covers tfM_dispatch return 0 path */
+    /* CSI M dispatch + raw bytes -> covers tfM_dispatch return 0 path */
     /* Feed CSI M followed by 3 raw bytes in one chunk */
     r = feed_seq(&S, &key, "\x1b[M\x20\x21\x22", 6);
     asserteq(r, TF_OK);

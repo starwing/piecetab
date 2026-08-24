@@ -127,9 +127,9 @@ struct ut_Hunk {
 struct ut_Node {
     ut_Node    *parent;      /* parent node (NULL at root)              */
     ut_Node    *last_child;  /* youngest (last-committed) child         */
-    ut_Node    *next_sib;    /* → older sibling (oldest wraps to young) */
+    ut_Node    *next_sib;    /* -> older sibling (oldest wraps to young) */
     ut_Payload *payload;     /* caller snapshot (e.g. pt_Buffer)        */
-    ut_Hunk    *h;           /* vec: parent→this changeset              */
+    ut_Hunk    *h;           /* vec: parent->this changeset              */
     int         depth;       /* distance from root                      */
     int         child_count; /* number of children                       */
 };
@@ -375,35 +375,35 @@ UT_API void ut_unrecord(ut_Tree *T, unsigned n) {
 
 typedef struct ut_Merge {
     ut_State *S;    /* alloc state                          */
-    ut_Hunk **out;  /* output hunk vec (X→Z)                */
-    ut_HunkCV x2y;  /* A: X→Y changeset                     */
-    ut_HunkCV y2z;  /* B: Y→Z changeset                     */
-    ptrdiff_t xoff; /* Σ(cins-pdel) over processed A hunks  */
-    ptrdiff_t zoff; /* Σ(cins-pdel) over processed B hunks  */
+    ut_Hunk **out;  /* output hunk vec (X->Z)                */
+    ut_HunkCV x2y;  /* A: X->Y changeset                     */
+    ut_HunkCV y2z;  /* B: Y->Z changeset                     */
+    ptrdiff_t xoff; /* sum(cins-pdel) over processed A hunks  */
+    ptrdiff_t zoff; /* sum(cins-pdel) over processed B hunks  */
 } ut_Merge;
 
 /*
- * Compose: X → Y → Z, output X → Z.
+ * Compose: X -> Y -> Z, output X -> Z.
  *
  *          ,- pa <- A (x2y)
  *     X  --[pdel]--        ,- pa <- B (y2z)
- *          [cins]-->  Y  --[pdel]--           ΔA = cins−pdel
- *          `- ca           [cins]-->  Z       ΔB = cins−pdel
+ *          [cins]-->  Y  --[pdel]--           DeltaA = cins-pdel
+ *          `- ca           [cins]-->  Z       DeltaB = cins-pdel
  *                          `- ca
  *
- * xoff = ΣΔA(processed)  tracks how far X has drifted from Y
- * zoff = ΣΔB(processed)  tracks how far Y has drifted from Z
+ * xoff = sumDeltaA(processed)  tracks how far X has drifted from Y
+ * zoff = sumDeltaB(processed)  tracks how far Y has drifted from Z
  *
  * emitX2Y: A_i unblocked  |  emitY2Z: B_j unblocked
- *   X: pa  [pdel]         |    X: pa−xoff  [pdel]  ← shift back by prior A
- *   Y: ca  [cins]         |    Y: pa       [pdel]  ← B_j in Y
- *         ↓ +zoff         |    Z: ca       [cins]  ← unchanged
+ *   X: pa  [pdel]         |    X: pa-xoff  [pdel]  <- shift back by prior A
+ *   Y: ca  [cins]         |    Y: pa       [pdel]  <- B_j in Y
+ *         v +zoff         |    Z: ca       [cins]  <- unchanged
  *   Z: ca+zoff [cins]     |
  *
- * emitcross: A_i ∩ B_j overlap in Y
- *   surv = A.cins − B.pdel  (>0: A insert survives, <0: B del overflows)
- *   del  = A.pdel + max(0,−surv)     ins = max(0,surv) + B.cins
- *   pa   = min(A.pa, B.pa−xoff)      ca  = min(A.ca+zoff, B.ca)
+ * emitcross: A_i inter B_j overlap in Y
+ *   surv = A.cins - B.pdel  (>0: A insert survives, <0: B del overflows)
+ *   del  = A.pdel + max(0,-surv)     ins = max(0,surv) + B.cins
+ *   pa   = min(A.pa, B.pa-xoff)      ca  = min(A.ca+zoff, B.ca)
  */
 
 static int utH_emitX2Y(ut_Merge *M, ut_HunkCV h) {
@@ -506,7 +506,7 @@ UT_API ut_Vid ut_commit(ut_Tree *T, ut_Payload *pl) {
     memset(n, 0, sizeof(ut_Node));
     n->payload = pl, n->h = h, p = T->current;
     n->parent = p, n->depth = p->depth + 1;
-    /* ring tail-insert: youngest (last_child) → new → oldest */
+    /* ring tail-insert: youngest (last_child) -> new -> oldest */
     if (!p->last_child)
         n->next_sib = n; /* single-node ring */
     else
@@ -549,7 +549,7 @@ UT_API ut_Vid ut_younger(ut_Vid v) {
 UT_API ut_Vid ut_older(ut_Vid v) {
     ut_Node *p, *bro;
     if (v == NULL || v->parent == NULL) return NULL;
-    /* v is oldest sibling? → parent */
+    /* v is oldest sibling? -> parent */
     if (p = v->parent, v == p->last_child->next_sib) return p;
     /* find chronologically older sibling, then drill down */
     for (bro = p->last_child; bro->next_sib != v; bro = bro->next_sib) continue;
@@ -571,15 +571,15 @@ static int utD_calc(ut_DX *X, ut_Vid fn, ut_Vid tn) {
     ut_Vid    v;
     if (X->hasfrom || X->hasto)
         utOK(utH_normalize(X->T, &X->fresh, 0, utV_len(X->T->journal)), 0);
-    /* four-phase compose: [inv(fresh)] + fn→anc⁻¹ + anc→tn + [fresh] */
+    /* four-phase compose: [inv(fresh)] + fn->anc^-1 + anc->tn + [fresh] */
     if (X->hasfrom && (r = utH_invert(S, X->fresh, &X->cur)) != UT_OK)
         return utV_free(S, X->fresh), r;
-    for (v = fn; v != X->anc; v = v->parent) { /* phase 2: fn→anc, inverted */
+    for (v = fn; v != X->anc; v = v->parent) { /* phase 2: fn->anc, inverted */
         utOK(utH_invert(S, v->h, &inv), 0);
         r = utH_compose(S, X->cur, inv, &next), utV_free(S, inv);
         if (utV_free(S, X->cur), X->cur = next, r != UT_OK) return r;
     }
-    for (v = tn; v != X->anc; v = v->parent) /* phase 3: anc→tn, forward path */
+    for (v = tn; v != X->anc; v = v->parent) /* phase 3: anc->tn, forward path */
         utOK(utV_push(S, X->nodes, v), 0);
     for (i = utV_len(X->nodes) - 1; i >= 0; i--) {
         v = X->nodes[i], r = utH_compose(S, X->cur, v->h, &next);

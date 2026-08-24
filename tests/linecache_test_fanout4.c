@@ -244,7 +244,7 @@ TEST(scan_oom_build) {
 }
 
 /* scan OOM after makechain: makechain deepens root, then lcL_new fails
- * → lc_scan returns ERRMEM without fold/rebalance → underfilled node */
+ * -> lc_scan returns ERRMEM without fold/rebalance -> underfilled node */
 TEST(scan_oom_unfolded) {
     int       oom = 100, r;
     lc_State *S = lc_open(&oom_alloc, &oom);
@@ -809,7 +809,7 @@ TEST(markbreak_brute) {
     for (pos = 0; pos <= nb + 1; ++pos)
         for (ins = 1; ins <= n; ++ins) {
             c = lc_newcache(S);
-            lc_rscanV(c, 128, 2); /* 128*2=256 bytes, levels≥2 */
+            lc_rscanV(c, 128, 2); /* 128*2=256 bytes, levels>=2 */
             lc_seek(&C, c, pos);
             r = lc_markbreak(&C, ins);
             asserteq(r, LC_OK);
@@ -1266,7 +1266,7 @@ TEST(remove_params) {
     asserteq(lc_remove(&C, &X), LC_ERRPARAM); /* X.tree==NULL != c */
     asserteq(lc_remove(&X, &C), LC_ERRPARAM); /* !X->tree */
 
-    /* reversed → no-op */
+    /* reversed -> no-op */
     lc_scanV(c, 10, 10);
     lc_seek(&C, c, 5);
     lc_seek(&R, c, 2);
@@ -1300,7 +1300,7 @@ TEST(remove_basic) {
     assertok(lc_checkcursor(&C, 0));
     lc_delcache(S, c);
 
-    /* remove range — keep first 11 + last 9 bytes */
+    /* remove range -- keep first 11 + last 9 bytes */
     c = lc_newcache(S);
     lc_rscanV(c, 100, 10);
     lc_seek(&C, c, 11);
@@ -1392,7 +1392,7 @@ TEST(remove_rend_overtail_range2) {
     lc_close(S);
 }
 
-/* leaf fold underfills a root child (cc 2→1): rebalance must fold at
+/* leaf fold underfills a root child (cc 2->1): rebalance must fold at
  * the root level too (fuzz seed 7 op 219) */
 TEST(remove_foldroot) {
     lc_State *S = lc_open(&test_alloc, NULL);
@@ -1594,7 +1594,7 @@ TEST(splice_trailing) {
 
 /* splice_brute: exhaustive pos+del+ins enumeration on multi-level tree.
  * 128 lines of 2 bytes each = 256 total bytes, levels >= 2.
- * pos=0..257 (1 past end → trailing), del=0..257 (past end → clamp),
+ * pos=0..257 (1 past end -> trailing), del=0..257 (past end -> clamp),
  * ins=0..1 (byte insert). */
 TEST(splice_brute) {
     lc_State *S;
@@ -1717,7 +1717,7 @@ TEST(splice_brute3) {
 
 /* cross-leaf splice with L->col (1) != R->col (0): del [1,4) of
  * lines {3,1 | 2,2} kills line A's break and line B; A's leading
- * byte must merge into line C → {1+2, 2} */
+ * byte must merge into line C -> {1+2, 2} */
 TEST(splice_cross_col) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(S, 0, botV(leafV(3, 1), leafV(2, 2)));
@@ -1741,10 +1741,10 @@ TEST(splice_cov_rebalance) {
                           botV(leafV(2, 2), leafV(2, 2))),
                    innerV(botV(leafV(2)))));
     lc_Cursor C;
-    /* L at offset 0 leaf0[2,2]: splice del=3 → leaf becomes [1]
-     * underfull → foldleaf merge → botV0.cc=1 → rebalance(1)
-     * → foldnode at inner0: cl=1 cr=2 → merge (returns 1);
-     * root-level fold merges inner0+inner1 → root collapses (levels 1) */
+    /* L at offset 0 leaf0[2,2]: splice del=3 -> leaf becomes [1]
+     * underfull -> foldleaf merge -> botV0.cc=1 -> rebalance(1)
+     * -> foldnode at inner0: cl=1 cr=2 -> merge (returns 1);
+     * root-level fold merges inner0+inner1 -> root collapses (levels 1) */
     lc_seek(&C, c, 0);
     lc_splice(&C, 3, 0);
     lc_asserttree(
@@ -1764,7 +1764,7 @@ TEST(splice_cov_foldleaf_lr) {
     lc_Cursor C;
     lc_Cache *c = cacheV(S, 0, botV(leafV(10, 10), leafV(10, 10, 10, 10)));
     lc_seek(&C, c, 10);   /* left leaf lnu=1, cross into right leaf */
-    lc_splice(&C, 11, 0); /* delete 11 bytes → cross leaf, trim left */
+    lc_splice(&C, 11, 0); /* delete 11 bytes -> cross leaf, trim left */
     assertok(lc_checktree(c));
     assertok(lc_checkcursor(&C, 10));
     lc_delcache(S, c);
@@ -2137,7 +2137,7 @@ TEST(append_brute) {
         for (ins = 0; ins <= n; ++ins)
             for (e = 0; e <= 1; ++e) {
                 c = lc_newcache(S);
-                lc_rscanV(c, 128, 2); /* 128*2=256 bytes, levels≥2 */
+                lc_rscanV(c, 128, 2); /* 128*2=256 bytes, levels>=2 */
                 lc_seek(&C, c, pos);
                 rem = ins;
                 r = lc_append(&C, e, brute_scanner, &rem);
@@ -2528,7 +2528,7 @@ TEST(append_oom_rollback) {
 }
 
 /* stitch reserve: full 256-seg tree, seek 254, insert 48*1b.
- * freelists cleared → every page alloc goes through oom_alloc.
+ * freelists cleared -> every page alloc goes through oom_alloc.
  * O(1) reserve: oom=3 fails (findroom+stitch need 4 allocfs);
  * oom=4 succeeds. */
 TEST(append_oom_full) {
@@ -2540,7 +2540,7 @@ TEST(append_oom_full) {
     int       oom, r;
 
     /* oom=3: cutleaf(1 leaf) + findroom reserve(1 node) + stitch reserve(2
-     * node) = 4. 4th allocf fails → OOM → rollback. */
+     * node) = 4. 4th allocf fails -> OOM -> rollback. */
     S = lc_open(&test_alloc, NULL);
     c = lc_newcache(S);
     lc_rscanV(c, 256, 1);
@@ -2560,7 +2560,7 @@ TEST(append_oom_full) {
     lc_delcache(S, c);
     lc_close(S);
 
-    /* oom=4: stitch gets its page → insert succeeds.
+    /* oom=4: stitch gets its page -> insert succeeds.
      * New reserve O(1): mix of findroom reserve(3) + stitch reserve(5)
      * needs 4 allocfs total (vs 5 in old O(n) reserve). */
     S = lc_open(&test_alloc, NULL);
@@ -2620,7 +2620,7 @@ TEST(splice_cov_foldleaf_rl) {
 
 /* rebalance early exit: foldnode returns 0 (balance, not merge).
  * botV[0] underfull after foldleaf (1 leaf), botV[1] has 4 leaves,
- * 1+4=5 > 4 → balance → foldnode returns 0 → rebalance returns. */
+ * 1+4=5 > 4 -> balance -> foldnode returns 0 -> rebalance returns. */
 TEST(splice_rebalance_earlyexit) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = cacheV(
@@ -2644,7 +2644,7 @@ TEST(splice_rebalance_earlyexit) {
     lc_close(S);
 }
 
-/* markbreak at right-half of fully packed tree → root split with i>=mid */
+/* markbreak at right-half of fully packed tree -> root split with i>=mid */
 TEST(markbreak_cov_rootright) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
@@ -2761,7 +2761,7 @@ TEST(append_cov_rootdeep) {
     lc_close(S);
 }
 
-/* lc_insert — wrapper around lc_append that restores cursor */
+/* lc_insert -- wrapper around lc_append that restores cursor */
 
 TEST(insert_params) {
     lc_State *S;
