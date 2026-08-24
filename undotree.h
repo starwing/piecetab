@@ -207,7 +207,7 @@ struct ut_State {
 #define utV_push(S, A, V)          \
     (utV_reserve(S, A, 1) != UT_OK \
              ? UT_ERRMEM           \
-             : (*utV_end(A) = (V), ++utV_hdr(A)->len, UT_OK))
+             : ((A)[utV_hdr(A)->len++] = (V), UT_OK))
 
 #define utV_reserve(S, A, N) \
     utV_grow_(S, (void **)&(A), (unsigned)(N), sizeof(*(A)))
@@ -434,7 +434,7 @@ static int utH_emitcross(ut_Merge *M, int i, int j) {
 }
 
 static int utH_mergewalk(ut_Merge *M) {
-    int i = 0, j = 0, an = (int)utV_len(M->x2y), bn = (int)utV_len(M->y2z);
+    unsigned i = 0, j = 0, an = utV_len(M->x2y), bn = utV_len(M->y2z);
     while (i < an && j < bn) {
         size_t ae = M->x2y[i].ca + M->x2y[i].cins;
         size_t be = M->y2z[j].pa + M->y2z[j].pdel;
@@ -579,7 +579,8 @@ static int utD_calc(ut_DX *X, ut_Vid fn, ut_Vid tn) {
         r = utH_compose(S, X->cur, inv, &next), utV_free(S, inv);
         if (utV_free(S, X->cur), X->cur = next, r != UT_OK) return r;
     }
-    for (v = tn; v != X->anc; v = v->parent) /* phase 3: anc->tn, forward path */
+    for (v = tn; v != X->anc;
+         v = v->parent) /* phase 3: anc->tn, forward path */
         utOK(utV_push(S, X->nodes, v), 0);
     for (i = utV_len(X->nodes) - 1; i >= 0; i--) {
         v = X->nodes[i], r = utH_compose(S, X->cur, v->h, &next);

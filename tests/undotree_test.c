@@ -1704,4 +1704,118 @@ TEST(leak_oom_cleanup) {
     asserteq(c.live, 0);
 }
 
+/* branch: ut_switch(NULL, NULL) hits the T == NULL guard */
+TEST(switch_null_null) {
+    asserteq(ut_switch(NULL, NULL), UT_ERRPARAM);
+}
+
+/* branch: utD_calc normalize sees T->journal == NULL when diffing to/from
+ * fresh on a tree that has never recorded */
+TEST(diff_fresh_no_journal) {
+    ut_State *S = ut_open(NULL, NULL);
+    ut_Tree  *T = ut_newtree(S, NULL);
+    asserteq(ut_diff(T, ut_freshvid(S), ut_root(T)), 0);
+    asserteq(ut_diff(T, ut_root(T), ut_freshvid(S)), 0);
+    ut_deltree(S, T), ut_close(S);
+}
+
+/* branch: OOM in utH_emitY2Z's push during ut_commit normalize */
+TEST(commit_oom_emit_y2z) {
+    int       oom = 4; /* state+tree+journal+first-compose reserve */
+    ut_State *S = ut_open(&oom_alloc, &oom);
+    ut_Tree  *T = ut_newtree(S, NULL);
+    assertok(T);
+    ut_record(T, 10, 0, 5); /* A */
+    ut_record(T, 0, 3, 0);  /* B before A -> emitY2Z first */
+    asserteq(ut_commit(T, NULL), NULL);
+    ut_deltree(S, T), ut_close(S);
+}
+
+/* branch: OOM in utH_emitcross's push during ut_commit normalize */
+TEST(commit_oom_emitcross) {
+    int       oom = 4; /* state+tree+journal+first-compose reserve */
+    ut_State *S = ut_open(&oom_alloc, &oom);
+    ut_Tree  *T = ut_newtree(S, NULL);
+    assertok(T);
+    ut_record(T, 0, 0, 5); /* A */
+    ut_record(T, 0, 3, 0); /* overlapping B -> emitcross */
+    asserteq(ut_commit(T, NULL), NULL);
+    ut_deltree(S, T), ut_close(S);
+}
+
+/* branch: OOM in mergewalk tail-B push (B remains after all A consumed) */
+TEST(commit_oom_tail_b) {
+    int       oom = 9;
+    ut_State *S = ut_open(&oom_alloc, &oom);
+    ut_Tree  *T = ut_newtree(S, NULL);
+    int       i;
+    assertok(T);
+    /* five separated A inserts, then a B insert before all A */
+    for (i = 0; i < 5; i++) ut_record(T, (size_t)(10 + i * 10), 0, 1);
+    ut_record(T, 0, 0, 1);
+    asserteq(ut_commit(T, NULL), NULL);
+    ut_deltree(S, T), ut_close(S);
+}
+
+/* branch: OOM in mergewalk tail-A push (A remains after all B consumed) */
+TEST(commit_oom_tail_a) {
+    int       oom = 11;
+    ut_State *S = ut_open(&oom_alloc, &oom);
+    ut_Tree  *T = ut_newtree(S, NULL);
+    int       i;
+    assertok(T);
+    /* same shape as tail_b, but fail later so tail-A grow hits OOM */
+    for (i = 0; i < 5; i++) ut_record(T, (size_t)(10 + i * 10), 0, 1);
+    ut_record(T, 0, 0, 1);
+    asserteq(ut_commit(T, NULL), NULL);
+    ut_deltree(S, T), ut_close(S);
+}
+
+/* branch: OOM in utD_calc phase-3 nodes vector push */
+TEST(diff_oom_phase3_nodes) {
+    int       oom = 6;
+    ut_State *S = ut_open(&oom_alloc, &oom);
+    ut_Tree  *T = ut_newtree(S, NULL);
+    ut_Vid    root, c1, c2;
+    assertok(T);
+    root = ut_root(T);
+    ut_record(T, 0, 1, 2);
+    c1 = ut_commit(T, NULL);
+    assertok(c1);
+    ut_record(T, 10, 0, 3);
+    c2 = ut_commit(T, NULL);
+    assertok(c2);
+    assertok(ut_diff(T, root, c2) < 0);
+    ut_deltree(S, T), ut_close(S);
+}
+
+/* branch: OOM in utD_calc phase-4 compose with fresh (hasto) */
+TEST(diff_oom_phase4_fresh) {
+    int       oom = 9;
+    ut_State *S = ut_open(&oom_alloc, &oom);
+    ut_Tree  *T = ut_newtree(S, NULL);
+    ut_Vid    root, c1, c2;
+    assertok(T);
+    root = ut_root(T);
+    ut_record(T, 0, 1, 2);
+    c1 = ut_commit(T, NULL);
+    assertok(c1);
+    ut_record(T, 10, 0, 3);
+    c2 = ut_commit(T, NULL);
+    assertok(c2);
+    assertok(ut_diff(T, root, ut_freshvid(S)) < 0);
+    ut_deltree(S, T), ut_close(S);
+}
+
+/* branch: OOM in ut_freshdiff reverse normalize (before invert) */
+TEST(freshdiff_oom_normalize_reverse) {
+    int       oom = 3;
+    ut_State *S = ut_open(&oom_alloc, &oom);
+    ut_Tree  *T = ut_newtree(S, NULL);
+    assertok(T);
+    ut_record(T, 0, 1, 1);
+    assertok(ut_freshdiff(T, 1, 0) < 0);
+    ut_deltree(S, T), ut_close(S);
+}
+
 #include "undotree_test.gen.inc"
