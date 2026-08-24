@@ -27,7 +27,8 @@ LUA_INC := `
 `
 LUAJIT_INC := `
     for d in ../.lua/include/luajit-2.1 .lua/include/luajit-2.1 \
-        /opt/homebrew/include/luajit-2.1 /usr/include/luajit-2.1; do
+        /opt/homebrew/include/luajit-2.1 /usr/include/luajit-2.1 \
+        /usr/local/include/luajit-2.1; do
         [ -d "$d" ] && { echo "-I$d"; exit 0; }
     done
     exit 0
@@ -92,8 +93,8 @@ ts-grammars *langs='c lua':
 
 build-ts: ts-grammars
     mkdir -p luajit
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA_INC }} {{ TS_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o treesitter.so treesitter.c {{ TS_LIB }}
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} {{ TS_INC }} -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o luajit/treesitter.so treesitter.c {{ TS_LIB }}
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA_INC }} {{ TS_INC }} -DNDEBUG -O2 {{ LDF }} -o treesitter.so treesitter.c {{ TS_LIB }}
+    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} {{ TS_INC }} -DNDEBUG -O2 {{ LDF }} -o luajit/treesitter.so treesitter.c {{ TS_LIB }}
 
 ts *args='': build-ts (run "treesitter_test" args)
 

@@ -153,10 +153,10 @@ static int lts_pushnode(lua_State *L, int treeidx, TSNode node) {
      * lts_retrieve caches bare pointers in the same box, and a node id
      * (root nodes live inside the tree allocation) can alias a tree
      * pointer — without the mark the two caches collide. */
-    const void *nodeid = (const void *)(((ptrdiff_t)node.id | 1)
-                                                + ts_node_start_byte(node)
-                                        | (ptrdiff_t)1
-                                                  << (sizeof(void *) * 8 - 2));
+    const void *nodeid = (const void *)((((ptrdiff_t)node.id | 1)
+                                         + ts_node_start_byte(node))
+                                        | ((ptrdiff_t)1
+                                           << (sizeof(void *) * 8 - 2)));
     if (lua53_rawgetp(L, -2, nodeid) != LUA_TUSERDATA) {      /* 3: miss */
         lua_pop(L, 1);                                        /* 3 */
         *(TSNode *)lua_newuserdata(L, sizeof(TSNode)) = node; /* 3: ud */

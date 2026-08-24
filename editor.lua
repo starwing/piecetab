@@ -2,16 +2,19 @@
 -- editor.lua -- piecetab-based terminal text editor (class skeleton)
 -- usage: lua editor.lua [file]
 
-package.cpath = package.cpath ..
-    ";./lua/?.so;./lua/luajit/?.so;/opt/homebrew/lib/lua/5.5/?.so;/opt/homebrew/lib/lua/5.4/?.so"
+package.cpath = package.cpath
+    .. (_G["jit"] and ";./lua/luajit/?.so" or ";./lua/?.so")
+    .. ";./lua/?.so;/opt/homebrew/lib/lua/5.5/?.so;/opt/homebrew/lib/lua/5.4/?.so"
 package.path = package.path .. ";./lua/?.lua"
 local pt = require("piecetab")
 local cg = require("cellgrid")
 
 local tf = require("termfeed")
 local sp = require("spantree")
-local _, ts = pcall(require, "treesitter")
-local _, lsp = pcall(require, "lsp")
+local ok, ts = pcall(require, "treesitter")
+if not ok then ts = nil end
+local ok, lsp = pcall(require, "lsp")
+if not ok then lsp = nil end
 
 -- Section 0: Logging (writes to editor.log for debugging)
 
