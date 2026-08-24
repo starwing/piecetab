@@ -87,6 +87,130 @@ function tmux:capture()
   return rows
 end
 
+-- Styled-match markers: fullwidth brackets so they cannot collide with
+-- ordinary ASCII brackets in captured content.
+local ST = "\239\188\155" -- ［ U+FF3B
+local ET = "\239\188\157" -- ］ U+FF3D
+
+-- Build a styled match string: "［F207G236B］text［R］".
+-- Absent attributes are omitted; default text has no marker.
+--- @param text string
+--- @param attr {fg?: integer|string, bg?: integer|string, bold?: boolean,
+---   dim?: boolean, italic?: boolean, underline?: boolean,
+---   reverse?: boolean}?
+--- @return string
+function tmux.styled(text, attr)
+  if not attr or next(attr) == nil then return text end
+  local parts = { ST }
+  if attr.fg ~= nil then parts[#parts + 1] = "F" .. tostring(attr.fg) end
+  if attr.bg ~= nil then parts[#parts + 1] = "G" .. tostring(attr.bg) end
+  if attr.bold then parts[#parts + 1] = "B" end
+  if attr.dim then parts[#parts + 1] = "D" end
+  if attr.italic then parts[#parts + 1] = "I" end
+  if attr.underline then parts[#parts + 1] = "U" end
+  if attr.reverse then parts[#parts + 1] = "V" end
+  parts[#parts + 1] = ET
+  return table.concat(parts) .. text .. ST .. "R" .. ET
+end
+
+-- Apply one SGR parameter string to an attr table in place.
+--- @param attr table
+--- @param s string
+local function apply_sgr(attr, s)
+  local n = {}
+  for v in s:gmatch("%d+") do n[#n + 1] = tonumber(v) end
+  if #n == 0 then
+    for k in pairs(attr) do attr[k] = nil end
+    return
+  end
+  local i = 1
+  while i <= #n do
+    local c = n[i]
+    if c == 0 then
+      for k in pairs(attr) do attr[k] = nil end
+    elseif c == 1 then attr.bold = true
+    elseif c == 2 then attr.dim = true
+    elseif c == 3 then attr.italic = true
+    elseif c == 4 then attr.underline = true
+    elseif c == 7 then attr.reverse = true
+    elseif c == 22 then attr.bold, attr.dim = nil, nil
+    elseif c == 23 then attr.italic = nil
+    elseif c == 24 then attr.underline = nil
+    elseif c == 27 then attr.reverse = nil
+    elseif c == 39 then attr.fg = nil
+    elseif c == 49 then attr.bg = nil
+    elseif c >= 30 and c <= 37 then attr.fg = c - 30
+    elseif c >= 40 and c <= 47 then attr.bg = c - 40
+    elseif c >= 90 and c <= 97 then attr.fg = c - 90 + 8
+    elseif c >= 100 and c <= 107 then attr.bg = c - 100 + 8
+    elseif c == 38 or c == 48 then
+      local mode = n[i + 1]
+      if mode == 5 then
+        if c == 38 then attr.fg = n[i + 2] else attr.bg = n[i + 2] end
+        i = i + 2
+      elseif mode == 2 then
+        local rgb = table.concat({ n[i + 2], n[i + 3], n[i + 4] }, ",")
+        if c == 38 then attr.fg = rgb else attr.bg = rgb end
+        i = i + 4
+      end
+    end
+    i = i + 1
+  end
+end
+
+-- Convert one ANSI-SGR row into the styled-match representation.
+--- @param row string
+--- @return string
+local function render_sgr(row)
+  local out = {}
+  local attr = {}
+  local buf = {}
+  local function flush()
+    if #buf == 0 then return end
+    local text = table.concat(buf)
+    buf = {}
+    if next(attr) == nil then
+      out[#out + 1] = text
+    else
+      out[#out + 1] = tmux.styled(text, attr)
+    end
+  end
+  local i, n = 1, #row
+  while i <= n do
+    if row:sub(i, i + 1) == "\27[" then
+      local j = i + 2
+      while j <= n and not row:sub(j, j):match("%a") do j = j + 1 end
+      local letter = row:sub(j, j)
+      if letter == "m" then
+        flush()
+        apply_sgr(attr, row:sub(i + 2, j - 1))
+      end
+      i = j + 1
+    else
+      buf[#buf + 1] = row:sub(i, i)
+      i = i + 1
+    end
+  end
+  flush()
+  return table.concat(out)
+end
+
+-- Styled screen snapshot: one string per row, trailing plain whitespace
+-- trimmed. Same shape as capture(), but ANSI SGR runs are replaced with
+-- one-way match strings (see tmux.styled).
+--- @param self tmux
+--- @return string[]
+function tmux:capture_styled()
+  local out = run("capture-pane -t " .. self.name .. " -e -p")
+  if server_down(out) then return {} end
+  local rows = {}
+  for line in (out .. "\n"):gmatch("(.-)\n") do
+    local s = render_sgr(line)
+    rows[#rows + 1] = s:gsub("%s+$", "")
+  end
+  return rows
+end
+
 -- Cursor position {x, y} (0-based within the pane)
 --- @param self tmux
 --- @return {x: integer, y: integer}

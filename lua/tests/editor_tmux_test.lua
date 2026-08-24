@@ -20,19 +20,73 @@ local tmux = require "tmux"
 
 -- short-lived temp files in TMPDIR: os.tmpname() returns a unique path
 -- per call; contents are (over)written by tmux.new's io.open(path, "w").
--- Long paths may truncate the status bar, but no assertion depends on it.
+-- The ".lua" suffix makes tree-sitter highlight the edited file (the
+-- display tests assert TS colors). Long paths may truncate the status
+-- bar, but no assertion depends on it.
 --- @return string
 local function tmpfile()
-  return os.tmpname()
+  return os.tmpname() .. ".lua"
+end
+
+-- Render a small Lua value as a Lua literal (used to embed fakelsp
+-- semantic-token payloads into the generated server script).
+--- @param v any
+--- @return string
+local function lua_lit(v)
+  if type(v) == "string" then return string.format("%q", v) end
+  if type(v) == "number" or type(v) == "boolean" then return tostring(v) end
+  if type(v) == "table" then
+    local arr = {}
+    for _, x in ipairs(v) do arr[#arr + 1] = lua_lit(x) end
+    if #arr > 0 then return "{" .. table.concat(arr, ", ") .. "}" end
+    local kv = {}
+    for k, x in pairs(v) do
+      kv[#kv + 1] = "[" .. lua_lit(k) .. "] = " .. lua_lit(x)
+    end
+    table.sort(kv)
+    return "{" .. table.concat(kv, ", ") .. "}"
+  end
+  return "nil"
+end
+
+-- Encode high-level semantic tokens into the relative-encoded data
+-- array used by textDocument/semanticTokens/full.
+--- @param legend string[]
+--- @param tokens {line: integer, character: integer, len: integer, type: string}[]
+--- @return {legend: string[], data: integer[]}
+local function sem_tokens(legend, tokens)
+  local data = {}
+  local line, unit = 0, 0
+  for _, t in ipairs(tokens) do
+    local ttype
+    for i, name in ipairs(legend) do
+      if name == t.type then ttype = i - 1 break end
+    end
+    assert(ttype ~= nil, "unknown semantic token type " .. tostring(t.type))
+    data[#data + 1] = t.line - line
+    if t.line == line then
+      data[#data + 1] = t.character - unit
+    else
+      data[#data + 1] = t.character
+    end
+    data[#data + 1] = t.len
+    data[#data + 1] = ttype
+    data[#data + 1] = 0
+    line = t.line
+    unit = t.character
+  end
+  return { legend = legend, data = data }
 end
 
 -- fakelsp: LSP server script wired through the editor's PT_LSP_CMD
--- hook. Handles initialize/inlayHint/shutdown; with `diag` pushes a
--- publishDiagnostics after didOpen (file uri captured from the frame).
+-- hook. Handles initialize/inlayHint/semanticTokens/shutdown; with
+-- `diag` pushes a publishDiagnostics after didOpen; with `sem` answers
+-- textDocument/semanticTokens/full (relative-encoded data).
 --- @param hints {line: integer, character: integer, label: string}[]?
 --- @param diag string?
+--- @param sem {legend?: string[], data?: integer[]}?
 --- @return string
-local function fakelsp_src(hints, diag)
+local function fakelsp_src(hints, diag, sem)
   local parts = {}
   for _, h in ipairs(hints or {}) do
     parts[#parts + 1] = string.format(
@@ -44,6 +98,8 @@ local function fakelsp_src(hints, diag)
     "{{ range = { start = { line = 0, character = 0 }, "
     .. "['end'] = { line = 0, character = 1 } }, message = %q, "
     .. "severity = 1 } }", diag) or "nil"
+  local sem_lit = sem and lua_lit(sem) or "nil"
+  local sem_legend_lit = sem and lua_lit(sem.legend or {}) or "nil"
   return string.format([[
 package.path = package.path .. ";" .. %q .. "/lua/?.lua"
 package.cpath = package.cpath .. ";" .. %q .. "/lua/?.so;"
@@ -52,6 +108,8 @@ local lsp = require "lsp"
 local yy = require "json"
 local HINTS = %s
 local DIAG = %s
+local SEM = %s
+local SEM_LEGEND = %s
 -- read one byte at a time: io.read(n) blocks until n bytes arrive on a
 -- pipe, so a frame shorter than n would deadlock at its tail
 local dec = lsp.RPC.decoder(function() return io.read(1) end)
@@ -66,9 +124,17 @@ while true do
   if m.id then
     if m.method == "initialize" then
       sendmsg({ jsonrpc = "2.0", id = m.id,
-        result = { capabilities = { inlayHintProvider = true } } })
+        result = { capabilities = {
+          inlayHintProvider = true,
+          semanticTokensProvider = SEM and {
+            full = true,
+            legend = { tokenTypes = SEM_LEGEND },
+          } or nil,
+        } } })
     elseif m.method == "textDocument/inlayHint" then
       sendmsg({ jsonrpc = "2.0", id = m.id, result = HINTS })
+    elseif m.method == "textDocument/semanticTokens/full" then
+      sendmsg({ jsonrpc = "2.0", id = m.id, result = { data = SEM.data } })
     elseif m.method == "shutdown" then
       sendmsg({ jsonrpc = "2.0", id = m.id, result = yy.null })
     end
@@ -81,7 +147,7 @@ while true do
     end
   end
 end
-]], root, root, hint_lit, diag_lit)
+]], root, root, hint_lit, diag_lit, sem_lit, sem_legend_lit)
 end
 
 -- open editor sessions: killed in tearDown even when a test fails
@@ -119,7 +185,7 @@ end
 -- Waits for "lsp:on" in the status bar (handshake round trip).
 --- @param content string
 --- @param hints {line: integer, character: integer, label: string}[]?
---- @param opts {diag?: string}?
+--- @param opts {diag?: string, sem?: {legend?: string[], data?: integer[]}}?
 --- @return tmux
 local function spawn_ed(content, hints, opts)
   opts = opts or {}
@@ -133,7 +199,7 @@ local function spawn_ed(content, hints, opts)
       "PT_LSP_CMD='%s %s' PT_HINT_IDLE=0 %s %s %s 2>%s; echo \\$? > %s",
       lua_bin, fs, lua_bin, root .. "/editor.lua", f, errf, codef),
     files = { { path = f, content = content },
-      { path = fs,    content = fakelsp_src(hints, opts.diag) },
+      { path = fs,    content = fakelsp_src(hints, opts.diag, opts.sem) },
       { path = errf,  content = "" },
       { path = codef, content = "" } },
   })
@@ -170,6 +236,21 @@ local function wait_screen(s, text)
     return false
   end)
   if not ok then dump_screen(s, "wait_screen timeout for " .. string.format("%q", text)) end
+  return ok
+end
+
+-- Poll the styled screen until a row contains a styled-match substring
+--- @param s tmux
+--- @param text string
+--- @return boolean
+local function wait_styled(s, text)
+  local ok = s:wait(function()
+    for _, row in ipairs(s:capture_styled()) do
+      if row:find(text, 1, true) then return true end
+    end
+    return false
+  end)
+  if not ok then dump_screen(s, "wait_styled timeout for " .. string.format("%q", text)) end
   return ok
 end
 
@@ -372,6 +453,43 @@ function TestDisplay:testTabAfterHint()
   local row = s:capture()[1] or ""
   -- b lands at screen col 4: hint shifts the tab's start, not its width
   lu.assertStrContains(row, "ahi b")
+end
+
+function TestDisplay:testTsSyntaxHighlight()
+  -- tree-sitter colors are the base layer: keyword/function/comment/
+  -- string all render with their ATTR_* colors when no LSP semantic
+  -- tokens are advertised.
+  local s = spawn_ed(
+    "local x = hello()\n  -- hi\n  return \"s\"\n", nil)
+  wait_styled(s, tmux.styled("local", { fg = 207 }))
+  local rows = s:capture_styled()
+  lu.assertStrContains(rows[1] or "", tmux.styled("local", { fg = 207 }))
+  lu.assertStrContains(rows[1] or "", tmux.styled("hello", { fg = 81 }))
+  lu.assertStrContains(rows[2] or "", tmux.styled("-- hi", { fg = 245 }))
+  lu.assertStrContains(rows[3] or "", tmux.styled("\"s\"", { fg = 114 }))
+end
+
+function TestDisplay:testLspSemDoesNotWipeTs()
+  -- Mixed highlighting: LSP semantic tokens paint variable/comment, but
+  -- the tree-sitter keyword `local` must stay visible through the sem
+  -- layer. The long comment (>64 bytes) is the end-to-end regression
+  -- for the get_line cap bug that used to stretch a comment token to EOF
+  -- and wipe every lower-layer color.
+  local comment = "-- this comment is longer than sixty four bytes "
+      .. "to trigger the old bug"
+  local content = "local x = 1\n" .. comment .. "\n"
+  local sem = sem_tokens({ "comment", "variable" }, {
+    { line = 0, character = 6, len = 1, type = "variable" },
+    { line = 1, character = 0, len = #comment, type = "comment" },
+  })
+  local s = spawn_ed(content, nil, { sem = sem })
+  -- LSP semantic tokens have arrived once x is painted by the sem layer.
+  wait_styled(s, tmux.styled("x", { fg = 114 }))
+  local rows = s:capture_styled()
+  lu.assertStrContains(rows[1] or "", tmux.styled("local", { fg = 207 }))
+  lu.assertStrContains(rows[1] or "", tmux.styled("x", { fg = 114 }))
+  lu.assertStrContains(rows[2] or "",
+    tmux.styled(comment, { fg = 245 }))
 end
 
 os.exit(lu.LuaUnit.run(), true)
