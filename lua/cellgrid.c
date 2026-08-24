@@ -10,10 +10,16 @@
 #include <lua.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
 
-#ifndef _WIN32
+#ifdef _WIN32
+# include <io.h>
+# define lcg_write(fd, buf, len) _write((fd), (buf), (unsigned int)(len))
+# define lcg_ssize               int
+#else
 # include <sys/ioctl.h>
+# include <unistd.h>
+# define lcg_write(fd, buf, len) write((fd), (buf), (len))
+# define lcg_ssize               ssize_t
 #endif
 
 #define CG_STATIC_API
@@ -321,7 +327,7 @@ static const char *lcg_styleof(lua_State *L, int idx, unsigned st) {
 static int lcg_output(lcg_Diff *d, const char *buf, int len) {
     if (len <= 0) return 0;
     if (d->fd >= 0)
-        return write(d->fd, buf, (size_t)len) == (ssize_t)len ? 0 : -1;
+        return lcg_write(d->fd, buf, (size_t)len) == (lcg_ssize)len ? 0 : -1;
     return luaL_addlstring(&d->b, buf, (size_t)len), 0;
 }
 

@@ -2,9 +2,16 @@
 -- editor.lua -- piecetab-based terminal text editor (class skeleton)
 -- usage: lua editor.lua [file]
 
-package.cpath = package.cpath
-    .. (_G["jit"] and ";./lua/luajit/?.so" or ";./lua/?.so")
-    .. ";./lua/?.so;/opt/homebrew/lib/lua/5.5/?.so;/opt/homebrew/lib/lua/5.4/?.so"
+if package.config:sub(1, 1) == "\\" then
+  -- Windows: add luajit/?.dll to cpath for LuaJIT and Lua 5.4/5.5
+  package.cpath = package.cpath
+      .. (_G["jit"] and ";./lua/luajit/?.dll" or ";./lua/?.dll")
+else
+  -- POSIX: add luajit/?.so to cpath for LuaJIT and Lua 5.4/5.5
+  package.cpath = package.cpath
+      .. (_G["jit"] and ";./lua/luajit/?.so" or ";./lua/?.so")
+      .. ";./lua/?.so;./lua/?.dll;/opt/homebrew/lib/lua/5.5/?.so;/opt/homebrew/lib/lua/5.4/?.so"
+end
 package.path = package.path .. ";./lua/?.lua"
 local pt = require("piecetab")
 local cg = require("cellgrid")

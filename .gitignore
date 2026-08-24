@@ -22,6 +22,7 @@ notes/reports/
 *.so
 *.log
 *.exe
+*.dll
 *.obj
 *.pdb
 *.exp

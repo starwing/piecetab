@@ -172,8 +172,13 @@ libtermkey 的"flush 后保留 buffer 继续解析"等价，避免数据滞留�
 4. POLLIN → `read` 进 wait 缓冲 → `tf_feed` 包全量交付 reader
    注入 → 回到步骤 1
 read 内部重试 EINTR/EAGAIN; poll 被 EINTR 打断 → 继续循环。
-**`_WIN32` 分支返回 TF_ERRPARAM**——Windows console handle 不可
-poll，调用方用 `tf_feed`+`tf_readkey` 自行驱动。
+**`_WIN32` 分支保持 TF_ERRPARAM**——不在头文件里实现 Windows
+console 支持；Windows 的 console 按键读取放在绑定层
+`lua/termfeed.c`：`Ltf_waitkey` 用 `WaitForSingleObject` +
+`ReadConsoleInputW` 直接填 `tf_Key`（方向键/功能键/Alt/Ctrl/普通字符），
+绕过 `tf_feed`/`tf_readkey`/`tf_flush` 管线。
+`lua/termfeed.c` 的 Windows `raw`/`cooked` 用 `SetConsoleMode` 关闭
+echo/line/processed input，供 editor demo 使用。
 
 **wait 缓冲不是输入源，是 read 目标**: `tf_State.wait`（`tf_WaitCtx`
 { buf, len }，缓冲懒分配 `TF_WAIT_BUFSIZE`、`tf_free` 释放——大小恒等于

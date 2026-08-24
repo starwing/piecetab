@@ -11,6 +11,9 @@
 
 #ifndef _WIN32
 # include <termios.h>
+#else
+# include <io.h>
+# include <windows.h>
 #endif
 
 #define TF_STATIC_API
@@ -54,9 +57,11 @@ typedef struct ltf_State {
     char      *lookup; /* terminfo sequence buffer (lookup callback) */
     size_t     looklen;
     int        lookup_ref; /* Lua lookup callback, LUA_NOREF = none */
+    int        rawfd;      /* raw() fd, -1 = not in raw mode */
 #ifndef _WIN32
-    int            rawfd; /* raw() fd, -1 = not in raw mode */
     struct termios oldtio;
+#else
+    DWORD oldmode;
 #endif
 } ltf_State;
 
@@ -93,33 +98,31 @@ static void ltf_freelookup(lua_State *L, ltf_State *st) {
 
 static int Ltf_new(lua_State *L) {
     ltf_State *st = (ltf_State *)lua_newuserdata(L, sizeof(ltf_State));
-    void      *aud;
     memset(st, 0, sizeof(*st));
     st->L = L;
     st->lookup_ref = LUA_NOREF;
-#ifndef _WIN32
     st->rawfd = -1;
-#endif
-    tf_init(&st->S, lua_getallocf(L, &aud), aud);
+    tf_init(&st->S, NULL, NULL);
     luaL_setmetatable(L, LTF_STATE_TYPE);
     return 1;
 }
 
-#ifndef _WIN32
 static void ltf_restore(ltf_State *st) {
     if (st->rawfd >= 0) {
+#ifdef _WIN32
+        intptr_t ih = _get_osfhandle(st->rawfd);
+        if (ih != -1) SetConsoleMode((HANDLE)ih, st->oldmode);
+#else
         tcsetattr(st->rawfd, TCSANOW, &st->oldtio);
+#endif
         st->rawfd = -1;
     }
 }
-#endif
 
 static int Ltf_delete(lua_State *L) {
     ltf_State *st = ltf_check(L, 1);
     ltf_freelookup(L, st);
-#ifndef _WIN32
     ltf_restore(st);
-#endif
     if (st->feed) st->S.allocf(st->S.alloc_ud, st->feed, st->feedlen, 0);
     if (st->lookup) st->S.allocf(st->S.alloc_ud, st->lookup, st->looklen, 0);
     st->feed = st->lookup = NULL;
@@ -157,9 +160,30 @@ static int Ltf_cooked(lua_State *L) {
     return lua_settop(L, 1), 1;
 }
 #else
-static int Ltf_raw(lua_State *L) { return lua_settop(L, 1), 1; }
+static int Ltf_raw(lua_State *L) {
+    ltf_State *st = ltf_check(L, 1);
+    int        fd = (int)luaL_optinteger(L, 2, 0);
+    intptr_t   ih = _get_osfhandle(fd);
+    HANDLE     h;
+    DWORD      mode;
+    if (ih == -1)
+        return luaL_error(L, "termfeed: _get_osfhandle(%d) failed", fd);
+    h = (HANDLE)ih;
+    if (!GetConsoleMode(h, &st->oldmode))
+        return luaL_error(L, "termfeed: GetConsoleMode(%d) failed", fd);
+    mode = st->oldmode;
+    mode &= (DWORD) ~(
+            ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
+    if (!SetConsoleMode(h, mode))
+        return luaL_error(L, "termfeed: SetConsoleMode(%d) failed", fd);
+    st->rawfd = fd;
+    return lua_settop(L, 1), 1;
+}
 
-static int Ltf_cooked(lua_State *L) { return lua_settop(L, 1), 1; }
+static int Ltf_cooked(lua_State *L) {
+    ltf_State *st = ltf_check(L, 1);
+    return ltf_restore(st), lua_settop(L, 1), 1;
+}
 #endif
 
 /* ---- attributes ---- */
@@ -235,11 +259,122 @@ static int Ltf_readkey(lua_State *L) {
     return ltf_pushresult(L, ltf_checkerror(L, r));
 }
 
+#ifdef _WIN32
+
+static const struct {
+    int    vk;
+    tf_Sym sym;
+} ltf_console_syms[] = {
+        {VK_UP, TF_SYM_UP},         {VK_DOWN, TF_SYM_DOWN},
+        {VK_RIGHT, TF_SYM_RIGHT},   {VK_LEFT, TF_SYM_LEFT},
+        {VK_HOME, TF_SYM_HOME},     {VK_END, TF_SYM_END},
+        {VK_INSERT, TF_SYM_INSERT}, {VK_DELETE, TF_SYM_DELETE},
+        {VK_PRIOR, TF_SYM_PAGEUP},  {VK_NEXT, TF_SYM_PAGEDOWN},
+};
+
+static const struct {
+    int vk;
+    int fn;
+} ltf_console_fns[] = {
+        {VK_F1, 1}, {VK_F2, 2},   {VK_F3, 3},   {VK_F4, 4},
+        {VK_F5, 5}, {VK_F6, 6},   {VK_F7, 7},   {VK_F8, 8},
+        {VK_F9, 9}, {VK_F10, 10}, {VK_F11, 11}, {VK_F12, 12},
+};
+
+static tf_Sym ltf_console_sym(int vk) {
+    int i, n = (int)(sizeof(ltf_console_syms) / sizeof(ltf_console_syms[0]));
+    for (i = 0; i < n; ++i)
+        if (ltf_console_syms[i].vk == vk) return ltf_console_syms[i].sym;
+    return TF_SYM_NONE;
+}
+
+static int ltf_console_fn(int vk) {
+    int i, n = (int)(sizeof(ltf_console_fns) / sizeof(ltf_console_fns[0]));
+    for (i = 0; i < n; ++i)
+        if (ltf_console_fns[i].vk == vk) return ltf_console_fns[i].fn;
+    return 0;
+}
+
+static int ltf_console_special(ltf_State *st, int vk) {
+    tf_Key *key = &st->key;
+    if (vk == VK_BACK) {
+        tf_Sym sym = TF_SYM_DELETE;
+        if (st->S.flags & TF_FLAG_DELBS) sym = TF_SYM_BACKSPACE;
+        return tfK_keysym(key, sym), 1;
+    }
+    if (vk == VK_TAB) return tfK_keysym(key, TF_SYM_TAB), 1;
+    if (vk == VK_RETURN) return tfK_keysym(key, TF_SYM_ENTER), 1;
+    if (vk == VK_ESCAPE) return tfK_keysym(key, TF_SYM_ESCAPE), 1;
+    if (vk == VK_SPACE) {
+        if (st->S.flags & TF_FLAG_SPACESYMBOL)
+            tfK_keysym(key, TF_SYM_SPACE);
+        else
+            tfK_codepoint(key, ' ');
+        return 1;
+    }
+    return 0;
+}
+
+static int ltf_console_key(ltf_State *st, const KEY_EVENT_RECORD *ke) {
+    DWORD   stt = ke->dwControlKeyState;
+    DWORD   am = (DWORD)LEFT_ALT_PRESSED | (DWORD)RIGHT_ALT_PRESSED;
+    DWORD   cm = (DWORD)LEFT_CTRL_PRESSED | (DWORD)RIGHT_CTRL_PRESSED;
+    int     alt = (stt & am) != 0;
+    int     ctl = (stt & cm) != 0;
+    WCHAR   wc = ke->uChar.UnicodeChar;
+    tf_Sym  sym = ltf_console_sym(ke->wVirtualKeyCode);
+    int     fn = ltf_console_fn(ke->wVirtualKeyCode);
+    tf_Key *key = &st->key;
+    memset(key, 0, sizeof(*key));
+    key->event = TF_EVENT_PRESS;
+    if (alt) key->modifiers |= TF_MOD_ALT;
+    if (ctl) key->modifiers |= TF_MOD_CTRL;
+    if (sym != TF_SYM_NONE) return tfK_keysym(key, sym), 1;
+    if (fn) return tfK_function(key, fn), 1;
+    if (ltf_console_special(st, ke->wVirtualKeyCode)) return 1;
+    if (wc) {
+        int cp = (int)wc;
+        if (ctl) {
+            if (cp >= 'A' && cp <= 'Z')
+                cp = cp + 0x20;
+            else if (cp >= 1 && cp <= 26)
+                cp = cp + 'a' - 1;
+        }
+        return tfK_codepoint(key, cp), 1;
+    }
+    return 0;
+}
+
+static int ltf_console_wait(ltf_State *st, int fd, int timeout_ms) {
+    intptr_t     ih = _get_osfhandle(fd);
+    HANDLE       h;
+    DWORD        ms = timeout_ms < 0 ? INFINITE : (DWORD)timeout_ms;
+    DWORD        mode, n = 0, wr;
+    INPUT_RECORD rec;
+    if (ih == -1) return TF_ERRPARAM;
+    if (h = (HANDLE)ih, !GetConsoleMode(h, &mode)) return TF_ERRPARAM;
+    for (;;) {
+        wr = WaitForSingleObject(h, ms);
+        if (wr == (DWORD)WAIT_TIMEOUT) return TF_AGAIN;
+        if (wr != (DWORD)WAIT_OBJECT_0) return TF_ERRPARAM;
+        if (!ReadConsoleInputW(h, &rec, 1, &n) || n == 0u) return TF_ERRPARAM;
+        if (rec.EventType != (WORD)KEY_EVENT || !rec.Event.KeyEvent.bKeyDown)
+            continue;
+        if (ltf_console_key(st, &rec.Event.KeyEvent)) return TF_OK;
+    }
+}
+
+#endif
+
 static int Ltf_waitkey(lua_State *L) {
     ltf_State *st = ltf_check(L, 1);
     int        fd = (int)luaL_optinteger(L, 2, 0);
     int        timeout = (int)luaL_optinteger(L, 3, -1);
-    int        r = tf_waitkey(&st->S, fd, timeout, &st->key);
+#ifndef _WIN32
+    int r = tf_waitkey(&st->S, fd, timeout, &st->key);
+#else
+    int r = ltf_console_wait(st, fd, timeout);
+#endif
     return ltf_pushresult(L, ltf_checkerror(L, r));
 }
 
@@ -334,8 +469,7 @@ static int Ltf_data(lua_State *L) {
         int args[16];
         int nargs, cmd, i;
         nargs = tf_csi(&st->S, args, 16, &cmd);
-        if (nargs < 0)
-            return luaL_error(L, "termfeed: bad CSI sequence");
+        if (nargs < 0) return luaL_error(L, "termfeed: bad CSI sequence");
         lua_createtable(L, nargs, 3);
         if ((cmd >> 16))
             lua_pushinteger(L, cmd >> 16), lua_setfield(L, -2, "intermediate");
@@ -461,9 +595,13 @@ LUALIB_API int luaopen_termfeed(lua_State *L) {
 #undef LTF_FMT
     lua_pushinteger(L, TF_FMT_WRAPBRACKET | TF_FMT_ALTISMETA);
     lua_setfield(L, -2, "FORMAT_VIM");
-    lua_pushcfunction(L, Ltf_name);
-    lua_setfield(L, -2, "name");
-    lua_pushcfunction(L, Ltf_sym);
-    lua_setfield(L, -2, "sym");
+    lua_pushcfunction(L, Ltf_name), lua_setfield(L, -2, "name");
+    lua_pushcfunction(L, Ltf_sym), lua_setfield(L, -2, "sym");
+#ifndef WIN32
+    lua_pushliteral(L, "POSIX");
+#else
+    lua_pushliteral(L, "Windows");
+#endif
+    lua_setfield(L, -2, "platform");
     return 1;
 }
