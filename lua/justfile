@@ -41,6 +41,8 @@ build-jit mod:
     mkdir -p luajit
     {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} -DNDEBUG -O2 {{ LDF }} -o luajit/{{ mod }}.so {{ mod }}.c
 
+build-both mod: (build mod) (build-jit mod)
+
 build-utf8:
     {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA_INC }} -DNDEBUG -O2 {{ LDF }} -o lua-utf8.so lutf8lib.c
 
@@ -57,13 +59,13 @@ run t *args='':
     lua tests/{{ t }}.lua {{ args }}
     luajit tests/{{ t }}.lua {{ args }}
 
-pt *args='': (build "piecetab") (run "piecetab_test" args)
-cg *args='': (build "cellgrid") (run "cellgrid_test" args)
-tf *args='': (build "termfeed") (run "termfeed_test" args)
-json *args='': (build "json") (run "json_test" args)
-utf8: build-utf8
-lsp *args='': (build "piecetab") (build "json") build-utf8 (run "lsp_test" args)
-sp *args='': (build "spantree") (run "spantree_test" args)
+pt *args='': (build-both "piecetab") (run "piecetab_test" args)
+cg *args='': (build-both "cellgrid") (run "cellgrid_test" args)
+tf *args='': (build-both "termfeed") (run "termfeed_test" args)
+json *args='': (build-both "json") (run "json_test" args)
+utf8: build-utf8 build-utf8-jit
+lsp *args='': (build-both "piecetab") (build-both "json") utf8 (run "lsp_test" args)
+sp *args='': (build-both "spantree") (run "spantree_test" args)
 # tree-sitter is optional; add it with `just lua/build-ts` for highlighting.
 # Build the PUC Lua modules needed to run the editor demo (no tests).
 deps: deps-lua deps-jit

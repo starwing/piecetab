@@ -57,7 +57,7 @@ static int lua53_rawgetp(lua_State *L, int idx, const void *p) {
 #endif /* LUA_VERSION_NUM >= 503 */
 
 #define LPT_VERSION    "0.1.0"
-#define LPT_STATE_KEY  ((void *)0x91ECE7AB)
+#define LPT_STATE_KEY  ((const void *)(ptrdiff_t)0x91ECE7AB)
 #define LPT_STATE_TYPE "piecetab.State"
 
 #define lpt_checkmem(L, p) \
