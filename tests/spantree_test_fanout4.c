@@ -3294,6 +3294,56 @@ TEST(idref_differ) {
     sp_close(S);
 }
 
+/* freelist reuse through the public construction helper: leafV/treeV
+ * return a node to the pool, and the next leafV must pop it instead of
+ * allocating a fresh page. */
+TEST(pool_reuse_leaf) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Node  *n1, *n2;
+    sp_Tree  *e;
+    n1 = leafV(1, 1, 0, 0);
+    e = treeV(0, n1);
+    n2 = leafV(2, 1, 0, 0);
+    sp_freetree(e);
+    e = treeV(0, n2);
+    asserteq(sp_bytes(e), 1);
+    assertok(sp_checktree(e));
+    sp_freetree(e);
+    asserteq(S->nodes.live_obj, 0);
+    sp_close(S);
+}
+
+/* NDEBUG-only defensive path: an arbiter returning SP_NONE is caught by
+ * assert in debug builds, but in coverage builds the fallback to id 0
+ * must still keep the tree valid. */
+SP_STATIC sp_Id arb_sentinel(void *ud, sp_Id id, sp_Id old, sp_Mask *mask) {
+    (void)ud, (void)id, (void)old;
+    if (mask) *mask = 0;
+    return SP_NONE;
+}
+
+TEST(fill_arb_sentinel) {
+#ifdef NDEBUG
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t = sp_newtree(S);
+    sp_Cursor C;
+    sp_seek(&C, t, 0);
+    sp_append(&C, 4);
+    sp_seek(&C, t, 0);
+    sp_fill(&C, 1, 4);
+    sp_setarbiter(t, arb_sentinel, NULL);
+    sp_seek(&C, t, 1);
+    asserteq(sp_fill(&C, 7, 1), SP_OK);
+    assertok(sp_checktree(t));
+    assertok(sp_checkcursor(&C, 2));
+    sp_assertstream(S, t, "[1:1][0:1][1:2]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    sp_close(S);
+#endif
+}
+
 /* SP_NONE is the end-of-iteration sentinel; 0 remains a valid id. */
 TEST(sp_none) {
     sp_State *S = sp_open(NULL, NULL);
