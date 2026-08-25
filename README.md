@@ -509,6 +509,24 @@ treesitter binding; grammars are fetched and compiled by
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for coding conventions.
 
+## Fuzzing
+
+The `fuzz/` tree contains C89 fuzz harnesses for `piecetab.h`, `spantree.h`,
+and `linecache.h`:
+
+```sh
+just fuzz/pt   # piecetab fuzz stress (default seed 1)
+just fuzz/sp   # spantree fuzz stress
+just fuzz/lc   # linecache fuzz stress
+just fuzz/pt-dbg  # piecetab fuzz under ASan/UBSan
+just fuzz/sp-dbg  # spantree fuzz under ASan/UBSan
+just fuzz/lc-dbg  # linecache fuzz under ASan/UBSan
+just fuzz/replay pt /tmp/pt_oplog.txt  # replay a crash log
+```
+
+A crash writes `/tmp/<lib>_oplog.txt` before each op, so replaying that file
+reproduces the exact failing sequence.
+
 ## Benchmarking
 
 The `bench/` tree contains a C89 benchmark harness for the piecetab library

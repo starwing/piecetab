@@ -29,7 +29,7 @@ bench/
   bench_pt.c        # piecetab API 维度 cases
   bench_sp.c        # spantree API 维度 cases
   bench_data.h      # piecetab 确定性 corpus 生成器（结构基数驱动）
-  justfile          # recipes: all/smoke/pt-sweep/sp-sweep/pt-plot/sp-plot/clean
+  justfile          # import ../build.just; recipes: all/smoke/sweep/confirm/plot + pt/sp/lc variants
   scripts/
     bench_sweep.sh    # piecetab 编译矩阵：FANOUT 循环 → 运行 → 收集 JSON
     bench_sweep_sp.sh # spantree 编译矩阵：SP_FANOUT 循环 → 运行 → 收集 JSON
@@ -268,7 +268,7 @@ done
 
 1. `just bench/all` 能编译并运行默认 FANOUT 的 piecetab 全部 API cases。
 2. `just bench/sweep` 能产出 `bench/results/pt_fanout_4.json` … `bench/results/pt_fanout_64.json`。
-3. `python3 bench/scripts/plot_bench.py bench/results/pt_fanout_*.json --out bench/reports/` 能生成曲线图。
+3. `just bench/plot` 能生成曲线图（内部走 `bench/scripts/plot_bench.py`）。
 4. 报告 `notes/reports/bench_tuning_pt.md` 包含：
    - 各 API 维度曲线；
    - 每个维度最优 FANOUT；

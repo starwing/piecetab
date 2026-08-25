@@ -22,12 +22,16 @@ just clean       # remove generated files
 just lua/pt  # piecetab binding tests (also lua/cg, lua/tf, lua/ed)
 just lua/ts  # treesitter binding tests
 just lua/ts-cov  # treesitter binding coverage
+
+# Fuzz tests — just fuzz/<recipe> runs fuzz/justfile
+just fuzz/pt  # piecetab fuzz stress (also fuzz/sp, fuzz/lc)
+just fuzz/pt-dbg  # piecetab fuzz under ASan/UBSan
+just fuzz/replay pt /tmp/pt_oplog.txt  # replay a crash log
 ```
 
-Run a subset by prefix: `just pt insert` runs all tests starting with
-`insert`; `just pt @insert` runs only the first match. Never invoke `gcc`
-or test binaries directly — always go through `just` so flags stay
-consistent.
+All compile flags and commands are centralized in `build.just`; submodule
+justfiles only call its private recipes. Never invoke `gcc` or test binaries
+directly — always go through `just` so flags stay consistent.
 
 All C headers maintain **100% line coverage** and ~90% branch coverage.
 Changes must not regress coverage; add tests alongside code changes.

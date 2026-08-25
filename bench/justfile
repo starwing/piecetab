@@ -1,123 +1,106 @@
 # piecetab benchmark recipes
 # Run from repo root: just bench/<recipe> (just runs this file from bench/)
 
-ROOT := ".."
+import '../build.just'
 
 default: all
 
-all:
-    @if [ -x {{ ROOT }}/.venv/bin/python ]; then \
-        {{ ROOT }}/.venv/bin/python scripts/bench_summary.py; \
-    else \
-        python3 scripts/bench_summary.py; \
-    fi
+# print the current benchmark summary table
+all: (py "scripts/bench_summary.py")
 
-smoke:
-    mkdir -p build/pt results/pt
-    gcc -Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic \
-        -std=c89 -Wno-variadic-macros -O2 -DNDEBUG -I{{ ROOT }} -I. \
-        -o build/pt/pt_bench bench_pt.c
+# quick PT smoke run
+smoke: (c-build "bench_pt.c" "build/pt/pt_bench" "-I.. -I.")
+    mkdir -p results/pt
     ./build/pt/pt_bench --rounds 2 --iters 100 --json results/pt/pt_smoke.json
 
-sp *args='':
-    mkdir -p build/sp results/sp
-    gcc -Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic \
-        -std=c89 -Wno-variadic-macros -O2 -DNDEBUG \
-        -DSP_FANOUT=34 -DSP_MAX_LEVEL=16 -I{{ ROOT }} -I. \
-        -o build/sp/sp_bench bench_sp.c
+# run default SP benchmark
+sp *args='': (c-build "bench_sp.c" "build/sp/sp_bench" "-I.. -I." "-DSP_FANOUT=34 -DSP_MAX_LEVEL=16")
+    mkdir -p results/sp
     ./build/sp/sp_bench {{ args }}
 
-sp-smoke:
-    mkdir -p build/sp results/sp
-    gcc -Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic \
-        -std=c89 -Wno-variadic-macros -O2 -DNDEBUG \
-        -DSP_FANOUT=34 -DSP_MAX_LEVEL=16 -I{{ ROOT }} -I. \
-        -o build/sp/sp_bench bench_sp.c
+# quick SP smoke run
+sp-smoke: (c-build "bench_sp.c" "build/sp/sp_bench" "-I.. -I." "-DSP_FANOUT=34 -DSP_MAX_LEVEL=16")
+    mkdir -p results/sp
     ./build/sp/sp_bench --rounds 2 --iters 100 --json results/sp/sp_smoke.json
 
+# SP_FANOUT sweep
 sp-sweep:
     bash scripts/bench_sweep_sp.sh
 
+# SP confirmation sweep
 sp-confirm:
     bash scripts/bench_confirm_sp.sh
 
-sp-analyze:
-    python3 scripts/analyze_sp_confirm.py
+# analyze SP confirmation results
+sp-analyze: (py "scripts/analyze_sp_confirm.py")
 
+# SP sparse confirmation sweep
 sp-sparse-confirm:
     bash scripts/bench_sparse_confirm.sh
 
-sp-sparse-analyze:
-    python3 scripts/analyze_sparse_confirm.py
+# analyze SP sparse confirmation results
+sp-sparse-analyze: (py "scripts/analyze_sparse_confirm.py")
 
-sp-plot:
-    @if [ -x {{ ROOT }}/.venv/bin/python ]; then \
-        {{ ROOT }}/.venv/bin/python scripts/plot_bench.py \
-            results/sp/sp_fanout_*.json --out reports/sp; \
-    else \
-        python3 scripts/plot_bench.py \
-            results/sp/sp_fanout_*.json --out reports/sp; \
-    fi
-lc *args='':
-    mkdir -p build/lc results/lc
-    gcc -Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic \
-        -std=c89 -Wno-variadic-macros -O2 -DNDEBUG \
-        -DLC_FANOUT=16 -DLC_LEAF_FANOUT=34 -DLC_MAX_LEVEL=21 -I{{ ROOT }} -I. \
-        -o build/lc/lc_bench bench_lc.c
+# plot SP sweep results
+sp-plot: (py "scripts/plot_bench.py" "results/sp/sp_fanout_*.json" "--out" "reports/sp")
+
+# run default LC benchmark
+lc *args='': (c-build "bench_lc.c" "build/lc/lc_bench" "-I.. -I." "-DLC_FANOUT=16 -DLC_LEAF_FANOUT=34 -DLC_MAX_LEVEL=21")
+    mkdir -p results/lc
     ./build/lc/lc_bench {{ args }}
 
-lc-smoke:
-    mkdir -p build/lc results/lc
-    gcc -Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic \
-        -std=c89 -Wno-variadic-macros -O2 -DNDEBUG \
-        -DLC_FANOUT=16 -DLC_LEAF_FANOUT=34 -DLC_MAX_LEVEL=21 -I{{ ROOT }} -I. \
-        -o build/lc/lc_bench bench_lc.c
+# quick LC smoke run
+lc-smoke: (c-build "bench_lc.c" "build/lc/lc_bench" "-I.. -I." "-DLC_FANOUT=16 -DLC_LEAF_FANOUT=34 -DLC_MAX_LEVEL=21")
+    mkdir -p results/lc
     ./build/lc/lc_bench --rounds 2 --iters 100 --json results/lc/lc_smoke.json
 
+# LC probe sweep
 lc-probe:
     bash scripts/bench_lc_probe.sh
 
-lc-probe-plot:
-    @if [ -x {{ ROOT }}/.venv/bin/python ]; then \
-        {{ ROOT }}/.venv/bin/python scripts/plot_lc_probe3d.py; \
-    else \
-        python3 scripts/plot_lc_probe3d.py; \
-    fi
+# plot LC probe results
+lc-probe-plot: (py "scripts/plot_lc_probe3d.py")
 
+# LC sweep (fanout or leaf)
 lc-sweep *args='':
     bash scripts/bench_lc_sweep.sh {{ args }}
 
-lc-analyze:
-lc-sweep-analyze *args='':
-    python3 scripts/analyze_lc_sweep.py {{ args }}
+# analyze LC sweep results
+lc-analyze *args='': (lc-sweep-analyze args)
+
+# analyze LC sweep results (low-level alias)
+lc-sweep-analyze *args='': (py "scripts/analyze_lc_sweep.py" args)
+
+# LC confirmation sweep
 lc-confirm:
     bash scripts/bench_lc_confirm.sh
 
-lc-confirm-analyze:
-    python3 scripts/analyze_lc_confirm.py
+# analyze LC confirmation results
+lc-confirm-analyze: (py "scripts/analyze_lc_confirm.py")
 
-lc-plot:
-    @if [ -x {{ ROOT }}/.venv/bin/python ]; then \
-        {{ ROOT }}/.venv/bin/python scripts/plot_bench.py \
-            results/lc/probe/lc_f*_lf*.json --out reports/lc; \
-    else \
-        python3 scripts/plot_bench.py \
-            results/lc/probe/lc_f*_lf*.json --out reports/lc; \
-    fi
+# plot LC probe results
+lc-plot: (py "scripts/plot_bench.py" "results/lc/probe/lc_f*_lf*.json" "--out" "reports/lc")
 
+# PT_FANOUT sweep
 pt-sweep:
     bash scripts/bench_sweep.sh
 
+# PT confirmation sweep
 pt-confirm:
     bash scripts/bench_confirm.sh
-pt-plot:
-    @if [ -x {{ ROOT }}/.venv/bin/python ]; then \
-        {{ ROOT }}/.venv/bin/python scripts/plot_bench.py \
-            results/pt/pt_fanout_*.json --out reports/pt; \
-    else \
-        python3 scripts/plot_bench.py \
-            results/pt/pt_fanout_*.json --out reports/pt; \
-    fi
 
+# plot PT sweep results
+pt-plot: (py "scripts/plot_bench.py" "results/pt/pt_fanout_*.json" "--out" "reports/pt")
+
+# full PT_FANOUT sweep (README-compatible aggregate)
+sweep: pt-sweep
+
+# focused multi-seed confirmation sweep (README-compatible aggregate)
+confirm: pt-confirm
+
+# plot JSON results (README-compatible aggregate)
+plot: pt-plot
+
+# remove benchmark build/results/reports
 clean:
     rm -rf build results reports

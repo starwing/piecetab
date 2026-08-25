@@ -177,7 +177,7 @@
 
 ## 4. 验证策略
 
-以下场景须有测试覆盖，入 `tests/lc_test4.c` (或 `tests/lc_test8.c` 若测试大型扇出)，以 `just dbg` (或 `just dbg_lc8`) 运行：
+以下场景须有测试覆盖，入 `tests/linecache_test_fanout4.c` (或 `tests/linecache_test_fanout8.c` 若测试大型扇出)，以 `just lc4` (或 `just lc8`) 运行：
 
 1. **深谷悬切** `[1..1000] -> [1, 1000]`：4 层树，极左极右各留 1 项。验 Phase 2 自 l 层逐级下放资源，终叶满足最少填充，树结构合法。
 2. **叶 shift-many-to-one**：左叶 2 项 + 右叶 3 项 ≤ LEAF_FANOUT。验 foldleaf（于 mergeleaf 回退）正确 shift 合并。若合并后仍不足半，验 rebalance 向上修。

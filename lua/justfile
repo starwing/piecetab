@@ -4,157 +4,106 @@
 import '../build.just'
 
 INCS := "-I. -I.."
-LUAFLAGS := "-Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -std=gnu99 -Wno-variadic-macros -Wno-array-bounds"
-LDF := `if [ "$(uname)" = "Darwin" ]; then echo "-bundle -undefined dynamic_lookup"; else echo "-shared -fPIC"; fi`
-LUA_INC := `
-    if [ "$(uname)" = "Darwin" ]; then
-        for d in /opt/homebrew/include/lua5.5 /opt/homebrew/include/lua5.4 \
-            "$HOME/.lua/include" "$HOME/.lua/include/lua5.5" \
-            "$HOME/.lua/include/lua5.4" ../.lua/include .lua/include \
-            /usr/local/include /usr/local/include/lua5.5 \
-            /usr/local/include/lua5.4 /usr/include/lua5.4; do
-            [ -d "$d" ] && { echo "-I$d"; exit 0; }
-        done
-    else
-        for d in ../.lua/include .lua/include "$HOME/.lua/include" \
-            "$HOME/.lua/include/lua5.5" "$HOME/.lua/include/lua5.4" \
-            /usr/local/include /usr/local/include/lua5.5 \
-            /usr/local/include/lua5.4 /usr/include/lua5.4; do
-            [ -d "$d" ] && { echo "-I$d"; exit 0; }
-        done
-    fi
-    exit 0
-`
-LUAJIT_INC := `
-    for d in ../.lua/include/luajit-2.1 .lua/include/luajit-2.1 \
-        /opt/homebrew/include/luajit-2.1 /usr/include/luajit-2.1 \
-        /usr/local/include/luajit-2.1; do
-        [ -d "$d" ] && { echo "-I$d"; exit 0; }
-    done
-    exit 0
-`
 
-build mod:
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA_INC }} -DNDEBUG -O2 {{ LDF }} -o {{ mod }}.so {{ mod }}.c
-
-build-jit mod:
-    mkdir -p luajit
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} -DNDEBUG -O2 {{ LDF }} -o luajit/{{ mod }}.so {{ mod }}.c
-
+# build a PUC Lua module
+build mod: (lua-build mod + ".c" INCS LUA_INC mod + ".so" "-DNDEBUG -O2")
+# build a LuaJIT Lua module
+build-jit mod: (lua-build mod + ".c" INCS LUAJIT_INC "luajit/" + mod + ".so" "-DNDEBUG -O2")
+# build both PUC and LuaJIT modules
 build-both mod: (build mod) (build-jit mod)
+# build vendored lua-utf8 for PUC Lua
+build-utf8: (lua-build "lutf8lib.c" INCS LUA_INC "lua-utf8.so" "-DNDEBUG -O2")
+# build vendored lua-utf8 for LuaJIT
+build-utf8-jit: (lua-build "lutf8lib.c" INCS LUAJIT_INC "luajit/lua-utf8.so" "-DNDEBUG -O2")
+# debug + ASan build of a binding module; output stays {{mod}}.so so Lua can require it
+dbg mod: (lua-build mod + ".c" INCS LUA_INC mod + ".so" "-g -O0 -fno-omit-frame-pointer -fsanitize=address,undefined")
 
-build-utf8:
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA_INC }} -DNDEBUG -O2 {{ LDF }} -o lua-utf8.so lutf8lib.c
-
-build-utf8-jit:
-    mkdir -p luajit
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} -DNDEBUG -O2 {{ LDF }} -o luajit/lua-utf8.so lutf8lib.c
-
-# debug + ASAN build of a binding module: `just lua/dbg spantree` then
-# run with `lua -e 'package.cpath="./?.so;./spantree_asan.so;"..package.cpath'`
-dbg mod:
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA_INC }} -g -O0 -fno-omit-frame-pointer {{ LDF }} -o {{ mod }}.so {{ mod }}.c
-
+# run a Lua test file under both PUC Lua and LuaJIT
 run t *args='':
     lua tests/{{ t }}.lua {{ args }}
     luajit tests/{{ t }}.lua {{ args }}
 
+# piecetab binding tests
 pt *args='': (build-both "piecetab") (run "piecetab_test" args)
+# cellgrid binding tests
 cg *args='': (build-both "cellgrid") (run "cellgrid_test" args)
+# termfeed binding tests
 tf *args='': (build-both "termfeed") (run "termfeed_test" args)
+# json binding tests
 json *args='': (build-both "json") (run "json_test" args)
+# build lua-utf8 for both PUC and LuaJIT
 utf8: build-utf8 build-utf8-jit
+# lsp binding tests
 lsp *args='': (build-both "piecetab") (build-both "json") utf8 (run "lsp_test" args)
+# spantree binding tests
 sp *args='': (build-both "spantree") (run "spantree_test" args)
-# tree-sitter is optional; add it with `just lua/build-ts` for highlighting.
-# Build the PUC Lua modules needed to run the editor demo (no tests).
+
+# build the PUC Lua modules needed for the editor demo (tree-sitter optional)
 deps: deps-lua deps-jit
+# build PUC Lua modules for the editor demo
 deps-lua: (build "piecetab") (build "cellgrid") (build "termfeed") (build "json") (build "spantree") build-utf8
+# build LuaJIT modules for the editor demo
 deps-jit: (build-jit "piecetab") (build-jit "cellgrid") (build-jit "termfeed") (build-jit "json") (build-jit "spantree") build-utf8-jit
 
-# editor demo builds vendored lua-utf8 (lutf8lib.c); json.so is required
-# by lsp.lua, which editor.lua loads optionally (pcall require)
+# editor demo unit tests (builds required C modules)
 ed *args='': deps-lua
     lua tests/editor_test.lua {{ args }}
-# display integration tests: real terminal via tmux helper
-# (needs tmux in PATH; json.so is required by lsp.lua in the session)
+# editor display tests via tmux (builds required C modules)
 ed-tmux *args='': deps-lua
     lua tests/editor_tmux_test.lua {{ args }}
 
-# LuaLS formatting is LSP-only (no CLI flag); this recipe uses stylua as
-# the standalone CLI formatter.
-fmt:
-    @command -v stylua >/dev/null || { echo "stylua not installed: brew install stylua"; exit 1; }
-    stylua ../editor.lua .
-
-TS_INC := "-I/opt/homebrew/include"
-TS_LIB := "-L/opt/homebrew/lib -ltree-sitter"
-
+# fetch tree-sitter grammars (optional)
 ts-grammars *langs='c lua':
-    ../misc/fetch_grammars.sh {{ langs }}
+    {{ ROOT }}/misc/fetch_grammars.sh {{ langs }}
 
-build-ts: ts-grammars
-    mkdir -p luajit
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA_INC }} {{ TS_INC }} -DNDEBUG -O2 {{ LDF }} -o treesitter.so treesitter.c {{ TS_LIB }}
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} {{ TS_INC }} -DNDEBUG -O2 {{ LDF }} -o luajit/treesitter.so treesitter.c {{ TS_LIB }}
+# build tree-sitter binding for PUC and LuaJIT
+build-ts: ts-grammars (lua-build "treesitter.c" INCS LUA_INC "treesitter.so" "-DNDEBUG -O2 " + TS_INC TS_LIB) (lua-build "treesitter.c" INCS LUAJIT_INC "luajit/treesitter.so" "-DNDEBUG -O2 " + TS_INC TS_LIB)
 
+# treesitter binding tests
 ts *args='': build-ts (run "treesitter_test" args)
 
 # run every test suite (needs lua-utf8 rock, tmux, tree-sitter grammars)
 test: pt cg tf json lsp ed ed-tmux ts sp
 
-cov mod t:
-    rm -f *.gcda luajit/*.gcda
-    mkdir -p luajit
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o {{ mod }}.so {{ mod }}.c
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o luajit/{{ mod }}.so {{ mod }}.c
-    lua tests/{{ t }}.lua && luajit tests/{{ t }}.lua
-    lcov --capture --directory . --base-directory . --rc branch_coverage=1 --output-file lua_coverage.info --ignore-errors mismatch
-    lcov --extract lua_coverage.info '*/{{ mod }}.c' --rc branch_coverage=1 --output-file lcov.info
-    @echo ""
-    @echo "=== {{ mod }}.c coverage ==="
-    lcov --list --rc branch_coverage=1 lcov.info
+# piecetab binding coverage
+pt-cov: (lua-cov-run "piecetab" "piecetab_test" INCS)
+# cellgrid binding coverage
+cg-cov: (lua-cov-run "cellgrid" "cellgrid_test" INCS)
+# termfeed binding coverage
+tf-cov: (lua-cov-run "termfeed" "termfeed_test" INCS)
+# spantree binding coverage
+sp-cov: (lua-cov-run "spantree" "spantree_test" INCS)
+# json binding coverage
+json-cov: (lua-cov-run "json" "json_test" INCS)
+# treesitter binding coverage
+ts-cov: (lua-cov-run "treesitter" "treesitter_test" INCS + " " + TS_INC TS_LIB)
 
-pt-cov: (cov "piecetab" "piecetab_test")
-cg-cov: (cov "cellgrid" "cellgrid_test")
-tf-cov: (cov "termfeed" "termfeed_test")
-sp-cov: (cov "spantree" "spantree_test")
-
-json-cov:
-    rm -f *.gcda luajit/*.gcda
-    mkdir -p luajit
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o json.so json.c
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o luajit/json.so json.c
-    lua tests/json_test.lua && luajit tests/json_test.lua
-    lcov --capture --directory . --base-directory . --rc branch_coverage=1 --output-file lua_coverage.info --ignore-errors mismatch,inconsistent,unsupported
-    lcov --extract lua_coverage.info '*/json.c' --rc branch_coverage=1 --output-file lcov.info --ignore-errors mismatch,inconsistent,unsupported
-    lcov --remove lcov.info '*/yyjson/yyjson.c' --rc branch_coverage=1 --output-file lcov.info --ignore-errors mismatch,inconsistent,unsupported
-    @echo ""
-    @echo "=== json.c coverage ==="
-    lcov --list --rc branch_coverage=1 lcov.info
-
-ts-cov:
-    rm -f *.gcda luajit/*.gcda
-    mkdir -p luajit
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUA_INC }} {{ TS_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o treesitter.so treesitter.c {{ TS_LIB }}
-    {{ CC }} {{ LUAFLAGS }} {{ INCS }} {{ LUAJIT_INC }} {{ TS_INC }} --coverage -g -O0 -bundle -undefined dynamic_lookup -o luajit/treesitter.so treesitter.c {{ TS_LIB }}
-    lua tests/treesitter_test.lua && luajit tests/treesitter_test.lua
-    lcov --capture --directory . --base-directory . --rc branch_coverage=1 --output-file lua_coverage.info --ignore-errors mismatch
-    lcov --extract lua_coverage.info '*/treesitter.c' --rc branch_coverage=1 --output-file lcov.info
-    @echo ""
-    @echo "=== treesitter.c coverage ==="
-    lcov --list --rc branch_coverage=1 lcov.info
-
+[private]
 lines mod:
     @awk '/^DA:/ && /,0$/ {gsub(/DA:|,0/,""); print $0}' lcov.info \
     | sort -n | while read ln; do echo "L$ln: $(sed -n ${ln}p {{ mod }}.c)"; done
 
+# piecetab uncovered lines
 pt-lines: (lines "piecetab")
+# cellgrid uncovered lines
 cg-lines: (lines "cellgrid")
+# termfeed uncovered lines
 tf-lines: (lines "termfeed")
+# treesitter uncovered lines
 ts-lines: (lines "treesitter")
+# spantree uncovered lines
 sp-lines: (lines "spantree")
+# spantree uncovered branches
 sp-unbranched: (cov-unbranched "spantree")
 
+# remove Lua coverage artifacts
+clean-gcda:
+    -just rm-gcda "."
+    -just rm-gcda "luajit"
+
+# remove generated Lua modules and coverage artifacts
 clean: clean-gcda
-    rm -f *.so luajit/*.so *.gcda luajit/*.gcda lua_coverage.info lcov.info
+    -rm -fr *.dSYM grammar luajit
+    -rm -f *.so luajit/*.so lua_coverage.info lcov.info
+    -rm -f *.so *.dll *.exp *.lib
+    -rm -f luajit/*.so luajit/*.dll luajit/*.exp luajit/*.lib

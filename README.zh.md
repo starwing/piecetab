@@ -466,6 +466,22 @@ just lua/ts-lines  # treesitter 未覆盖行
 
 编码规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
+## Fuzz 测试
+
+`fuzz/` 目录包含针对 `piecetab.h`、`spantree.h`、`linecache.h` 的 C89 fuzz 测试：
+
+```sh
+just fuzz/pt   # piecetab fuzz 压力（默认 seed 1）
+just fuzz/sp   # spantree fuzz 压力
+just fuzz/lc   # linecache fuzz 压力
+just fuzz/pt-dbg  # piecetab fuzz（ASan/UBSan）
+just fuzz/sp-dbg  # spantree fuzz（ASan/UBSan）
+just fuzz/lc-dbg  # linecache fuzz（ASan/UBSan）
+just fuzz/replay pt /tmp/pt_oplog.txt  # 重放崩溃日志
+```
+
+每次 op 前会先写 `/tmp/<lib>_oplog.txt`，崩溃后重放该文件即可复现失败序列。
+
 ## 基准测试
 
 `bench/` 目录包含 piecetab 库族的 C89 基准测试框架。它以 public API 为维度、

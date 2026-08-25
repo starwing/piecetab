@@ -39,10 +39,10 @@
 ## Fuzz 测试
 
 - 源文件 `fuzz/<lib>_fuzz.c`（pt/sp/lc，fanout 4），共享脚手架 `fuzz/fz.h`（种子 RNG、op 日志 io、op 表宏）
-- 运行：`just <lib>-fuzz [seed]`（如 `just pt-fuzz 1`）；崩溃重放：`just fuzz-replay <lib> <path>`；消毒版 `just dfz-<lib> [seed]`（ASan/UBSan）
+- 运行：`just fuzz/<lib> [seed]`（如 `just fuzz/pt 1`）；崩溃重放：`just fuzz/replay <lib> <path>`；消毒版 `just fuzz/<lib>-dbg [seed]`（ASan/UBSan）
 - **op 表统一为 X-macro 权重表**：每 fuzz 定义 `FZ_KIND(X)`（每 op 一行 `X(NAME, weight)`）后展开 `FZ_TABLE()`，得到 enum、名字表、权重表和 `fz_opidx`/`fz_opname`；`o->op = rnd()%100` 按累计权重映射到 op——**权重和必须保持 100**（超 100 的尾部行永不命中），调权重只改数字不重排；加新 op = 表加一行 + `runop` 加 case
-- 崩溃契约：每 op 先写 `/tmp/<lib>_oplog.txt` 再执行，崩溃即用 `just fuzz-replay <lib> /tmp/<lib>_oplog.txt` 重放定位
-- 查树频率：游标检查每 op（O(1)），树检查每 `FZ_CHECK` op（O(树大小)，默认 256）；`-DFZ_CHECK=1` 最强扫描（justfile 改 CFLAGS 或直接 gcc -D）
+- 崩溃契约：每 op 先写 `/tmp/<lib>_oplog.txt` 再执行，崩溃即用 `just fuzz/replay <lib> /tmp/<lib>_oplog.txt` 重放定位
+- 查树频率：游标检查每 op（O(1)），树检查每 `FZ_CHECK` op（O(树大小)，默认 256）；`-DFZ_CHECK=1` 最强扫描（build.just 改 CFLAGS 或直接 gcc -D）
 - **禁止在 fuzz 里手写弱化 check 副本**：直接用 tests 标准 `pt_checktree`/`lc_checktree`/`sp_checktree`。教训：标准 checktree 曾漏叶容器内合并检查（pt 的 ADJACENT、sp 的 SEGMERGE 相邻段检查），已补进 tests 标准版（tests/pt_tests.h、tests/sp_tests.h）——fuzz 与单测共用一份，两边同步受益
 
 ## Lua 测试（luaunit）
@@ -108,7 +108,7 @@
 
 - **严禁 LCOV_EXCL** — 不得用 `LCOV_EXCL_BR_LINE` / `LCOV_EXCL_START` 排除标记，这是作弊
 - **行覆盖率必须 100%**；**分支覆盖率基准线 95%**，到不了须写报告说明每一条未覆盖分支原因
-- **覆盖构建已带 `-DNDEBUG`**（build.just 的 cov-run），assert 分支不纳入统计；95% 针对的是实际可执行分支
+- **覆盖构建已带 `-DNDEBUG`**（build.just 的 c-cov-run / lua-cov-run），assert 分支不纳入统计；95% 针对的是实际可执行分支
 - **宏幻影分支**：`utV_len`（`?:`）、`utV_free`（`&&`）、`utOK` 等 C89 宏展开的伪分支，gcov 可见但逻辑不可达，允许不覆盖但须列入报告
 - **reserve 守卫分支**：`utV_push` 在 `utV_reserve` 成功后理论永不失败，push 错误路径为防御代码，允许不覆盖但须列入报告
 - **可覆盖的 OOM 路径必须覆盖**：`drainpool` + `oom_alloc` 精准触发，不留未覆盖 OOM 分支

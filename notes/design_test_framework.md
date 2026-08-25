@@ -36,7 +36,7 @@ TEST(foo) { ... }
   entries 表（`{"name", test_name}`）+ main
 - banner = 源文件 basename 去 `.c`
 - 生成物 gitignore（`tests/*.gen.inc`）；`just` 编译前自动重新生成
-  （dbg-run / cov-run 前置一步）
+  （c-dbg-run / c-cov-run 前置一步）
 
 ### 4. 库特有基建位置
 
@@ -65,5 +65,5 @@ TEST(foo) { ... }
 | tests/linecache_test_fanout4.c / fanout8.c | 双 FANOUT 共享 lc_tests.h |
 | tests/undotree_test.c | drainpool 并入；删 ut_tests.h |
 | tests/cellgrid_test.c / termfeed_test.c | 删内联 runner |
-| build.just | dbg-run/cov-run 前置 gen_entries |
+| build.just | c-dbg-run/c-cov-run 前置 gen_entries |
 | .gitignore | `tests/*.gen.inc` |

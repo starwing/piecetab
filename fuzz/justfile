@@ -1,0 +1,21 @@
+import '../build.just'
+
+INCS := "-I. -I.. -I../tests"
+
+# fuzz: seeded random-op stress with per-op invariant checks
+sp seed='1': (fuzz-run "sp" INCS seed)
+# fuzz: seeded random-op stress with per-op invariant checks
+pt seed='1': (fuzz-run "pt" INCS seed)
+# fuzz: seeded random-op stress with per-op invariant checks
+lc seed='1': (fuzz-run "lc" INCS seed)
+# replay a recorded op log
+replay lib path: (fuzz-run lib INCS "replay" path)
+# debug fuzz: ASan/UBSan build, precise fault isolation
+sp-dbg seed='1': (dfz-run "sp" INCS seed)
+# debug fuzz: ASan/UBSan build, precise fault isolation
+pt-dbg seed='1': (dfz-run "pt" INCS seed)
+# debug fuzz: ASan/UBSan build, precise fault isolation
+lc-dbg seed='1': (dfz-run "lc" INCS seed)
+# remove fuzz binaries
+clean:
+    -rm -f *_fuzz *_fuzz_dbg *_replay
