@@ -265,16 +265,13 @@ static int Lstate_gc(lua_State *L) {
 
 static sp_State *lst_state(lua_State *L) {
     lsp_State *S;
-    void      *ud;
-    lua_Alloc  f;
     if (lua53_rawgetp(L, LUA_REGISTRYINDEX, LSP_STATE_KEY) != LUA_TNIL) {
         S = (lsp_State *)lua_touserdata(L, -1);
         return lua_pop(L, 1), S->S;
     }
     lua_pop(L, 1);
     S = (lsp_State *)lua_newuserdata(L, sizeof(lsp_State));
-    f = lua_getallocf(L, &ud);
-    S->S = sp_open((sp_Alloc *)f, ud);
+    S->S = sp_open(NULL, NULL);
     if (luaL_newmetatable(L, LSP_STATE_TYPE)) {
         lua_pushcfunction(L, Lstate_gc);
         lua_setfield(L, -2, "__gc");
@@ -477,8 +474,8 @@ static cp_Op cp_opmake(cp_Kind k, cp_NS ns, cp_Attr a) {
 }
 
 static sp_Id cpO_opkey(lua_State *L, cp_State *S, cp_Op op) {
-    sp_Id   id;
-    int     isnew, tab;
+    sp_Id    id;
+    int      isnew, tab;
     unsigned old;
     lua_rawgeti(L, LUA_REGISTRYINDEX, S->ref_byop);
     lua_insert(L, -2);
@@ -586,11 +583,12 @@ static size_t cpP_slotalloc(lua_State *L, cp_State *S) {
     return k;
 }
 
-static sp_Id cpP_chain(lua_State *L, cp_State *S, const cp_NSAttr *p, int n,
-                       sp_Id a) {
+static sp_Id cpP_chain(
+        lua_State *L, cp_State *S, const cp_NSAttr *p, int n, sp_Id a) {
     int i;
     for (i = 0; i < n - 1; ++i) {
-        sp_Id  b = cp_op(L, S, cp_opmake(CP_K_WRITE, p[i + 1].ns, p[i + 1].attr));
+        sp_Id b = cp_op(
+                L, S, cp_opmake(CP_K_WRITE, p[i + 1].ns, p[i + 1].attr));
         size_t k = cpP_slotalloc(L, S);
         S->slots[k].a = a, S->slots[k].b = b, S->slots[k].refcnt = 0;
         a = (sp_Id)(k + CP_COMP_START);
@@ -811,8 +809,8 @@ static sp_Mask cp_segmask(const cp_State *S, sp_Id id) {
     return m;
 }
 
-static sp_Id cp_merge(lua_State *L, cp_State *S, sp_Id in, sp_Id old, int *pn,
-                      cp_NS *ns) {
+static sp_Id cp_merge(
+        lua_State *L, cp_State *S, sp_Id in, sp_Id old, int *pn, cp_NS *ns) {
     cp_NSAttr ps[SP_MASK_BITS + 1];
     sp_Id     ret;
     int       n, k = 0, i;
@@ -832,11 +830,12 @@ static sp_Id cp_merge(lua_State *L, cp_State *S, sp_Id in, sp_Id old, int *pn,
     return ret;
 }
 
-static cp_Attr cp_foldattr(lua_State *L, cp_State *S, cp_NSAttr *rt, size_t b,
-                           size_t a, sp_Id id) {
-    int      fold;
-    size_t   k;
-    cp_Attr  rid;
+static cp_Attr cp_foldattr(
+        lua_State *L, cp_State *S, cp_NSAttr *rt, size_t b, size_t a,
+        sp_Id id) {
+    int     fold;
+    size_t  k;
+    cp_Attr rid;
     lua_newtable(L);
     fold = lua_gettop(L);
     cp_sort(S, rt, (int)b);
@@ -898,8 +897,9 @@ static void svN_norm(sv_Span *S, size_t j) {
     stV_hdr(S)->len = (unsigned)n;
 }
 
-static void svN_place(sv_Span *p, size_t s, size_t n, size_t off, size_t len,
-                      cp_Attr id, int right, size_t ohlen, cp_Attr ohid) {
+static void svN_place(
+        sv_Span *p, size_t s, size_t n, size_t off, size_t len, cp_Attr id,
+        int right, size_t ohlen, cp_Attr ohid) {
     if (right) {
         memmove(p + s + 2, p + s, (n - s) * sizeof(sv_Span));
         p[s].off = off, p[s].len = len, p[s].id = id;
@@ -1078,8 +1078,9 @@ static size_t lst_ephpairs(lst_Eph *e, size_t n, size_t x, cp_NSAttr *rt) {
     return c;
 }
 
-static void lst_curinit(lst_Cur *c, lst_Tree *t, size_t off, size_t endoff,
-                        int nsid, int mode) {
+static void lst_curinit(
+        lst_Cur *c, lst_Tree *t, size_t off, size_t endoff, int nsid,
+        int mode) {
     sp_seek(&c->C, t->T, off);
     c->tree = t;
     c->epoch = t->epoch;
@@ -1116,7 +1117,8 @@ static int lst_merge(lua_State *L) {
     return n + 2;
 }
 
-static sp_Id lst_arb_death(lua_State *L, lst_Tree *t, sp_Id old, sp_Mask *mask) {
+static sp_Id lst_arb_death(
+        lua_State *L, lst_Tree *t, sp_Id old, sp_Mask *mask) {
     if (old == 0) return *mask = 0, 0;
     cp_refdown(L, t->cp, old);
     return *mask = 0, 0;
@@ -1129,8 +1131,8 @@ static sp_Id lst_arb_birth(lst_Tree *t, sp_Id in, sp_Mask *mask) {
     return *mask = cp_segmask(t->cp, in), in;
 }
 
-static sp_Id lst_arb_merge(lua_State *L, lst_Tree *t, sp_Id in, sp_Id old,
-                           sp_Mask *mask) {
+static sp_Id lst_arb_merge(
+        lua_State *L, lst_Tree *t, sp_Id in, sp_Id old, sp_Mask *mask) {
     sp_Id ret;
     int   n, i, base;
     base = lua_gettop(L);
@@ -1266,8 +1268,8 @@ static lua_Number lst_compnsunreg(lua_State *L, lst_Comp *c, const char *name) {
 
 static int Lcur_iter(lua_State *L);
 
-static int lst_makeiter(lua_State *L, lst_Tree *t, size_t off, size_t len,
-                        int nsid, int mode) {
+static int lst_makeiter(
+        lua_State *L, lst_Tree *t, size_t off, size_t len, int nsid, int mode) {
     lst_Cur *c = (lst_Cur *)lua_newuserdata(L, sizeof(lst_Cur));
     lst_curinit(c, t, off, off + len, nsid, mode);
     lst_setuv(L, "tree");
@@ -1390,8 +1392,8 @@ static int lst_clearns_full(lua_State *L, lst_Tree *t, int nsid) {
     return lua_settop(L, 1), t->epoch += 1, 1;
 }
 
-static int lst_clearns_range(lua_State *L, lst_Tree *t, int nsid, size_t off,
-                             size_t len) {
+static int lst_clearns_range(
+        lua_State *L, lst_Tree *t, int nsid, size_t off, size_t len) {
     sp_Cursor C;
     sp_Id     op;
     if (lst_iseph(nsid)) {
@@ -1978,7 +1980,8 @@ static int lst_cur_clearall(lua_State *L, lst_Cur *c, lua_Integer len) {
     return lua_settop(L, 1), 1;
 }
 
-static int lst_cur_clearns(lua_State *L, lst_Cur *c, int nsid, lua_Integer len) {
+static int lst_cur_clearns(
+        lua_State *L, lst_Cur *c, int nsid, lua_Integer len) {
     size_t i;
     sp_Id  op = 0;
     if (lst_iseph(nsid)) {

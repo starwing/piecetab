@@ -84,19 +84,14 @@ static int Lstate_gc(lua_State *L) {
 
 static lpt_State *lpt_state(lua_State *L) {
     lpt_State *S;
-    void      *ud;
-    lua_Alloc  f;
-    if (lua53_rawgetp(L, LUA_REGISTRYINDEX, LPT_STATE_KEY) != LUA_TNIL) {
-        S = (lpt_State *)lua_touserdata(L, -1);
-        return lua_pop(L, 1), S;
-    }
+    if (lua53_rawgetp(L, LUA_REGISTRYINDEX, LPT_STATE_KEY) != LUA_TNIL)
+        return (S = (lpt_State *)lua_touserdata(L, -1)), lua_pop(L, 1), S;
     lua_pop(L, 1);
     S = (lpt_State *)lua_newuserdata(L, sizeof(lpt_State));
     S->PS = NULL, S->LS = NULL, S->US = NULL;
-    f = lua_getallocf(L, &ud);
-    S->PS = pt_open((pt_Alloc *)f, ud);
-    S->LS = lc_open((lc_Alloc *)f, ud);
-    S->US = ut_open((ut_Alloc *)f, ud);
+    S->PS = pt_open(NULL, NULL);
+    S->LS = lc_open(NULL, NULL);
+    S->US = ut_open(NULL, NULL);
     if (luaL_newmetatable(L, LPT_STATE_TYPE))
         lua_pushcfunction(L, Lstate_gc), lua_setfield(L, -2, "__gc");
     lua_setmetatable(L, -2);

@@ -103,8 +103,7 @@ static int Ltf_new(lua_State *L) {
     st->lookup_ref = LUA_NOREF;
     st->rawfd = -1;
     tf_init(&st->S, NULL, NULL);
-    luaL_setmetatable(L, LTF_STATE_TYPE);
-    return 1;
+    return luaL_setmetatable(L, LTF_STATE_TYPE), 1;
 }
 
 static void ltf_restore(ltf_State *st) {
