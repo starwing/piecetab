@@ -320,7 +320,7 @@ CG_API int      cg_putslice(cg_Grid *G, int r, int c, cg_Slice s,
 
 **宽度语义定案**（对拍暴露，editor 跟随渲染）：
 - 孤立 continuation 跳过（lua-utf8 +1 列 → 随 putslice 跳过）
-- ambiwidth（U+00A1/é）宽 2（lcgW_width 表，异于 lua-utf8）
+- ambiwidth（U+00A1/é）默认宽 1；绑定层 `g:ambiwidth(2)` 可切宽 2（cellgrid 核心不介入，lcgW_width 通过 ud 读取）
 - 宽度折叠 `w>1→2, 其余→1`（含零宽折叠 1）
 - 截断序列当单字节；`cg_next` 不卡死（byte 方向无 stall）
 

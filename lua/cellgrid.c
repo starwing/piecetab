@@ -74,8 +74,17 @@ static int lua53_geti(lua_State *L, int idx, lua_Integer i) {
 
 /* ---- grid userdata ---- */
 
+typedef struct lcg_Grid {
+    cg_Grid cg;
+    int     ambiwidth;
+} lcg_Grid;
+
+static lcg_Grid *lcg_full(lua_State *L, int idx) {
+    return (lcg_Grid *)luaL_checkudata(L, idx, LCG_GRID_TYPE);
+}
+
 static cg_Grid *lcg_check(lua_State *L, int idx) {
-    return (cg_Grid *)luaL_checkudata(L, idx, LCG_GRID_TYPE);
+    return &lcg_full(L, idx)->cg;
 }
 
 static int lcg_cptoutf8(int cp, char *buf) {
@@ -121,14 +130,14 @@ static int lcg_find(const range_table *t, size_t size, utfint ch) {
 
 static int lcgW_width(void *ud, int cp) {
     utfint ch = (utfint)cp;
-    (void)ud;
+    int ambiwidth = ud ? ((lcg_Grid *)ud)->ambiwidth : 1;
     if (lcg_find(unprintable_table, lcgW_tablesize(unprintable_table), ch))
         return 0;
     if (lcg_find(compose_table, lcgW_tablesize(compose_table), ch)) return 0;
     if (lcg_find(doublewidth_table, lcgW_tablesize(doublewidth_table), ch))
         return 2;
     if (lcg_find(ambiwidth_table, lcgW_tablesize(ambiwidth_table), ch))
-        return 2;
+        return ambiwidth;
     return 1;
 }
 
@@ -141,11 +150,12 @@ static int Lgrid_delete(lua_State *L) {
 }
 
 static int Lgrid_new(lua_State *L) {
-    cg_Grid *g = (cg_Grid *)lua_newuserdata(L, sizeof(cg_Grid));
+    lcg_Grid *g = (lcg_Grid *)lua_newuserdata(L, sizeof(lcg_Grid));
     assert((unsigned)(lua_Integer)-1 == CG_TRANSPARENT);
-    cg_init(g, NULL, NULL);
-    cg_setwcwidth(g, lcgW_width, NULL);
-    cg_settabstop(g, 4);
+    cg_init(&g->cg, NULL, NULL);
+    g->ambiwidth = 1;
+    cg_setwcwidth(&g->cg, lcgW_width, g);
+    cg_settabstop(&g->cg, 4);
     luaL_setmetatable(L, LCG_GRID_TYPE);
     return 1;
 }
@@ -518,6 +528,18 @@ static int Lgrid_tabstop(lua_State *L) {
     return cg_settabstop(g, (int)luaL_checkinteger(L, 2)), lua_settop(L, 1), 1;
 }
 
+static int Lgrid_ambiwidth(lua_State *L) {
+    lcg_Grid *g = lcg_full(L, 1);
+    int aw;
+    if (lua_isnoneornil(L, 2))
+        return lua_pushinteger(L, g->ambiwidth), 1;
+    aw = (int)luaL_checkinteger(L, 2);
+    if (aw != 1 && aw != 2)
+        return luaL_argerror(L, 2, "ambiwidth must be 1 or 2");
+    g->ambiwidth = aw;
+    return lua_settop(L, 1), 1;
+}
+
 /* ===== Module registration ===== */
 
 LUALIB_API int luaopen_cellgrid(lua_State *L) {
@@ -547,6 +569,7 @@ LUALIB_API int luaopen_cellgrid(lua_State *L) {
             ENTRY(byte),
             ENTRY(next),
             ENTRY(tabstop),
+            ENTRY(ambiwidth),
 #undef ENTRY
             {NULL, NULL}};
     if (luaL_newmetatable(L, LCG_GRID_TYPE)) {

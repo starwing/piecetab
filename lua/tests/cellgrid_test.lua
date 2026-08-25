@@ -294,7 +294,7 @@ end
 function TestWrite:testPutlineUtf8TwoByte()
     local g = cg.new()
     g:begin(0, 3, 10)
-    -- é (0xE9) is ambiwidth → width=2. Use 0x80 (control, width=1).
+    -- é (0xE9) is ambiwidth; default width is 1. Use 0x80 (control, width=1).
     g:putstring(0, 0, 0, "\xc2\x80") -- U+0080, width=1
     local cp, st = g:cell(0, 0)
     lu.assertEquals(cp, 0x80)
@@ -919,6 +919,13 @@ function TestCols:testTabstopGetter()
     lu.assertEquals(g:tabstop(), 8)
 end
 
+function TestCols:testAmbiwidthGetter()
+    local g = cg.new()
+    lu.assertEquals(g:ambiwidth(), 1) -- Lgrid_new default
+    g:ambiwidth(2)
+    lu.assertEquals(g:ambiwidth(), 2)
+end
+
 -- randomized cross-check against the Lua reference
 function TestCols:testRandomFuzz()
     if not ok_utf8 then return end
@@ -967,17 +974,30 @@ function TestCols:testRandomFuzz()
     end
 end
 
--- ambiwidth: lcgW_width treats as 2 (matches rendering); lua-utf8 may
--- say 1 (system wcwidth) -- editor semantics follow lcgW_width
+-- ambiwidth: lcgW_width defaults to 1 (single-width); set 2 to treat
+-- East Asian Ambiguous characters as double-width. lua-utf8 (system
+-- wcwidth) also reports 1 for these characters by default.
 function TestCols:testAmbiwidth()
     if not ok_utf8 then return end
     local a1 = utf8.char(0x00a1)
     local e9 = utf8.char(0x00e9)
     local g = mg(4)
+    -- default: single-width
+    lu.assertEquals(g:cols(a1 .. "x", 1, 2), 1)
+    lu.assertEquals(g:cols(a1 .. "x", 1, 3), 2)
+    lu.assertEquals(g:cols(e9 .. "x", 1, 2), 1)
+    -- double-width mode
+    g:ambiwidth(2)
     lu.assertEquals(g:cols(a1 .. "x", 1, 2), 2)
     lu.assertEquals(g:cols(a1 .. "x", 1, 3), 3)
     lu.assertEquals(g:cols(e9 .. "x", 1, 2), 2)
     lu.assertEquals(g:byte(1, a1 .. "x", 1, 2), 1) -- inside: char start
+end
+
+function TestCols:testAmbiwidthRejectsInvalid()
+    local g = cg.new()
+    lu.assertErrorMsgContains("must be 1 or 2", function() g:ambiwidth(0) end)
+    lu.assertErrorMsgContains("must be 1 or 2", function() g:ambiwidth(3) end)
 end
 
 -- ======== Scroll branches coverage ========
@@ -1156,6 +1176,19 @@ end
 function TestWidth:testAmbiWidth()
     -- U+00A1 inverted exclamation (ambiwidth_table, line 483)
     local g = cg.new()
+    g:begin(0, 1, 10)
+    g:put(0, 0, 0xA1)
+    local cp1, _ = g:cell(0, 0)
+    lu.assertEquals(cp1, 0xA1)
+    -- default ambiwidth is single-width, so no right half marker
+    local cp2, _ = g:cell(0, 1)
+    lu.assertNotEquals(cp2, -1)
+end
+
+function TestWidth:testAmbiWidthDouble()
+    -- U+00A1 inverted exclamation (ambiwidth_table, line 483)
+    local g = cg.new()
+    g:ambiwidth(2)
     g:begin(0, 1, 10)
     g:put(0, 0, 0xA1)
     local cp1, _ = g:cell(0, 0)

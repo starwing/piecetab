@@ -105,6 +105,13 @@ function Grid:top() end
 ---@return integer
 function Grid:tabstop() end
 
+---Get or set how the built-in wcwidth callback treats East Asian
+---Ambiguous characters: 1 = single-width (default), 2 = double-width.
+---If aw is nil, returns the current value.
+---@overload fun(self: cellgrid.Grid, aw: integer): self
+---@return integer
+function Grid:ambiwidth() end
+
 ---Display width of s[i..j] rendered from starting column c (tab
 ---expanded via grid tabstop, wcwidth from unidata). Two call forms,
 ---split on the first argument: `cols(s, i?, j?)` (c = 0) or

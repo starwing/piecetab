@@ -564,6 +564,48 @@ function TestCommand:testEreloadsFile()
   os.remove(path)
 end
 
+function TestCommand:testSetAmbiwidthSingle()
+  local e = make_ed("")
+  e:dispatch(":")
+  for ch in ("set ambiwidth single"):gmatch(".") do e:dispatch(ch) end
+  e:dispatch("<Enter>")
+  lu.assertEquals(e.grid:ambiwidth(), 1)
+end
+
+function TestCommand:testSetAmbiwidthDouble()
+  local e = make_ed("")
+  e:dispatch(":")
+  for ch in ("set ambiwidth double"):gmatch(".") do e:dispatch(ch) end
+  e:dispatch("<Enter>")
+  lu.assertEquals(e.grid:ambiwidth(), 2)
+end
+
+function TestCommand:testSetAmbiwidthInvalid()
+  local e = make_ed("")
+  e:dispatch(":")
+  for ch in ("set ambiwidth wide"):gmatch(".") do e:dispatch(ch) end
+  e:dispatch("<Enter>")
+  lu.assertStrContains(e.msg, "usage")
+  lu.assertEquals(e.grid:ambiwidth(), 1)
+end
+
+function TestCommand:testSetTabstop()
+  local e = make_ed("")
+  e:dispatch(":")
+  for ch in ("set tabstop 8"):gmatch(".") do e:dispatch(ch) end
+  e:dispatch("<Enter>")
+  lu.assertEquals(e.grid:tabstop(), 8)
+end
+
+function TestCommand:testSetTabstopInvalid()
+  local e = make_ed("")
+  e:dispatch(":")
+  for ch in ("set tabstop abc"):gmatch(".") do e:dispatch(ch) end
+  e:dispatch("<Enter>")
+  lu.assertStrContains(e.msg, "usage")
+  lu.assertEquals(e.grid:tabstop(), 4)
+end
+
 TestUtf8 = {}
 
 function TestUtf8:setUp()

@@ -533,6 +533,27 @@ local function install_builtin_commands(self)
     end
   end
 
+  function c.set(ed, arg, bang)
+    local what, value = arg:match("^(%S+)%s+(%S+)$")
+    if what == "ambiwidth" and value == "single" then
+      ed.grid:ambiwidth(1)
+      ed.msg = "ambiwidth single"
+    elseif what == "ambiwidth" and value == "double" then
+      ed.grid:ambiwidth(2)
+      ed.msg = "ambiwidth double"
+    elseif what == "tabstop" then
+      local ts = tonumber(value)
+      if ts and ts >= 0 and ts == math.floor(ts) then
+        ed.grid:tabstop(math.floor(ts))
+        ed.msg = "tabstop " .. ts
+      else
+        ed.msg = "usage: :set tabstop <integer>"
+      end
+    else
+      ed.msg = "usage: :set ambiwidth single|double or :set tabstop <integer>"
+    end
+  end
+
   function c.e(ed, arg, bang)
     if not arg or arg == "" then
       ed.msg = "No filename"; return
@@ -1001,7 +1022,7 @@ do
     -- number) or, when the block reaches the end of the document, #doc.
     local e_line = math.min(self.scroll_line + visrows, total_lines)
     local e_off = e_line < total_lines
-      and self.doc:lineoffset(e_line) or #self.doc
+        and self.doc:lineoffset(e_line) or #self.doc
     -- tree-sitter spans into the tree's "hl" eph layer (below the
     -- persistent ns layers): every tree edit clears it, the next frame
     -- refills from a fresh query
