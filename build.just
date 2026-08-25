@@ -92,7 +92,7 @@ lua-cov-run mod t incs libs='':
 [private]
 cov-gen dir src lcov=(dir / 'lcov.info'):
     lcov --capture --directory {{ dir }} --rc branch_coverage=1 --output-file coverage.info \
-        --no-external --ignore-errors unsupported,inconsistent --filter range
+        --no-external --ignore-errors unsupported,inconsistent
     lcov --extract coverage.info {{ src }} --rc branch_coverage=1 --ignore-errors inconsistent --output-file {{ lcov }}
 
 [private]
