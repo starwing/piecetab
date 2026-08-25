@@ -33,17 +33,20 @@ typedef struct nfc_table {
     unsigned int data2;
 } nfc_table;
 
-#define REASON_MUST_CONVERT_1 1
-#define REASON_MUST_CONVERT_2 2
-#define REASON_STARTER_CAN_COMBINE 3
-#define REASON_COMBINING_MARK 4
-#define REASON_JAMO_VOWEL 5
-#define REASON_JAMO_TRAILING 6
+typedef enum ud_Reason {
+    REASON_MUST_CONVERT_1,
+    REASON_MUST_CONVERT_2,
+    REASON_STARTER_CAN_COMBINE,
+    REASON_COMBINING_MARK,
+    REASON_JAMO_VOWEL,
+    REASON_JAMO_TRAILING,
+    REASON_MAX
+} ud_Reason;
 
 typedef struct canon_cls_table {
     utfint first;
     utfint last;
-    unsigned int canon_cls;
+    int canon_cls;
 } canon_cls_table;
 
 typedef struct combine_table {
@@ -57,7 +60,7 @@ typedef struct decompose_table {
     utfint cp;
     utfint to1;
     utfint to2;
-    unsigned int canon_cls2;
+    int canon_cls2;
 } decompose_table;
 
 #define HANGUL_L 1
