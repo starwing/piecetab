@@ -250,6 +250,14 @@ comment/function 样式）。`Ed:open_language(lang)` 可手动开启；编辑�
 
 #### 安装 / 构建
 
+注意：要本地构建 C 模块，必须安装 `just`（>= 1.27）。直接执行：
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to DEST
+```
+
+或者看： https://github.com/casey/just#installation
+
 在仓库根目录运行：
 
 ```sh
@@ -373,16 +381,16 @@ just lua/ts   # 获取/编译 lua/grammar/*.so，构建 treesitter.so + luajit/t
 每个 C 库在 `lua/` 下都有 Lua 绑定（`name.c` + `name.d.lua` 类型声明）。
 此外还有纯 Lua / 仅元数据模块和 vendored JSON 绑定：
 
-| 模块         | 源 / 文件                                     | 说明                                                                                 |
-| ------------ | --------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `piecetab`   | `lua/piecetab.c`, `lua/piecetab.d.lua`        | `piecetab.h` 的 C 绑定（buffer、游标、文档）                                         |
-| `cellgrid`   | `lua/cellgrid.c`, `lua/cellgrid.d.lua`        | `cellgrid.h` 的 C 绑定（屏幕网格 + diff）                                            |
-| `termfeed`   | `lua/termfeed.c`, `lua/termfeed.d.lua`        | `termfeed.h` 的 C 绑定（终端输入）                                                   |
-| `spantree`   | `lua/spantree.c`, `lua/spantree.d.lua`        | `spantree.h` 的 C 绑定（Compositor/Tree/Cursor span 染色）                           |
-| `json`       | `lua/json.c`, `lua/json.d.lua`, `lua/yyjson/` | 基于 vendored yyjson 的纯 C 绑定（`decode`/`encode`/`array`/`object`/`null`/`type`） |
-| `treesitter` | `lua/treesitter.c`, `lua/treesitter.d.lua`    | 基于 `libtree-sitter` 的 C 绑定（parser/tree/query API）                             |
-| `lsp`        | `lua/lsp.lua`                                 | 纯 Lua LSP 客户端构建块；需要 `json`、`luv` 与 `lua-utf8`                            |
-| `lua-utf8`   | `lua/lutf8lib.c`, `lua/unidata.h`, `lua/lua-utf8.d.lua`                | Vendored luautf8（C 模块 + 类型声明）                                               |
+| 模块         | 源 / 文件                                               | 说明                                                                                 |
+| ------------ | ------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `piecetab`   | `lua/piecetab.c`, `lua/piecetab.d.lua`                  | `piecetab.h` 的 C 绑定（buffer、游标、文档）                                         |
+| `cellgrid`   | `lua/cellgrid.c`, `lua/cellgrid.d.lua`                  | `cellgrid.h` 的 C 绑定（屏幕网格 + diff）                                            |
+| `termfeed`   | `lua/termfeed.c`, `lua/termfeed.d.lua`                  | `termfeed.h` 的 C 绑定（终端输入）                                                   |
+| `spantree`   | `lua/spantree.c`, `lua/spantree.d.lua`                  | `spantree.h` 的 C 绑定（Compositor/Tree/Cursor span 染色）                           |
+| `json`       | `lua/json.c`, `lua/json.d.lua`, `lua/yyjson/`           | 基于 vendored yyjson 的纯 C 绑定（`decode`/`encode`/`array`/`object`/`null`/`type`） |
+| `treesitter` | `lua/treesitter.c`, `lua/treesitter.d.lua`              | 基于 `libtree-sitter` 的 C 绑定（parser/tree/query API）                             |
+| `lsp`        | `lua/lsp.lua`                                           | 纯 Lua LSP 客户端构建块；需要 `json`、`luv` 与 `lua-utf8`                            |
+| `lua-utf8`   | `lua/lutf8lib.c`, `lua/unidata.h`, `lua/lua-utf8.d.lua` | Vendored luautf8（C 模块 + 类型声明）                                                |
 
 构建/测试 recipe 位于 `lua/justfile`，以 `just lua/<name>` 运行（如
 `just lua/json`、`just lua/sp`、`just lua/ts`）。demo 的模块要求见

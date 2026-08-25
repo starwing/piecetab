@@ -270,6 +270,13 @@ enables it manually. Editing updates highlights incrementally.
 
 #### Install / build
 
+Notice you should have `just` above `1.27` installed.
+To install `just`, see https://github.com/casey/just#installation ，or just use:
+
+```shell
+curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to DEST
+```
+
 From the repo root:
 
 ```sh
@@ -401,16 +408,16 @@ Each C library has a Lua binding in `lua/` (`name.c` plus `name.d.lua`
 type declarations). There are also two pure-Lua / meta-only modules and a
 vendored JSON binding:
 
-| Module       | Source / files                                | Description                                                                            |
-| ------------ | --------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `piecetab`   | `lua/piecetab.c`, `lua/piecetab.d.lua`        | C binding for `piecetab.h` (buffers, cursors, documents)                               |
-| `cellgrid`   | `lua/cellgrid.c`, `lua/cellgrid.d.lua`        | C binding for `cellgrid.h` (screen grid + diff)                                        |
-| `termfeed`   | `lua/termfeed.c`, `lua/termfeed.d.lua`        | C binding for `termfeed.h` (terminal input)                                            |
-| `spantree`   | `lua/spantree.c`, `lua/spantree.d.lua`        | C binding for `spantree.h` (Compositor/Tree/Cursor span coloring)                      |
-| `json`       | `lua/json.c`, `lua/json.d.lua`, `lua/yyjson/` | Pure C binding over vendored yyjson (`decode`/`encode`/`array`/`object`/`null`/`type`) |
-| `treesitter` | `lua/treesitter.c`, `lua/treesitter.d.lua`    | C binding over `libtree-sitter` (parser/tree/query APIs)                               |
-| `lsp`        | `lua/lsp.lua`                                 | Pure-Lua LSP client building blocks; requires `json`, `luv`, and `lua-utf8`            |
-| `lua-utf8`   | `lua/lutf8lib.c`, `lua/unidata.h`, `lua/lua-utf8.d.lua`                | Vendored luautf8 (C module + type declarations)                                       |
+| Module       | Source / files                                          | Description                                                                            |
+| ------------ | ------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `piecetab`   | `lua/piecetab.c`, `lua/piecetab.d.lua`                  | C binding for `piecetab.h` (buffers, cursors, documents)                               |
+| `cellgrid`   | `lua/cellgrid.c`, `lua/cellgrid.d.lua`                  | C binding for `cellgrid.h` (screen grid + diff)                                        |
+| `termfeed`   | `lua/termfeed.c`, `lua/termfeed.d.lua`                  | C binding for `termfeed.h` (terminal input)                                            |
+| `spantree`   | `lua/spantree.c`, `lua/spantree.d.lua`                  | C binding for `spantree.h` (Compositor/Tree/Cursor span coloring)                      |
+| `json`       | `lua/json.c`, `lua/json.d.lua`, `lua/yyjson/`           | Pure C binding over vendored yyjson (`decode`/`encode`/`array`/`object`/`null`/`type`) |
+| `treesitter` | `lua/treesitter.c`, `lua/treesitter.d.lua`              | C binding over `libtree-sitter` (parser/tree/query APIs)                               |
+| `lsp`        | `lua/lsp.lua`                                           | Pure-Lua LSP client building blocks; requires `json`, `luv`, and `lua-utf8`            |
+| `lua-utf8`   | `lua/lutf8lib.c`, `lua/unidata.h`, `lua/lua-utf8.d.lua` | Vendored luautf8 (C module + type declarations)                                        |
 
 Build/test recipes live in `lua/justfile` and are run as `just lua/<name>`
 (e.g. `just lua/json`, `just lua/sp`, `just lua/ts`). See the
