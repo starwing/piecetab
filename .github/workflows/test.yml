@@ -125,6 +125,8 @@ jobs:
         uses: vegardit/fast-apt-mirror.sh@v1
       - name: Setup LCOV
         uses: hrishikesh-kadam/setup-lcov@v1
+        with:
+          ref: v2.5
       - name: coverage
         run: just cov
       - name: Coveralls
