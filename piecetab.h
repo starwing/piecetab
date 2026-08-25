@@ -432,6 +432,7 @@ static void ptN_remove(pt_State *S, pt_Node *p, int k, int s, int e) {
     ptN_purge(S, p, k, s, e, p->version);
     ptN_move(p, s, e, ptN_cc(p) - e);
     ptN_setcc(p, ptN_cc(p) - (e - s)), ptM_clamp(p);
+    if (ptN_cc(p) == 0) p->children[0] = NULL, p->bytes[0] = 0;
 }
 
 static void ptN_makespace(pt_Node *p, int i, int n) {
@@ -598,6 +599,7 @@ PT_API const char *pt_piece(pt_Cursor *C, size_t *plen) {
     pt_Node *p;
     int      i;
     if (C == NULL || C->tree == NULL) return NULL;
+    if (ptK_bytes(C) == 0) return (void)(plen && (*plen = 0)), NULL;
     i = ptK_idx(C, p = ptK_parent(C, ptK_levels(C)), ptK_levels(C));
     if (C->poff >= p->bytes[i]) return (void)(plen && (*plen = 0)), NULL;
     if (plen) *plen = p->bytes[i] - C->poff;

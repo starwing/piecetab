@@ -982,11 +982,20 @@ TEST(remove_all) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = treeV(0, leafV(litV("aa"), litV("bb")));
     pt_Cursor c;
+    size_t    n;
     pt_seek(&c, b, 0);
     asserteq(pt_remove(&c, 4), PT_OK); /* delete everything */
     assertok(pt_checktree(c.tree));
     asserteq(pt_bytes(c.tree), 0);
     assertok(pt_checkcursor(&c, 0));
+    /* The tree is structurally empty; the root slot must be cleared so
+       pt_piece/pt_next never read stale data. */
+    pt_seek(&c, c.tree, 0);
+    asserteq(pt_piece(&c, &n), NULL);
+    asserteq(n, 0);
+    pt_asserttree(c.tree, 0, leafV(litV_(NULL, 0)));
+    asserteq(c.tree->root.children[0], NULL);
+    asserteq(c.tree->root.bytes[0], 0);
     pt_release(c.tree), pt_release(b);
     asserteq(S->nodes.live_obj, 0);
     asserteq(S->holes.live_obj, 0);

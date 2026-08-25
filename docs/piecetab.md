@@ -230,7 +230,8 @@ the cursor first, then return the target piece's data pointer.
 
 - **`pt_piece`**: Returns the **remaining** data of the current piece from
   `C->poff` onward; out parameter `plen` is set to the remaining length. When
-  `C->poff >= piece->bytes[i]` (cursor past piece end) or no tree exists,
+  `C->poff >= piece->bytes[i]` (cursor past piece end), the tree has zero
+  logical bytes (e.g. after deleting all content), or no tree exists,
   returns `NULL` with `*plen = 0`. Typical traversal idiom:
   `for (p = pt_piece(c, &n); n; p = pt_next(c, &n))`.
 - **`pt_next`**: If the cursor is inside the current piece (`poff < bytes[i]`),

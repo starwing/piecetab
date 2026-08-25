@@ -32,6 +32,8 @@ function Buffer:read(off, len) end
 
 ---Iterate over all pieces in the buffer. Read-only: no cursor exists on a
 ---Buffer, so iteration never moves or disturbs any editor cursor.
+---Terminates immediately when the buffer has zero logical bytes (e.g.
+---after deleting all content), so it never reads stale empty-tree state.
 ---@return fun(): integer, integer, string
 ---@usage
 ---```lua
@@ -143,11 +145,12 @@ function Doc:__len() end
 
 ---Seek to a position and return the new offset. Whence initials are
 ---unique (`set`/`cur`/`end`/`line`, prefix match on the first letter).
----`"line"` lands at the line start (byte 0 of the line); lnum = breaks()
----- 1 (the trailing line) lands at the trailing fragment start. The
----optional `col` lands `col` bytes into the line, clamped to the line
----text end (the `\n` byte for lc lines, the doc end for the trailing
----line). Cursor may clamp when past the document end.
+---`"line"` lands at the line start (byte 0 of the line); lnum is
+---0-based and may equal `breaks()` as a tail sentinel (the start of the
+---trailing region / doc end). The optional `col` lands `col` bytes into
+---the line, clamped to the line text end (the `\n` byte for lc lines,
+---the doc end for the trailing line). Cursor may clamp when past the
+---document end.
 ---@return integer
 ---@overload fun(self: piecetab.Doc): integer
 ---@overload fun(self: piecetab.Doc, off: integer): integer
@@ -247,7 +250,8 @@ function Doc:charlen(off) end
 function Doc:advancechars(n) end
 
 ---Byte offset of the start of a line (0-based). Read-only: does not
----move the doc cursor.
+---move the doc cursor. `lnum` must be a valid line number, i.e.
+---`0 <= lnum < breaks()`; returns the byte offset of that line start.
 ---@param lnum integer  line number (0-based)
 ---@return integer  byte offset of the line start
 function Doc:lineoffset(lnum) end
@@ -258,7 +262,9 @@ function Doc:lineoffset(lnum) end
 ---@return integer line, integer col
 function Doc:linecol(off) end
 
----Total lines in the document (always `breaks + 1`). Syncs linecache.
+---Total display lines in the document: `lc_breaks + 1` for every
+---document, so even an empty file has one empty line and a trailing
+---newline counts as an empty final line. Syncs linecache.
 ---@return integer
 function Doc:breaks() end
 

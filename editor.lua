@@ -320,8 +320,22 @@ local function install_normal_keys(self)
 
   function n.dd(ed)
     local lnum = ed.doc:line()
+    local last = lnum == ed.doc:breaks() - 1
     ed.doc:seek("line", lnum)
-    ed:on_edit(ed.doc:linelen(lnum), "")
+    if last and #ed.doc > 0 and ed.doc:readat(#ed.doc - 1, 1) == "\n"
+        and ed.doc:linelen(lnum) == 0 then
+      ed.doc:seek("set", #ed.doc - 1)
+      ed:on_edit(1, "")
+    elseif last and lnum > 0 and ed.doc:readat(#ed.doc - 1, 1) ~= "\n" then
+      local lo = ed.doc:lineoffset(lnum) - 1
+      ed.doc:seek("set", lo)
+      ed:on_edit(#ed.doc - lo, "")
+    else
+      ed:on_edit(ed.doc:linelen(lnum), "")
+      if last and ed.doc:line() > 0 then
+        ed.doc:seek("line", ed.doc:line() - 1)
+      end
+    end
   end
 
   function n.i(ed) ed.mode = "INSERT" end
@@ -982,8 +996,12 @@ do
       rows, cols, self.scroll_line, cur_line, self.cursor_col, total_lines)
 
     local s_off = self.doc:lineoffset(self.scroll_line)
-    local e_off = self.doc:lineoffset(
-      math.min(self.scroll_line + visrows, total_lines))
+    -- e_off is the exclusive end of the visible text range: either the
+    -- start of the first line after the visible block (a valid line
+    -- number) or, when the block reaches the end of the document, #doc.
+    local e_line = math.min(self.scroll_line + visrows, total_lines)
+    local e_off = e_line < total_lines
+      and self.doc:lineoffset(e_line) or #self.doc
     -- tree-sitter spans into the tree's "hl" eph layer (below the
     -- persistent ns layers): every tree edit clears it, the next frame
     -- refills from a fresh query

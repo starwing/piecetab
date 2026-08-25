@@ -85,6 +85,22 @@ function TestBuffer:testPiecesAfterDeleteGenericFor()
     lu.assertEquals(n, 1)
 end
 
+function TestBuffer:testPiecesAfterDeleteToEmptyTerminates()
+    -- deleting every byte leaves a structurally empty tree; the piece
+    -- iterator must terminate instead of reading stale empty-tree state
+    local d = pt.doc("abc\ndef\n")
+    d:seek("line", 0)
+    d:edit(d:linelen(0), "")
+    d:edit(d:linelen(0), "")
+    lu.assertEquals(#d, 0)
+    local n = 0
+    for off, len, s in d:buffer():pieces() do
+        n = n + 1
+        if n > 10 then break end
+    end
+    lu.assertEquals(n, 0)
+end
+
 function TestBuffer:testCompact()
     local b = pt.from("hello\nworld")
     local c = b:compact()
@@ -1137,31 +1153,42 @@ end
 
 function TestDoc:testLineCountEmpty()
     local d = pt.doc("")
-    lu.assertEquals(d:breaks(), 0)
+    lu.assertEquals(d:breaks(), 1) -- one empty display line
+end
+
+function TestDoc:testTrailingNewlineCountsEmptyLine()
+    local d = pt.doc("a\n")
+    lu.assertEquals(d:breaks(), 2)
+    d:seek("line", 1)
+    lu.assertEquals(d:offset(), 2)
+    lu.assertEquals(d:line(), 1)
+    lu.assertEquals(d:linelen(1), 0)
+    lu.assertEquals(pt.doc("a\nb"):breaks(), 2)
+    lu.assertEquals(pt.doc("a\nb\n"):breaks(), 3)
 end
 
 function TestDoc:testBreaksAfterAppend()
     -- append at pos 0 should not change break count
     local d = pt.doc("hello\nworld\n")
-    lu.assertEquals(d:breaks(), 2)
+    lu.assertEquals(d:breaks(), 3)
     d:seek(0); d:append("X")
-    lu.assertEquals(d:breaks(), 2)
+    lu.assertEquals(d:breaks(), 3)
 end
 
 function TestDoc:testBreaksAfterAppendMiddle()
     -- append in middle of first line
     local d = pt.doc("hello\nworld\n")
-    lu.assertEquals(d:breaks(), 2)
+    lu.assertEquals(d:breaks(), 3)
     d:seek(2); d:append("X")
-    lu.assertEquals(d:breaks(), 2)
+    lu.assertEquals(d:breaks(), 3)
 end
 
 function TestDoc:testBreaksAfterAppendPastNL()
     -- append after \n (shifts \n position, line count unchanged)
     local d = pt.doc("hello\nworld\n")
-    lu.assertEquals(d:breaks(), 2)
+    lu.assertEquals(d:breaks(), 3)
     d:seek(6); d:append("X") -- at "world"
-    lu.assertEquals(d:breaks(), 2)
+    lu.assertEquals(d:breaks(), 3)
 end
 
 function TestDoc:testLinesCorruptsSeekLine()
@@ -1210,11 +1237,10 @@ function TestDoc:testLinesTrailingNL()
 end
 
 function TestDoc:testBreaksLinesMismatchTrailingNL()
-    -- File ending with \n: breaks() counts trailing empty line,
-    -- but lines() does not yield it. This mismatch causes
-    -- editor G command to leave a ghost row at screen bottom.
+    -- File ending with \n: breaks() counts the trailing empty line,
+    -- while lines() does not yield it (io.lines semantics).
     local d = pt.doc("a\nb\n")
-    lu.assertEquals(d:breaks(), 2) -- should match lines() yield count
+    lu.assertEquals(d:breaks(), 3)
 
     local yielded = {}
     for text in d:lines() do
@@ -1224,7 +1250,7 @@ function TestDoc:testBreaksLinesMismatchTrailingNL()
     lu.assertEquals(yielded[1], "a")
     lu.assertEquals(yielded[2], "b")
 
-    -- Without trailing \n: consistent (already passing)
+    -- Without trailing \n: breaks() also equals the lines() count.
     local d2 = pt.doc("a\nb")
     lu.assertEquals(d2:breaks(), 2)
     local c = 0
@@ -1355,7 +1381,7 @@ function TestDoc:testPieceBoundaryNewline()
     d:edit(0, "def")
     d:append("zzz\n")
     lu.assertEquals(d:dump(), "abcdefzzz\n")
-    lu.assertEquals(d:breaks(), 1)
+    lu.assertEquals(d:breaks(), 2)
     lu.assertEquals(d:linelen(0), 10)
 end
 
@@ -1441,7 +1467,7 @@ function TestDoc:testUndoLinecacheConsistency()
     d:seek("line", 1); local ll = d:linelen(1); d:remove(ll)
     d:undo()
     lu.assertEquals(d:dump(), "line0\nline1\nline2\nline3\nline4\n")
-    lu.assertEquals(d:breaks(), 5)
+    lu.assertEquals(d:breaks(), 6)
     d:seek("set", 0)
     local yielded = {}
     for text in d:lines() do table.insert(yielded, text) end
@@ -1470,8 +1496,8 @@ function TestDoc:testReadBadFormat()
 end
 
 function TestDoc:testSeekLineToBreaks()
-    -- doc "hello\nworld": breaks=1, seek("line", 0) = line 0 start
-    -- seek("line", 1) = residual row start (lnum == breaks)
+    -- doc "hello\nworld": breaks=2, seek("line", 0) = line 0 start
+    -- seek("line", 1) = trailing fragment start
     local d = pt.doc("hello\nworld")
     d:seek("line", 0)
     lu.assertEquals(d:offset(), 0)

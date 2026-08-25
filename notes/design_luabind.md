@@ -141,7 +141,7 @@ d:seek("set", off) → pos
 d:seek("cur", delta) → pos
 d:seek("end" [, -n]) → pos
 d:seek("line", lnum) → pos            -- 行首定位；lnum ∈ [0, breaks]
-                                      --   （=breaks 落残行首）
+                                      --   （=breaks 落尾哨兵：残段首/文末）
 d:offset() → off
 -- 读（io file 形态；位置推进；EOF 返 nil）
 d:read() → s | nil                     -- 无参 = read("l")，读一行不含 \n
@@ -155,12 +155,12 @@ d:line() → lnum                       -- 当前位置行号
 d:column() → col                      -- 当前位置列（行内字节偏移）
 d:linelen([lnum]) → n                 -- 行长含 \n；残段/虚拟尾行 =
                                        --   pt_bytes - lc_bytes
-d:lineoffset(lnum) → off             -- 第 lnum 行起始字节偏移（0-based，
-                                       --   lnum ∈ [0, breaks()]；只读，不动游标）
+d:lineoffset(lnum) → off             -- 第 lnum 行起始字节偏移（0-based；
+                                       --   lnum ∈ [0, breaks())；只读，不动游标）
 d:linecol(off) → line, col           -- 字节 offset → 行号 + 行内字节列
                                        --   （0-based；只读，不动游标）
-d:breaks() → n                        -- 行数（= lc_breaks + 尾残段修正）；
-                                       --   尾 \n 的虚拟空行不计（editor 行号语义）
+d:breaks() → n                        -- 显示行数 = lc_breaks + 1；
+                                       --   空文档也有 1 个空行，尾 \n 后的空行计一行
 d:lines([fmt, ...])                   -- 迭代器，反复调 read(fmt, ...) 直到 nil；
                                        --   无参 = lines() 逐行不含 \n（io.lines 语义）
 d:piece("len"|"next"|"prev") → n       -- 当前/下一/前一 piece 长度（调试用）；
@@ -298,9 +298,11 @@ lpt_docsync(L, d, tbytes, tlines):
 - `line()`/`column()`：`lc_seek(lcC, d->lc, pt_offset(&d->C))` 定位。
   offset 可能 > lc_bytes（在残段区），此时 lc_seek 软 clamp 并将 col
   设为 excess。lc_line 给出行号，lc_col 给出列（残段区为残段内偏移）。
-- `linelen(n)`：n < breaks → `lc_seekline` + `lc_linelen`；n == breaks
-  → 残段行长 = `pt_bytes - lc_bytes`（从 lc_seek 到 lc_bytes 处取得
-  col=excess，即残段长度）；n > breaks → argcheck。
+- `linelen(n)`：n ≤ lc_breaks（= breaks-1）→
+  `lc_seekline`/`lc_seek` + `lc_linelen`；n ≥ breaks → argcheck。
+  空文档 `linelen(0)` 返回 0。
+- `lineoffset(n)`：n ≤ lc_breaks（= breaks-1）→ 行首偏移；
+  n ≥ breaks → argcheck。空文档 `lineoffset(0)` 返回 0。
 - `seek("line", n)`：n ≤ breaks → `lc_seekline` + `lc_lineoffset` 返回行首；
   n > breaks → argcheck。
 - `lines([fmt, ...])`：io.lines 语义——返回闭包迭代器，每次迭代调
@@ -383,17 +385,17 @@ lpt_docsync(L, d, tbytes, tlines):
 
 **残段不进树**：scanner 只返回含 \n 完整行；尾部无 \n 字节留在
 树外（lc_bytes ≤ pt_bytes），由 trailing 虚拟行机制寻址。
-**行数恒 = breaks + 1**（无脑 +1：尾要么有残段行，要么 \n 后有
-虚拟空行，要么空文档一个空行）。
-**breaks() 返回行数**（§五）：= lc_breaks + 尾残段修正；尾 \n 后的
-虚拟空行**不计**（编辑器行号语义，vim 对 "a\n" 显示 1 行）。
+**breaks() 返回显示行数**：恒 = lc_breaks + 1，所以空文档也有 1 个
+空行，尾 \n 后的空行计为一行。`lines()` 仍按 io.lines 语义，不产出
+尾空行。
 
-| 文档     | breaks | 行数 | read("l") 连续     | lines() 迭代 |
-| -------- | ------ | ---- | ------------------- | ------------ |
-| `""`     | 0      | 1    | —                   | （无迭代）   |
-| `"a"`    | 0      | 1    | `"a"`, nil          | `"a"`        |
-| `"a\n"`  | 1      | 2    | `"a"`, nil          | `"a"`        |
-| `"a\nb"` | 1      | 2    | `"a"`, `"b"`, nil   | `"a"`, `"b"` |
+| 文档     | breaks | read("l") 连续     | lines() 迭代 |
+| -------- | ------ | ------------------- | ------------ |
+| `""`     | 1      | `nil`               | （无迭代）   |
+| `"a"`    | 1      | `"a"`, nil          | `"a"`        |
+| `"a\n"`  | 2      | `"a"`, nil          | `"a"`        |
+| `"a\nb"` | 2      | `"a"`, `"b"`, nil   | `"a"`, `"b"` |
+| `"a\nb\n"` | 3    | `"a"`, `"b"`, nil   | `"a"`, `"b"` |
 
 - **lines() = io.lines 语义**：无参时反复调 `read()`（行不含 \n）直到 nil。
   接受可选格式参数：`d:lines("*L")` 含换行，`d:lines(80)` 按字节。

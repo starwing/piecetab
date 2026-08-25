@@ -631,8 +631,7 @@ static int Lpt_doc(lua_State *L) {
 static size_t lpt_docbreaks(lua_State *L, lpt_Doc *d, size_t lnum) {
     size_t br;
     lpt_checkerror(L, lpt_docsync(L, d, lnum, -1));
-    br = lc_breaks(d->lc);
-    if (lc_bytes(d->lc) < pt_bytes(pt_buffer(&d->C))) ++br;
+    br = lc_breaks(d->lc) + 1;
     return luaL_argcheck(L, lnum <= br, 3, "line out of range"), br;
 }
 
@@ -980,10 +979,9 @@ static int Ldoc_linecol(lua_State *L) {
 
 static int Ldoc_breaks(lua_State *L) {
     lpt_Doc *d = lpt_checkdoc(L, 1);
-    size_t   trailing = 0, total = pt_bytes(pt_buffer(&d->C));
+    size_t   total = pt_bytes(pt_buffer(&d->C));
     lpt_checkerror(L, lpt_docsync(L, d, LPT_UNL, total));
-    if (lc_bytes(d->lc) < total) trailing = 1;
-    return lua_pushinteger(L, (lua_Integer)(lc_breaks(d->lc) + trailing)), 1;
+    return lua_pushinteger(L, (lua_Integer)(lc_breaks(d->lc) + 1)), 1;
 }
 
 static int Ldoc_lineiter(lua_State *L) {

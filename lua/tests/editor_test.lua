@@ -107,7 +107,7 @@ end
 
 function TestSkeleton:testNewEmptyDoc()
   local e = make_ed()
-  lu.assertEquals(e.doc:breaks(), 0) -- empty doc: 0 lines (see piecetab_test testLineCountEmpty)
+  lu.assertEquals(e.doc:breaks(), 1) -- one empty display line
 end
 
 function TestSkeleton:testUndoSwitchSyncsLsp()
@@ -143,7 +143,7 @@ function TestSkeleton:testOpenReadsFile()
   f:close()
   local e = Ed.open(path)
   e.log = function() end
-  lu.assertEquals(e.doc:breaks(), 2)
+  lu.assertEquals(e.doc:breaks(), 3)
   os.remove(path)
 end
 
@@ -246,7 +246,7 @@ end
 function TestNormal:testDollarXKeepsLine()
   self.e:dispatch("$")
   self.e:dispatch("x") -- deletes 'e', not the newline
-  lu.assertEquals(self.e.doc:breaks(), 3)
+  lu.assertEquals(self.e.doc:breaks(), 4)
 end
 
 function TestNormal:testDollarAInsertsAtEnd()
@@ -260,7 +260,7 @@ end
 
 function TestNormal:testGgG()
   self.e:dispatch("G")
-  lu.assertEquals(self.e.doc:line(), 2)
+  lu.assertEquals(self.e.doc:line(), 3)
   self.e:dispatch("gg")
   lu.assertEquals(self.e.doc:line(), 0)
 end
@@ -272,7 +272,47 @@ end
 
 function TestNormal:testDdDeletesLine()
   self.e:dispatch("dd")
-  lu.assertEquals(self.e.doc:breaks(), 2)
+  lu.assertEquals(self.e.doc:breaks(), 3)
+end
+
+function TestNormal:testDdOnLastEmptyLineRemovesFinalNewline()
+  local e = make_ed("abc\ndef\n")
+  e.doc:seek("line", 2) -- trailing empty line
+  e:dispatch("dd")
+  e.doc:seek("set", 0)
+  lu.assertEquals(e.doc:read("*a"), "abc\ndef")
+  lu.assertEquals(e.doc:breaks(), 2)
+  lu.assertEquals(e.doc:line(), 1)
+end
+
+function TestNormal:testDdOnOnlyEmptyLineRemovesFinalNewline()
+  local e = make_ed("abc\n")
+  e.doc:seek("line", 1) -- trailing empty line
+  e:dispatch("dd")
+  e.doc:seek("set", 0)
+  lu.assertEquals(e.doc:read("*a"), "abc")
+  lu.assertEquals(e.doc:breaks(), 1)
+  lu.assertEquals(e.doc:line(), 0)
+end
+
+function TestNormal:testDdOnLastFragmentRemovesPrecedingNewline()
+  local e = make_ed("abc\ndef")
+  e.doc:seek("line", 1) -- trailing fragment line
+  e:dispatch("dd")
+  e.doc:seek("set", 0)
+  lu.assertEquals(e.doc:read("*a"), "abc")
+  lu.assertEquals(e.doc:breaks(), 1)
+  lu.assertEquals(e.doc:line(), 0)
+end
+
+function TestNormal:testEmptyFileSequenceDdRenderNoHang()
+  local e = make_ed("")
+  for _, k in ipairs({ "i", "a", "b", "c", "<Enter>", "d", "e", "f",
+      "<Enter>", "<Escape>", "k", "k", "d", "d", "d", "d" }) do
+    keystroke(e, k)
+  end
+  lu.assertEquals(e.doc:breaks(), 1)
+  lu.assertEquals(e.doc:line(), 0)
 end
 
 function TestNormal:testPendingGeneric()
@@ -313,7 +353,7 @@ end
 function TestNormal:testOOpensLineBelow()
   self.e:dispatch("o")
   lu.assertEquals(self.e.mode, "INSERT")
-  lu.assertEquals(self.e.doc:breaks(), 4)
+  lu.assertEquals(self.e.doc:breaks(), 5)
   lu.assertEquals(self.e.doc:line(), 1) -- new empty line below, cursor at its start
   lu.assertEquals(self.e.doc:column(), 0)
 end
@@ -321,7 +361,7 @@ end
 function TestNormal:testOOpensLineAbove()
   self.e:dispatch("O")
   lu.assertEquals(self.e.mode, "INSERT")
-  lu.assertEquals(self.e.doc:breaks(), 4)
+  lu.assertEquals(self.e.doc:breaks(), 5)
   lu.assertEquals(self.e.doc:line(), 0) -- new empty line above, cursor at its start
   lu.assertEquals(self.e.doc:column(), 0)
 end
@@ -378,7 +418,7 @@ function TestInsert:testEnterSplitsLine()
   self.e:dispatch("i")
   self.e:dispatch("<Enter>")
   esc(self.e)
-  lu.assertEquals(self.e.doc:breaks(), 2)
+  lu.assertEquals(self.e.doc:breaks(), 3)
 end
 
 function TestInsert:testEscapeMovesLeft()
@@ -518,7 +558,7 @@ function TestCommand:testEreloadsFile()
   e:dispatch(path)
   e:dispatch("<Enter>")
   lu.assertEquals(e.filename, path)
-  lu.assertEquals(e.doc:breaks(), 2)
+  lu.assertEquals(e.doc:breaks(), 3)
   e.doc:seek("line", 0)
   lu.assertEquals(e.doc:read("l"), "two")
   os.remove(path)
