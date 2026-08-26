@@ -120,15 +120,49 @@ jobs:
       - uses: leafo/gh-actions-lua@v13
         with:
           luaVersion: "5.5"
-      - name: Configure Fast APT Mirror
-        if: runner.os == 'Linux'
-        uses: vegardit/fast-apt-mirror.sh@v1
-      - name: Install Sphinx for LCOV
-        run: sudo apt-get update && sudo apt-get install -y python3-sphinx python3-sphinx-rtd-theme
-      - name: Setup LCOV
-        uses: hrishikesh-kadam/setup-lcov@v1
+      # setup-lcov builds lcov v2.5 from source (Perl deps + Sphinx docs);
+      # cache a local install under ~/.lcov to avoid rebuilding every run.
+      - name: Restore LCOV cache
+        id: lcov-cache
+        uses: actions/cache/restore@v4
         with:
-          ref: v2.5
+          path: ~/.lcov
+          key: ${{ runner.os }}-lcov-v2.5-${{ hashFiles('.github/workflows/test.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-lcov-v2.5-
+      - name: Configure Fast APT Mirror
+        if: runner.os == 'Linux' && steps.lcov-cache.outputs.cache-hit != 'true'
+        uses: vegardit/fast-apt-mirror.sh@v1
+      - name: Install LCOV (cache miss)
+        if: steps.lcov-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cpanminus python3-sphinx python3-sphinx-rtd-theme libcrypt-dev
+          cpanm --local-lib-contained "$HOME/.lcov/perl5" --notest Capture::Tiny DateTime
+          rm -rf /tmp/lcov
+          git clone --depth 1 --branch v2.5 https://github.com/linux-test-project/lcov.git /tmp/lcov
+          make -C /tmp/lcov install PREFIX="$HOME/.lcov/lcov"
+      - name: Save LCOV cache
+        if: steps.lcov-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.lcov
+          key: ${{ runner.os }}-lcov-v2.5-${{ hashFiles('.github/workflows/test.yml') }}
+      - name: Add LCOV to environment
+        run: |
+          echo "$HOME/.lcov/lcov/bin" >> "$GITHUB_PATH"
+          LCOV_PERL5LIB="$HOME/.lcov/perl5/lib/perl5"
+          ARCH_DIR="$HOME/.lcov/perl5/lib/perl5/$(perl -MConfig -e 'print $Config{archname}')"
+          if [ -d "$ARCH_DIR" ]; then
+            LCOV_PERL5LIB="$LCOV_PERL5LIB:$ARCH_DIR"
+          fi
+          if [ -n "${PERL5LIB:-}" ]; then
+            echo "PERL5LIB=$LCOV_PERL5LIB:$PERL5LIB" >> "$GITHUB_ENV"
+          else
+            echo "PERL5LIB=$LCOV_PERL5LIB" >> "$GITHUB_ENV"
+          fi
       - name: coverage
         run: just cov
       - name: Coveralls
