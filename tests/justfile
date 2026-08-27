@@ -6,7 +6,7 @@ INCS := "-I.. -I."
 
 # run all C test runners
 [default]
-all: lc4 lc8 pt sp4 sp8 ut cg tf
+all: lc4 lc8 pt sp4 sp8 ut cg tf tm
 
 # linecache fanout-4 tests (ASan/UBSan)
 lc4 *args='': (c-dbg-run "linecache_test_fanout4" INCS args)
@@ -22,6 +22,12 @@ ut *args='': (c-dbg-run "undotree_test" INCS args)
 cg *args='': (c-dbg-run "cellgrid_test" INCS args)
 # termfeed tests (ASan/UBSan)
 tf *args='': (c-dbg-run "termfeed_test" INCS args)
+# textmatch tests (ASan/UBSan)
+tm *args='': tm-check (c-dbg-run "textmatch_test" INCS args)
+
+[private]
+tm-check:
+    lua {{ ROOT }}/misc/check_textmatch.lua {{ ROOT }}/textmatch.h
 # spantree fanout-4 tests (ASan/UBSan)
 sp4 *args='': (c-dbg-run "spantree_test_fanout4" INCS args)
 # spantree fanout-8 tests (ASan/UBSan)
@@ -30,7 +36,7 @@ sp8 *args='': (c-dbg-run "spantree_test_fanout8" INCS args)
 sp *args='': (c-dbg-run "spantree_test_fanout4" INCS "?" + args) (c-dbg-run "spantree_test_fanout8" INCS "?" + args)
 
 # coverage: build and run all C tests, then report combined coverage
-cov: clean-gcda (c-cov-run "linecache_test_fanout4" INCS) (c-cov-run "linecache_test_fanout8" INCS) (c-cov-run "piecetab_test_fanout4" INCS) (c-cov-run "undotree_test" INCS) (c-cov-run "cellgrid_test" INCS) (c-cov-run "termfeed_test" INCS) (c-cov-run "spantree_test_fanout4" INCS) (cov-show ".." "piecetab.h linecache.h undotree.h cellgrid.h termfeed.h spantree.h")
+cov: clean-gcda (c-cov-run "linecache_test_fanout4" INCS) (c-cov-run "linecache_test_fanout8" INCS) (c-cov-run "piecetab_test_fanout4" INCS) (c-cov-run "undotree_test" INCS) (c-cov-run "cellgrid_test" INCS) (c-cov-run "termfeed_test" INCS) (c-cov-run "spantree_test_fanout4" INCS) (c-cov-run "textmatch_test" INCS) (cov-show ".." "piecetab.h linecache.h undotree.h cellgrid.h termfeed.h spantree.h textmatch.h")
 
 # linecache coverage
 lc-cov: clean-gcda (c-cov-run "linecache_test_fanout4" INCS) (c-cov-run "linecache_test_fanout8" INCS) (cov-show ".." "linecache.h")
@@ -42,6 +48,8 @@ ut-cov: clean-gcda (c-cov-run "undotree_test" INCS) (cov-show ".." "undotree.h")
 cg-cov: clean-gcda (c-cov-run "cellgrid_test" INCS) (cov-show ".." "cellgrid.h")
 # termfeed coverage
 tf-cov: clean-gcda (c-cov-run "termfeed_test" INCS) (cov-show ".." "termfeed.h")
+# textmatch coverage
+tm-cov: clean-gcda (c-cov-run "textmatch_test" INCS) (cov-show ".." "textmatch.h")
 # spantree coverage
 sp-cov: clean-gcda (c-cov-run "spantree_test_fanout4" INCS) (c-cov-run "spantree_test_fanout8" INCS) (cov-show ".." "spantree.h")
 
@@ -55,6 +63,8 @@ ut-lines: (cov-lines "undotree.h" "../lcov.info")
 cg-lines: (cov-lines "cellgrid.h" "../lcov.info")
 # termfeed uncovered lines
 tf-lines: (cov-lines "termfeed.h" "../lcov.info")
+# textmatch uncovered lines
+tm-lines: (cov-lines "textmatch.h" "../lcov.info")
 # spantree uncovered lines
 sp-lines: (cov-lines "spantree.h" "../lcov.info")
 
@@ -68,6 +78,8 @@ ut-unbranched: (cov-unbranched "undotree.h" "../lcov.info")
 cg-unbranched: (cov-unbranched "cellgrid.h" "../lcov.info")
 # termfeed uncovered branches
 tf-unbranched: (cov-unbranched "termfeed.h" "../lcov.info")
+# textmatch uncovered branches
+tm-unbranched: (cov-unbranched "textmatch.h" "../lcov.info")
 # spantree uncovered branches
 sp-unbranched: (cov-unbranched "spantree.h" "../lcov.info")
 

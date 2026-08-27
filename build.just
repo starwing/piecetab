@@ -60,7 +60,7 @@ c-build src out incs extra='':
 [private]
 c-dbg-run t incs *args='':
     lua {{ ROOT }}/misc/gen_entries.lua {{ t }}.c {{ t }}.gen.inc
-    {{ CC }} {{ CFLAGS }} {{ incs }} -g -O0 -fsanitize=address,undefined -o {{ t }} {{ t }}.c && ./{{ t }} {{ args }}
+    {{ CC }} {{ CFLAGS }} {{ incs }} -g -O0 -fsanitize=address,undefined -fno-sanitize-recover=undefined -o {{ t }} {{ t }}.c && ./{{ t }} {{ args }}
 
 [private]
 c-cov-run t incs *tests='':
@@ -73,7 +73,7 @@ fuzz-run lib incs mode arg='':
 
 [private]
 dfz-run lib incs mode arg='':
-    {{ CC }} {{ CFLAGS }} {{ incs }} -g -O1 -fsanitize=address,undefined -o {{ lib }}_fuzz_dbg {{ lib }}_fuzz.c && ./{{ lib }}_fuzz_dbg {{ mode }} {{ arg }}
+    {{ CC }} {{ CFLAGS }} {{ incs }} -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -o {{ lib }}_fuzz_dbg {{ lib }}_fuzz.c && ./{{ lib }}_fuzz_dbg {{ mode }} {{ arg }}
 
 [private]
 lua-build src incs lua_inc out extra='' libs='':

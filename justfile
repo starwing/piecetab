@@ -17,6 +17,7 @@ alias sp := t::sp
 alias ut := t::ut
 alias cg := t::cg
 alias tf := t::tf
+alias tm := t::tm
 alias cov := t::cov
 
 # capture an SVG screenshot of the editor demo (needs tmux + ansisvg;
