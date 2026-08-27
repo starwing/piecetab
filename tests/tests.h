@@ -42,6 +42,7 @@
                     __LINE__, #a, (long)_a, (long)_b);                 \
             abort();                                                   \
         }                                                              \
+        assert(_a == _b);                                              \
     } while (0)
 
 /* assertok -- abort if (e) is false */
