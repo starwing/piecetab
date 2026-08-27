@@ -456,6 +456,7 @@ TEST(piece_reader) {
     asserteq(r, TM_MATCHED);
     asserteq(st, 5);
     asserteq(en, 2);
+    pt_release(b);
     pt_close(S);
 }
 
@@ -941,6 +942,7 @@ TEST(piece_backref) {
     asserteq(r, TM_MATCHED);
     asserteq(st, 0);
     asserteq(en, 7);
+    pt_release(b);
     pt_close(S);
 }
 
