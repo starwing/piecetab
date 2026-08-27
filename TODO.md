@@ -153,6 +153,11 @@
   header），负载只作参考
 - **LSP 扩展**：在能促进展示/孵化 C 模块的情况下做（如 UTF-16 换算、
   span_decode、semantic/diag 写者的 C 化展示）；否则保持 Demo 够用即可
+- **piecetab `pt_close` 与未释放 buffer 的 arena 泄漏**：`pt_reset` /
+  `pt_close` 目前只销毁 node/hole/tree 对象池，不会释放仍被外部持有的
+  `pt_Tree::arena`；调用方必须在 `pt_close` 前 `pt_release` 所有 buffer，
+  否则 ASan 报泄漏。待定：改为 `pt_close` 全量回收（需 live tree 追踪），
+  或至少把“必须先 release”写进 docs/README
 - **popup window / cmd window**：横向新特性，无设计支撑，
   需先澄清孵什么 C 库
 - **lsp.lua UTF-16 换算遇非法 UTF-8 的显式处理**：piecetab 是字节级
