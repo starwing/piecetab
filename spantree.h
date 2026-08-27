@@ -120,6 +120,10 @@ SP_NS_END
 
 #endif /* spantree_h */
 
+/* ======================================================================== */
+/*                           IMPLEMENTATION                                 */
+/* ======================================================================== */
+
 #if defined(SP_IMPLEMENTATION) && !defined(sp_implemented)
 #define sp_implemented
 

@@ -188,15 +188,13 @@ static int cgK_utflen(const char *s) {
 }
 
 static int cgK_tocp(const char *s, int len) {
-    int b = (unsigned char)*s;
+    int b = *s & 0xFF;
     if (b < 0x80) return b;
-    if (len >= 2 && b < 0xe0)
-        return ((b & 0x1f) << 6) | ((unsigned char)s[1] & 0x3f);
+    if (len >= 2 && b < 0xe0) return ((b & 0x1f) << 6) | (s[1] & 0x3f);
     if (len >= 3 && b < 0xf0)
-        return ((b & 0x0f) << 12) | (((unsigned char)s[1] & 0x3f) << 6)
-             | ((unsigned char)s[2] & 0x3f);
-    return ((b & 0x07) << 18) | (((unsigned char)s[1] & 0x3f) << 12)
-         | (((unsigned char)s[2] & 0x3f) << 6) | ((unsigned char)s[3] & 0x3f);
+        return ((b & 0x0f) << 12) | ((s[1] & 0x3f) << 6) | (s[2] & 0x3f);
+    return ((b & 0x07) << 18) | ((s[1] & 0x3f) << 12) | ((s[2] & 0x3f) << 6)
+         | (s[3] & 0x3f);
 }
 
 CG_API int cg_next(const cg_Grid *G, int c, cg_Slice *s) {

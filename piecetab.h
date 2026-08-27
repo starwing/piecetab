@@ -137,6 +137,10 @@ PT_NS_END
 
 #endif /* piecetab_h */
 
+/* ======================================================================== */
+/*                           IMPLEMENTATION                                 */
+/* ======================================================================== */
+
 #if defined(PT_IMPLEMENTATION) && !defined(pt_implemented)
 #define pt_implemented
 
