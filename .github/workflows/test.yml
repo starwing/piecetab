@@ -31,6 +31,8 @@ jobs:
         run: just cg
       - name: termfeed tests
         run: just tf
+      - name: textmatch tests
+        run: just tm
       - name: spantree tests (FANOUT=4)
         run: just sp
       - name: spantree tests (FANOUT=8)
