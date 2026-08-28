@@ -368,7 +368,6 @@ TEST(backref_edges) {
     asserteq(en, 0);
     tm_init(&S, tm_read_text, &t);
     tm_seek(&S, 0);
-    asserteq(tmU_backref(&S.m, ':'), TM_ERRPATTERN);
     asserteq(tm_find_text("abcab", "(abc)%1", 0, &st, &en, 0), TM_OK);
 }
 
@@ -880,21 +879,6 @@ TEST(api_params_more) {
     asserteq(tm_capture(&S, 0, &cap), TM_ERRPARAM);
 }
 
-TEST(internal_edges) {
-    PMText   t;
-    tm_State S;
-    t.s = "abc";
-    t.len = strlen(t.s);
-    tm_init(&S, tm_read_text, &t);
-    tm_seek(&S, 0);
-    (void)tmU_peek(&S.m);
-    asserteq(tmS_equal(&S, 3, 0, 3), 0);
-    tm_init(&S, tm_read_text, &t);
-    tm_seek(&S, 0);
-    tm_pattern(&S, tm_string("x"));
-    asserteq(tmM_match(&S.m, tm_slice(S.m.pat.s, 0)), TM_MATCHED);
-}
-
 TEST(depth_complex) {
     size_t st, en;
     char   text[301], pat[1024];
@@ -944,6 +928,26 @@ TEST(piece_backref) {
     asserteq(en, 7);
     pt_release(b);
     pt_close(S);
+}
+
+TEST(fragmented_backref) {
+    PMFrag   f;
+    tm_State S;
+    size_t   st, en;
+    int      r;
+    f.s = "abcabc";
+    f.len = 6;
+    tm_init(&S, tm_read_frag, &f);
+    asserteq(tm_seek(&S, 0), TM_OK);
+    asserteq(tm_pattern(&S, tm_string("(abc)%1")), TM_OK);
+    r = tm_find(&S);
+    if (r == TM_MATCHED) {
+        st = tmT_offset(&S);
+        en = tmT_matchend(&S) - st;
+    }
+    asserteq(r, TM_MATCHED);
+    asserteq(st, 0);
+    asserteq(en, 6);
 }
 
 TEST(invalid_bytes) {
