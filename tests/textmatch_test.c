@@ -94,6 +94,11 @@ typedef struct {
     char        cell;
 } PMFrag;
 
+typedef struct {
+    const char *s;
+    size_t      base, len;
+} PMGap;
+
 TEST_STATIC void   tmT_setflags(tm_State *S, int f) { tm_setflags(S, f); }
 TEST_STATIC size_t tmT_offset(tm_State *S) { return tm_offset(S); }
 TEST_STATIC size_t tmT_matchend(tm_State *S) { return tm_matchend(S); }
@@ -136,6 +141,15 @@ TEST_STATIC tm_Slice tm_read_frag(void *ud, size_t *poff) {
     if (*poff >= f->len) return tm_slice(NULL, 0);
     f->cell = f->s[*poff];
     return tm_slice(&f->cell, 1);
+}
+
+TEST_STATIC tm_Slice tm_read_gap(void *ud, size_t *poff) {
+    PMGap *g = (PMGap *)ud;
+    if (*poff >= g->base && *poff < g->base + g->len) {
+        *poff = g->base;
+        return tm_slice(g->s, g->len);
+    }
+    return tm_slice(NULL, 0);
 }
 
 TEST_STATIC int tm_find_text(
@@ -879,6 +893,51 @@ TEST(api_params_more) {
     asserteq(tm_capture(&S, 0, &cap), TM_ERRPARAM);
 }
 
+TEST(api_surface) {
+    PMText     t;
+    tm_State   S;
+    tm_Slice   sl;
+    tm_Capture cap;
+    tm_State  *N = NULL;
+    int        r;
+    t.s = "abc";
+    t.len = strlen(t.s);
+    asserteq(tm_flags(N), 0);
+    asserteq(tm_offset(N), 0);
+    asserteq(tm_matchend(N), 0);
+    asserteq(tm_captures(N), 0);
+    tm_setflags(N, TM_LITERAL);
+    sl = tm_slice("abc", 2);
+    asserteq(sl.e - sl.s, 2);
+    assertok(sl.s[0] == 'a' && sl.s[1] == 'b');
+    sl = tm_string("abc");
+    asserteq(sl.e - sl.s, 3);
+    tm_init(&S, tm_read_text, &t);
+    asserteq(tm_flags(&S), 0);
+    tm_setflags(&S, TM_LITERAL);
+    asserteq(tm_flags(&S), TM_LITERAL);
+    tm_setflags(&S, 0);
+    asserteq(tm_seek(&S, 1), TM_OK);
+    asserteq(tm_offset(&S), 1);
+    asserteq(tm_advance(&S, -1), TM_OK);
+    asserteq(tm_offset(&S), 0);
+    asserteq(tm_pattern(&S, tm_string("(ab)")), TM_OK);
+    r = tm_match(&S);
+    asserteq(r, TM_MATCHED);
+    asserteq(tm_matchend(&S), 2);
+    asserteq(tm_captures(&S), 1);
+    asserteq(tm_capture(&S, 0, &cap), TM_OK);
+    asserteq(cap.start, 0);
+    asserteq(cap.len, 2);
+    asserteq(tm_advance(&S, 1), TM_OK);
+    asserteq(tm_offset(&S), 1);
+    asserteq(tm_pattern(&S, tm_string("b")), TM_OK);
+    r = tm_find(&S);
+    asserteq(r, TM_MATCHED);
+    asserteq(tm_offset(&S), 1);
+    asserteq(tm_matchend(&S), 2);
+}
+
 TEST(depth_complex) {
     size_t st, en;
     char   text[301], pat[1024];
@@ -1025,6 +1084,109 @@ TEST(prev_continuation) {
     asserteq(
             tm_find_text("\x80\x80\x80\x80\x80\x80", "%f[%a]", 6, &st, &en, 0),
             TM_OK);
+}
+
+TEST(prev_ascii_next) {
+    PMText   t;
+    tm_State S;
+    t.s = "abX";
+    t.len = 3;
+    tm_init(&S, tm_read_text, &t);
+    asserteq(tm_seek(&S, 2), TM_OK);
+    asserteq(tm_pattern(&S, tm_string("")), TM_OK);
+    asserteq(tm_match(&S), TM_MATCHED);
+    asserteq(tm_offset(&S), 2);
+    asserteq(tm_matchend(&S), 2);
+}
+
+TEST(prev_frag_lead) {
+    PMFrag   f;
+    tm_State S;
+    f.s = "\xF8\x81\x81\x81\x81";
+    f.len = 5;
+    tm_init(&S, tm_read_frag, &f);
+    asserteq(tm_seek(&S, 3), TM_OK);
+    asserteq(tm_pattern(&S, tm_string("^")), TM_OK);
+    asserteq(tm_match(&S), TM_OK);
+    asserteq(tm_offset(&S), 3);
+}
+
+TEST(prev_midchar_fill) {
+    PMFrag   f;
+    tm_State S;
+    f.s = "\xF8\x81\x81\x81\x81";
+    f.len = 5;
+    tm_init(&S, tm_read_frag, &f);
+    asserteq(tm_seek(&S, 1), TM_OK);
+    asserteq(tm_pattern(&S, tm_string("^")), TM_OK);
+    asserteq(tm_match(&S), TM_OK);
+    asserteq(tm_offset(&S), 1);
+}
+
+TEST(prev_stray_fallback) {
+    PMText   t;
+    tm_State S;
+    t.s = "A\x80";
+    t.len = 2;
+    tm_init(&S, tm_read_text, &t);
+    asserteq(tm_seek(&S, 2), TM_OK);
+    asserteq(tm_pattern(&S, tm_string("")), TM_OK);
+    asserteq(tm_match(&S), TM_MATCHED);
+    asserteq(tm_matchend(&S), 2);
+}
+
+TEST(prev_at_piece_base) {
+    PMSplit  sp;
+    tm_State S;
+    sp.a = "ab";
+    sp.la = 2;
+    sp.b = "1de";
+    sp.lb = 3;
+    tm_init(&S, tm_read_split, &sp);
+    asserteq(tm_seek(&S, 2), TM_OK);
+    asserteq(tm_pattern(&S, tm_string("x")), TM_OK);
+    asserteq(tm_match(&S), TM_OK);
+    asserteq(tm_pattern(&S, tm_string("")), TM_OK);
+    asserteq(tm_match(&S), TM_MATCHED);
+    asserteq(tm_offset(&S), 2);
+    asserteq(tm_matchend(&S), 2);
+}
+
+TEST(prev_long_continuation) {
+    PMText   t;
+    tm_State S;
+    t.s = "\x80\x80\x80\x80\x80\x80\x80";
+    t.len = 7;
+    tm_init(&S, tm_read_text, &t);
+    asserteq(tm_seek(&S, 7), TM_OK);
+    asserteq(tm_pattern(&S, tm_string("")), TM_OK);
+    asserteq(tm_match(&S), TM_MATCHED);
+    asserteq(tm_matchend(&S), 7);
+}
+
+TEST(prev_trailing_lead) {
+    PMText   t;
+    tm_State S;
+    t.s = "\xCD";
+    t.len = 1;
+    tm_init(&S, tm_read_text, &t);
+    asserteq(tm_seek(&S, 1), TM_OK);
+    asserteq(tm_pattern(&S, tm_string("")), TM_OK);
+    asserteq(tm_match(&S), TM_MATCHED);
+    asserteq(tm_matchend(&S), 1);
+}
+
+TEST(prev_gap_reader) {
+    PMGap    g;
+    tm_State S;
+    g.s = "\x81\x81";
+    g.base = 2;
+    g.len = 2;
+    tm_init(&S, tm_read_gap, &g);
+    asserteq(tm_seek(&S, 4), TM_OK);
+    asserteq(tm_pattern(&S, tm_string("")), TM_OK);
+    asserteq(tm_match(&S), TM_MATCHED);
+    asserteq(tm_matchend(&S), 4);
 }
 
 TEST(mid_char_boundary) {

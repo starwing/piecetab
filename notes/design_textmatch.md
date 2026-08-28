@@ -242,6 +242,11 @@ static void        tmU_reset(tm_State *S);
   `tmU_setp` 重新 materialize `p`。
 - `tmU_prev`：回退到前一个 codepoint 起点并解码；`pos == 0` 时返回 `0`，
   不返回 `TM_EOS`。会正确处理 mid-character 与非法 continuation 串的边界。
+  热路径是 `p[-1] < 0x80` 时直接左移 `p` 返回 ASCII；否则最多回扫
+  `TM_UTFMAX` 个 continuation 找到 lead。回扫跨 piece 时只逐 piece
+  `tmS_load`，不保存被换出 cache 的字节；找到 lead 后，若当前 piece 内
+  lead 之后的字节不足 claimed 长度，才用一次 `tmS_copy` 从 lead 向前
+  重组（至多 `TM_UTFMAX` 字节），否则直接解码当前 piece 内的 slice。
 - `tmU_goto`：设置 `pos = off`，清 `current/prev`，并用 `tmU_setp` 建立或
   失效 `p`；若 `off == pos`，内部直接走 `tmU_reset`。
 - `tmU_reset`：不移动 `pos`，只清 `current/prev/next` 并重建 `p`。
