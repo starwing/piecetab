@@ -55,10 +55,13 @@ ed-tmux *args='': root deps-lua
 
 # fetch tree-sitter grammars (optional)
 ts-grammars *langs='c lua': root
-    "$ROOT/misc/fetch_grammars.sh" {{ langs }}
+    sh "$ROOT/misc/fetch_grammars.sh" {{ langs }}
 
 # build tree-sitter binding for PUC and LuaJIT
 build-ts: root ts-grammars (lua-build "treesitter.c" INCS LUA_INC "treesitter.so" "-DNDEBUG -O2 " + TS_INC TS_LIB) (lua-build "treesitter.c" INCS LUAJIT_INC "luajit/treesitter.so" "-DNDEBUG -O2 " + TS_INC TS_LIB)
+
+# build only the PUC Lua tree-sitter binding (used by macOS CI)
+build-ts-puc: ts-grammars (lua-build "treesitter.c" INCS LUA_INC "treesitter.so" "-DNDEBUG -O2 " + TS_INC TS_LIB)
 
 # treesitter binding tests
 ts *args='': root build-ts (run "treesitter_test" args)

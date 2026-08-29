@@ -19,14 +19,14 @@ LUA_INC := `
             "$HOME/.lua/include/lua5.4" ../.lua/include .lua/include \
             /usr/local/include /usr/local/include/lua5.5 \
             /usr/local/include/lua5.4 /usr/include/lua5.4; do
-            [ -d "$d" ] && { echo "-I$d"; exit 0; }
+            [ -d "$d" ] && { echo "-I${d#../}"; exit 0; }
         done
     else
         for d in ../.lua/include .lua/include "$HOME/.lua/include" \
             "$HOME/.lua/include/lua5.5" "$HOME/.lua/include/lua5.4" \
             /usr/local/include /usr/local/include/lua5.5 \
             /usr/local/include/lua5.4 /usr/include/lua5.4; do
-            [ -d "$d" ] && { echo "-I$d"; exit 0; }
+            [ -d "$d" ] && { echo "-I${d#../}"; exit 0; }
         done
     fi
     exit 0
@@ -35,7 +35,7 @@ LUAJIT_INC := `
     for d in ../.lua/include/luajit-2.1 .lua/include/luajit-2.1 \
         /opt/homebrew/include/luajit-2.1 /usr/include/luajit-2.1 \
         /usr/local/include/luajit-2.1; do
-        [ -d "$d" ] && { echo "-I$d"; exit 0; }
+        [ -d "$d" ] && { echo "-I${d#../}"; exit 0; }
     done
     exit 0
 `

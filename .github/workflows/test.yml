@@ -94,10 +94,8 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install tree-sitter
+          just l::build-ts-puc
           cd lua
-          sh ../misc/fetch_grammars.sh c lua
-          LUA_INC=$(just --evaluate LUA_INC)
-          gcc -Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -std=gnu99 -Wno-variadic-macros -Wno-array-bounds -I. -I.. $LUA_INC -I/opt/homebrew/include -DNDEBUG -O2 -bundle -undefined dynamic_lookup -o treesitter.so treesitter.c -L/opt/homebrew/lib -ltree-sitter
           lua tests/editor_test.lua
 
   test-windows:
