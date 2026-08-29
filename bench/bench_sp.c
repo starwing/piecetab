@@ -1,4 +1,4 @@
-#define SP_IMPLEMENTATION
+#define SP_STATIC_API
 #include "bench.h"
 #include "spantree.h"
 

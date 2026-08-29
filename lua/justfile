@@ -2,21 +2,22 @@
 # run from repo root: just lua/<name> | just lua/<name>-cov | just lua/<name>-lines | just lua/clean
 
 import '../build.just'
+MODULE := "lua"
 
-INCS := "-I. -I.."
+INCS := "-I. -Ilua"
 
 # build a PUC Lua module
-build mod: (lua-build mod + ".c" INCS LUA_INC mod + ".so" "-DNDEBUG -O2")
+build mod: root (lua-build mod + ".c" INCS LUA_INC mod + ".so" "-DNDEBUG -O2")
 # build a LuaJIT Lua module
-build-jit mod: (lua-build mod + ".c" INCS LUAJIT_INC "luajit/" + mod + ".so" "-DNDEBUG -O2")
+build-jit mod: root (lua-build mod + ".c" INCS LUAJIT_INC "luajit/" + mod + ".so" "-DNDEBUG -O2")
 # build both PUC and LuaJIT modules
-build-both mod: (build mod) (build-jit mod)
+build-both mod: root (build mod) (build-jit mod)
 # build vendored lua-utf8 for PUC Lua
-build-utf8: (lua-build "lutf8lib.c" INCS LUA_INC "lua-utf8.so" "-DNDEBUG -O2")
+build-utf8: root (lua-build "lutf8lib.c" INCS LUA_INC "lua-utf8.so" "-DNDEBUG -O2")
 # build vendored lua-utf8 for LuaJIT
-build-utf8-jit: (lua-build "lutf8lib.c" INCS LUAJIT_INC "luajit/lua-utf8.so" "-DNDEBUG -O2")
+build-utf8-jit: root (lua-build "lutf8lib.c" INCS LUAJIT_INC "luajit/lua-utf8.so" "-DNDEBUG -O2")
 # debug + ASan build of a binding module; output stays {{mod}}.so so Lua can require it
-dbg mod: (lua-build mod + ".c" INCS LUA_INC mod + ".so" "-g -O0 -fno-omit-frame-pointer -fsanitize=address,undefined")
+dbg mod: root (lua-build mod + ".c" INCS LUA_INC mod + ".so" "-g -O0 -fno-omit-frame-pointer -fsanitize=address,undefined")
 
 # run a Lua test file under both PUC Lua and LuaJIT
 run t *args='':
@@ -24,59 +25,59 @@ run t *args='':
     luajit tests/{{ t }}.lua {{ args }}
 
 # piecetab binding tests
-pt *args='': (build-both "piecetab") (run "piecetab_test" args)
+pt *args='': root (build-both "piecetab") (run "piecetab_test" args)
 # cellgrid binding tests
-cg *args='': (build-both "cellgrid") (run "cellgrid_test" args)
+cg *args='': root (build-both "cellgrid") (run "cellgrid_test" args)
 # termfeed binding tests
-tf *args='': (build-both "termfeed") (run "termfeed_test" args)
+tf *args='': root (build-both "termfeed") (run "termfeed_test" args)
 # json binding tests
-json *args='': (build-both "json") (run "json_test" args)
+json *args='': root (build-both "json") (run "json_test" args)
 # build lua-utf8 for both PUC and LuaJIT
-utf8: build-utf8 build-utf8-jit
+utf8: root build-utf8 build-utf8-jit
 # lsp binding tests
-lsp *args='': (build-both "piecetab") (build-both "json") utf8 (run "lsp_test" args)
+lsp *args='': root (build-both "piecetab") (build-both "json") utf8 (run "lsp_test" args)
 # spantree binding tests
-sp *args='': (build-both "spantree") (run "spantree_test" args)
+sp *args='': root (build-both "spantree") (run "spantree_test" args)
 
 # build the PUC Lua modules needed for the editor demo (tree-sitter optional)
-deps: deps-lua deps-jit
+deps: root deps-lua deps-jit
 # build PUC Lua modules for the editor demo
-deps-lua: (build "piecetab") (build "cellgrid") (build "termfeed") (build "json") (build "spantree") build-utf8
+deps-lua: root (build "piecetab") (build "cellgrid") (build "termfeed") (build "json") (build "spantree") build-utf8
 # build LuaJIT modules for the editor demo
-deps-jit: (build-jit "piecetab") (build-jit "cellgrid") (build-jit "termfeed") (build-jit "json") (build-jit "spantree") build-utf8-jit
+deps-jit: root (build-jit "piecetab") (build-jit "cellgrid") (build-jit "termfeed") (build-jit "json") (build-jit "spantree") build-utf8-jit
 
 # editor demo unit tests (builds required C modules)
-ed *args='': deps-lua
+ed *args='': root deps-lua
     lua tests/editor_test.lua {{ args }}
 # editor display tests via tmux (builds required C modules)
-ed-tmux *args='': deps-lua
+ed-tmux *args='': root deps-lua
     lua tests/editor_tmux_test.lua {{ args }}
 
 # fetch tree-sitter grammars (optional)
-ts-grammars *langs='c lua':
-    {{ ROOT }}/misc/fetch_grammars.sh {{ langs }}
+ts-grammars *langs='c lua': root
+    "$ROOT/misc/fetch_grammars.sh" {{ langs }}
 
 # build tree-sitter binding for PUC and LuaJIT
-build-ts: ts-grammars (lua-build "treesitter.c" INCS LUA_INC "treesitter.so" "-DNDEBUG -O2 " + TS_INC TS_LIB) (lua-build "treesitter.c" INCS LUAJIT_INC "luajit/treesitter.so" "-DNDEBUG -O2 " + TS_INC TS_LIB)
+build-ts: root ts-grammars (lua-build "treesitter.c" INCS LUA_INC "treesitter.so" "-DNDEBUG -O2 " + TS_INC TS_LIB) (lua-build "treesitter.c" INCS LUAJIT_INC "luajit/treesitter.so" "-DNDEBUG -O2 " + TS_INC TS_LIB)
 
 # treesitter binding tests
-ts *args='': build-ts (run "treesitter_test" args)
+ts *args='': root build-ts (run "treesitter_test" args)
 
 # run every test suite (needs lua-utf8 rock, tmux, tree-sitter grammars)
-test: pt cg tf json lsp ed ed-tmux ts sp
+test: root pt cg tf json lsp ed ed-tmux ts sp
 
 # piecetab binding coverage
-pt-cov: (lua-cov-run "piecetab" "piecetab_test" INCS)
+pt-cov: root (lua-cov-run "piecetab" "piecetab_test" INCS)
 # cellgrid binding coverage
-cg-cov: (lua-cov-run "cellgrid" "cellgrid_test" INCS)
+cg-cov: root (lua-cov-run "cellgrid" "cellgrid_test" INCS)
 # termfeed binding coverage
-tf-cov: (lua-cov-run "termfeed" "termfeed_test" INCS)
+tf-cov: root (lua-cov-run "termfeed" "termfeed_test" INCS)
 # spantree binding coverage
-sp-cov: (lua-cov-run "spantree" "spantree_test" INCS)
+sp-cov: root (lua-cov-run "spantree" "spantree_test" INCS)
 # json binding coverage
-json-cov: (lua-cov-run "json" "json_test" INCS)
+json-cov: root (lua-cov-run "json" "json_test" INCS)
 # treesitter binding coverage
-ts-cov: (lua-cov-run "treesitter" "treesitter_test" INCS + " " + TS_INC TS_LIB)
+ts-cov: root (lua-cov-run "treesitter" "treesitter_test" INCS + " " + TS_INC TS_LIB)
 
 [private]
 lines mod:

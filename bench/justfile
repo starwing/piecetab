@@ -2,6 +2,7 @@
 # Run from repo root: just bench/<recipe> (just runs this file from bench/)
 
 import '../build.just'
+MODULE := "bench"
 
 default: all
 
@@ -9,17 +10,17 @@ default: all
 all: (py "scripts/bench_summary.py")
 
 # quick PT smoke run
-smoke: (c-build "bench_pt.c" "build/pt/pt_bench" "-I.. -I.")
+smoke: root (c-build "bench_pt.c" "build/pt/pt_bench" "-I. -Ibench")
     mkdir -p results/pt
     ./build/pt/pt_bench --rounds 2 --iters 100 --json results/pt/pt_smoke.json
 
 # run default SP benchmark
-sp *args='': (c-build "bench_sp.c" "build/sp/sp_bench" "-I.. -I." "-DSP_FANOUT=34 -DSP_MAX_LEVEL=16")
+sp *args='': root (c-build "bench_sp.c" "build/sp/sp_bench" "-I. -Ibench" "-DSP_FANOUT=34 -DSP_MAX_LEVEL=16")
     mkdir -p results/sp
     ./build/sp/sp_bench {{ args }}
 
 # quick SP smoke run
-sp-smoke: (c-build "bench_sp.c" "build/sp/sp_bench" "-I.. -I." "-DSP_FANOUT=34 -DSP_MAX_LEVEL=16")
+sp-smoke: root (c-build "bench_sp.c" "build/sp/sp_bench" "-I. -Ibench" "-DSP_FANOUT=34 -DSP_MAX_LEVEL=16")
     mkdir -p results/sp
     ./build/sp/sp_bench --rounds 2 --iters 100 --json results/sp/sp_smoke.json
 
@@ -45,12 +46,12 @@ sp-sparse-analyze: (py "scripts/analyze_sparse_confirm.py")
 sp-plot: (py "scripts/plot_bench.py" "results/sp/sp_fanout_*.json" "--out" "reports/sp")
 
 # run default LC benchmark
-lc *args='': (c-build "bench_lc.c" "build/lc/lc_bench" "-I.. -I." "-DLC_FANOUT=16 -DLC_LEAF_FANOUT=34 -DLC_MAX_LEVEL=21")
+lc *args='': root (c-build "bench_lc.c" "build/lc/lc_bench" "-I. -Ibench" "-DLC_FANOUT=16 -DLC_LEAF_FANOUT=34 -DLC_MAX_LEVEL=21")
     mkdir -p results/lc
     ./build/lc/lc_bench {{ args }}
 
 # quick LC smoke run
-lc-smoke: (c-build "bench_lc.c" "build/lc/lc_bench" "-I.. -I." "-DLC_FANOUT=16 -DLC_LEAF_FANOUT=34 -DLC_MAX_LEVEL=21")
+lc-smoke: root (c-build "bench_lc.c" "build/lc/lc_bench" "-I. -Ibench" "-DLC_FANOUT=16 -DLC_LEAF_FANOUT=34 -DLC_MAX_LEVEL=21")
     mkdir -p results/lc
     ./build/lc/lc_bench --rounds 2 --iters 100 --json results/lc/lc_smoke.json
 

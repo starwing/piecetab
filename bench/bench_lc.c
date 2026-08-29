@@ -1,4 +1,4 @@
-#define LC_IMPLEMENTATION
+#define LC_STATIC_API
 #include "bench.h"
 #include "linecache.h"
 

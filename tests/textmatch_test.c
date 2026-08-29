@@ -5,7 +5,7 @@
 #endif
 #define PT_STATIC_API
 #include "../lua/unidata.h"
-#include "../piecetab.h"
+#include "piecetab.h"
 
 #define PMT_TABSIZE(t) (sizeof(t) / sizeof((t)[0]))
 

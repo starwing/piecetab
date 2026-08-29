@@ -1,8 +1,7 @@
 #define LC_LEAF_FANOUT 4
 #define LC_FANOUT      4
 #define LC_PAGE_SIZE   512
-#undef LC_IMPLEMENTATION
-#define LC_IMPLEMENTATION
+#define LC_STATIC_API
 #ifndef LC_POOL_STATS
 # define LC_POOL_STATS
 #endif

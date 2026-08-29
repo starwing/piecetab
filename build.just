@@ -4,7 +4,9 @@
 # (source_directory(), not justfile_dir(), which depends on invocation style);
 # submodule justfiles pass paths relative to their own CWD.
 
-ROOT := source_directory()
+set allow-duplicate-variables
+export ROOT := source_directory()
+MODULE := "."
 
 CC := "gcc"
 CFLAGS := "-Wall -Wextra -Wconversion -Wno-sign-conversion -Werror -pedantic -std=c89 -Wno-variadic-macros"
@@ -41,9 +43,13 @@ TS_INC := "-I/opt/homebrew/include"
 TS_LIB := "-L/opt/homebrew/lib -ltree-sitter"
 
 [private]
+root:
+    @echo 'export ROOT={{ ROOT }}'
+
+[private]
 py script *args='':
-    @if [ -x {{ ROOT }}/.venv/bin/python ]; then \
-        {{ ROOT }}/.venv/bin/python {{ script }} {{ args }}; \
+    @if [ -x "$ROOT/.venv/bin/python" ]; then \
+        "$ROOT/.venv/bin/python" {{ script }} {{ args }}; \
     else \
         python3 {{ script }} {{ args }}; \
     fi
@@ -52,42 +58,54 @@ py script *args='':
 rm-gcda dir:
     -rm -f {{ dir }}/*.gcda {{ dir }}/*.gcno {{ dir }}/*.gcov {{ dir }}/*.info
 
+[no-cd]
 [private]
 c-build src out incs extra='':
-    @mkdir -p $(dirname {{ out }})
-    {{ CC }} {{ CFLAGS }} {{ incs }} -O2 -DNDEBUG {{ extra }} -o {{ out }} {{ src }}
+    @cd "$ROOT" && mkdir -p $(dirname {{ join(MODULE, out) }})
+    cd "$ROOT" && {{ CC }} {{ CFLAGS }} {{ incs }} -O2 -DNDEBUG {{ extra }} -o {{ join(MODULE, out) }} {{ join(MODULE, src) }}
 
+[no-cd]
 [private]
-c-dbg-run t incs *args='':
-    lua {{ ROOT }}/misc/gen_entries.lua {{ t }}.c {{ t }}.gen.inc
-    {{ CC }} {{ CFLAGS }} {{ incs }} -g -O0 -fsanitize=address,undefined -fno-sanitize-recover=undefined -o {{ t }} {{ t }}.c && ./{{ t }} {{ args }}
+c-dbg-run t incs *args='': (gen-inc t)
+    cd "$ROOT" && \
+    {{ CC }} {{ CFLAGS }} {{ incs }} -g -O0 -fsanitize=address,undefined \
+        -fno-sanitize-recover=undefined \
+        -o {{ join(MODULE, t) }} {{ prepend(MODULE + "/", t) }}.c
+    cd "$ROOT/{{ MODULE }}" && ./{{ t }} {{ args }}
 
+[no-cd]
 [private]
-c-cov-run t incs *tests='':
-    lua {{ ROOT }}/misc/gen_entries.lua {{ t }}.c {{ t }}.gen.inc
-    {{ CC }} {{ CFLAGS }} {{ incs }} -DNDEBUG --coverage -Wno-unused-function -O0 -o {{ t }} {{ t }}.c && ./{{ t }} {{ tests }}
+c-cov-run t incs *tests='': (gen-inc t)
+    cd "$ROOT" && \
+    {{ CC }} {{ CFLAGS }} {{ incs }} -DNDEBUG --coverage -Wno-unused-function \
+        -O0 -o {{ join(MODULE, t) }} {{ prepend(MODULE + "/", t) }}.c
+    cd "$ROOT/{{ MODULE }}" && ./{{ t }} {{ tests }}
 
+gen-inc t:
+    lua "$ROOT/misc/gen_entries.lua" {{ t }}.c {{ t }}.gen.inc
+
+[no-cd]
 [private]
 fuzz-run lib incs mode arg='':
-    {{ CC }} {{ CFLAGS }} {{ incs }} -g -O2 -o {{ lib }}_fuzz {{ lib }}_fuzz.c && ./{{ lib }}_fuzz {{ mode }} {{ arg }}
+    cd "$ROOT" && {{ CC }} {{ CFLAGS }} {{ incs }} -g -O2 -o {{ join(MODULE, lib + "_fuzz") }} {{ join(MODULE, lib + "_fuzz") }}.c && cd "{{ MODULE }}" && ./{{ lib }}_fuzz {{ mode }} {{ arg }}
 
+[no-cd]
 [private]
 dfz-run lib incs mode arg='':
-    {{ CC }} {{ CFLAGS }} {{ incs }} -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -o {{ lib }}_fuzz_dbg {{ lib }}_fuzz.c && ./{{ lib }}_fuzz_dbg {{ mode }} {{ arg }}
+    cd "$ROOT" && {{ CC }} {{ CFLAGS }} {{ incs }} -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -o {{ join(MODULE, lib + "_fuzz_dbg") }} {{ join(MODULE, lib + "_fuzz") }}.c && cd "{{ MODULE }}" && ./{{ lib }}_fuzz_dbg {{ mode }} {{ arg }}
 
+[no-cd]
 [private]
 lua-build src incs lua_inc out extra='' libs='':
-    @mkdir -p $(dirname {{ out }})
-    {{ CC }} {{ LUAFLAGS }} {{ incs }} {{ lua_inc }} {{ extra }} {{ LDF }} -o {{ out }} {{ src }} {{ libs }}
+    @cd "$ROOT" && mkdir -p $(dirname {{ join(MODULE, out) }})
+    cd "$ROOT" && {{ CC }} {{ LUAFLAGS }} {{ incs }} {{ lua_inc }} {{ extra }} {{ LDF }} -o {{ join(MODULE, out) }} {{ join(MODULE, src) }} {{ libs }}
 
+[no-cd]
 [private]
 lua-cov-run mod t incs libs='':
-    rm -f *.gcda luajit/*.gcda
-    @mkdir -p luajit
-    {{ CC }} {{ LUAFLAGS }} {{ incs }} {{ LUA_INC }} --coverage -g -O0 {{ LDF }} -o {{ mod }}.so {{ mod }}.c {{ libs }}
-    {{ CC }} {{ LUAFLAGS }} {{ incs }} {{ LUAJIT_INC }} --coverage -g -O0 {{ LDF }} -o luajit/{{ mod }}.so {{ mod }}.c {{ libs }}
-    lua tests/{{ t }}.lua && luajit tests/{{ t }}.lua
-    @just cov-show "." "{{ mod }}.c"
+    cd "$ROOT" && rm -f {{ join(MODULE, "*.gcda") }} {{ join(MODULE, "luajit/*.gcda") }} && mkdir -p {{ join(MODULE, "luajit") }} && {{ CC }} {{ LUAFLAGS }} {{ incs }} {{ LUA_INC }} --coverage -g -O0 {{ LDF }} -o {{ join(MODULE, mod + ".so") }} {{ join(MODULE, mod + ".c") }} {{ libs }} && {{ CC }} {{ LUAFLAGS }} {{ incs }} {{ LUAJIT_INC }} --coverage -g -O0 {{ LDF }} -o {{ join(MODULE, "luajit/" + mod + ".so") }} {{ join(MODULE, mod + ".c") }} {{ libs }}
+    cd "$ROOT/{{ MODULE }}" && lua tests/{{ t }}.lua && luajit tests/{{ t }}.lua
+    @cd "$ROOT/{{ MODULE }}" && just cov-show "." "{{ mod }}.c"
 
 [private]
 cov-gen dir src lcov=(dir / 'lcov.info'):

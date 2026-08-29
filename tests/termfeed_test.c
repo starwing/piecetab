@@ -1,5 +1,5 @@
 #define _DEFAULT_SOURCE /* glibc: declare snprintf under strict C89 */
-#define TF_IMPLEMENTATION
+#define TF_STATIC_API
 #include "termfeed.h"
 
 #include "tests.h"
@@ -3605,7 +3605,8 @@ TEST(parse_fail) {
     tf_Key key;
     int    n;
 
-    /* single letter without separator is a key name: <S> -> 'S' (no modifier) */
+    /* single letter without separator is a key name: <S> -> 'S' (no modifier)
+     */
     n = tf_parse("<S>", &key);
     asserteq(n, 3);
     asserteq(key.type, TF_TYPE_UNICODE);

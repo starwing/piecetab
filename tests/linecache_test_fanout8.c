@@ -1,8 +1,7 @@
 #define LC_LEAF_FANOUT 8
 #define LC_FANOUT      8
 #define LC_PAGE_SIZE   4096
-#undef LC_IMPLEMENTATION
-#define LC_IMPLEMENTATION
+#define LC_STATIC_API
 
 #include "lc_tests.h"
 

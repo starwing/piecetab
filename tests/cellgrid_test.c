@@ -1,7 +1,5 @@
 #define _DEFAULT_SOURCE /* glibc: declare snprintf under strict C89 */
-#ifndef CG_IMPLEMENTATION
-# define CG_IMPLEMENTATION
-#endif
+#define CG_STATIC_API
 #include "cellgrid.h"
 
 #include "tests.h"
@@ -541,7 +539,7 @@ TEST(putline_wide) {
 
 TEST(putline_params) {
     char     buf[4];
-    cg_Slice es = { NULL, NULL };
+    cg_Slice es = {NULL, NULL};
     cg_Grid  g, *gp = NULL;
     cg_init(&g, test_alloc, NULL);
     cg_begin(&g, 0, 2, 4);
@@ -1273,7 +1271,7 @@ TEST(byte_tab) {
     asserteq(cg_byte(&g, 0, SL("a\tb"), 4), 2);
     asserteq(cg_byte(&g, 0, SL("a\tb"), 5), 3);
     asserteq(cg_byte(&g, 0, SL("a\tb"), 6), 3);
-    asserteq(cg_byte(&g, 0, SL("\ta"), 2), 0);  /* lead tab, col 0 */
+    asserteq(cg_byte(&g, 0, SL("\ta"), 2), 0); /* lead tab, col 0 */
     asserteq(cg_byte(&g, 0, SL("\ta"), 4), 1);
     cg_settabstop(&g, 1);
     asserteq(cg_byte(&g, 0, SL("\ta"), 1), 1); /* tabstop fold -> 1 */
@@ -1303,7 +1301,9 @@ TEST(byte_cont) {
     buf[0] = test_byte(0x80);
     buf[1] = 'a';
     buf[2] = '\0';
-    asserteq(cg_byte(&g, 0, cg_slice(buf, 2), 1), 2); /* 'a' at col 0, col 1 = EOL */
+    asserteq(
+            cg_byte(&g, 0, cg_slice(buf, 2), 1),
+            2); /* 'a' at col 0, col 1 = EOL */
     cg_free(&g);
 }
 
@@ -1364,8 +1364,10 @@ TEST(next_tab) {
 }
 
 TEST(next_cont) {
-    cg_Slice s = SL("\x80" "a");
-    cg_Grid  g;
+    cg_Slice s = SL(
+            "\x80"
+            "a");
+    cg_Grid g;
     cc_init(&g, 1, 4);
     asserteq(cg_next(&g, 0, &s), 0); /* stray continuation: skipped */
     asserteq(cg_next(&g, 0, &s), 1);
@@ -1373,7 +1375,7 @@ TEST(next_cont) {
 }
 
 TEST(next_trunc) {
-    char    buf[3];
+    char     buf[3];
     cg_Slice s;
     cg_Grid  g;
     cc_init(&g, 1, 4);
@@ -1395,10 +1397,22 @@ TEST(next_iter) {
     cc_init(&g, 1, 4);
     while (s.s < s.e) {
         int w = cg_next(&g, col, &s);
-        if (k == 0) { asserteq((int)(s.s - base.s), 1); asserteq(col, 0); }
-        if (k == 1) { asserteq((int)(s.s - base.s), 2); asserteq(col, 1); }
-        if (k == 2) { asserteq((int)(s.s - base.s), 5); asserteq(col, 4); }
-        if (k == 3) { asserteq((int)(s.s - base.s), 6); asserteq(col, 6); }
+        if (k == 0) {
+            asserteq((int)(s.s - base.s), 1);
+            asserteq(col, 0);
+        }
+        if (k == 1) {
+            asserteq((int)(s.s - base.s), 2);
+            asserteq(col, 1);
+        }
+        if (k == 2) {
+            asserteq((int)(s.s - base.s), 5);
+            asserteq(col, 4);
+        }
+        if (k == 3) {
+            asserteq((int)(s.s - base.s), 6);
+            asserteq(col, 6);
+        }
         col += w, k++;
     }
     asserteq(k, 4);
@@ -1450,7 +1464,13 @@ TEST(putline_tabmid) {
     cg_Grid g;
     cc_init(&g, 1, 4);
     cg_begin(&g, 0, 1, 8);
-    asserteq(cg_putslice(&g, 0, 0, SL(ZH "\t" "b"), 1), 5);
+    asserteq(
+            cg_putslice(
+                    &g, 0, 0,
+                    SL(ZH "\t"
+                          "b"),
+                    1),
+            5);
     asserteq(cg_cell(&g, 0, 4, NULL), 'b');
     cg_free(&g);
 }
