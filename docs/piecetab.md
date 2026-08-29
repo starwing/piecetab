@@ -118,8 +118,9 @@ pt_Alloc *pt_getallocf(pt_State *S, void **pud);
   `NULL` for the default `realloc` wrapper. Initializes the object pools and the
   empty sentinel. Returns `NULL` on failure (OOM).
 - **`pt_reset`**: Frees all pools within the state (including all allocated
-  nodes, holes, and trees). The state object itself is retained. All buffers and
-  cursors depending on this state are invalidated. Accepts `NULL`.
+  nodes, holes, and trees) and all remaining arena blocks. The state object
+  itself is retained. All buffers and cursors depending on this state are
+  invalidated. Accepts `NULL`.
 - **`pt_close`**: `pt_reset` + frees the `pt_State` structure. Accepts `NULL`.
 - **`pt_getallocf`**: Returns the allocator function and user data associated
   with the state (output via `pud`, which may be `NULL`).
@@ -388,7 +389,7 @@ The arena is a **per-tree** block chain that stores frozen literal data.
   `pt_empty`.
 - A cursor borrows its buffer; keep the buffer alive while the cursor is in use.
 - After `pt_reset`/`pt_close`, all buffers and cursors created from that state
-  are invalid.
+  are invalid; any remaining arena blocks are reclaimed by the state.
 - After `pt_commit`/`pt_rollback`, the cursor is detached; re-seek it on the
   returned buffer to continue.
 - Multiple cursors can share one transient tree if copied from the same cursor,

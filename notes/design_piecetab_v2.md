@@ -11,10 +11,11 @@
 ```
 ┌─────────────────────────────┐
 │  pt_State (内存上下文)        │
-│  ├── allocf / alloc_ud       │
+│  ├── allocf / ud             │
 │  ├── pt_Pool nodes           │
 │  ├── pt_Pool holes           │
-│  ├── pt_BufferPool literalBuffer │
+│  ├── pt_Pool trees           │
+│  ├── pt_Arena *arenas        │
 │  └── max_version             │
 └─────────────────────────────┘
             │

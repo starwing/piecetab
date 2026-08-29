@@ -276,7 +276,7 @@ TEST(lifecycle) {
         void     *ud;
         pt_Alloc *af = pt_getallocf(S, &ud);
         asserteq(af, S->allocf);
-        asserteq(ud, S->alloc_ud);
+        asserteq(ud, S->ud);
         af = pt_getallocf(S, NULL);
         asserteq(af, S->allocf);
     }
@@ -477,7 +477,8 @@ TEST(insert_deep) {
     pt_close(S);
 }
 
-/* T3g: COW -- editing a committed levels-1 tree copies the path, source stays */
+/* T3g: COW -- editing a committed levels-1 tree copies the path, source stays
+ */
 
 TEST(insert_cow) {
     pt_State *S = pt_open(&test_alloc, NULL);
@@ -1945,9 +1946,9 @@ TEST(remove_hole_trim) {
     pt_close(S);
 }
 
-/* seam merge: delete a non-contiguous piece separating twosame-source buf fragments,
-   so thefragments become physically adjacent -> mergeleaf fuses them.
-   Covers: same node, cross node, multi-element cross node. */
+/* seam merge: delete a non-contiguous piece separating twosame-source buf
+   fragments, so thefragments become physically adjacent -> mergeleaf fuses
+   them. Covers: same node, cross node, multi-element cross node. */
 TEST(remove_merge_literal) {
     static const char buf[] = "abcdef";
     /* --- same node (levels=0): [abc][SEP][def] delete SEP --- */
@@ -2451,10 +2452,9 @@ TEST(remove_fold_adjacent_lit) {
 TEST(seam_insert_append_left) {
     static const char buf[] = "abcdefXYZ";
     pt_State         *S = pt_open(&test_alloc, NULL);
-    pt_Buffer         b = treeV(
-            0, leafV(litV_(buf + 0, 3), litV_(buf + 6, 3)));
+    pt_Buffer         b = treeV(0, leafV(litV_(buf + 0, 3), litV_(buf + 6, 3)));
     pt_Cursor         c;
-    pt_seek(&c, b, 3); /* cursor at head of "XYZ" */
+    pt_seek(&c, b, 3);                          /* cursor at head of "XYZ" */
     asserteq(pt_append(&c, buf + 3, 3), PT_OK); /* "def" bridges both */
     assertok(pt_checktree(c.tree));
     assertok(pt_checkcursor(&c, 6));
@@ -2468,10 +2468,9 @@ TEST(seam_insert_append_left) {
 TEST(seam_insert_append_right) {
     static const char buf[] = "abcdefg";
     pt_State         *S = pt_open(&test_alloc, NULL);
-    pt_Buffer         b = treeV(
-            0, leafV(litV_(buf + 0, 3), litV_(buf + 6, 1)));
+    pt_Buffer         b = treeV(0, leafV(litV_(buf + 0, 3), litV_(buf + 6, 1)));
     pt_Cursor         c;
-    pt_seek(&c, b, 3); /* cursor at tail of "abc" */
+    pt_seek(&c, b, 3);                          /* cursor at tail of "abc" */
     asserteq(pt_append(&c, buf + 3, 3), PT_OK); /* "def" bridges both */
     assertok(pt_checktree(c.tree));
     assertok(pt_checkcursor(&c, 6));
@@ -2485,15 +2484,13 @@ TEST(seam_insert_append_right) {
 TEST(seam_insert_tail_bridge) {
     static const char buf[] = "abcdefgh";
     pt_State         *S = pt_open(&test_alloc, NULL);
-    pt_Buffer         b = treeV(
-            0, leafV(litV_(buf + 0, 2), litV_(buf + 5, 3)));
+    pt_Buffer         b = treeV(0, leafV(litV_(buf + 0, 2), litV_(buf + 5, 3)));
     pt_Cursor         c;
-    pt_seek(&c, b, 2); /* cursor at tail of "ab" */
+    pt_seek(&c, b, 2);                          /* cursor at tail of "ab" */
     asserteq(pt_append(&c, buf + 3, 2), PT_OK); /* "cd" bridges next */
     assertok(pt_checktree(c.tree));
     assertok(pt_checkcursor(&c, 4));
-    pt_asserttree(c.tree, 0,
-                  leafV(litV_(buf + 0, 2), litV_(buf + 3, 5)));
+    pt_asserttree(c.tree, 0, leafV(litV_(buf + 0, 2), litV_(buf + 3, 5)));
     pt_release(c.tree), pt_release(b);
     asserteq(S->nodes.live_obj, 0);
     asserteq(S->holes.live_obj, 0);
@@ -2525,8 +2522,7 @@ TEST(seam_remove_hole_erase) {
 TEST(seam_remove_head_shrink) {
     static const char buf[] = "abcdefghi";
     pt_State         *S = pt_open(&test_alloc, NULL);
-    pt_Buffer         b = treeV(
-            0, leafV(litV_(buf + 4, 4), litV_(buf + 5, 4)));
+    pt_Buffer         b = treeV(0, leafV(litV_(buf + 4, 4), litV_(buf + 5, 4)));
     pt_Cursor         c;
     pt_seek(&c, b, 4); /* head of second piece */
     asserteq(pt_remove(&c, 3), PT_OK);
@@ -2542,15 +2538,13 @@ TEST(seam_remove_head_shrink) {
 TEST(seam_remove_tail_shrink) {
     static const char buf[] = "abcdefgh";
     pt_State         *S = pt_open(&test_alloc, NULL);
-    pt_Buffer         b = treeV(
-            0, leafV(litV_(buf + 0, 3), litV_(buf + 4, 4)));
+    pt_Buffer         b = treeV(0, leafV(litV_(buf + 0, 3), litV_(buf + 4, 4)));
     pt_Cursor         c;
     pt_seek(&c, b, 5); /* inside "efgh", 4 bytes remain to the end */
     asserteq(pt_remove(&c, 4), PT_OK); /* clamp: rmleaf tail-shrink last */
     assertok(pt_checktree(c.tree));
     assertok(pt_checkcursor(&c, 5));
-    pt_asserttree(c.tree, 0,
-                  leafV(litV_(buf + 0, 3), litV_(buf + 4, 2)));
+    pt_asserttree(c.tree, 0, leafV(litV_(buf + 0, 3), litV_(buf + 4, 2)));
     pt_release(c.tree), pt_release(b);
     asserteq(S->nodes.live_obj, 0);
     asserteq(S->holes.live_obj, 0);
@@ -2561,18 +2555,19 @@ TEST(seam_remove_balance_left) {
     static const char buf[] = "abcdefghij";
     pt_State         *S = pt_open(&test_alloc, NULL);
     pt_Buffer         b = treeV(
-            1, innerV(leafV(litV("a"), litV_(buf + 0, 3)),
-                      leafV(litV_(buf + 3, 3), litV("c"), litV("d"),
-                            litV("e"))));
-    pt_Cursor         c;
+            1,
+            innerV(leafV(litV("a"), litV_(buf + 0, 3)),
+                   leafV(litV_(buf + 3, 3), litV("c"), litV("d"), litV("e"))));
+    pt_Cursor c;
     pt_seek(&c, b, 0);
     asserteq(pt_remove(&c, 1), PT_OK); /* drop "a": left leaf underfull */
     assertok(pt_checktree(c.tree));
     assertok(pt_checkcursor(&c, 0));
     /* seambound pre-merge fuses "abc"+"def" (physically adjacent), cL+cR
      * drops to 4 <= FANOUT so foldnode merges the pair into one leaf. */
-    pt_asserttree(c.tree, 0,
-                  leafV(litV_(buf + 0, 6), litV("c"), litV("d"), litV("e")));
+    pt_asserttree(
+            c.tree, 0,
+            leafV(litV_(buf + 0, 6), litV("c"), litV("d"), litV("e")));
     pt_release(c.tree), pt_release(b);
     asserteq(S->nodes.live_obj, 0);
     asserteq(S->holes.live_obj, 0);
@@ -2585,14 +2580,15 @@ TEST(seam_remove_balance_right) {
     pt_Buffer         b = treeV(
             1, innerV(leafV(litV("a"), litV("b"), litV("c"), litV_(buf + 0, 3)),
                       leafV(litV("Y"), litV_(buf + 3, 3))));
-    pt_Cursor         c;
-    pt_seek(&c, b, 6); /* cursor at head of "Y" */
+    pt_Cursor c;
+    pt_seek(&c, b, 6);                 /* cursor at head of "Y" */
     asserteq(pt_remove(&c, 1), PT_OK); /* drop "Y": right leaf underfull */
     assertok(pt_checktree(c.tree));
     /* seambound pre-merge fuses "abc"+"def" (physically adjacent), cL+cR
      * drops to 4 <= FANOUT so foldnode merges the pair into one leaf. */
-    pt_asserttree(c.tree, 0,
-                  leafV(litV("a"), litV("b"), litV("c"), litV_(buf + 0, 6)));
+    pt_asserttree(
+            c.tree, 0,
+            leafV(litV("a"), litV("b"), litV("c"), litV_(buf + 0, 6)));
     pt_release(c.tree), pt_release(b);
     asserteq(S->nodes.live_obj, 0);
     asserteq(S->holes.live_obj, 0);
@@ -3410,7 +3406,8 @@ TEST(commit_reservebuf_oom) {
     pt_close(S);
 }
 
-/* sec.8.3 full round-trip: edit series -> commit -> content matches reference */
+/* sec.8.3 full round-trip: edit series -> commit -> content matches reference
+ */
 TEST(edit_commit_roundtrip) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_from(S, "Hello World", 11);
@@ -5340,6 +5337,76 @@ TEST(edit_pieceend_escape) {
     asserteq(S->nodes.live_obj, 0);
     asserteq(S->holes.live_obj, 0);
     pt_close(S);
+}
+
+TEST(close_unreleased_arena) {
+    Count     c = {0};
+    pt_State *S = pt_open(&count_alloc, &c);
+    pt_Buffer b;
+    pt_Cursor cur;
+    char     *p;
+
+    b = pt_empty(S);
+    pt_seek(&cur, b, 0);
+    p = pt_reserve(&cur, 0);
+    assertok(p != NULL);
+    assertok(S->arenas != NULL);
+    pt_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST(close_unreleased_commit) {
+    Count     c = {0};
+    pt_State *S = pt_open(&count_alloc, &c);
+    pt_Buffer b, nb;
+    pt_Cursor cur;
+
+    b = pt_empty(S);
+    pt_seek(&cur, b, 0);
+    assertok(pt_edit(&cur, 0, "hello", 5) == PT_OK);
+    nb = pt_commit(&cur);
+    assertok(nb != NULL);
+    assertok(S->arenas != NULL);
+    pt_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST(reset_unreleased_arena) {
+    Count     c = {0};
+    pt_State *S = pt_open(&count_alloc, &c);
+    pt_Buffer b;
+    pt_Cursor cur;
+
+    b = pt_empty(S);
+    pt_seek(&cur, b, 0);
+    assertok(pt_reserve(&cur, 0) != NULL);
+    assertok(S->arenas != NULL);
+    pt_reset(S);
+    assertok(S->arenas == NULL);
+    b = pt_empty(S);
+    pt_seek(&cur, b, 0);
+    assertok(pt_reserve(&cur, 0) != NULL);
+    assertok(S->arenas != NULL);
+    pt_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST(release_unlinks_arena_blocks) {
+    Count     c = {0};
+    pt_State *S = pt_open(&count_alloc, &c);
+    pt_Buffer b, nb;
+    pt_Cursor cur;
+
+    b = pt_empty(S);
+    pt_seek(&cur, b, 0);
+    assertok(pt_edit(&cur, 0, "hello", 5) == PT_OK);
+    nb = pt_commit(&cur);
+    assertok(nb != NULL);
+    assertok(S->arenas != NULL);
+    pt_release(nb);
+    assertok(S->arenas == NULL);
+    pt_close(S);
+    asserteq(c.live, 0);
 }
 
 #include "piecetab_test_fanout4.gen.inc"

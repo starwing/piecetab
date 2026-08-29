@@ -108,8 +108,9 @@ pt_Alloc *pt_getallocf(pt_State *S, void **pud);
 
 - **`pt_open`**：创建 state 对象。`allocf` 为自定义分配器；传 `NULL` 使用默认
   `realloc` 包装。初始化对象池和空哨兵。失败（OOM）返回 `NULL`。
-- **`pt_reset`**：释放 state 内所有池（包括所有节点、hole、树）。state 对象本身
-  保留。所有依赖该 state 的 buffer 和 cursor 失效。接受 `NULL`。
+- **`pt_reset`**：释放 state 内所有池（包括所有节点、hole、树）以及所有剩余
+  arena block。state 对象本身保留。所有依赖该 state 的 buffer 和 cursor 失效。
+  接受 `NULL`。
 - **`pt_close`**：`pt_reset` + 释放 `pt_State` 结构。接受 `NULL`。
 - **`pt_getallocf`**：返回与 state 关联的分配器函数和用户数据（通过 `pud` 输出，
   `pud` 可为 `NULL`）。
@@ -330,7 +331,8 @@ arena 是**每棵树**的块链，用于存放冻结的 literal 数据。
 
 - 除 `pt_empty` 返回的哨兵外，每个 `pt_Buffer` 都是已拥有的引用。
 - 游标借用其 buffer；使用游标期间保持 buffer 存活。
-- `pt_reset`/`pt_close` 后，从该 state 创建的所有 buffer 和 cursor 均失效。
+- `pt_reset`/`pt_close` 后，从该 state 创建的所有 buffer 和 cursor 均失效；
+  剩余 arena block 也会由 state 一并回收。
 - `pt_commit`/`pt_rollback` 后游标被分离；如需继续，在返回的 buffer 上重新
   `pt_seek`。
 - 多个游标若从同一游标拷贝，可共享同一棵 transient 树；但树结构变化会使其他

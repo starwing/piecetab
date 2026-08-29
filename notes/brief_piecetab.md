@@ -89,13 +89,15 @@ ptK_parent(C, levels) = 叶容器(pt_Node)，其 children[] 直接存数据指�
 
 ### pt_State / pt_Pool / pt_Arena
 
-- `pt_State`: allocf + 三池（nodes/holes/trees）+ `rt[PT_MAX_LEVEL]` 缝合暂存节点
-  + `empty` 哨兵树（零分配）+ `max_version` 全局 COW 计数
+- `pt_State`: allocf + 三池（nodes/holes/trees）+ `arenas` 全局 arena 链表
+  + `rt[PT_MAX_LEVEL]` 缝合暂存节点 + `empty` 哨兵树（零分配）+ `max_version`
+  全局 COW 计数
 - `pt_Pool`: 页式池分配器（同 lc_Pool）。`freed_obj` 计数使
   `ptP_reserve(n)` O(1) 判断；事务预分配防 OOM，
   `ptP_ralloc` 从预留取（`assert(freed)` 保不缺）
 - `pt_Arena`: 块链 arena（current=有空位链, full=满块链），存冻结 literal 数据。
-  每树独享，随树释放
+  每树独享，随树释放；只有拥有 block 的 arena 才挂入 `pt_State.arenas`，使
+  `pt_reset`/`pt_close` 能全量回收仍存活树的 arena
 
 ## 三、关键常量
 
@@ -162,7 +164,7 @@ grep '^static' piecetab.h
 | `ptN_` | Node        | 节点运作              | `sumbytes`, `copy`, `move`, `remove`, `makespace`, `purge`（版本感知递归释放）                                                                                                                                        |
 | `ptH_` | Hole        | hole 操作             | `new`, `append`, `remove`（宏 `fit`, `reserve`）                                                                                                                                                                      |
 | `ptC_` | Commit      | 冻结+压缩             | `holebytes`, `freezeleaf`, `mergelits`, `nexthole`, `freezestep`, `freeze`                                                                                                                                            |
-| `ptA_` | Arena       | arena                 | `alloc`, `destroy`                                                                                                                                                                                                    |
+| `ptA_` | Arena       | arena + 全局 arena 链表 | `alloc`, `free`, `destroy`, `link`, `unlink`                                                                                                                                                                          |
 | `ptZ_` | Zip/Compact | compact 全家          | `collect`, `addranges`, `rangecmp`, `inranges`, `freeranges`（from 链 arena 区间收集/qsort/二分判定 internal）; `bulknext`, `bulkleaf`, `bulkbuild`（批量建树，lc_scan 式）; struct `ptZ_Compact`                      |
 | `ptP_` | Pool        | 池                    | `init`, `destroy`, `alloc`, `ralloc`, `free`, `reserve`                                                                                                                                                               |
 | `ptS_` | State       | 状态                  | `defallocf`                                                                                                                                                                                                           |

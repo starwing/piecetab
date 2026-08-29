@@ -215,14 +215,16 @@ typedef struct pt_Node {
 } pt_Node;
 
 typedef struct pt_Block {
-    struct pt_Block *next; /* next block in chain */
+    struct pt_Block *next; /* next block in tree arena chain */
     size_t           size; /* data capacity (bytes) */
     size_t           used; /* bytes written so far */
 } pt_Block;
 
 typedef struct pt_Arena {
-    pt_Block *current; /* blocks with free space, head = active writable */
-    pt_Block *full;    /* blocks that are completely full */
+    pt_Block *current;      /* blocks with free space, head = active writable */
+    pt_Block *full;         /* blocks that are completely full */
+    struct pt_Arena  *next; /* next arena with live blocks */
+    struct pt_Arena **pprev; /* pointer to previous next field or &S->arenas */
 } pt_Arena;
 
 typedef struct pt_Tree {
@@ -246,14 +248,15 @@ typedef struct pt_Pool {
 } pt_Pool;
 
 struct pt_State {
-    void     *alloc_ud;         /* user data for allocator */
+    void     *ud;               /* user data for allocator */
     pt_Alloc *allocf;           /* allocator function */
     pt_Pool   nodes;            /* pool for pt_Node */
     pt_Pool   holes;            /* pool for pt_Hole */
     pt_Pool   trees;            /* pool for pt_Tree */
-    pt_Node   rt[PT_MAX_LEVEL]; /* scratch nodes for tree stitch */
+    pt_Arena *arenas;           /* arenas that own live blocks */
     pt_Tree   empty;            /* sentinel empty tree zero-alloc */
     pt_Ver    max_version;      /* global COW version counter */
+    pt_Node   rt[PT_MAX_LEVEL]; /* scratch nodes for tree stitch */
 };
 
 /* mempool */
@@ -273,7 +276,7 @@ static void ptP_destroy(pt_State *S, pt_Pool *p) {
     void *next, *page = p->pages;
     for (; page; page = next) {
         next = *(void **)((char *)page + PT_PAGE_SIZE - sizeof(void *));
-        S->allocf(S->alloc_ud, page, PT_PAGE_SIZE, 0);
+        S->allocf(S->ud, page, PT_PAGE_SIZE, 0);
     }
     ptP_init(p, p->obj_size);
 }
@@ -293,7 +296,7 @@ static void *ptP_alloc(pt_State *S, pt_Pool *p) {
     size_t sz = p->obj_size;
     char  *page, *end;
     if (p->freed_obj) return ptP_ralloc(p);
-    page = (char *)S->allocf(S->alloc_ud, NULL, 0, PT_PAGE_SIZE);
+    page = (char *)S->allocf(S->ud, NULL, 0, PT_PAGE_SIZE);
     if (page == NULL) return NULL;
     end = &page[PT_PAGE_SIZE - sizeof(void *)], *(void **)end = p->pages;
     p->pages = (void *)page, page += sz, end -= sz;
@@ -312,20 +315,32 @@ static int ptP_reserve(pt_State *S, pt_Pool *p, size_t n) {
     return (p->freed_obj = avail) >= n ? PT_OK : PT_ERRMEM;
 }
 
-static pt_Block *ptA_alloc(pt_State *S, size_t sz) {
-    pt_Block *b = (pt_Block *)S->allocf(
-            S->alloc_ud, NULL, 0, sizeof(pt_Block) + sz);
-    if (b == NULL) return NULL;
-    return b->next = NULL, b->size = sz, b->used = 0, b;
+static void ptA_link(pt_State *S, pt_Arena *a) {
+    if (a->pprev != NULL) return;
+    if ((a->next = S->arenas)) S->arenas->pprev = &a->next;
+    a->pprev = &S->arenas, S->arenas = a;
 }
 
+static void ptA_unlink(pt_Arena *a) {
+    if (a->pprev == NULL) return;
+    *a->pprev = a->next;
+    if (a->next) a->next->pprev = a->pprev;
+    a->next = NULL, a->pprev = NULL;
+}
+
+static pt_Block *ptA_alloc(pt_State *S, pt_Arena *a, size_t sz) {
+    pt_Block *b = (pt_Block *)S->allocf(S->ud, NULL, 0, sizeof(pt_Block) + sz);
+    if (b == NULL) return NULL;
+    return (b->next = NULL, b->size = sz, b->used = 0), ptA_link(S, a), b;
+}
+
+#define ptA_free(S, b) S->allocf(S->ud, b, sizeof(pt_Block) + (b)->size, 0)
+
 static void ptA_destroy(pt_State *S, pt_Arena *a) {
-    pt_Block *b, *next;
-    for (b = a->current; b; b = next)
-        next = b->next, S->allocf(S->alloc_ud, b, 0, 0);
-    for (b = a->full; b; b = next)
-        next = b->next, S->allocf(S->alloc_ud, b, 0, 0);
-    memset(a, 0, sizeof(pt_Arena));
+    pt_Block *next, **h;
+    for (h = &a->current; *h; *h = next) next = (*h)->next, ptA_free(S, *h);
+    for (h = &a->full; *h; *h = next) next = (*h)->next, ptA_free(S, *h);
+    ptA_unlink(a), memset(a, 0, sizeof(pt_Arena));
 }
 
 /* utils */
@@ -449,7 +464,7 @@ static void ptN_makespace(pt_Node *p, int i, int n) {
 
 /* clang-format off */
 PT_API void pt_close(pt_State *S)
-{ if (S) pt_reset(S), S->allocf(S->alloc_ud, S, sizeof(pt_State), 0); }
+{ if (S) pt_reset(S), S->allocf(S->ud, S, sizeof(pt_State), 0); }
 /* clang-format on */
 
 static void *ptS_defallocf(void *ud, void *p, size_t osize, size_t nsize) {
@@ -464,7 +479,7 @@ PT_API pt_State *pt_open(pt_Alloc *allocf, void *ud) {
     if (allocf == NULL) allocf = &ptS_defallocf;
     S = (pt_State *)allocf(ud, NULL, 0, sizeof(pt_State));
     if (!S) return NULL;
-    memset(S, 0, sizeof(pt_State)), S->alloc_ud = ud, S->allocf = allocf;
+    memset(S, 0, sizeof(pt_State)), S->ud = ud, S->allocf = allocf;
     ptP_init(&S->nodes, sizeof(pt_Node));
     ptP_init(&S->holes, sizeof(pt_Hole));
     ptP_init(&S->trees, sizeof(pt_Tree));
@@ -474,6 +489,7 @@ PT_API pt_State *pt_open(pt_Alloc *allocf, void *ud) {
 
 PT_API void pt_reset(pt_State *S) {
     if (S == NULL) return;
+    while (S->arenas) ptA_destroy(S, S->arenas);
     ptP_destroy(S, &S->nodes);
     ptP_destroy(S, &S->holes);
     ptP_destroy(S, &S->trees);
@@ -482,7 +498,7 @@ PT_API void pt_reset(pt_State *S) {
 
 PT_API pt_Alloc *pt_getallocf(pt_State *S, void **pud) {
     if (S == NULL) return NULL;
-    if (pud) *pud = S->alloc_ud;
+    if (pud) *pud = S->ud;
     return S->allocf;
 }
 
@@ -666,7 +682,7 @@ static int ptK_markdirty(pt_Cursor *C) {
     pt_Tree  *old = C->tree, *nt;
     if (C->dirty) return PT_OK;
     if (!(nt = (pt_Tree *)ptP_alloc(S, &S->trees))) return PT_ERRMEM;
-    *nt = *old, nt->arena.current = NULL, nt->arena.full = NULL;
+    *nt = *old, memset(&nt->arena, 0, sizeof(pt_Arena)),
     nt->root.version = ++S->max_version, nt->refc = 1;
     nt->from = old, pt_retain(old); /* keep source alive: COW lifetime */
     C->paths[0] = nt->root.children + (C->paths[0] - old->root.children);
@@ -688,7 +704,7 @@ PT_API char *pt_reserve(pt_Cursor *C, size_t len) {
             return (char *)(b + 1) + b->used;
         }
     }
-    if ((b = ptA_alloc(S, pt_max(len, PT_ARENA_SIZE))) == NULL) return NULL;
+    if ((b = ptA_alloc(S, a, pt_max(len, PT_ARENA_SIZE))) == NULL) return NULL;
     return b->next = a->current, a->current = b, (char *)(b + 1);
 }
 
@@ -1390,7 +1406,7 @@ static int ptZ_addranges(pt_State *S, pt_Compact *B, const pt_Block *b) {
         if (B->nr == B->cap) {
             size_t nc = B->cap ? (B->cap + (B->cap >> 1)) : PT_COMPACT_RANGES;
             size_t sz = B->cap * sizeof(pt_Range), nz = nc * sizeof(pt_Range);
-            pt_Range *nrs = (pt_Range *)S->allocf(S->alloc_ud, B->rs, sz, nz);
+            pt_Range *nrs = (pt_Range *)S->allocf(S->ud, B->rs, sz, nz);
             if (nrs == NULL) return PT_ERRMEM;
             B->rs = nrs, B->cap = nc;
         }
@@ -1453,7 +1469,7 @@ PT_API pt_Buffer pt_compact(pt_State *S, pt_Buffer b) {
     pt_seek(&oC, b, 0), pt_seek(&nC, pt_empty(S), 0);
     memset(&B, 0, sizeof(B)), B.oC = &oC;
     if ((r = ptZ_collect(S, b, &B)) == PT_OK) r = ptZ_build(&nC, &B);
-    if (B.rs) S->allocf(S->alloc_ud, B.rs, B.cap * sizeof(pt_Range), 0);
+    if (B.rs) S->allocf(S->ud, B.rs, B.cap * sizeof(pt_Range), 0);
     return (r == PT_OK) ? pt_commit(&nC) : (pt_rollback(&nC), (pt_Buffer)NULL);
 }
 
