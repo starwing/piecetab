@@ -93,7 +93,7 @@ struct tm_State {
     const char *p;     /* current byte in cache; NULL when not materialized */
 
     size_t off;  /* current source position */
-    size_t next; /* offset of current cp+1; valid when current != TM_UNKNOWN */
+    size_t noff; /* offset of current cp+1; valid when current != TM_UNKNOWN */
     utfint current; /* codepoint at pos; TM_UNKNOWN or TM_EOS */
     utfint prev;    /* codepoint before pos; TM_UNKNOWN, 0 = start/NUL */
 };
@@ -254,7 +254,7 @@ static const char *tmK_setp(tm_State *S) {
 
 /* clang-format off */
 static void tmK_reset(tm_State *S)
-{ S->next = 0, S->current = TM_UNKNOWN, S->prev = TM_UNKNOWN; tmK_setp(S); }
+{ S->noff = 0, S->current = TM_UNKNOWN, S->prev = TM_UNKNOWN; tmK_setp(S); }
 
 static size_t tmK_offset(tm_Match *M)
 { tm_State *S = (tm_State *)M; return S->off; }
@@ -262,7 +262,7 @@ static size_t tmK_offset(tm_Match *M)
 
 static int tmK_goto(tm_State *S, size_t off) {
     if (off == S->off) return tmK_reset(S), 0;
-    S->off = off, S->next = 0, S->current = TM_UNKNOWN, S->prev = TM_UNKNOWN;
+    S->off = off, S->noff = 0, S->current = TM_UNKNOWN, S->prev = TM_UNKNOWN;
     if (!tmR_incache(S, off)) S->cache = tm_slice(NULL, 0);
     return tmK_setp(S), 1;
 }
@@ -275,18 +275,18 @@ static utfint tmK_peek(tm_Match *M) {
     utfint    ch;
     if (S->current != TM_UNKNOWN) return S->current;
     if (S->p == NULL) {
-        if (!tmR_load(S, S->off)) return (S->next = 0), S->current = TM_EOS;
+        if (!tmR_load(S, S->off)) return (S->noff = 0), S->current = TM_EOS;
         (void)tmK_setp(S), assert(S->p != NULL);
     }
     if ((ch = tmC(*S->p)) < 0x80 || (need = tmU_utflen(ch)) == 1)
-        return S->next = S->off + 1, S->current = ch;
+        return S->noff = S->off + 1, S->current = ch;
     if ((have = (size_t)(S->cache.e - S->p)) >= need) {
         cur = tm_slice(S->p, need);
-        S->next = S->off + tmU_decodelen(&cur, need, &ch);
+        S->noff = S->off + tmU_decodelen(&cur, need, &ch);
         return S->current = ch;
     }
     cur = tm_slice(buf, tmR_copy(S, S->off, buf, need));
-    return (S->next = S->off + tmU_decode(&cur, &ch)), S->current = ch;
+    return (S->noff = S->off + tmU_decode(&cur, &ch)), S->current = ch;
 }
 
 static utfint tmK_next(tm_Match *M) {
@@ -294,7 +294,7 @@ static utfint tmK_next(tm_Match *M) {
     assert(S->current != TM_UNKNOWN);
     assert(S->current != TM_EOS);
     S->prev = S->current, S->current = TM_UNKNOWN;
-    S->off = S->next, S->next = 0;
+    S->off = S->noff, S->noff = 0;
     return tmK_setp(S), tmK_peek(M);
 }
 
@@ -305,10 +305,10 @@ static utfint tmK_prev(tm_Match *M) {
     tm_Slice cur = tm_slice(NULL, 0);
     utfint   ch, val;
     if (S->p && S->p > S->cache.s && (ch = tmC(S->p[-1])) < 0x80)
-        return (S->off = pos, S->next = pos + 1, S->p -= 1), S->current = ch;
+        return (S->off = pos, S->noff = pos + 1, S->p -= 1), S->current = ch;
     if (S->p) cur = tm_slice(S->cache.s, (size_t)(S->p - S->cache.s));
     if (tmL_empty(cur) && !tmR_load(S, pos))
-        return (S->off = pos + 1, S->next = 0), tmK_setp(S), S->current = 0;
+        return (S->off = pos + 1, S->noff = 0), tmK_setp(S), S->current = 0;
     cur = tm_slice(S->cache.s, pos + 1 - S->base);
     for (val = tmC(cur.e[-1]); n < TM_UTFMAX; --cur.e, ++n) {
         if (tmL_empty(cur) && (!S->base || !tmR_load(S, S->base - 1))) break;
@@ -316,50 +316,47 @@ static utfint tmK_prev(tm_Match *M) {
         if (((ch = tmC(cur.e[-1])) & 0xC0) != 0x80) break;
     }
     if (tmL_empty(cur) || n == TM_UTFMAX)
-        return (S->off = pos, S->next = pos + 1), tmK_setp(S), S->current = val;
+        return (S->off = pos, S->noff = pos + 1), tmK_setp(S), S->current = val;
     S->off = pos - n, cur.s = cur.e - 1, cur.e = S->cache.e, l = tmU_utflen(ch);
     if (l > tmL_len(cur)) cur = tm_slice(buf, tmR_copy(S, S->off, buf, l));
     if (S->off + (l = tmU_decode(&cur, &ch)) <= pos)
-        return (S->off = pos, S->next = pos + 1), tmK_setp(S), S->current = val;
-    return (S->next = S->off + l), tmK_setp(S), S->current = ch;
+        return (S->off = pos, S->noff = pos + 1), tmK_setp(S), S->current = val;
+    return (S->noff = S->off + l), tmK_setp(S), S->current = ch;
+}
+
+static utfint tmK_prevcp(tm_Match *M) {
+    tm_State *S = (tm_State *)M;
+    size_t    off;
+    utfint    p;
+    if (S->prev != TM_UNKNOWN) return S->prev;
+    if (S->off == 0) return 0;
+    off = S->off, (void)off;
+    p = tmK_prev(M), assert(S->noff == off);
+    return (void)tmK_next(M), p;
 }
 
 /* --- cursor save/restore and predicates ------------------------------- */
 
 typedef struct tm_Save {
-    size_t off, next;
+    size_t off, noff;
     utfint current, prev;
 } tm_Save;
 
 static tm_Save tmK_save(tm_Match *M) {
     tm_Save   r;
     tm_State *S = (tm_State *)M;
-    r.off = S->off, r.next = S->next;
+    r.off = S->off, r.noff = S->noff;
     r.current = S->current, r.prev = S->prev;
     return r;
 }
 
 static int tmK_restore(tm_Match *M, const tm_Save *save) {
     tm_State *S = (tm_State *)M;
-    S->off = save->off, S->next = save->next;
+    S->off = save->off, S->noff = save->noff;
     S->current = save->current, S->prev = save->prev;
     if (!tmR_incache(S, S->off))
         return S->p = NULL, S->cache = tm_slice(NULL, 0), 0;
     return S->p = S->cache.s + (S->off - S->base), 1;
-}
-
-static utfint tmK_prevcp(tm_Match *M) {
-    tm_State *S = (tm_State *)M;
-    int       boundary;
-    tm_Save   save;
-    utfint    p;
-    if (S->prev != TM_UNKNOWN) return S->prev;
-    if (S->off == 0) return 0;
-    save = tmK_save(M);
-    p = tmK_prev(M), boundary = (S->next == save.off);
-    tmK_restore(M, &save);
-    if (boundary) S->prev = p;
-    return p;
 }
 
 /* --- byte-range helpers ----------------------------------------------- */
@@ -434,26 +431,14 @@ static int tmM_backref(tm_Match *M, utfint ch) {
         return TM_ERRPATTERN;
     if ((len = M->cap[idx].len) == TM_CAP_POSITION) return TM_CONTINUE;
     if (!tmR_equal(S, M->cap[idx].start, S->off, len)) return TM_OK;
-    return (void)(len && tmK_goto(S, S->off + len)), TM_CONTINUE;
-}
-
-static int tmK_isboundary(tm_Match *M) {
-    tm_State *S = (tm_State *)M;
-    tm_Save   save;
-    int       ok;
-    if (S->off == 0 || S->prev != TM_UNKNOWN) return 1;
-    save = tmK_save(M), (void)tmK_prev(M);
-    return (ok = (S->next == save.off)), tmK_restore(M, &save), ok;
+    if (len) tmK_goto(S, S->off + len);
+    return TM_CONTINUE;
 }
 
 static int tmK_islinestart(tm_Match *M) {
     tm_State *S = (tm_State *)M;
-    tm_Save   save;
-    utfint    p;
     if (S->off == 0 || (M->flags & TM_LINEANCHOR) == 0) return 1;
-    if (S->prev != TM_UNKNOWN) return S->prev == '\n';
-    save = tmK_save(M), p = tmK_prev(M), tmK_restore(M, &save);
-    return (S->prev = p), p == '\n';
+    return assert(S->prev != TM_UNKNOWN), S->prev == '\n';
 }
 
 /* === match layer begin === */
@@ -591,10 +576,10 @@ static int tmM_endcapture(tm_Match *M, tm_Slice *pat) {
     return r;
 }
 
-/* clang-format off */
-static int tmK_islineend(tm_Match *M)
-{ utfint c = tmK_peek(M); return c == TM_EOS || c == '\n'; }
-/* clang-format on */
+static int tmK_islineend(tm_Match *M) {
+    utfint c = tmK_peek(M);
+    return c == TM_EOS || ((M->flags & TM_LINEANCHOR) && c == '\n');
+}
 
 static int tmM_basic(tm_Match *M, tm_Slice *pat, utfint ch) {
     const char *e = pat->e;
@@ -606,9 +591,7 @@ static int tmM_basic(tm_Match *M, tm_Slice *pat, utfint ch) {
     if (ch == ')') return (pat->s += 1), tmM_endcapture(M, pat);
     assert(ch == '$');
     if (pat->s + 1 != e) return tmM_default(M, pat);
-    if (!tmK_isboundary(M)) return TM_OK;
-    if (M->flags & TM_LINEANCHOR) return tmK_islineend(M) ? TM_MATCHED : TM_OK;
-    return tmK_peek(M) == TM_EOS ? TM_MATCHED : TM_OK;
+    return tmK_islineend(M) ? TM_MATCHED : TM_OK;
 }
 
 static int tmM_frontier(tm_Match *M, tm_Slice *pat) {
@@ -689,11 +672,6 @@ static int tmM_match(tm_Match *M, tm_Slice pat) {
     utfint   ch;
     if (M->depth <= 0) return TM_ERRCOMPLEX;
     M->depth -= 1, assert(!tmL_empty(pat) || pat.s != M->pat.s);
-    if (pat.s == M->pat.s && *pat.s == '^') { /* TODO don't write here */
-        if (!tmK_isboundary(M) || !tmK_islinestart(M))
-            return (M->depth += 1), tmK_restore(M, &save), TM_OK;
-        if (pat.s += 1, tmL_empty(pat)) return (M->depth += 1), TM_MATCHED;
-    }
     while (!tmL_empty(pat)) {
         cur = pat, (void)tmU_decode(&cur, &ch);
         switch (ch) { /* clang-format off */
@@ -733,12 +711,26 @@ TM_API int tm_advance(tm_State *S, ptrdiff_t delta) {
     return tmK_goto(S, (size_t)((ptrdiff_t)S->off + delta)), TM_OK;
 }
 
+static int tmK_isboundary(tm_Match *M) {
+    tm_State *S = (tm_State *)M;
+    tm_Save   save;
+    if (S->off == 0 || S->prev != TM_UNKNOWN) return 1;
+    save = tmK_save(M), (void)tmK_prev(M);
+    if (S->noff == save.off) return (void)tmK_next(M), 1;
+    return tmK_restore(M, &save), 0;
+}
+
 static int tmM_trymatch(tm_State *S) {
-    int    r, i;
-    size_t restore = S->off;
-    assert(S->m.level == 0);
-    S->m.depth = TM_MAXCCALLS, r = tmM_match(&S->m, S->m.pat);
-    if (r == TM_MATCHED) {
+    int      r, i;
+    size_t   restore = S->off;
+    tm_Slice pat = S->m.pat;
+    assert(S->m.level == 0), assert(!tmL_empty(pat));
+    S->m.depth = TM_MAXCCALLS;
+    if (*pat.s == '^') {
+        if (!tmK_islinestart(&S->m)) return TM_OK;
+        pat.s++;
+    }
+    if ((r = tmM_match(&S->m, pat)) == TM_MATCHED) {
         for (i = 0; i < S->m.level; ++i)
             if (S->m.cap[i].len == TM_CAP_UNFINISHED) return TM_ERRPATTERN;
         return (S->m.end = S->off, tmK_goto(S, restore), TM_MATCHED);
@@ -758,7 +750,7 @@ TM_API int tm_match(tm_State *S) {
             return (S->m.end = S->off + tmL_len(S->m.pat)), TM_MATCHED;
         return TM_OK;
     }
-    return tmM_trymatch(S);
+    return tmK_isboundary(&S->m) ? tmM_trymatch(S) : TM_OK;
 }
 
 TM_API int tm_find(tm_State *S) {
@@ -766,15 +758,16 @@ TM_API int tm_find(tm_State *S) {
     int    r;
     if (!S || !S->reader || !S->m.pat.s) return TM_ERRPARAM;
     S->m.level = 0;
-    if (tmL_empty(S->m.pat)) {
-        if (tmK_isboundary(&S->m)) return (S->m.end = S->off), TM_MATCHED;
-        return TM_OK;
-    }
     if (S->m.flags & TM_LITERAL) {
         size_t s = tmR_find(S, S->off, S->m.pat);
         if (s == TM_NOMATCH) return TM_OK;
         return (S->m.end = s + tmL_len(S->m.pat)), tmK_goto(S, s), TM_MATCHED;
     }
+    if (!tmK_isboundary(&S->m)) {
+        if (tmK_peek(&S->m) == TM_EOS) return TM_OK;
+        (void)tmK_prev(&S->m), (void)tmK_next(&S->m);
+    }
+    if (tmL_empty(S->m.pat)) return (S->m.end = S->off), TM_MATCHED;
     start = S->off;
     if (!(S->m.flags & TM_LINEANCHOR) && *S->m.pat.s == '^')
         return tmM_trymatch(S);
