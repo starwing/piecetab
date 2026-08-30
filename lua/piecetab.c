@@ -74,7 +74,7 @@ typedef struct lpt_State {
     ut_State *US;
 } lpt_State;
 
-static int Lstate_gc(lua_State *L) {
+static int Lstate_delete(lua_State *L) {
     lpt_State *S = (lpt_State *)lua_touserdata(L, 1);
     if (S->PS) pt_close(S->PS), S->PS = NULL;
     if (S->LS) lc_close(S->LS), S->LS = NULL;
@@ -93,7 +93,7 @@ static lpt_State *lpt_state(lua_State *L) {
     S->LS = lc_open(NULL, NULL);
     S->US = ut_open(NULL, NULL);
     if (luaL_newmetatable(L, LPT_STATE_TYPE))
-        lua_pushcfunction(L, Lstate_gc), lua_setfield(L, -2, "__gc");
+        lua_pushcfunction(L, Lstate_delete), lua_setfield(L, -2, "__gc");
     lua_setmetatable(L, -2);
     if (!S->PS || !S->LS || !S->US) luaL_error(L, "piecetab: out of memory");
     ut_setcleaner(S->US, lpt_ut_cleaner, NULL);

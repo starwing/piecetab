@@ -16,7 +16,7 @@
 - 编辑/替换/gsub（需要可写 buffer 或分配，后续另设计）
 - 管理 piecetab 生命周期；只通过 `tm_Reader` 回调取文本
 - 正则编译/缓存（Lua pattern 足够小，逐次解释即可）
-- 调用方的搜索循环推进由调用方负责，通过 `tm_seek`/`tm_advance` 完成
+- 调用方的搜索循环推进由调用方负责，通过 `tm_seek` 完成
 
 ## 二、核心抽象：tm_Reader
 
@@ -43,7 +43,7 @@ typedef tm_Slice tm_Reader(void *ud, size_t *poff);
 4. `tm` 会把返回的 piece 保存在 `S->cache`/`S->base`，只要当前
    位置仍在这些字段描述的 piece 内就复用，不重复调用 Reader。
 5. 调用方（Reader 实现）不保证返回指针永久有效；`tm` 只在 cache 有效期间
-   引用它，一旦 `tmK_goto` 跳到 cache 外或再次 load 就会替换/丢弃。
+   引用它，一旦 `tm_seek` 跳到 cache 外或再次 load 就会替换/丢弃。
 
 ### 推荐内部实现（piecetab 适配器）
 
@@ -89,6 +89,9 @@ API 是**有状态的**：Reader、flags、pattern、当前位置都绑定在
 #define TM_ERRPARAM  (-1)
 #define TM_ERRPATTERN (-2)
 #define TM_ERRCOMPLEX (-3)
+
+#define TM_CAP_UNFINISHED ((size_t)-1)
+#define TM_CAP_POSITION   ((size_t)-2)
 ```
 
 | 值  | 名字            | 含义                                                                                                              |
@@ -113,17 +116,15 @@ typedef tm_Slice tm_Reader(void *ud, size_t *poff);
 typedef struct tm_Capture { size_t start, len; } tm_Capture;
 typedef struct tm_State tm_State;
 
-TM_API void tm_init(tm_State *S, tm_Reader *r, void *ud);
+TM_API int tm_reset(tm_State *S, tm_Reader *r, void *ud);
 
 #define tm_flags(S)       ((S) ? (S)->m.flags : 0)
 #define tm_setflags(S, f) ((void)((S) && ((S)->m.flags = (f))))
 
 TM_API int tm_seek(tm_State *S, size_t off);
-TM_API int tm_advance(tm_State *S, ptrdiff_t delta);
 
-TM_API int tm_pattern(tm_State *S, tm_Slice pattern);
-TM_API int tm_match(tm_State *S);
-TM_API int tm_find(tm_State *S);
+TM_API int tm_match(tm_State *S, tm_Slice pattern);
+TM_API int tm_find(tm_State *S, tm_Slice pattern, size_t limit);
 
 TM_API size_t tm_offset(const tm_State *S);
 TM_API size_t tm_matchend(const tm_State *S);
@@ -131,6 +132,8 @@ TM_API size_t tm_matchend(const tm_State *S);
 #define tm_captures(S) ((S) ? (S)->m.level : 0)
 
 TM_API int tm_capture(const tm_State *S, int i, tm_Capture *out);
+
+TM_API size_t tm_copy(tm_State *S, size_t off, char *buf, size_t n);
 ```
 
 `TM_MAX_PATTERN_COUNT` 是编译期最大 capture 数量，默认 9；使用者可在
@@ -141,30 +144,40 @@ stb 风格配置，`tm_State` 在公开头文件中完整定义。
 
 ### 语义
 
-- `tm_init`：绑定 Reader/ud，flags=0，pattern 为空，当前位置=0，
-  `current`/`prev` 为 `TM_UNKNOWN`。
+- `tm_reset`：绑定/重置 Reader/ud，flags=0，当前位置=0，
+  `current`/`prev` 为 `TM_UNKNOWN`。可在新 State 上初始化，也可在已有
+  State 上重新绑定 Reader；返回 `TM_OK`；`S` 或 `r` 为 NULL 时返回
+  `TM_ERRPARAM`，且不修改 `S`。
 - `tm_setflags(S, f)`：覆盖设置 flags；`tm_flags(S)` 读取当前 flags。
-- `tm_pattern`：设置 pattern slice（借用指针，不拷贝；调用方保证生命周期）。
-  没设置 pattern 时调用 `tm_match`/`tm_find` 返回 `TM_ERRPARAM`。
-- `tm_seek` / `tm_advance`：负责定位。二者都走 `tmK_goto`，重置
-  `current`/`prev`，不扫描源文本。`tm_advance` 是 byte delta，可正可负；
+- `tm_seek`：负责绝对定位。重置 `current`/`prev`，不扫描源文本；
   Unicode 推进（如空匹配后前进一个 codepoint）由调用方自行计算。
-- `tm_match`：只在当前位置匹配。返回 `TM_MATCHED` / `TM_OK` / 负错误；
-  成功时 `S->m.end` 是 exclusive byte offset，并把 `S->off` 恢复为匹配起点。
-- `tm_find`：从当前位置 **forward** 搜索。返回 `TM_MATCHED` / `TM_OK` / 负错误；
-  成功时 `S->off` 是匹配起点，`S->m.end` 是匹配终点（exclusive）。
+- `tm_match(S, pattern)`：只在当前位置匹配。pattern slice 是借用指针，
+  调用方保证调用期间生命周期；`p.s == NULL` 返回 `TM_ERRPARAM`。
+  返回 `TM_MATCHED` / `TM_OK` / 负错误；成功时 `S->m.end` 是 exclusive
+  byte offset，并把 `S->off` 恢复为匹配起点。
+- `tm_find(S, pattern, limit)`：从当前位置 **forward** 搜索到 `limit`
+  （exclusive）。pattern 同样由调用方传入。返回 `TM_MATCHED` / `TM_OK` /
+  负错误；成功时 `S->off` 是匹配起点，`S->m.end` 是匹配终点（exclusive）。
 - 匹配长度 = `tm_matchend(S) - tm_offset(S)`。
 - `tm_offset(S)` 返回 `S->off`；`tm_matchend(S)` 返回 `S->m.end`。
+- `tm_copy(S, off, buf, n)`：从 byte offset `off` 拷贝至多 `n` 字节到
+  `buf`，返回实际拷贝字节数；到达 EOF 时截断，可跨 piece。
+  不改变 `off` / `current` / `prev`，但可能使当前 cache / `p` 失效；
+  调用后若继续匹配，应先 `tm_seek` 或依赖 `tmK_peek` 的重新加载路径。
 - `tm_captures(S)`：返回 capture 数量（>=0）。
 - `tm_capture(S, i, &out)`：返回 `TM_OK` 或错误；通过 `tm_Capture out` 返回
-  `start`/`len`。所有 offset 都是 byte offset；`()` position capture 的 `len == 0`。
-  `i` 是 0-based 显式 capture 下标，不含整个匹配。
+  `start`/`len`。所有 offset 都是 byte offset；`()` position capture 的
+  `len == TM_CAP_POSITION`，调用方据此与普通空匹配 capture 区分。
+  `TM_CAP_UNFINISHED` 表示尚未闭合的 capture；成功匹配后不应出现，
+  若 `tm_capture` 因 unfinished capture 返回 `TM_ERRPARAM`，`out` 仍会被填上
+  该 unfinished capture 以提供诊断信息。`i` 是 0-based 显式 capture 下标，
+  不含整个匹配。
 
 ## 四、集中式 source 迭代
 
 Reader 读取是昂贵操作。`tm_State` 分成两部分：
 
-- `tm_Match`：pattern、flags、capture、depth 等纯匹配状态；
+- `tm_Match`：flags、capture、depth 等纯匹配状态；pattern 由调用方按次传入；
 - `tm_State` 其余字段：reader、cache、`off/next/current/prev` 等 source 游标。
 
 匹配层函数只接收 `tm_Match *M`，不接收 `tm_State *S`。  
@@ -173,7 +186,6 @@ Reader 读取是昂贵操作。`tm_State` 分成两部分：
 
 ```c
 typedef struct tm_Match {
-    tm_Slice   pat;
     size_t     end;
     int        depth;
     int        level;
@@ -223,13 +235,13 @@ static int    tmK_islineend(tm_Match *M);
 static int         tmR_incache(tm_State *S, size_t off);
 static int         tmR_load(tm_State *S, size_t off);
 static tm_Slice    tmR_at(tm_State *S, size_t off);
-static size_t      tmR_copy(tm_State *S, size_t off, char *buf, size_t n);
+TM_API size_t      tm_copy(tm_State *S, size_t off, char *buf, size_t n);
 static int         tmR_equalmem(tm_State *S, size_t off, tm_Slice mem);
 static int         tmR_equal(tm_State *S, size_t a, size_t b, size_t len);
 static size_t      tmR_find(tm_State *S, size_t from, tm_Slice pat);
 static void        tmK_setp(tm_State *S);
 static void        tmK_reset(tm_State *S);
-static void        tmK_goto(tm_State *S, size_t off);
+TM_API int         tm_seek(tm_State *S, size_t off);
 ```
 
 语义：
@@ -245,9 +257,9 @@ static void        tmK_goto(tm_State *S, size_t off);
   热路径是 `p[-1] < 0x80` 时直接左移 `p` 返回 ASCII；否则最多回扫
   `TM_UTFMAX` 个 continuation 找到 lead。回扫跨 piece 时只逐 piece
   `tmR_load`，不保存被换出 cache 的字节；找到 lead 后，若当前 piece 内
-  lead 之后的字节不足 claimed 长度，才用一次 `tmR_copy` 从 lead 向前
+  lead 之后的字节不足 claimed 长度，才用一次 `tm_copy` 从 lead 向前
   重组（至多 `TM_UTFMAX` 字节），否则直接解码当前 piece 内的 slice。
-- `tmK_goto`：设置 `S->off = off`，清 `current/prev`，并用 `tmK_setp` 建立或
+- `tm_seek`：设置 `S->off = off`，清 `current/prev`，并用 `tmK_setp` 建立或
   失效 `p`；若目标等于当前 `off`，内部直接走 `tmK_reset`。
 - `tmK_reset`：不移动 `off`，只清 `current/prev/next` 并重建 `p`。
 - `tmK_save/restore`：保存/恢复 `off/next/current/prev`；restore 后用
@@ -272,11 +284,11 @@ peek 的热路径不需要做 `tmR_incache` 范围判断。
 |---|---|---|
 | L | Slice/Range 纯工具 | `tmL_len`, `tmL_empty` |
 | U | Unicode/UTF 解码 | `tmU_utflen`, `tmU_decodelen`, `tmU_decode` |
-| R | Relocate/Raw cache 层：可能重定向并令 `p` 失效，或对 cache 做只读查询 | `tmR_incache`, `tmR_load`, `tmR_at`, `tmR_copy`, `tmR_equalmem`, `tmR_equal`, `tmR_find` |
-| K | Cursor/游标 | `tmK_setp`, `tmK_reset`, `tmK_offset`, `tmK_goto`, `tmK_peek`, `tmK_next`, `tmK_prev`, `tmK_prevcp`, `tmK_save`, `tmK_restore`, `tmK_isboundary`, `tmK_islinestart`, `tmK_islineend` |
+| R | Relocate/Raw cache 层：可能重定向并令 `p` 失效，或对 cache 做只读查询 | `tmR_incache`, `tmR_load`, `tmR_at`, `tm_copy`, `tmR_equalmem`, `tmR_equal`, `tmR_find` |
+| K | Cursor/游标 | `tmK_setp`, `tmK_reset`, `tmK_offset`, `tm_seek`, `tmK_peek`, `tmK_next`, `tmK_prev`, `tmK_prevcp`, `tmK_save`, `tmK_restore`, `tmK_isboundary`, `tmK_islinestart`, `tmK_islineend` |
 | M | Match 匹配引擎 | `tmM_class`, `tmM_match`, `tmM_default`, `tmM_toclosecapture`, `tmM_classend`, `tmM_bracketclass`, `tmM_single`, `tmM_balance`, `tmM_startcapture`, `tmM_endcapture`, `tmM_basic`, `tmM_frontier`, `tmM_escaped`, `tmM_maxexpand`, `tmM_minexpand`, `tmM_backref`, `tmM_trymatch` |
 
-> 注：K 里的 `goto`/`next`/`prev`/`restore` 也可能让 `p` 失效并触发重读，但它们的领域是游标移动/恢复；R 专指直接操作 Reader/cache 的底层函数。
+> 注：K 里的 `seek`/`next`/`prev`/`restore` 也可能让 `p` 失效并触发重读，但它们的领域是游标移动/恢复；R 专指直接操作 Reader/cache 的底层函数。
 
 ## 五、匹配引擎
 
@@ -394,7 +406,7 @@ while (tm_seek(S, from) == TM_OK
 }
 ```
 
-Unicode 推进由调用方负责，通过 `tm_seek`/`tm_advance` 完成。
+Unicode 推进由调用方负责，通过 `tm_seek` 完成。
 
 ## 七、内部数据结构草案
 
@@ -403,7 +415,6 @@ typedef struct tm_Capture { size_t start, len; } tm_Capture;
 typedef struct tm_Slice   { const char *s, *e; } tm_Slice;
 
 typedef struct tm_Match {
-    tm_Slice   pat;
     size_t     end;
     int        depth;
     int        level;
@@ -438,7 +449,7 @@ typedef struct tm_State {
 - `tm_match` / `tm_find` 分离：match 只匹配当前位置，find 负责 forward 搜索
 - 结果通过 `tm_offset` / `tm_matchend` 读取，不再用出参
 - 反向搜索由调用方用 forward 反复找实现
-- 空匹配推进由调用方负责，通过 `tm_seek`/`tm_advance` 完成
+- 空匹配推进由调用方负责，通过 `tm_seek` 完成
 - 匹配/查找/参数类接口返回 int 状态码；flags 与 capture 数量通过宏读取
 - `TM_MAX_PATTERN_COUNT` 作为编译期最大 capture 数量，默认 9
 - `TM_LINEANCHOR` 下 `^` 匹配 offset 0 或 `\n` 后，`$` 匹配 EOF 或 `\n` 前

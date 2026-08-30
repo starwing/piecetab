@@ -5,7 +5,8 @@
 >   spantree / **textmatch**，均为 C89 单头 + 测试/CI/覆盖率。
 > - editor.lua 已完成多层高亮、spantree/vtext、LSP 集成、光标同步与渲染整理。
 > - 行覆盖 100%、分支覆盖目标 95%（覆盖构建用 -DNDEBUG，assert 分支不纳入）。
-> - textmatch.h 当前是独立库落地，尚未接入 editor.lua / Lua 绑定。
+> - textmatch.h 独立库 + Lua 绑定（`tm.find/match/gmatch`）已落地；
+>   尚未接入 editor.lua 搜索。
 
 ## 已完成（2026-08）
 
@@ -16,15 +17,18 @@
 - [x] **Lua pattern**：按 Unicode codepoint 匹配；`^ $ * + - ?`、字符类 /
       `[...]` / `%b` / `%f` / `%1..%9` / `()` captures；`TM_LITERAL`、
       `TM_LINEANCHOR`。
-- [x] **API**：`tm_init/seek/advance/pattern/match/find/offset/matchend/capture`；
+- [x] **API**：`tm_reset/seek/pattern/match/find/offset/matchend/capture`；
       source 游标集中在 `tm_State`，匹配层只传 `tm_Match *M`。
 - [x] **测试与集成**：`tests/textmatch_test.c` 全覆盖（split piece、跨 piece
       回溯、literal 跨块搜索、mid-character 边界等）；`just tm` /
       `just tm-cov` / CI 已接入；`misc/check_textmatch.lua` 做匹配层结构检查。
 - [x] **文档**：`notes/design_textmatch.md` 与 refine / global-state 计划、
       audit 已同步。
+- [x] **Lua 绑定**：新增 `lua/textmatch.c`，提供 `tm.find` / `tm.match` /
+      `tm.gmatch`，接受 string 与 `piecetab.Buffer`，索引统一 Lua 1-based；
+      `just lua/tm` / `just lua/tm-cov` 已接入。
 
-边界：目前仅独立库落地，未接入 editor.lua / Lua 绑定（见下一步候选）。
+边界：尚未接入 editor.lua 搜索（见下一步候选）。
 
 ### 多层高亮 / spantree / vtext
 
@@ -62,9 +66,8 @@
 
 ## 下一步候选（未完成）
 
-- **textmatch 接入 editor / Lua 绑定**
-  - 把 `textmatch.h` 接入 editor.lua 的搜索（`/`、`?`）或命令层；评估纯 Lua
-    `tm_Reader` 适配器还是新增 `lua/textmatch.c` 绑定。
+- **textmatch 接入 editor.lua 搜索**
+  - 基于已落地的 `lua/textmatch.c`，把 `/`、`?` 搜索接到 editor.lua。
   - 反向搜索按设计用 forward 反复找；空匹配推进由调用方处理。
   - 顺手补 README 的库清单 / API 概览。
 - **editor 读行不要整行读**：渲染路径已按 run 按需读；剩余 word motion 等
@@ -76,6 +79,10 @@
 
 ## 低优先级
 
+- **textmatch `^` 在查找边界 `off == endoff` 的 0 长度匹配**：当前
+  `tm_find` 对 `S->off >= endoff` 直接返回 `TM_OK`，因此 `^` 在空输入或
+  范围终点不匹配；这是已接受的行为。若以后要支持，需要只放行 `^` 分支并
+  校验 `tm_matchend(S) == S->off`（或引入 bounded probe），属于低优先级增强。
 - **popup window / cmd window**：横向新特性，无设计支撑，需先澄清孵什么 C
   库。
 - **lsp.lua UTF-16 非法 UTF-8 显式处理**：piecetab 是字节级库，编辑若在多

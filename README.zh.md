@@ -37,6 +37,8 @@ O(log n) 偏移 ↔ 行号双向导航和 undo/redo 的完整编辑器 buffer；
   原语，以及用于高效屏幕更新的重绘差分驱动。
 - **`termfeed.h`** — libtermkey 风格的终端输入状态机：原始字节 →
   解码按键（CSI/SS3、UTF-8、Alt 键、鼠标、OSC52）。
+- **`textmatch.h`** — Lua pattern 匹配引擎，作用于任意可 seek 的字节源；
+  `tm_Reader` 使其可直接跑在 piecetab 的 piece 表上。
 
 全部遵循同一 stb 风格布局：单头 C89 实现、`lua/` 下的 Lua 绑定、
 `tests/` 下的测试文件。
@@ -116,6 +118,16 @@ O(log n) 偏移 ↔ 行号双向导航和 undo/redo 的完整编辑器 buffer；
 - **编辑同步**：`sp_splice` / `sp_append` / `sp_insert` / `sp_remove`
   随文本编辑平移 span，重力确定（append 继承左、insert 继承右）
 - **稀疏染色免费**：未染色字节即大段 id 0，无需树级偏移特殊机制
+
+### textmatch.h
+
+- **Lua pattern 语义**：按 Unicode codepoint 匹配可 seek 源，支持
+  `^ $ * + - ?`、字符类、`[...]`、`%b`、`%f`、capture 与反向引用
+- **Reader 抽象**：`tm_Reader` 按绝对 byte offset 返回 slice，因此引擎
+  可直接跑在 piecetab piece 表上，无需把 buffer 摊平成字符串
+- **字面量 / 行锚点模式**：`TM_LITERAL` 做纯字节搜索，`TM_LINEANCHOR`
+  让 `^`/`$` 按行感知
+- **无堆分配**：全部状态放在调用方提供的 `tm_State` 中
 
 ## 快速上手
 
@@ -371,6 +383,16 @@ just lua/ts   # 获取/编译 lua/grammar/*.so，构建 treesitter.so + luajit/t
 | 读取     | `sp_next`, `sp_prev`, `sp_style`                    |
 | 编辑     | `sp_splice`, `sp_append`, `sp_insert`, `sp_remove`  |
 
+### textmatch.h
+
+| 类别   | 函数                                                  |
+| ------ | ----------------------------------------------------- |
+| 重置   | `tm_reset`, `tm_seek`                                    |
+| 匹配   | `tm_match(pattern)`, `tm_find(pattern, limit)`          |
+| 结果   | `tm_offset`, `tm_matchend`, `tm_captures`, `tm_capture` |
+| 读取   | `tm_copy`                                               |
+| 标志   | `tm_flags`, `tm_setflags`                              |
+
 完整 API 参考见 [`docs/piecetab.zh.md`](docs/piecetab.zh.md)、
 [`docs/linecache.zh.md`](docs/linecache.zh.md)、
 [`docs/undotree.zh.md`](docs/undotree.zh.md) 与
@@ -387,6 +409,7 @@ just lua/ts   # 获取/编译 lua/grammar/*.so，构建 treesitter.so + luajit/t
 | `cellgrid`   | `lua/cellgrid.c`, `lua/cellgrid.d.lua`                  | `cellgrid.h` 的 C 绑定（屏幕网格 + diff）                                            |
 | `termfeed`   | `lua/termfeed.c`, `lua/termfeed.d.lua`                  | `termfeed.h` 的 C 绑定（终端输入）                                                   |
 | `spantree`   | `lua/spantree.c`, `lua/spantree.d.lua`                  | `spantree.h` 的 C 绑定（Compositor/Tree/Cursor span 染色）                           |
+| `textmatch`  | `lua/textmatch.c`, `lua/textmatch.d.lua`                | `textmatch.h` 的 C 绑定（1-based `find`/`match`/`gmatch` + 0-based `new(source)` 状态 API 与 `option`/`find`/`match`/`gfind`/`reset`/`delete`；string 或 `piecetab.Buffer`） |
 | `json`       | `lua/json.c`, `lua/json.d.lua`, `lua/yyjson/`           | 基于 vendored yyjson 的纯 C 绑定（`decode`/`encode`/`array`/`object`/`null`/`type`） |
 | `treesitter` | `lua/treesitter.c`, `lua/treesitter.d.lua`              | 基于 `libtree-sitter` 的 C 绑定（parser/tree/query API）                             |
 | `lsp`        | `lua/lsp.lua`                                           | 纯 Lua LSP 客户端构建块；需要 `json`、`luv` 与 `lua-utf8`                            |
@@ -413,6 +436,8 @@ just lua/ts   # 获取/编译 lua/grammar/*.so，构建 treesitter.so + luajit/t
 | `PT_PAGE_SIZE` / `LC_PAGE_SIZE` / `UT_PAGE_SIZE` / `SP_PAGE_SIZE` | 65536 | 池分配器页大小                                                               |
 | `PT_ARENA_SIZE`                                                   | 1024  | arena 块最小容量                                                             |
 | `PT_COMPACT_RANGES`                                               | 64    | compact 区间数组初始容量                                                     |
+| `TM_MAX_PATTERN_COUNT`                                            | 9     | pattern 中最大显式 capture 数                                                |
+| `TM_MAXCCALLS`                                                    | 200   | 匹配时最大递归深度                                                           |
 
 所有库均可在 `*_open` 时传入自定义分配器（`lc_Alloc` / `pt_Alloc`
 / `ut_Alloc` / `sp_Alloc`，Lua 风格 realloc 签名）。
@@ -420,7 +445,8 @@ just lua/ts   # 获取/编译 lua/grammar/*.so，构建 treesitter.so + luajit/t
 ## 目录结构
 
 - `*.h` — stb 风格单头文件库（纯 C89，自包含）：`piecetab.h`、
-  `linecache.h`、`undotree.h`、`spantree.h`、`cellgrid.h`、`termfeed.h`
+  `linecache.h`、`undotree.h`、`spantree.h`、`cellgrid.h`、`termfeed.h`、
+  `textmatch.h`
 - `lua/` — Lua 侧：每个库一个绑定 `name.c` + API 声明 `name.d.lua`，
   以及 `editor.lua` demo 和 `tests/`（Lua 测试）。绑定构建产物：
   `lua/*.so`（Lua 5.5，主运行时）与 `lua/luajit/*.so`（LuaJIT，兼容验证）
@@ -438,8 +464,9 @@ just lua/ts   # 获取/编译 lua/grammar/*.so，构建 treesitter.so + luajit/t
 - [`notes/`](notes/) — 设计文档：架构总览（`brief_*.md`）、算法设计
   （`design_*.md`）、区间删除算法演进史
 
-外围库（`cellgrid.h`、`termfeed.h`）尚无 API 文档——参见各自
-`lua/*.d.lua` 声明与 `notes/design_cellgrid.md`、`notes/design_termfeed.md`。
+外围库（`cellgrid.h`、`termfeed.h`、`textmatch.h`）尚无 API 文档——参见
+各自 `lua/*.d.lua` 声明与 `notes/design_cellgrid.md`、
+`notes/design_termfeed.md`、`notes/design_textmatch.md`。
 
 ## 测试
 
@@ -455,6 +482,7 @@ just ut     # undotree 测试
 just sp     # spantree 测试
 just cg     # cellgrid 测试
 just tf     # termfeed 测试
+just tm     # textmatch 测试
 just cov    # 覆盖率报告
 just sp-cov # spantree 覆盖率报告
 just sp-lines  # spantree 未覆盖行
@@ -463,6 +491,7 @@ just sp-unbranched  # spantree 未覆盖分支
 # Lua 绑定测试 — just lua/<recipe> 执行 lua/justfile
 just lua/pt  # piecetab 绑定（另有 lua/cg、lua/tf）
 just lua/sp  # spantree 绑定
+just lua/tm  # textmatch 绑定
 just lua/json  # yyjson 绑定
 just lua/lsp  # 纯 Lua LSP 客户端测试（构建 json）
 just lua/ed  # editor.lua 单元测试

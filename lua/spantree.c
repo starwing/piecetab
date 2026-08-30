@@ -257,7 +257,7 @@ static int stV_keep_(void **pA, unsigned need, size_t objsz) {
 
 /* ---- state singleton (module-wide sp_State, lua_Alloc adapted) ---- */
 
-static int Lstate_gc(lua_State *L) {
+static int Lstate_delete(lua_State *L) {
     lsp_State *S = (lsp_State *)lua_touserdata(L, 1);
     if (S->S) sp_close(S->S), S->S = NULL;
     return 0;
@@ -273,7 +273,7 @@ static sp_State *lst_state(lua_State *L) {
     S = (lsp_State *)lua_newuserdata(L, sizeof(lsp_State));
     S->S = sp_open(NULL, NULL);
     if (luaL_newmetatable(L, LSP_STATE_TYPE)) {
-        lua_pushcfunction(L, Lstate_gc);
+        lua_pushcfunction(L, Lstate_delete);
         lua_setfield(L, -2, "__gc");
     }
     lua_setmetatable(L, -2);

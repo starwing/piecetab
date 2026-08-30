@@ -4,6 +4,11 @@
 > 不保留，将回滚 `HEAD` 后按本文目标重写；本文随 `editor.lua` 同步更新。
 > 旧规划与历史决策见文末「历史」章节。
 
+> **最高原则（试验田）**：`editor.lua` 是 C 库验证平台，不是功能实现平台。
+> **严禁“Lua 包装”**——C 接口做不到就直接报告，严禁为了实现功能而在 Lua
+> 里偷摸实现。`editor.lua` 最重要的是【验证】，不是【实现功能】；如果最终
+> 证明某个功能无法实现，这也是成果。
+
 ## 〇、接口阅读约定
 
 - `editor.lua` 只依赖各 Lua 绑定的 **`.d.lua` 接口文档**
@@ -24,7 +29,8 @@
 - `piecetab`（Doc：piece tree + undo）
 - `cellgrid`（屏幕网格、坐标/宽度/写入）
 - `termfeed`（终端输入解析）
-- `spantree`（样式合成器 + span 树：hl/sem/diag/piece/visual/vtext）
+- `spantree`（样式合成器 + span 树：hl/sem/diag/piece/visual/search/vtext）
+- `textmatch`（搜索：Lua pattern 匹配）
 - `treesitter`（可选，缺失时 `hl` 关闭）
 - `lsp`（`lua/lsp.lua`，可选 LSP client）
 
@@ -45,12 +51,13 @@ Ed.open(filename, term?, grid?)    -- 读文件
 | 字段 | 含义 |
 |---|---|
 | `doc` | `piecetab.Doc`，文本/光标/undo 的权威状态 |
-| `mode` | `"NORMAL"` / `"INSERT"` / `"COMMAND"` / `"VISUAL"` |
+| `mode` | `"NORMAL"` / `"INSERT"` / `"COMMAND"` / `"VISUAL"` / `"SEARCH"` |
 | `goal` | 纵向目标列（Neovim curswant），**不是当前屏幕列**；空行/短行会 clamp |
 | `scroll_line` | 视口首行 |
 | `grid` / `term` / `tf` | 屏幕、终端输出、输入解析 |
 | `comp` / `tree` | `spantree.Compositor` / `Tree`，样式与 span 层 |
 | `styles` | 预 intern 的 style handle 表 |
+| `search_pat` | 最近一次搜索 pattern（空 pattern 时重复用） |
 | `hl` | tree-sitter 高亮器（可空） |
 | `lsp` | `lsp.Client`（可空） |
 | `show_pieces` | piece 边界可视化（debug） |
@@ -94,6 +101,7 @@ Ed.open(filename, term?, grid?)    -- 读文件
 | `sem` | 2 | LSP semantic tokens |
 | `diag` | 3 | LSP diagnostics |
 | `piece` | 4 | piece 边界可视化（快速层，每帧重填） |
+| `search` | 4 | 搜索命中高亮（快速层，每帧清空重填，直接写树） |
 | `visual` | 5 | 视觉选择反色（快速层，每帧重填） |
 
 `tree:styled(s_off, e_off)` 返回已按 namespace/优先级折叠好的非重叠 run，
@@ -109,15 +117,17 @@ Lua 侧不再有 `merge_layers`。
 3. 填 `piece`/`visual` 快速层：piece 直接内联遍历
    `doc:buffer():pieces()` 并 `tree:mark("piece", ...)`，不建中间 table
    （不保留 `piece_spans` 函数）。
-4. `tree:styled(s_off, e_off)` 收集 viewport 级 spans（仅供非行内用途；
+4. 若启用搜索：清 `search` 层可视区间，用 textmatch 遍历匹配并
+   `tree:mark("search", ...)` **直接写树**，不先收集匹配区间到 Lua table。
+5. `tree:styled(s_off, e_off)` 收集 viewport 级 spans（仅供非行内用途；
    `_render_line` 不再依赖 `self._spans`）。
-5. `g:begin` + 行号列。
-6. 逐行调用 `_render_line(line_idx, col, dry_run, target_scol, ...)`：
+6. `g:begin` + 行号列。
+7. 逐行调用 `_render_line(line_idx, col, dry_run, target_scol, ...)`：
    - 行内样式与 vtext 全部来自 `tree:styled(lo, lo + linelen + 1)`；
    - 不再需要 `hl.line_segments` 或单独 `tree:span("vtext")`。
-7. `g:diff` 生成 CSI 输出。
-8. `render_status` + `render_cursor`，`g:freeze`。
-9. `lsp:post_render()` 异步刷新。
+8. `g:diff` 生成 CSI 输出。
+9. `render_status` + `render_cursor`，`g:freeze`。
+10. `lsp:post_render()` 异步刷新。
 
 ### `Ed:_render_line`（目标算法，2026-08 用户澄清后修订）
 
@@ -237,6 +247,10 @@ editor demo 是 C 库孵化平台：cellgrid 坐标族、spantree 样式折叠�
 > 以便真实暴露“这里用起来不顺”的摩擦点，驱动 C 库孵化。像 `line_text`
 > 这种把 `doc:readat(doc:lineoffset(...), doc:linelen(...))` 包一层的
 > oneliner 应删除，调用处直接写 C API。
+>
+> 高亮/搜索等数据必须**直接写 spantree**，禁止先收集区间到 Lua table 再
+> 转存。中间 table 要么是浪费，要么是隐藏 C 接口摩擦；editor 的目的是
+> 暴露摩擦、测试 C 库，不是用 Lua 把 C API 包圆。
 
 已 C 化：
 

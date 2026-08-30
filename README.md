@@ -41,6 +41,8 @@ Peripheral libraries extend the core toward a full editor:
   screen updates.
 - **`termfeed.h`** — a libtermkey-style terminal input state machine:
   raw bytes to decoded keys (CSI/SS3, UTF-8, alt keys, mouse, OSC52).
+- **`textmatch.h`** — a Lua-pattern matching engine over any seekable byte
+  source; `tm_Reader` makes it work directly on piecetab piece tables.
 
 All of them follow the same stb-style layout: single-header C89
 implementation, a Lua binding in `lua/`, and a test file in `tests/`.
@@ -134,6 +136,18 @@ complex content:
   (append inherits left, insert inherits right)
 - **Sparse coloring for free**: uncolored bytes are a single large id-0
   span; no special tree-level offset mechanism needed
+
+### textmatch.h
+
+- **Lua-pattern semantics**: matches by Unicode codepoint over a seekable
+  source, with `^ $ * + - ?`, character classes, `[...]`, `%b`, `%f`,
+  captures, and backreferences
+- **Reader abstraction**: `tm_Reader` returns byte slices by absolute
+  offset, so the engine runs directly on piecetab piece tables without
+  flattening the buffer
+- **Literal / line-anchor modes**: `TM_LITERAL` for plain byte search and
+  `TM_LINEANCHOR` for line-aware `^`/`$`
+- **No heap allocation**: all state lives in a caller-provided `tm_State`
 
 ## Quick Start
 
@@ -397,6 +411,16 @@ the caller must keep the memory alive while any buffer references it.
 | Reading   | `sp_next`, `sp_prev`, `sp_style`                    |
 | Edit      | `sp_splice`, `sp_append`, `sp_insert`, `sp_remove`  |
 
+### textmatch.h
+
+| Category  | Functions                                                       |
+| --------- | --------------------------------------------------------------- |
+| Reset     | `tm_reset`, `tm_seek`                                           |
+| Match     | `tm_match(pattern)`, `tm_find(pattern, limit)`                  |
+| Result    | `tm_offset`, `tm_matchend`, `tm_captures`, `tm_capture`          |
+| Read      | `tm_copy`                                                        |
+| Flags     | `tm_flags`, `tm_setflags`                                        |
+
 See [`docs/piecetab.md`](docs/piecetab.md),
 [`docs/linecache.md`](docs/linecache.md),
 [`docs/undotree.md`](docs/undotree.md), and
@@ -414,6 +438,7 @@ vendored JSON binding:
 | `cellgrid`   | `lua/cellgrid.c`, `lua/cellgrid.d.lua`                  | C binding for `cellgrid.h` (screen grid + diff)                                        |
 | `termfeed`   | `lua/termfeed.c`, `lua/termfeed.d.lua`                  | C binding for `termfeed.h` (terminal input)                                            |
 | `spantree`   | `lua/spantree.c`, `lua/spantree.d.lua`                  | C binding for `spantree.h` (Compositor/Tree/Cursor span coloring)                      |
+| `textmatch`  | `lua/textmatch.c`, `lua/textmatch.d.lua`                | C binding for `textmatch.h` (1-based `find`/`match`/`gmatch` + 0-based `new(source)` state API with `option`/`find`/`match`/`gfind`/`reset`/`delete`; string or `piecetab.Buffer`) |
 | `json`       | `lua/json.c`, `lua/json.d.lua`, `lua/yyjson/`           | Pure C binding over vendored yyjson (`decode`/`encode`/`array`/`object`/`null`/`type`) |
 | `treesitter` | `lua/treesitter.c`, `lua/treesitter.d.lua`              | C binding over `libtree-sitter` (parser/tree/query APIs)                               |
 | `lsp`        | `lua/lsp.lua`                                           | Pure-Lua LSP client building blocks; requires `json`, `luv`, and `lua-utf8`            |
@@ -440,6 +465,8 @@ Override before including the implementation:
 | `PT_PAGE_SIZE` / `LC_PAGE_SIZE` / `UT_PAGE_SIZE` / `SP_PAGE_SIZE` | 65536   | pool allocator page size                                                         |
 | `PT_ARENA_SIZE`                                                   | 1024    | arena block minimum size                                                         |
 | `PT_COMPACT_RANGES`                                               | 64      | compact range array initial capacity                                             |
+| `TM_MAX_PATTERN_COUNT`                                            | 9       | max explicit captures in a pattern                                                |
+| `TM_MAXCCALLS`                                                    | 200     | max recursion depth while matching                                               |
 
 All libraries accept a custom allocator (`lc_Alloc` / `pt_Alloc`
 / `ut_Alloc` / `sp_Alloc`, Lua-style realloc signature) at `*_open`.
@@ -448,7 +475,7 @@ All libraries accept a custom allocator (`lc_Alloc` / `pt_Alloc`
 
 - `*.h` — stb-style single-header libraries (pure C89, self-contained):
   `piecetab.h`, `linecache.h`, `undotree.h`, `spantree.h`, `cellgrid.h`,
-  `termfeed.h`
+  `termfeed.h`, `textmatch.h`
 - `lua/` — Lua side: one binding `name.c` + API declaration `name.d.lua`
   per library, the `editor.lua` demo, and `tests/` with Lua tests.
   Bindings build to `lua/*.so` (Lua 5.5, primary) and `lua/luajit/*.so`
@@ -470,9 +497,10 @@ All libraries accept a custom allocator (`lc_Alloc` / `pt_Alloc`
 - [`docs/spantree.md`](docs/spantree.md) — spantree API reference &
   implementation notes ([中文](docs/spantree.zh.md))
 
-Peripheral libraries (`cellgrid.h`, `termfeed.h`) have no API docs yet —
-see their `lua/*.d.lua` declarations and `notes/design_cellgrid.md`,
-`notes/design_termfeed.md`.
+Peripheral libraries (`cellgrid.h`, `termfeed.h`, `textmatch.h`) have no
+API docs yet — see their `lua/*.d.lua` declarations and
+`notes/design_cellgrid.md`, `notes/design_termfeed.md`,
+`notes/design_textmatch.md`.
 
 - [`notes/`](notes/) — design documents: architecture overviews
   (`brief_*.md`), algorithm designs (`design_*.md`), and the range-delete
@@ -493,6 +521,7 @@ just ut     # undotree tests
 just sp     # spantree tests
 just cg     # cellgrid tests
 just tf     # termfeed tests
+just tm     # textmatch tests
 just cov    # coverage report
 just sp-cov # spantree coverage report
 just sp-lines  # spantree uncovered lines
@@ -501,6 +530,7 @@ just sp-unbranched  # spantree uncovered branches
 # Lua binding tests — just lua/<recipe> runs lua/justfile
 just lua/pt  # piecetab binding (also lua/cg, lua/tf)
 just lua/sp  # spantree binding
+just lua/tm  # textmatch binding
 just lua/json  # yyjson binding
 just lua/lsp  # pure-Lua LSP client tests (builds json)
 just lua/ed  # editor.lua unit tests

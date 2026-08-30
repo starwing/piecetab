@@ -83,10 +83,12 @@ jobs:
           luarocks install luv
       - name: tmux display tests
         run: just lua/ed-tmux
+      - name: build textmatch
+        run: just lua/build textmatch
       - name: lua binding tests
         run: |
           cd lua
-          for t in piecetab cellgrid spantree termfeed json lsp; do
+          for t in piecetab cellgrid spantree termfeed json lsp textmatch; do
             echo "=== $t ==="
             lua tests/${t}_test.lua || exit 1
           done
