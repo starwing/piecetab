@@ -312,6 +312,7 @@ int  pt_advance(pt_Cursor *C, pt_Offset delta);
 
 /* query */
 #define pt_offset(C) ((C)->off + (C)->poff)
+#define pt_prefix(C) ((C)->poff)
 #define pt_buffer(C)   ((C)->tree)
 ```
 
@@ -321,6 +322,8 @@ int  pt_advance(pt_Cursor *C, pt_Offset delta);
 - piece 级遍历：`pt_piece` 返回当前 piece 剩余数据；`pt_next` 前进一片并返回落脚片；
   `pt_prev` 后退一片并返回落脚片（两者对称，均为"移动后返回落脚点"语义）。
   全量遍历惯用法：`for (p = pt_piece(C,&n); n; p = pt_next(C,&n))`
+- `pt_prefix(C)` 返回当前 piece 内、当前位置之前的字节数（即 `C->poff`），不移动游标；
+  与 `pt_piece` 组合可得到当前完整 piece 的 base 指针、起始 offset 和完整长度。
 
 ### 6.3 编辑（核心）
 

@@ -324,7 +324,7 @@ just lua/ts   # 获取/编译 lua/grammar/*.so，构建 treesitter.so + luajit/t
 | 生命周期 | `pt_open`, `pt_close`, `pt_reset`, `pt_getallocf`                                        |
 | Buffer   | `pt_empty`, `pt_from`, `pt_compact`, `pt_retain`, `pt_release`                           |
 | 查询     | `pt_bytes`, `pt_version`                                                                 |
-| 游标     | `pt_seek`, `pt_locate`, `pt_advance`, `pt_offset`                                        |
+| 游标     | `pt_seek`, `pt_locate`, `pt_advance`, `pt_offset`, `pt_prefix`                          |
 | 读取     | `pt_read`, `pt_piece`, `pt_next`, `pt_prev`                                              |
 | 编辑     | `pt_edit`（拷贝语义），`pt_insert` / `pt_append` / `pt_splice` / `pt_remove`（引用语义） |
 | 事务     | `pt_commit`, `pt_rollback`                                                               |

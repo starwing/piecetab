@@ -199,6 +199,7 @@ const char *pt_piece(pt_Cursor *C, size_t *plen);
 const char *pt_next(pt_Cursor *C, size_t *plen);
 const char *pt_prev(pt_Cursor *C, size_t *plen);
 size_t      pt_read(pt_Cursor *C, char *buf, size_t len);
+#define     pt_prefix(C) ((C)->poff)
 ```
 
 **语义：“先移动，再返回落脚点”** —— `pt_next`/`pt_prev` 先移动游标，再返回目标
@@ -208,6 +209,11 @@ piece 的数据指针。
   设为剩余长度。当 `C->poff >= piece->bytes[i]`（游标越过 piece 尾）、树逻辑
   字节为 0（如删除全部内容后）或不存在树时，返回 `NULL` 且 `*plen = 0`。
   典型遍历：`for (p = pt_piece(c, &n); n; p = pt_next(c, &n))`。
+- **`pt_prefix`**：返回当前 piece 内、当前位置之前的字节数（即 `C->poff`），
+  不移动游标。与 `pt_piece` 组合可得到当前完整 piece：
+  `base = pt_piece(c, &n) - pt_prefix(c)`、
+  `start = pt_offset(c) - pt_prefix(c)`、
+  `len = n + pt_prefix(c)`。
 - **`pt_next`**：若游标在当前 piece 内部（`poff < bytes[i]`），消耗剩余字节，
   右移到下一 piece 开头，返回新 piece 的完整数据指针。若已在 piece 尾
   （`poff == bytes[i]`），直接跳到下一 piece。没有下一 piece（树尾）时返回

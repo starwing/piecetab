@@ -1510,6 +1510,12 @@ TEST(arena_reserve_full) {
         assertok(p != NULL);
     }
 
+    /* Oversized reserve: len > PT_ARENA_SIZE takes the other pt_max arm. */
+    {
+        char *p = pt_reserve(&c, PT_ARENA_SIZE + 1);
+        assertok(p != NULL);
+    }
+
     pt_release(c.tree), pt_release(b);
     asserteq(S->nodes.live_obj, 0);
     asserteq(S->holes.live_obj, 0);
@@ -2546,6 +2552,92 @@ TEST(seam_remove_tail_shrink) {
     assertok(pt_checkcursor(&c, 5));
     pt_asserttree(c.tree, 0, leafV(litV_(buf + 0, 3), litV_(buf + 4, 2)));
     pt_release(c.tree), pt_release(b);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* append extends a literal whose right neighbor is a hole: seamleaf must
+ * not merge the extended literal with the hole. */
+TEST(seam_append_skip_hole_right) {
+    static const char buf[] = "abcdef";
+    pt_State         *S = pt_open(&test_alloc, NULL);
+    pt_Cursor         c;
+    editV(&c, 3, 0, leafV(litV_(buf + 0, 3), holeV("X")));
+    asserteq(pt_append(&c, buf + 3, 3), PT_OK); /* "abc"+"def" contiguous */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 6));
+    pt_asserttree(c.tree, 0, leafV(litV_(buf + 0, 6), holeV("X")));
+    pt_release(c.tree);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* append extends a literal whose right neighbor is a non-contiguous
+ * literal: seamleaf must not merge them. */
+TEST(seam_append_skip_noncontig) {
+    static const char buf[8] = "abcdef";
+    static const char sb[8]  = "def";
+    pt_State         *S = pt_open(&test_alloc, NULL);
+    pt_Cursor         c;
+    editV(&c, 3, 0, leafV(litV_(buf, 3), litV_(sb, 3)));
+    asserteq(pt_append(&c, buf + 3, 3), PT_OK); /* extends first literal */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 6));
+    pt_asserttree(c.tree, 0, leafV(litV_(buf, 6), litV_(sb, 3)));
+    pt_release(c.tree);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* append extends a literal and the next literal is physically contiguous:
+ * seamleaf merges them while the cursor stays on the left piece. */
+TEST(seam_append_merge_right) {
+    static const char buf[] = "abcdefghij";
+    pt_State         *S = pt_open(&test_alloc, NULL);
+    pt_Cursor         c;
+    editV(&c, 3, 0, leafV(litV_(buf + 0, 3), litV_(buf + 6, 3)));
+    asserteq(pt_append(&c, buf + 3, 3), PT_OK); /* bridges to next literal */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 6));
+    pt_asserttree(c.tree, 0, leafV(litV_(buf + 0, 9)));
+    pt_release(c.tree);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* seamleaf bails out when the right neighbor is a hole: tail-shrink of a
+ * literal next to a hole must not try to merge them. */
+TEST(seam_skip_hole_right) {
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Cursor c;
+    editV(&c, 1, 0, leafV(litV("abc"), holeV("X")));
+    asserteq(pt_remove(&c, 2), PT_OK); /* "abc" -> "a"; next is a hole */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 1));
+    pt_asserttree(c.tree, 0, leafV(litV("a"), holeV("X")));
+    pt_release(c.tree);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* seamleaf bails out when the two literals are not physically contiguous:
+ * tail-shrink must leave them as separate pieces. */
+TEST(seam_skip_noncontig) {
+    static const char sa[8] = "abc";
+    static const char sb[8] = "def";
+    pt_State         *S = pt_open(&test_alloc, NULL);
+    pt_Cursor         c;
+    editV(&c, 1, 0, leafV(litV_(sa, 3), litV_(sb, 3)));
+    asserteq(pt_remove(&c, 2), PT_OK); /* "abc" -> "a"; not contiguous */
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 1));
+    pt_asserttree(c.tree, 0, leafV(litV_(sa, 1), litV_(sb, 3)));
+    pt_release(c.tree);
     asserteq(S->nodes.live_obj, 0);
     asserteq(S->holes.live_obj, 0);
     pt_close(S);
@@ -3838,6 +3930,47 @@ TEST(piece_positions) {
     pt_close(S);
 }
 
+TEST(prefix_basic) {
+    pt_State   *S = pt_open(&test_alloc, NULL);
+    pt_Buffer   b = treeV(0, leafV(litV("hello"), litV("world"), litV("!!!")));
+    pt_Cursor   c;
+    const char *p, *base;
+    size_t      n, pre, full;
+
+    /* Middle of a piece: prefix + remaining reconstruct the full piece. */
+    pt_seek(&c, b, 2);
+    p = pt_piece(&c, &n);
+    assertok(p != NULL);
+    pre = pt_prefix(&c);
+    base = p - pre;
+    full = n + pre;
+    asserteq(pre, 2);
+    asserteq(full, 5);
+    asserteq(memcmp(base, "hello", 5), 0);
+    asserteq(pt_offset(&c) - pre, 0);
+
+    /* Piece start: prefix is zero and base equals pt_piece. */
+    pt_seek(&c, b, 5);
+    p = pt_piece(&c, &n);
+    assertok(p != NULL);
+    asserteq(pt_prefix(&c), 0);
+    asserteq(p - pt_prefix(&c), p);
+
+    /* Tree tail: pt_piece is empty, prefix still identifies the last piece. */
+    pt_seek(&c, b, 13);
+    p = pt_piece(&c, &n);
+    asserteq(p, NULL);
+    asserteq(n, 0);
+    pre = pt_prefix(&c);
+    asserteq(pre, 3);
+    asserteq(pt_offset(&c) - pre, 10);
+
+    pt_release(b);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
 TEST(next_basic) {
     pt_State   *S = pt_open(&test_alloc, NULL);
     pt_Buffer   b = treeV(0, leafV(litV("aa"), litV("bb"), litV("cc")));
@@ -4910,6 +5043,13 @@ TEST(error_cov_params) {
     asserteq(pt_next(&c, NULL), NULL);
     pt_locate(&c, 0);
     asserteq(pt_prev(&c, NULL), NULL);
+    {
+        pt_Cursor e;
+        pt_seek(&e, pt_empty(S), 0);
+        asserteq(pt_piece(&e, NULL), NULL);
+        asserteq(pt_next(&e, NULL), NULL);
+        asserteq(pt_prev(&e, NULL), NULL);
+    }
     asserteq(pt_scratch(&c, NULL), NULL);
     asserteq(pt_literal(&c, 0), NULL);
     asserteq(pt_splice(&c, 0, "x", 0), PT_OK);
@@ -5036,6 +5176,14 @@ TEST(compact_params) {
         pt_Buffer z = pt_from(S, NULL, 0); /* zero-byte blob */
         asserteq(pt_compact(S, z), pt_empty(S));
         pt_release(z);
+    }
+    {
+        pt_Buffer e = pt_empty(S);
+        pt_Cursor c;
+        pt_seek(&c, e, 0);
+        asserteq(pt_edit(&c, 0, "x", 1), PT_OK);
+        asserteq(pt_compact(S, c.tree), NULL); /* transient root has mask */
+        pt_release(c.tree);
     }
     pt_release(b);
     asserteq(S->nodes.live_obj, 0);

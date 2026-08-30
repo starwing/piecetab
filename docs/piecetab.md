@@ -224,6 +224,7 @@ const char *pt_piece(pt_Cursor *C, size_t *plen);
 const char *pt_next(pt_Cursor *C, size_t *plen);
 const char *pt_prev(pt_Cursor *C, size_t *plen);
 size_t      pt_read(pt_Cursor *C, char *buf, size_t len);
+#define     pt_prefix(C) ((C)->poff)
 ```
 
 **Semantics: "Move then return the landing point"** — `pt_next`/`pt_prev` move
@@ -235,6 +236,12 @@ the cursor first, then return the target piece's data pointer.
   logical bytes (e.g. after deleting all content), or no tree exists,
   returns `NULL` with `*plen = 0`. Typical traversal idiom:
   `for (p = pt_piece(c, &n); n; p = pt_next(c, &n))`.
+- **`pt_prefix`**: Returns the number of bytes before the current position
+  inside the current piece (i.e. `C->poff`), without moving the cursor.
+  Combined with `pt_piece` it yields the full current piece:
+  `base = pt_piece(c, &n) - pt_prefix(c)`,
+  `start = pt_offset(c) - pt_prefix(c)`,
+  `len = n + pt_prefix(c)`.
 - **`pt_next`**: If the cursor is inside the current piece (`poff < bytes[i]`),
   consumes the remaining bytes, moves right to the start of the next piece, and
   returns the new piece's full data pointer. If already at piece end

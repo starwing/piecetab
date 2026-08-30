@@ -350,7 +350,7 @@ just lua/ts   # fetch/compile lua/grammar/*.so, build treesitter.so + luajit/tre
 | Lifecycle | `pt_open`, `pt_close`, `pt_reset`, `pt_getallocf`                                   |
 | Buffer    | `pt_empty`, `pt_from`, `pt_compact`, `pt_retain`, `pt_release`                      |
 | Query     | `pt_bytes`, `pt_version`                                                            |
-| Cursor    | `pt_seek`, `pt_locate`, `pt_advance`, `pt_offset`                                   |
+| Cursor    | `pt_seek`, `pt_locate`, `pt_advance`, `pt_offset`, `pt_prefix`                      |
 | Read      | `pt_read`, `pt_piece`, `pt_next`, `pt_prev`                                         |
 | Edit      | `pt_edit` (copy), `pt_insert` / `pt_append` / `pt_splice` / `pt_remove` (reference) |
 | Txn       | `pt_commit`, `pt_rollback`                                                          |

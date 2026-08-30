@@ -138,7 +138,7 @@ grep '^PT_API' piecetab.h
 | Buffer   | `pt_empty`, `pt_from`, `pt_retain`, `pt_release`     | 构造/引用计数。`pt_empty` 返回哨兵零分配                                |
 | Buffer   | `pt_compact`                                         | 产出紧凑新 blob：external 保原指针，internal 拷新 arena，from=empty；不内部 release 旧链 |
 | 查询     | `pt_bytes`, `pt_version`                             | 树级汇总                                                                |
-| 定位     | `pt_seek`(构造器,清dirty), `pt_locate`, `pt_advance` | 游标                                                                    |
+| 定位     | `pt_seek`(构造器,清dirty), `pt_locate`, `pt_advance`, `pt_prefix` | 游标；`pt_prefix` 返回当前 piece 内当前位置之前的字节数 |
 | 读       | `pt_read`, `pt_piece`, `pt_next`, `pt_prev`          | piece 遍历："移动后返回落脚点"语义                                      |
 | 编辑     | `pt_edit`                                            | splice via hole（**copy 语义**，追尾）                                  |
 | 编辑     | `pt_insert`/`pt_append`/`pt_splice`/`pt_remove`      | literal **引用语义**（s 须存活至释放）；insert 原位, append/splice 追尾 |
