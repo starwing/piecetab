@@ -264,7 +264,9 @@ TEST(backwardoff_climb) {
     /* deep tree: stepping back from the first segment of a leaf
      * container must climb through the empty-slot loop (L451) */
     sp_freetree(t);
-    t = sp_mkstreamV(sp_newtree(S), 1,1,2,1,3,1,4,1,5,1,6,1,7,1,8,1,9,1,10,1,11,1,12,1,13,1,14,1,15,1,16,1,0,0);
+    t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1,
+            10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 0, 0);
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 2), SP_OK);
     asserteq(sp_offset(&C), 2);
@@ -672,31 +674,36 @@ TEST(fill_same_inside) {
     sp_freetree(t), sp_close(S);
 }
 
-/* fill with the same id while the arbiter changes the mask: the
- * split path still runs, then the seam merge collapses the same-id
- * pieces back into one run (public-API only) */
+/* fill with the same id is a no-op: the merge short-circuit skips the
+ * arbiter, so no (in, old) decision runs and the mask stays untouched */
 TEST(fill_same_mask_change) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t = sp_newtree(S);
     sp_Cursor C;
-    sp_Mask   m;
+    SpEvt     e;
+    sp_Mask   m = 0xffff;
     sp_Id     ids[8];
     size_t    lens[8];
     int       n;
     t = sp_mkstreamV(t, 1, 10, 0, 0);
     assertok(sp_checktree(t));
-    sp_setarbiter(t, spA_nsset, NULL);
+    memset(&e, 0, sizeof(SpEvt));
+    sp_setarbiter(t, spA_rec, &e);
     asserteq(sp_seek(&C, t, 3), SP_OK);
     asserteq(sp_fill(&C, 1, 4), SP_OK);
     asserteq(sp_offset(&C), 7);
     assertok(sp_checktree(t) && sp_checkcursor(&C, 7));
+    /* born + died protection pair only: no merge, no touch */
+    asserteq(e.n, 2);
+    asserteq(spA_mergecount(&e), 0);
+    asserteq(spA_touchcount(&e), 0);
     collect_stream(&C, ids, lens, &n);
     asserteq(n, 1);
     asserteq(ids[0], 1);
     asserteq(lens[0], 10);
     asserteq(sp_seek(&C, t, 0), SP_OK);
     asserteq(sp_style(&C, NULL, &m), 1);
-    assertok((m & 1));
+    asserteq(m, 0);
     sp_freetree(t), sp_close(S);
 }
 
@@ -704,6 +711,7 @@ TEST(fill_same_mask_change) {
 
 static sp_Id arb_sum(void *ud, sp_Id id, sp_Id old, sp_Mask *mask) {
     (void)ud, (void)mask;
+    if (id == old) return id; /* touch contract + merge short-circuit */
     return old + id;
 }
 
@@ -980,12 +988,14 @@ TEST(fill_right) {
     sp_Tree  *t;
     sp_Cursor C;
     size_t    live0;
-/* balanced tree: 16 one-byte segments built through the public API;
- * fl > 0 around [2, 8) */
-    t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 0, 0);
+    /* balanced tree: 16 one-byte segments built through the public API;
+     * fl > 0 around [2, 8) */
+    t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1,
+            10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 0, 0);
     assertok(sp_checktree(t));
-/* same-id arbiter: peel + absorb restores the segment stream; the
- * stitch folds the balanced 3-level tree to 2 levels, live - 3 */
+    /* same-id arbiter: peel + absorb restores the segment stream; the
+     * stitch folds the balanced 3-level tree to 2 levels, live - 3 */
     sp_setarbiter(t, arb_same, NULL);
     asserteq(sp_seek(&C, t, 2), SP_OK); /* poff == 0 at a segment head */
     live0 = S->nodes.live_obj;
@@ -993,11 +1003,14 @@ TEST(fill_right) {
     asserteq(sp_offset(&C), 8);
     asserteq(sp_bytes(t), 16);
     asserteq(S->nodes.live_obj, live0 - 3);
-    sp_assertstream(S, t, "[1:1][2:1][3:1][4:1][5:1][6:1][7:1][8:1][9:1][10:1][11:1][12:1][13:1][14:1][15:1][16:1]");
+    sp_assertstream(
+            S, t,
+            "[1:1][2:1][3:1][4:1][5:1][6:1][7:1][8:1][9:1][10:1][11:1][12:1]["
+            "13:1][14:1][15:1][16:1]");
     assertok(sp_checkcursor(&C, 8));
     assertok(sp_checktree(t));
-/* sum arbiter: [1, 12) recolors eleven segments; the tree stays
- * 2 levels, live - 3 */
+    /* sum arbiter: [1, 12) recolors eleven segments; the tree stays
+     * 2 levels, live - 3 */
     sp_setarbiter(t, arb_sum, NULL);
     asserteq(sp_seek(&C, t, 1), SP_OK);
     live0 = S->nodes.live_obj;
@@ -1018,12 +1031,15 @@ TEST(fill_right) {
  * border (multi-level byte fixup) */
 TEST(merge_right_deep) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1,
+            10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 0, 0);
     sp_Cursor C;
     assertok(sp_checktree(t));
     assertok(sp_seek(&C, t, 4) == SP_OK);
     assertok(sp_append(&C, 1) == SP_OK);
-    sp_assertstream(S, t,
+    sp_assertstream(
+            S, t,
             "[1:1][2:1][3:1][4:2][5:1][6:1][7:1][8:1]"
             "[9:1][10:1][11:1][12:1][13:1][14:1][15:1][16:1]");
     assertok(sp_checktree(t));
@@ -1390,7 +1406,9 @@ TEST(inherit_head_tail) {
  * current container's head stays unchanged */
 TEST(growleft_fold_done) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 0,
+            0);
     sp_Cursor C;
     sp_Id     ids[16];
     size_t    lens[16];
@@ -1426,7 +1444,9 @@ TEST(growleft_fold_done) {
  * sp_next runs twice */
 TEST(next_deep) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 0,
+            0);
     sp_Cursor C;
     size_t    len;
     assertok(sp_checktree(t));
@@ -1476,7 +1496,8 @@ TEST(remove_same_container) {
  * single-child root shrinks */
 TEST(rmleaf_rebalance) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 4, 2, 1, 3, 1, 3, 1, 3, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 4, 2, 1, 3, 1, 3, 1, 3, 1, 0, 0);
     sp_Cursor L, R;
     sp_Id     ids[16];
     size_t    lens[16];
@@ -1500,7 +1521,9 @@ TEST(rmleaf_rebalance) {
  * and fold loops run three levels */
 TEST(mergeleft_4level) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 3, 1, 3, 2, 4, 1, 5, 1, 6, 1, 7, 1, 4, 1, 4, 1, 9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 3, 1, 3, 2, 4, 1, 5, 1, 6, 1, 7, 1, 4, 1, 4, 1,
+            9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 0, 0);
     sp_Cursor C;
     sp_Id     ids[32];
     size_t    lens[32];
@@ -1517,7 +1540,9 @@ TEST(mergeleft_4level) {
     sp_freetree(t);
     asserteq(S->nodes.live_obj, 0);
     /* four-level append inside a segment: the run merges in-leaf */
-    t = sp_mkstreamV(sp_newtree(S), 1, 1, 3, 1, 3, 2, 4, 1, 5, 1, 6, 1, 7, 1, 4, 2, 4, 1, 9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 0, 0);
+    t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 3, 1, 3, 2, 4, 1, 5, 1, 6, 1, 7, 1, 4, 2, 4, 1,
+            9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 0, 0);
     asserteq(sp_seek(&C, t, 9), SP_OK);
     asserteq(sp_append(&C, 1), SP_OK);
     collect_stream(&C, ids, lens, &n);
@@ -1536,7 +1561,8 @@ TEST(mergeleft_4level) {
  * to zero, stitch drops it, and the cut partner climbs left */
 TEST(remove_empty_mid) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 2, 2, 2, 1, 3, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 2, 2, 2, 1, 3, 1, 0, 0);
     sp_Cursor L, R;
     sp_Id     ids[16];
     size_t    lens[16];
@@ -1560,7 +1586,8 @@ TEST(remove_empty_mid) {
  * climbs two levels to find the cut partner */
 TEST(remove_empty_deep) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 2, 2, 2, 1, 3, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 2, 2, 2, 1, 3, 1, 0, 0);
     sp_Cursor L, R;
     sp_Id     ids[16];
     size_t    lens[16];
@@ -1587,7 +1614,10 @@ TEST(fill_4level) {
     size_t    pos, len;
     for (pos = 0; pos <= 17; ++pos)
         for (len = 1; len <= 18; ++len) {
-            sp_Tree *t = sp_mkstreamV(sp_newtree(S), 1, 1, 3, 1, 3, 2, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 0, 0);
+            sp_Tree *t = sp_mkstreamV(
+                    sp_newtree(S), 1, 1, 3, 1, 3, 2, 4, 1, 5, 1, 6, 1, 7, 1, 8,
+                    1, 9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 0,
+                    0);
             sp_Cursor C;
             assertok(sp_checktree(t));
             asserteq(sp_seek(&C, t, pos), SP_OK);
@@ -1603,7 +1633,9 @@ TEST(fill_4level) {
  * folded by rebalance and exercises the zero-child seam boundary */
 TEST(remove_empty_leaf) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1,1,2,1,3,1,4,1,5,1,6,1,7,1,8,1,9,1,10,1,11,1,12,1,13,1,14,1,15,1,16,1,0,0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1,
+            10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 0, 0);
     sp_Cursor L, R;
     sp_Id     ids[32];
     size_t    lens[32];
@@ -1624,7 +1656,9 @@ TEST(remove_empty_leaf) {
     /* also empty the leftmost leaf container: the emptied shell is the
      * left side of the fold pair (cL == 0 seam boundary) */
     sp_freetree(t);
-    t = sp_mkstreamV(sp_newtree(S), 1,1,2,1,3,1,4,1,5,1,6,1,7,1,8,1,9,1,10,1,11,1,12,1,13,1,14,1,15,1,16,1,0,0);
+    t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1,
+            10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 0, 0);
     assertok(sp_checktree(t));
     asserteq(sp_seek(&L, t, 0), SP_OK);
     asserteq(sp_seek(&R, t, 2), SP_OK);
@@ -1685,7 +1719,9 @@ TEST(mergeleft_deep) {
  * chain is all first-slots until the fork level */
 TEST(prev_deep) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 0,
+            0);
     sp_Cursor C;
     size_t    len;
     assertok(sp_checktree(t));
@@ -1745,7 +1781,8 @@ TEST(remove_drain) {
  * pair instead of folding (balancenode shift, foldnode break path) */
 TEST(fold_balance) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 0, 0);
     sp_Cursor L, R;
     asserteq(sp_seek(&L, t, 5), SP_OK);
     asserteq(sp_seek(&R, t, 6), SP_OK);
@@ -1759,7 +1796,7 @@ TEST(fold_balance) {
  * the pool (fill_brute caught a one-node leak here) */
 TEST(foldnode_free) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 0, 0);
     sp_Cursor C;
     asserteq(sp_seek(&C, t, 1), SP_OK);
     asserteq(sp_splice(&C, 1, 0), SP_OK);
@@ -1953,7 +1990,10 @@ static void mfill(size_t pos, sp_Id in, size_t len, sp_Arbiterf *arb) {
         if (lo < hi) {
             if (lo > a) tmp[w].len = lo - a, tmp[w].id = msegs[i].id, w++;
             tmp[w].len = hi - lo,
-            tmp[w].id = (sp_Id)arb(NULL, in, msegs[i].id, &m), w++;
+            tmp[w].id = in == msegs[i].id
+                              ? msegs[i].id /* merge short-circuit */
+                              : (sp_Id)arb(NULL, in, msegs[i].id, &m),
+            w++;
             if (hi < b) tmp[w].len = b - hi, tmp[w].id = msegs[i].id, w++;
         } else
             tmp[w++] = msegs[i];
@@ -2092,9 +2132,9 @@ static sp_Id arb_uniq(void *ud, sp_Id id, sp_Id old, sp_Mask *mask) {
 /* 144 one-byte segments with distinct ids, built through the public
  * API so the tree reaches the same multi-level shape. */
 static void mkfilltree(sp_State *S, sp_Tree *t) {
-    sp_Id   ids[144];
-    size_t  lens[144];
-    int     i;
+    sp_Id  ids[144];
+    size_t lens[144];
+    int    i;
     (void)S;
     for (i = 0; i < 144; ++i) ids[i] = (sp_Id)(i + 1), lens[i] = 1;
     sp_mkstream(t, ids, lens, 144);
@@ -2779,7 +2819,9 @@ TEST(ns_edges) {
  * (mergeleft regression: the cursor used to dangle after the merge) */
 TEST(remove_mergeleft_gap) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 0, 42, 3, 18, 0, 61, 12, 7, 9, 10, 11, 5, 13, 5, 14, 5, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 0, 42, 3, 18, 0, 61, 12, 7, 9, 10, 11, 5, 13, 5, 14,
+            5, 0, 0);
     sp_Cursor C;
     char      buf[256];
     assertok(sp_checktree(t));
@@ -2799,7 +2841,9 @@ TEST(remove_mergeleft_gap) {
  * half-full invariant) */
 TEST(remove_mergeleft_foldfirst) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 5, 7, 6, 170, 7, 9, 2, 1152, 2, 3, 2, 82, 3, 142, 4, 89, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 5, 7, 6, 170, 7, 9, 2, 1152, 2, 3, 2, 82, 3, 142, 4,
+            89, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 0, 0);
     sp_Cursor C;
     char      buf[256];
     assertok(sp_checktree_allow_unseamedspan(t, 1)); /* pre-merge input */
@@ -2820,7 +2864,9 @@ TEST(remove_mergeleft_foldfirst) {
  * 9 spN_makespace assert on the extra pull) */
 TEST(remove_mergeleft_rtfull) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 8, 1, 9, 1, 10, 1, 8, 2, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 17, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 8, 1, 9, 1, 10, 1, 8, 2, 11, 1, 12, 1, 13, 1,
+            14, 1, 15, 1, 16, 1, 17, 1, 0, 0);
     sp_Cursor C, R;
     char      buf[256];
     assertok(sp_checktree(t));
@@ -2839,7 +2885,9 @@ TEST(remove_mergeleft_rtfull) {
  * container (id-mismatch early return) */
 TEST(remove_mergeleft_idmismatch) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 40, 1, 5, 1, 6, 1, 4, 1, 7, 1, 8, 1, 9, 1, 10, 1, 11, 1, 12, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 40, 1, 5, 1, 6, 1, 4, 1, 7, 1, 8,
+            1, 9, 1, 10, 1, 11, 1, 12, 1, 0, 0);
     sp_Cursor C, R;
     char      buf[256];
     assertok(sp_checktree(t));
@@ -2860,7 +2908,9 @@ TEST(remove_mergeleft_idmismatch) {
  * foldbelow stops at the first healthy chain node (cc >= FANOUT/2) */
 TEST(remove_mergeleft_healthy) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 9, 1, 6, 1, 8, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 9, 1, 6, 1,
+            8, 1, 0, 0);
     sp_Cursor C, R;
     char      buf[256];
     assertok(sp_checktree(t));
@@ -2878,7 +2928,9 @@ TEST(remove_mergeleft_healthy) {
  * container is full: foldright must balance (cN + cc > FANOUT) */
 TEST(remove_mergeleft_foldrightbal) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 4, 1, 7, 1, 8, 1, 9, 1, 10, 1, 11, 1, 12, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 4, 1, 7, 1, 8, 1,
+            9, 1, 10, 1, 11, 1, 12, 1, 0, 0);
     sp_Cursor C, R;
     char      buf[256];
     assertok(sp_checktree(t));
@@ -2896,7 +2948,9 @@ TEST(remove_mergeleft_foldrightbal) {
  * chains a fresh leaf container for the remainder */
 TEST(remove_stitch_findroom) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 10, 2, 10, 3, 10, 4, 10, 5, 10, 6, 10, 11, 10, 7, 10, 8, 10, 9, 10, 10, 10, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 10, 2, 10, 3, 10, 4, 10, 5, 10, 6, 10, 11, 10, 7,
+            10, 8, 10, 9, 10, 10, 10, 0, 0);
     sp_Cursor C, R;
     char      buf[256];
     assertok(sp_checktree(t));
@@ -2914,7 +2968,9 @@ TEST(remove_stitch_findroom) {
  * underfilled chain leaf folds left into its sibling below the fork */
 TEST(remove_mergeleft_foldleft) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 13, 1, 9, 1, 10, 1, 11, 1, 12, 1, 14, 1, 15, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 13, 1, 9, 1, 10,
+            1, 11, 1, 12, 1, 14, 1, 15, 1, 0, 0);
     sp_Cursor C, R;
     char      buf[256];
     assertok(sp_checktree(t));
@@ -2936,7 +2992,9 @@ TEST(remove_mergeleft_foldleft) {
  * table drifts below the segment tally */
 TEST(remove_mergeleft_pullref) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 9, 1, 3, 1, 4, 1, 5, 1, 3, 1, 6, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 9, 1, 3, 1, 4, 1, 5, 1, 3, 1, 6, 1, 0,
+            0);
     sp_Cursor C, R;
     SpRef     r;
     long      counts[SP_REFN];
@@ -3025,7 +3083,9 @@ TEST(clear_maskrefresh) {
 TEST(clear_underfull) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t;
-    t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 0, 0);
+    t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 0,
+            0);
     sp_setns(t, 0, 4, 1);
     sp_setarbiter(t, spA_nsset, NULL);
     asserteq(sp_clear(t, 1, 0x8000 + 1), SP_OK);
@@ -3374,6 +3434,740 @@ TEST(sp_none) {
     asserteq(sp_style(&C, &len, NULL), 0);
     asserteq(len, 3);
     sp_freetree(t), sp_close(S);
+}
+
+/* ---- touch contract tests ---- */
+
+/* recorder + sum merge in one arbiter: touch-shaped calls return the
+ * id unchanged and are logged; merge-shaped calls still sum */
+static sp_Id arb_sumrec(void *ud, sp_Id id, sp_Id old, sp_Mask *mask) {
+    SpEvt *e = (SpEvt *)ud;
+    (void)mask;
+    assert(e->n < SP_EVN);
+    e->ids[e->n] = id, e->olds[e->n] = old, e->n += 1;
+    if (id == old) return id;
+    return old + id;
+}
+
+/* keep-id mask-changing arbiter used by seam-fill coverage */
+static sp_Id arb_keepid_mask_rec(void *ud, sp_Id id, sp_Id old, sp_Mask *mask);
+
+/* assert that the whole recorder stream is exactly the given touch ids */
+static void spA_expect_touch_only(const SpEvt *e, const sp_Id *ids, int n) {
+    int i;
+    asserteq(e->n, n);
+    for (i = 0; i < n; ++i) {
+        asserteq(e->ids[i], ids[i]);
+        asserteq(e->olds[i], ids[i]);
+    }
+}
+
+/* model-side expected touch multiset for one edit step */
+static int   mtouch_n;
+static sp_Id mtouch[16];
+
+static void mtouch_add(sp_Id id) {
+    if (id != 0) mtouch[mtouch_n++] = id;
+}
+
+static void mtouch_append(size_t pos, size_t ins) {
+    int    idx;
+    size_t off;
+    if (ins == 0 || mbytes == 0) return;
+    if (pos > mbytes) mpad(pos);
+    mseek(pos, &idx, &off);
+    if (idx < mn && off > 0)
+        mtouch_add(msegs[idx].id);
+    else if (idx == mn) {
+        if (mn > 0) mtouch_add(msegs[mn - 1].id);
+    } else if (idx > 0)
+        mtouch_add(msegs[idx - 1].id);
+}
+
+static void mtouch_insert(size_t pos, size_t ins) {
+    int    idx;
+    size_t off;
+    if (ins == 0 || mbytes == 0) return;
+    if (pos > mbytes) mpad(pos);
+    mseek(pos, &idx, &off);
+    if (idx < mn) mtouch_add(msegs[idx].id);
+}
+
+static void mtouch_remove(size_t pos, size_t del) {
+    size_t acc = 0;
+    int    i;
+    if (del == 0 || pos >= mbytes) return;
+    if (pos + del > mbytes) del = mbytes - pos;
+    for (i = 0; i < mn; ++i) {
+        size_t a = acc, b = acc + msegs[i].len;
+        size_t lo = a > pos ? a : pos;
+        size_t hi = b < pos + del ? b : pos + del;
+        if (lo < hi && (lo > a || hi < b)) mtouch_add(msegs[i].id);
+        acc = b;
+    }
+}
+
+static int mtouch_cmp(const void *a, const void *b) {
+    sp_Id x = *(const sp_Id *)a, y = *(const sp_Id *)b;
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+
+static void mtouch_check(const SpEvt *e, int step) {
+    int   i, ng = 0;
+    sp_Id got[16];
+    for (i = 0; i < e->n; ++i)
+        if (e->ids[i] && e->ids[i] == e->olds[i]) got[ng++] = e->ids[i];
+    if (ng != mtouch_n) {
+        test_log("TOUCH step %d: got %d expected %d\n", step, ng, mtouch_n);
+        mops_dump();
+        abort();
+    }
+    qsort(got, (size_t)ng, sizeof(sp_Id), mtouch_cmp);
+    qsort(mtouch, (size_t)mtouch_n, sizeof(sp_Id), mtouch_cmp);
+    for (i = 0; i < ng; ++i)
+        if (got[i] != mtouch[i]) {
+            test_log(
+                    "TOUCH step %d: got[%d]=%lu expected[%d]=%lu\n", step, i,
+                    test_lu(got[i]), i, test_lu(mtouch[i]));
+            mops_dump();
+            abort();
+        }
+}
+
+TEST(touch_append) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t;
+    sp_Cursor C;
+    SpEvt     e;
+    sp_Id     ids[8];
+    /* mid-leaf append grows the current leaf once */
+    t = sp_mkstreamV(sp_newtree(S), 1, 3, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 1), SP_OK);
+    asserteq(sp_append(&C, 2), SP_OK);
+    ids[0] = 1;
+    spA_expect_touch_only(&e, ids, 1);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 3));
+    sp_assertstream(S, t, "[1:5]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* boundary append grows the left leaf once */
+    t = sp_mkstreamV(sp_newtree(S), 1, 3, 2, 5, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 3), SP_OK);
+    asserteq(sp_append(&C, 2), SP_OK);
+    ids[0] = 1;
+    spA_expect_touch_only(&e, ids, 1);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 5));
+    sp_assertstream(S, t, "[1:5][2:5]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* tree-head append pads and touches nothing */
+    t = sp_mkstreamV(sp_newtree(S), 1, 3, 2, 5, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 0), SP_OK);
+    asserteq(sp_append(&C, 2), SP_OK);
+    asserteq(e.n, 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 2));
+    sp_assertstream(S, t, "[0:2][1:3][2:5]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* tree-tail append grows the last leaf once */
+    t = sp_mkstreamV(sp_newtree(S), 1, 3, 2, 5, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 8), SP_OK);
+    asserteq(sp_append(&C, 2), SP_OK);
+    ids[0] = 2;
+    spA_expect_touch_only(&e, ids, 1);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 10));
+    sp_assertstream(S, t, "[1:3][2:7]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* mid-hole and trailing-hole appends grow id 0, no touch */
+    t = sp_mkstreamV(sp_newtree(S), 1, 3, 0, 2, 2, 5, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 4), SP_OK);
+    asserteq(sp_append(&C, 1), SP_OK);
+    asserteq(e.n, 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 5));
+    sp_assertstream(S, t, "[1:3][0:3][2:5]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    t = sp_mkstreamV(sp_newtree(S), 1, 3, 0, 2, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 5), SP_OK);
+    asserteq(sp_append(&C, 2), SP_OK);
+    asserteq(e.n, 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 7));
+    sp_assertstream(S, t, "[1:3][0:4]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    sp_close(S);
+}
+
+TEST(touch_insert) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t;
+    sp_Cursor C;
+    SpEvt     e;
+    sp_Id     ids[8];
+    /* mid-leaf insert grows the current leaf once */
+    t = sp_mkstreamV(sp_newtree(S), 1, 3, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 1), SP_OK);
+    asserteq(sp_insert(&C, 2), SP_OK);
+    ids[0] = 1;
+    spA_expect_touch_only(&e, ids, 1);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 1));
+    sp_assertstream(S, t, "[1:5]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* leaf-head insert grows the right (current) leaf once */
+    t = sp_mkstreamV(sp_newtree(S), 1, 3, 2, 5, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 3), SP_OK);
+    asserteq(sp_insert(&C, 2), SP_OK);
+    ids[0] = 2;
+    spA_expect_touch_only(&e, ids, 1);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 3));
+    sp_assertstream(S, t, "[1:3][2:7]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* tree-tail insert on a styled leaf pads, no touch */
+    t = sp_mkstreamV(sp_newtree(S), 1, 3, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 3), SP_OK);
+    asserteq(sp_insert(&C, 2), SP_OK);
+    asserteq(e.n, 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 3));
+    sp_assertstream(S, t, "[1:3][0:2]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* trailing-hole insert grows the hole, no touch */
+    t = sp_mkstreamV(sp_newtree(S), 1, 3, 0, 2, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 5), SP_OK);
+    asserteq(sp_insert(&C, 2), SP_OK);
+    asserteq(e.n, 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 5));
+    sp_assertstream(S, t, "[1:3][0:4]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* tree-tail insert into a full leaf container still pads, no touch */
+    t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 4), SP_OK);
+    asserteq(sp_insert(&C, 2), SP_OK);
+    asserteq(e.n, 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 4));
+    sp_assertstream(S, t, "[1:1][2:1][3:1][4:1][0:2]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    sp_close(S);
+}
+
+TEST(touch_growleft_branches) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t;
+    sp_Cursor C;
+    SpEvt     e;
+    sp_Id     ids[8];
+    /* (a) levels == 0: append at a leaf head touches the left sibling */
+    t = sp_mkstreamV(sp_newtree(S), 1, 3, 2, 2, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 3), SP_OK);
+    asserteq(sp_append(&C, 1), SP_OK);
+    ids[0] = 1;
+    spA_expect_touch_only(&e, ids, 1);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 4));
+    sp_assertstream(S, t, "[1:4][2:2]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* (b) multi-container, cursor at a container-mid leaf head */
+    t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 0,
+            0);
+    assertok(t->levels > 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 1), SP_OK);
+    asserteq(sp_append(&C, 1), SP_OK);
+    ids[0] = 1;
+    spA_expect_touch_only(&e, ids, 1);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 2));
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* (c) deep-leftmost: 16 leaves, append at first leaf of a middle
+     * container touches the rightmost leaf of the left sibling subtree */
+    t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1,
+            10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 0, 0);
+    assertok(t->levels >= 2);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 4), SP_OK);
+    asserteq(sp_append(&C, 1), SP_OK);
+    ids[0] = 4;
+    spA_expect_touch_only(&e, ids, 1);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 5));
+    sp_assertstream(
+            S, t,
+            "[1:1][2:1][3:1][4:2][5:1][6:1][7:1][8:1]"
+            "[9:1][10:1][11:1][12:1][13:1][14:1][15:1][16:1]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    sp_close(S);
+}
+
+TEST(touch_remove) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t;
+    sp_Cursor L, R;
+    SpEvt     e;
+    sp_Id     ids[8];
+    /* mid-leaf remove touches the current leaf once */
+    t = sp_mkstreamV(sp_newtree(S), 1, 5, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&L, t, 1), SP_OK);
+    asserteq(sp_seek(&R, t, 2), SP_OK);
+    asserteq(sp_remove(&L, &R), SP_OK);
+    ids[0] = 1;
+    spA_expect_touch_only(&e, ids, 1);
+    assertok(sp_checktree(t) && sp_checkcursor(&L, 1));
+    sp_assertstream(S, t, "[1:4]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* whole-leaf remove from its head dies, no touch */
+    t = sp_mkstreamV(sp_newtree(S), 1, 2, 2, 5, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&L, t, 2), SP_OK);
+    asserteq(sp_seek(&R, t, 7), SP_OK);
+    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(spA_touchcount(&e), 0);
+    asserteq(e.n, 1);
+    asserteq(e.ids[0], 0);
+    asserteq(e.olds[0], 2);
+    assertok(sp_checktree(t) && sp_checkcursor(&L, 2));
+    sp_assertstream(S, t, "[1:2]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* cross-leaf with both boundaries partial touches both */
+    t = sp_mkstreamV(sp_newtree(S), 1, 5, 2, 5, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&L, t, 2), SP_OK);
+    asserteq(sp_seek(&R, t, 7), SP_OK);
+    asserteq(sp_remove(&L, &R), SP_OK);
+    ids[0] = 1, ids[1] = 2;
+    spA_expect_touch_only(&e, ids, 2);
+    assertok(sp_checktree(t) && sp_checkcursor(&L, 2));
+    sp_assertstream(S, t, "[1:2][2:3]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* cross-leaf with R at the tree end touches only the left side */
+    t = sp_mkstreamV(sp_newtree(S), 1, 5, 2, 5, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&L, t, 2), SP_OK);
+    asserteq(sp_seek(&R, t, 10), SP_OK);
+    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(spA_touchcount(&e), 1);
+    asserteq(e.ids[0], 1);
+    asserteq(e.olds[0], 1);
+    assertok(sp_checktree(t) && sp_checkcursor(&L, 2));
+    sp_assertstream(S, t, "[1:2]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* one whole leaf removed: only died, no touch */
+    t = sp_mkstreamV(sp_newtree(S), 1, 2, 2, 5, 3, 2, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&L, t, 2), SP_OK);
+    asserteq(sp_seek(&R, t, 7), SP_OK);
+    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(spA_touchcount(&e), 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&L, 2));
+    sp_assertstream(S, t, "[1:2][3:2]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* middle same-id leaf remove: seam merge, still zero touch */
+    t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 1, 1, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&L, t, 1), SP_OK);
+    asserteq(sp_seek(&R, t, 2), SP_OK);
+    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(spA_touchcount(&e), 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&L, 1));
+    sp_assertstream(S, t, "[1:2]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    sp_close(S);
+}
+
+/* remove the last leaf of a container at its head: the zeroed left
+ * boundary leaf stays in place and stitch prunes the zero-length tail */
+TEST(remove_containertail) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 0, 0);
+    sp_Cursor L, R;
+    assertok(t->levels > 0);
+    asserteq(sp_seek(&L, t, 3), SP_OK);
+    asserteq(sp_seek(&R, t, 4), SP_OK);
+    asserteq(sp_remove(&L, &R), SP_OK);
+    assertok(sp_checktree(t) && sp_checkcursor(&L, 3));
+    sp_assertstream(S, t, "[1:1][2:1][3:1][5:1][6:1]");
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    sp_close(S);
+}
+
+TEST(touch_splice) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t;
+    sp_Cursor C;
+    SpEvt     e;
+    sp_Id     ids[8];
+    /* mid-leaf splice: trim touch then grow touch on the same id */
+    t = sp_mkstreamV(sp_newtree(S), 1, 5, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 1), SP_OK);
+    asserteq(sp_splice(&C, 2, 3), SP_OK);
+    ids[0] = 1, ids[1] = 1;
+    spA_expect_touch_only(&e, ids, 2);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 4));
+    sp_assertstream(S, t, "[1:6]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* boundary splice with a hole on the left: append into the hole */
+    t = sp_mkstreamV(sp_newtree(S), 1, 3, 0, 2, 2, 3, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 5), SP_OK);
+    asserteq(sp_splice(&C, 0, 2), SP_OK);
+    asserteq(e.n, 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 7));
+    sp_assertstream(S, t, "[1:3][0:4][2:3]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* remove gap + append gap inside a hole: no touch */
+    t = sp_mkstreamV(sp_newtree(S), 1, 3, 0, 4, 2, 3, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 4), SP_OK);
+    asserteq(sp_splice(&C, 1, 1), SP_OK);
+    asserteq(e.n, 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 5));
+    sp_assertstream(S, t, "[1:3][0:4][2:3]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    sp_close(S);
+}
+
+TEST(touch_fill_clear) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t;
+    sp_Cursor C;
+    SpEvt     e;
+    sp_Mask   m;
+    size_t    len;
+    /* no-op fill: exactly born+died, no merge/touch, tree unchanged */
+    t = sp_mkstreamV(sp_newtree(S), 1, 10, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 3), SP_OK);
+    asserteq(sp_fill(&C, 1, 4), SP_OK);
+    asserteq(e.n, 2);
+    asserteq(spA_mergecount(&e), 0);
+    asserteq(spA_touchcount(&e), 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 7));
+    sp_assertstream(S, t, "[1:10]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* normal/split/whole-tree fills never touch */
+    t = sp_mkstreamV(sp_newtree(S), 1, 10, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 2), SP_OK);
+    asserteq(sp_fill(&C, 9, 4), SP_OK);
+    asserteq(spA_touchcount(&e), 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 6));
+    memset(&e, 0, sizeof(e));
+    asserteq(sp_seek(&C, t, 0), SP_OK);
+    asserteq(sp_fill(&C, 7, 10), SP_OK);
+    asserteq(spA_touchcount(&e), 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 10));
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* seam fill: replacing the head of a leaf with its left neighbor's
+     * id routes through spK_seamleaf and still never touches */
+    t = sp_mkstreamV(sp_newtree(S), 1, 2, 2, 2, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_seek(&C, t, 2), SP_OK);
+    asserteq(sp_fill(&C, 1, 1), SP_OK);
+    asserteq(spA_touchcount(&e), 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 3));
+    sp_assertstream(S, t, "[1:3][2:1]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* seam fill with a keep-id/mask-change arbiter: the new segment
+     * id equals the right remainder, so spK_seamleaf merges them */
+    t = sp_mkstreamV(sp_newtree(S), 1, 3, 0, 0);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, arb_keepid_mask_rec, &e);
+    asserteq(sp_seek(&C, t, 1), SP_OK);
+    asserteq(sp_fill(&C, 9, 1), SP_OK);
+    asserteq(spA_touchcount(&e), 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 2));
+    sp_assertstream(S, t, "[1:3]");
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    /* clear with payload == segment id is a no-op arbiter-wise */
+    t = sp_mkstreamV(sp_newtree(S), 1, 10, 0, 0);
+    sp_setns(t, 0, 10, 1);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    asserteq(sp_clear(t, 1, 1), SP_OK);
+    asserteq(spA_mergecount(&e), 0);
+    asserteq(spA_touchcount(&e), 0);
+    asserteq(sp_seek(&C, t, 0), SP_OK);
+    asserteq(sp_style(&C, &len, &m), 1);
+    assertok((m & 1) != 0);
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    sp_close(S);
+}
+
+/* arbiter that tries to mutate the mask on a touch-shaped call */
+static sp_Id arb_maskguard(void *ud, sp_Id id, sp_Id old, sp_Mask *mask) {
+    (void)ud;
+    if (id == old && id != 0 && mask) (void)sp_addns(mask, 2);
+    return id;
+}
+
+/* recorder that keeps the old id but changes the mask on every merge */
+static sp_Id arb_keepid_mask_rec(void *ud, sp_Id id, sp_Id old, sp_Mask *mask) {
+    SpEvt *e = (SpEvt *)ud;
+    (void)id;
+    assert(e->n < SP_EVN);
+    e->ids[e->n] = id, e->olds[e->n] = old, e->n += 1;
+    if (mask) (void)sp_addns(mask, 2);
+    return old;
+}
+
+TEST(touch_mask_guard) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 10, 0, 0);
+    sp_Cursor C;
+    sp_Mask   m = 0;
+    size_t    len;
+    sp_setns(t, 0, 10, 1);
+    sp_setarbiter(t, arb_maskguard, NULL);
+    asserteq(sp_seek(&C, t, 1), SP_OK);
+    asserteq(sp_append(&C, 2), SP_OK);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 3));
+    asserteq(sp_seek(&C, t, 0), SP_OK);
+    asserteq(sp_style(&C, &len, &m), 1);
+    asserteq(len, 12);
+    assertok((m & 1) != 0);
+    assertok((m & 2) == 0);
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    sp_close(S);
+}
+
+TEST(touch_ref) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t = sp_newtree(S);
+    sp_Cursor C;
+    SpRefEvt  re;
+    long      counts[SP_REFN];
+    memset(&re, 0, sizeof(re));
+    t = sp_mkstreamV(t, 1, 10, 2, 10, 0, 0);
+    spA_seed(&re.ref, t);
+    sp_setarbiter(t, spA_refrec, &re);
+    /* append mid-leaf: touch 1 */
+    asserteq(sp_seek(&C, t, 2), SP_OK);
+    asserteq(sp_append(&C, 3), SP_OK);
+    asserteq(spA_touchcount(&re.evt), 1);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 5));
+    spA_tally(t, counts);
+    assertok(spA_check(&re.ref, counts));
+    /* insert at the leaf head: touch 2 */
+    asserteq(sp_seek(&C, t, 13), SP_OK);
+    asserteq(sp_insert(&C, 2), SP_OK);
+    asserteq(spA_touchcount(&re.evt), 2);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 13));
+    spA_tally(t, counts);
+    assertok(spA_check(&re.ref, counts));
+    /* mid-leaf splice: trim + grow on id 1 */
+    asserteq(sp_seek(&C, t, 1), SP_OK);
+    asserteq(sp_splice(&C, 2, 2), SP_OK);
+    asserteq(spA_touchcount(&re.evt), 4);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 3));
+    spA_tally(t, counts);
+    assertok(spA_check(&re.ref, counts));
+    /* cross partial remove: touch 1 and 2 */
+    asserteq(sp_seek(&C, t, 5), SP_OK);
+    {
+        sp_Cursor R;
+        asserteq(sp_seek(&R, t, 16), SP_OK);
+        asserteq(sp_remove(&C, &R), SP_OK);
+    }
+    asserteq(spA_touchcount(&re.evt), 6);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 5));
+    spA_tally(t, counts);
+    assertok(spA_check(&re.ref, counts));
+    /* fill: no touch */
+    asserteq(sp_seek(&C, t, 1), SP_OK);
+    asserteq(sp_fill(&C, 3, 2), SP_OK);
+    asserteq(spA_touchcount(&re.evt), 6);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 3));
+    spA_tally(t, counts);
+    assertok(spA_check(&re.ref, counts));
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    sp_close(S);
+}
+
+TEST(touch_differ) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t = sp_newtree(S);
+    sp_Cursor C;
+    SpEvt     e;
+    unsigned  seed = 13579;
+    int       step, maxstep = 1000;
+    mn = 0, mbytes = 0, mops_n = 0;
+    sp_setarbiter(t, arb_sumrec, &e);
+    for (step = 0; step < maxstep; ++step) {
+        int    op = (int)(seed = mrng(seed)) % 5;
+        size_t pos, l1, l2;
+        sp_Id  in;
+        memset(&e, 0, sizeof(e));
+        if (mbytes > 900) {
+            pos = (seed = mrng(seed)) % (mbytes / 2);
+            l1 = mbytes / 2;
+            mops_add(step, 9, pos, l1, 0, 0);
+            mtouch_n = 0;
+            mtouch_remove(pos, l1);
+            mremove(pos, l1);
+            asserteq(sp_seek(&C, t, pos), SP_OK);
+            {
+                sp_Cursor R;
+                asserteq(sp_seek(&R, t, pos + l1), SP_OK);
+                asserteq(sp_remove(&C, &R), SP_OK);
+            }
+            mtouch_check(&e, step);
+            mcompare(t, step);
+            assertok(sp_checkcursor(&C, pos));
+            continue;
+        }
+        pos = (seed = mrng(seed)) % (mbytes + 21);
+        l1 = 1 + (seed = mrng(seed)) % 12;
+        l2 = 1 + (seed = mrng(seed)) % 12;
+        in = (sp_Id)((seed = mrng(seed)) % 9);
+        mops_add(step, op, pos, l1, l2, in);
+        mtouch_n = 0;
+        switch (op) {
+        case 0:
+            mtouch_append(pos, l1);
+            minsert(pos, l1, 1);
+            asserteq(sp_seek(&C, t, pos), SP_OK);
+            asserteq(sp_append(&C, l1), SP_OK);
+            break;
+        case 1:
+            mtouch_insert(pos, l1);
+            minsert(pos, l1, 0);
+            asserteq(sp_seek(&C, t, pos), SP_OK);
+            asserteq(sp_insert(&C, l1), SP_OK);
+            break;
+        case 2:
+            mtouch_remove(pos, l1);
+            mremove(pos, l1);
+            asserteq(sp_seek(&C, t, pos), SP_OK);
+            {
+                sp_Cursor R;
+                asserteq(sp_seek(&R, t, pos + l1), SP_OK);
+                asserteq(sp_remove(&C, &R), SP_OK);
+            }
+            break;
+        case 3:
+            mtouch_remove(pos, l1);
+            mremove(pos, l1);
+            mtouch_append(pos, l2);
+            minsert(pos, l2, 1);
+            asserteq(sp_seek(&C, t, pos), SP_OK);
+            asserteq(sp_splice(&C, l1, l2), SP_OK);
+            break;
+        default:
+            mfill(pos, in, l1, arb_sum);
+            asserteq(sp_seek(&C, t, pos), SP_OK);
+            asserteq(sp_fill(&C, in, l1), SP_OK);
+            break;
+        }
+        mtouch_check(&e, step);
+        mcompare(t, step);
+        if (!sp_checkcursor(
+                    &C, pos
+                                + (op == 1 || op == 2 ? 0
+                                   : op == 3          ? l2
+                                                      : l1))) {
+            test_log(
+                    "checkcursor FAIL touch step=%d op=%d pos=%lu l1=%lu "
+                    "l2=%lu\n",
+                    step, op, test_lu(pos), test_lu(l1), test_lu(l2));
+            sp_dumptree(t, "touch-differ-tree");
+            abort();
+        }
+    }
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    sp_close(S);
 }
 
 #include "spantree_test_fanout4.gen.inc"

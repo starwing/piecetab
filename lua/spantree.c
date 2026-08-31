@@ -1154,6 +1154,7 @@ static sp_Id lst_arb_merge(
 
 static sp_Id lst_arb(void *ud, sp_Id in, sp_Id old, sp_Mask *mask) {
     lst_Tree *t = (lst_Tree *)ud;
+    if (in == old) return in; /* touch: notify only, ids stay in place */
     if (in == 0) return lst_arb_death(t->L, t, old, mask);
     if (old == 0) return lst_arb_birth(t, in, mask);
     return lst_arb_merge(t->L, t, in, old, mask);

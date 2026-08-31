@@ -423,9 +423,9 @@ peeldown(l, rt):                 # 层 l 的内容已在 rt[levels-l]
   引用
 - 合并两个同 id 段时（`spI_fillrt` 左邻合并 / `spF_appendspan` /
   `spF_appendvirt` merge 分支）必须 `spA_died` 一次
-- 新段插入不额外调 born/died；新 id 的引用由 `spA_born` / `spA_arb`
+- 新段插入不额外调 born/died；新 id 的引用由 `spA_born` / `spA_merge`
   负责
-- `spF_append` 剥叶时逐段 `spA_arb(C, in, old, &m, 0)`，`!nid` 时
+- `spF_append` 剥叶时逐段 `spA_merge(C, in, old, &m)`，`!nid` 时
   `m = 0`；`spF_peelleaf` 虚拟分支用 zero-id 段使 arb 看到 old=0
 
 ### 8.7 helper 抽象（实现映射）
@@ -617,9 +617,9 @@ sp_clear(T, ns, id):
   叶
 - **arb 返回仍匹配 id**：向前索引步进保证不重访
 
-## 十、id 生命周期契约（arb 三态）
+## 十、id 生命周期契约（arb 四态）
 
-**三态契约**：
+**四态契约**：
 
 ```
 arb(ud, in, old, mask):
@@ -633,7 +633,8 @@ arb(ud, in, old, mask):
 |---|---|---|
 | `arb(0, old)` | 死亡：一个持有 old 的段槽消失（合并/删除/trim 归零/freetree）；真清写 fill(0) 同形 | ret=0 → 仅 old--；返回 0 |
 | `arb(in, 0)` | 新生：一个持有 in 的段槽出现（写空段/分裂碎片/继承） | ret=in → 仅 in++；**必须原样返回 in** |
-| `arb(in, old)` | 合并决策 | ret=merge(in,old)；出口统一规则 +ret/−old（ret==old 两笔自然抵消）；分裂碎片计数由 filterleaf 的保护/补片承担 |
+| `arb(in, old)` | 合并决策（`spA_merge`；**in==old 已短路，不调 arb、mask 不变**） | ret=merge(in,old)；出口统一规则 +ret/−old（ret==old 两笔自然抵消）；分裂碎片计数由 filterleaf 的保护/补片承担 |
+| `arb(id, id)` | touch 通知（`spA_touch`）：叶 `(id, len)` 被公开编辑改为 `(id, len')`，`len' != len` | **必须原样返回 id、mask 不得改变**；返回值不写回、不改结构；每次公开编辑最多 3 次；debug 断言返回 == id |
 
 **树侧事件清单**（全部经 arb；id 0 不计不发；`T->arb == NULL` 时全部
 静默）：
@@ -646,6 +647,7 @@ arb(ud, in, old, mask):
 | spI_fillrt 新段与右半槽 | `arb(id, 0)`，返回值写入槽；rt 内合并补 `arb(0, id)` 抵消 |
 | spF_filterleaf | 见下 |
 | spF_cutleaf / spF_peelleaf | `arb(id, 0)` 补片 |
+| spA_touch（spI_grow / spI_growleft 三分支 / spD_trimright / spD_trimleft / spD_cutpiece 部分删除分支） | `arb(id, id)`；id 0 不触发；整叶死亡/长度归零走 died 不 touch；纯平移零 touch |
 | spF_cutright / spF_peeldown / spD_stitch | 静默（逻辑移动零事件） |
 
 **filterleaf 保护/补片/cancel**：
@@ -653,7 +655,7 @@ arb(ud, in, old, mask):
 ```
 k = (poff > 0) + (poff + len < n)         /* 存活片段数 */
 if (k >= 1 && sid != 0) arb(sid, 0)       /* 保护：出口 −1 永不归零 */
-nid = arb(in, sid)                        /* 出口双向计数 */
+nid = spA_merge(in, sid)                  /* in==old 短路：零回调、mask 不变 */
 if (nid == sid && mask 未变):
     if (k >= 1 && sid) arb(0, sid)        /* cancel，净 0 */
     return
@@ -665,7 +667,8 @@ if (k == 2 && sid) arb(sid, 0)            /* 补第二片 */
 - **refcnt 中途可暂时超前树状态 1**（保护 +1 至分裂落地或 cancel 才兑
   现）；k=0 时出口 −1 归零 = 整段死亡，合法
 - **计数精确性**：k=0/1/2 部分覆写净 −1/0/+1；ret==old 净 0；复用净
-  +1；append/insert 继承 +2/−2 成对净 0；remove/freetree 全 −1
+  +1；append/insert 继承 +2/−2 成对净 0；touch 的 `arb(id,id)` +1/−1
+  净 0；remove/freetree 全 −1
 
 ## 十一、Lua 绑定摘要
 
@@ -696,7 +699,7 @@ eph 完全在绑定层（lua/spantree.c）实现，不进 spantree 公共 API：
 - 无参读 = 树流 + 各 eph 层边界切分 merge；每子区间 **attr 黑盒覆
   盖**（comp:attr(树 id) + 各 eph attr 按层序覆盖 → comp:intern 幂
   等）
-- C 库无新增读 API；新增依赖 = **arb 三态契约与全量调用点**
+- C 库无新增读 API；新增依赖 = **arb 四态契约与全量调用点**
 - **eph 不变量**：
   1. 数组恒有序、不交叠、相邻异 id；fill 覆盖切分 + 规范化合并
   2. 树编辑动词（splice/append/insert/remove）= 先全清 eph；普通 ns
@@ -734,8 +737,9 @@ eph 完全在绑定层（lua/spantree.c）实现，不进 spantree 公共 API：
 - **sp_clear**：arb 调用数 == 匹配叶数；与 fill(op_clear_ns, bytes)
   差分 id/mask 流一致；吸收合并欠账零；arb 返回仍匹配 id 不重访；
   checktree；ns 越界/空树/arb NULL；GB 级性能冒烟
-- **id 生命周期**：三态分派各形态；计数差分 fuzz；部分覆写 k=0/1/2
-  与 ret==old/mask 变；保护/cancel 对称；purge 全量死亡
+- **id 生命周期**：四态分派各形态（含 touch）；计数差分 fuzz；部分
+  覆写 k=0/1/2 与 ret==old/mask 变；保护/cancel 对称；purge 全量死亡；
+  touch 事件集合 == 长度变化叶集合（随机差分钉死）
 - **eph（绑定侧）**：覆盖切分/规范化/幂等覆盖、区间清/全清、合成流、
   滚动残留两窗口、8 个编辑动词清空、eph fill 零 epoch
 - 序列化 tree/mcompare：合并跨容器待合并段后与模型比对；fuzz 多 seed
@@ -791,6 +795,7 @@ Lua 绑定与 editor 接入定案（spantree.h 零改动）。
 ### 13.5 其他历史决议与教训
 
 - 2026-08-13：坐标系与术语定案（层号 l、fl、rt[k] 层语义）；2026-08-14：光标三态与内部函数契约、sp_advance 不调 sp_locate、reserve 预算、splice = remove + edit；2026-08-16：id 生命周期三态契约（report_sp_idref.md）、eph 层、pt_checkcursor 禁树中段尾、ptD_rmleaf 裂段光标逃逸修复
+- 2026-09-01：三态改四态（`spA_arb` → `spA_merge` 带 in==old 短路 + `spA_touch` 通知态），依据 `notes/design_spantree_identity.md` §3；fill/clear 的 no-op 同 id 路径不再产生 `arb(id,id)`，绑定层收到的 `arb(id,id)` 只可能来自 touch
 - 2026-08-15 实施修订：删 `!changed && !db` 早停——每层无条件重算 OR + 爬到顶
 - 历史测试教训：多次迭代会覆盖早期定案语义，重写文档须对照 #if 0 测试（fill_virtual 的 pad 语义曾因 v7 误删而被 v8 恢复）
 

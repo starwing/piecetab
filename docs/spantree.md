@@ -94,14 +94,19 @@ Called for every style write/merge/delete decision. The parameter order is
 "new first": `id` is the incoming id, `old` is the current segment id, and
 `mask` is an in/out namespace set.
 
-Three-state contract:
+Four-state contract:
 
 - `arb(ud, 0, old, &mask)` — **death** event (merge/delete/trim/freetree).
 - `arb(ud, in, 0, &mask)` — **birth** event (write into an empty segment,
   split fragment, inheritance); must return `in` unchanged.
 - `arb(ud, in, old, &mask)` — **merge decision**; return the new id and set
   `mask` to the exact namespace set of the returned id (via
-  `sp_addns`/`sp_delns`).
+  `sp_addns`/`sp_delns`). The tree short-circuits `in == old` and does
+  not call the arbiter for no-op fills/clears.
+- `arb(ud, id, id, &mask)` — **touch** notification: an edit changed a
+  leaf's byte length (`id != 0`). Must return `id` unchanged and leave
+  the mask untouched; the return value is not written back. At most 3
+  touches per public edit.
 
 When the returned id is 0, the tree forces the mask to 0. The mask is an
 optimization channel for pruned namespace iteration; an incorrect mask can
@@ -168,6 +173,9 @@ arb(ud, in, old, mask):
     if (old != 0) refcnt[old] -= 1
     return ret
 ```
+
+A touch call `arb(id, id)` adds and removes one reference of `id` in the
+same expression — the rule above handles it with net zero effect.
 
 The library guarantees that a legal id — one still reachable from the tree —
 never has its refcnt drop to 0. So once any id's refcnt reaches 0, it is no

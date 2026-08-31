@@ -2201,8 +2201,7 @@ local COMP_ID_START = 2 ^ 24
 
 function TestIds:testFlatSeg()
     -- ns 0 (unaffiliated) mark: span yields the attr id; styled id
-    -- resolves to the same attr (a re-mark flattens the stored op id
-    -- back to the attr id)
+    -- resolves to the same attr
     local comp = newcomp(); local t = newtree(comp)
     t:splice(0, 0, 10)
     local attr = { fg = 5 }
@@ -2212,9 +2211,10 @@ function TestIds:testFlatSeg()
     local sid = collect(t, "styled", 2, 4)[1][1]
     lu.assertIsTrue(sid < COMP_ID_START)
     assert_attr(cur_comp, sid, attr)
-    -- idempotent re-mark merges: the stored id flattens to the attr id
+    -- same-attr re-mark is a four-state no-op (merge short-circuit):
+    -- the stored id stays put and the styled stream is unchanged
     t:mark(nil, attr, 2, 4)
-    lu.assertEquals(collect(t, "styled", 2, 4)[1][1], aid)
+    lu.assertEquals(collect(t, "styled", 2, 4)[1][1], sid)
 end
 
 function TestIds:testSingleOpDirect()

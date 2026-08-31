@@ -280,18 +280,6 @@ SP_API int sp_hasns(const sp_Mask *m, int ns)
 { return m && spM_check(ns) && (*m & spM_bit(ns)) != 0; }
 /* clang-format on */
 
-static sp_Id spA_born(sp_Tree *T, sp_Id id, sp_Mask *pm) {
-    sp_Mask m = 0;
-    sp_Id   r;
-    assert(id != SP_NONE), r = T->arb && id ? T->arb(T->aud, id, 0, &m) : id;
-    return assert(r != SP_NONE), (void)(pm && (*pm = m)), r == SP_NONE ? 0 : r;
-}
-
-static sp_Id spA_arb(sp_Cursor *C, sp_Id in, sp_Id old, sp_Mask *pm) {
-    sp_Id r = C->tree->arb ? C->tree->arb(C->tree->aud, in, old, pm) : in;
-    return assert(r != SP_NONE), r == SP_NONE ? 0 : r;
-}
-
 static void spN_copy(sp_Node *d, int di, const sp_Node *s, int si, int n) {
     assert(di + n <= SP_FANOUT && si + n <= SP_FANOUT);
     memcpy(&d->children[di], &s->children[si], n * sizeof(sp_Node *));
@@ -337,6 +325,30 @@ static void spM_up(sp_Cursor *C, int l, sp_Delta db) {
         if (l < spK_levels(C)) p->mask[i] = spM_sumns(p->children[i]);
     }
     if (db) C->tree->bytes += db;
+}
+
+static sp_Id spA_born(sp_Tree *T, sp_Id id, sp_Mask *pm) {
+    sp_Mask m = 0;
+    sp_Id   r;
+    assert(id != SP_NONE), r = T->arb && id ? T->arb(T->aud, id, 0, &m) : id;
+    return assert(r != SP_NONE), (void)(pm && (*pm = m)), r == SP_NONE ? 0 : r;
+}
+
+static sp_Id spA_merge(sp_Cursor *C, sp_Id in, sp_Id old, sp_Mask *pm) {
+    sp_Id r;
+    if (in == old) return old;
+    r = C->tree->arb ? C->tree->arb(C->tree->aud, in, old, pm) : in;
+    return assert(r != SP_NONE), r == SP_NONE ? 0 : r;
+}
+
+static void spA_touch(sp_Cursor *C, sp_Node *p, int i, sp_Delta db, int up) {
+    sp_Mask m = 0;
+    sp_Id   r = spL_id(p, i), id = r;
+    p->bytes[i] += db;
+    if (up) spM_up(C, spK_levels(C) - 1, db);
+    if (db && C->tree->arb && id && p->bytes[i])
+        r = C->tree->arb(C->tree->aud, id, id, &m);
+    assert(r == id), (void)r;
 }
 
 /* state */
@@ -561,14 +573,13 @@ SP_API sp_Id sp_prev(sp_Cursor *C, int ns, size_t *plen) {
 static void spD_trimright(sp_Cursor *L) {
     sp_Node *p;
     int      l = spK_levels(L), i = spK_idx(L, p = spK_parent(L, l), l);
-    spM_up(L, l, -(sp_Delta)(p->bytes[i] - L->poff));
+    spA_touch(L, p, i, -(sp_Delta)(p->bytes[i] - L->poff), 1);
 }
 
 static void spD_trimleft(sp_Cursor *R) {
     sp_Node *p;
     int      l = spK_levels(R), i = spK_idx(R, p = spK_parent(R, l), l);
-    p->bytes[i] -= R->poff;
-    spM_up(R, l - 1, -(sp_Delta)R->poff), R->poff = 0;
+    spA_touch(R, p, i, -(sp_Delta)R->poff, 1), R->poff = 0;
 }
 
 static void spD_cutrange(sp_Cursor *L, sp_Cursor *R, sp_Node *rt, int fl) {
@@ -772,10 +783,8 @@ static void spD_stitch(sp_Cursor *L, sp_Node *rt) {
     if (cc && spN_cc(&rt[0])) spD_mergeleaf(L, rt);
     spD_stitchnode(L, rt), spD_rebalance(L, 0);
     l = spK_levels(L), i = spK_idx(L, p = spK_parent(L, l), l), cc = spN_cc(p);
-    if (cc && i == cc) {
-        L->paths[spK_levels(L)] -= 1;
-        L->poff += p->bytes[cc - 1], L->off -= p->bytes[cc - 1];
-    }
+    if (cc && i == cc)
+        --L->paths[l], L->poff += p->bytes[cc - 1], L->off -= p->bytes[cc - 1];
     spM_up(L, spK_levels(L), 0);
 }
 
@@ -787,25 +796,21 @@ static void spD_rmrange(sp_Cursor *L, sp_Cursor *R, int fl) {
     spD_cutrange(L, R, rt, fl), spD_stitch(L, rt);
 }
 
-static int spD_cutpiece(sp_Cursor *C, size_t lo, size_t hi) {
-    sp_Node *p;
-    int      i = spK_idx(C, p = spK_parent(C, spK_levels(C)), spK_levels(C));
-    if (lo > 0 || hi < p->bytes[i]) return (p->bytes[i] -= hi - lo), 0;
-    return spN_remove(C->tree, p, 0, i, i + 1), spK_seamleaf(C), 1;
-}
-
 static void spD_rmleaf(sp_Cursor *C, size_t del) {
-    sp_Node *p = spK_parent(C, spK_levels(C));
-    int      l = spK_levels(C), oc = spN_cc(p);
-    assert(C->poff + del <= p->bytes[spK_idx(C, p, l)]);
-    spD_cutpiece(C, C->poff, C->poff + del), spM_up(C, l - 1, -(sp_Delta)del);
-    if (spN_cc(p) == 0)
+    sp_Node *p;
+    int      l = spK_levels(C), i = spK_idx(C, p = spK_parent(C, l), l);
+    int      cc = spN_cc(p), oc = cc;
+    assert(C->poff + del <= p->bytes[i]);
+    if (C->poff > 0 || C->poff + del < p->bytes[i])
+        spA_touch(C, p, i, -(sp_Delta)del, 0);
+    else
+        spN_remove(C->tree, p, 0, i, i + 1), spK_seamleaf(C), cc -= 1;
+    spM_up(C, l - 1, -(sp_Delta)del);
+    if (cc == 0)
         C->paths[l] = &p->children[0], C->off = 0, C->poff = 0;
-    else if (spK_idx(C, p, l) == spN_cc(p)) {
-        C->paths[l] -= 1;
-        C->poff = p->bytes[spN_cc(p) - 1], C->off -= p->bytes[spN_cc(p) - 1];
-    }
-    if (spN_cc(p) < oc && l > 0) spD_rebalance(C, l - 1);
+    else if (i == cc)
+        --C->paths[l], C->poff = p->bytes[cc - 1], C->off -= p->bytes[cc - 1];
+    if (cc < oc) spD_rebalance(C, l - 1);
 }
 
 static int spD_diverlevel(sp_Cursor *L, sp_Cursor *R) {
@@ -903,27 +908,18 @@ static int spI_pad(sp_Cursor *C, size_t len) {
     return (spM_up(C, spK_levels(C) - 1, (sp_Delta)len), C->poff = 0), 1;
 }
 
-static void spI_growleft(sp_Cursor *C, sp_Delta ins) {
+static int spI_growleft(sp_Cursor *C, sp_Delta ins) {
     sp_Node *p, *n;
-    int      d, i, base;
-    if (spK_levels(C) == 0) {
-        p = &C->tree->root, i = spK_idx(C, p, 0);
-        p->bytes[i - 1] += ins, C->off += ins, C->tree->bytes += ins;
-        return;
-    }
-    p = spK_parent(C, spK_levels(C)), i = spK_idx(C, p, spK_levels(C));
-    if (i > 0) {
-        p->bytes[i - 1] += ins;
-        spM_up(C, spK_levels(C) - 1, ins), C->off += ins;
-        return;
-    }
+    int d, base, l = spK_levels(C), i = spK_idx(C, p = spK_parent(C, l), l);
+    if (i > 0) return spA_touch(C, p, i - 1, ins, 1), C->off += ins, 0;
     d = spK_levels(C) - 1;
     while (d >= 0 && spK_idx(C, p = spK_parent(C, d), d) == 0) --d;
     assert(d >= 0), base = d, i = spK_idx(C, p, d) - 1, n = p->children[i];
     p->bytes[i] += ins;
     for (; d < spK_levels(C) - 1; ++d)
         p = n, i = spN_cc(p) - 1, p->bytes[i] += ins, n = p->children[i];
-    n->bytes[spN_cc(n) - 1] += ins, spM_up(C, base - 1, ins), C->off += ins;
+    spA_touch(C, n, spN_cc(n) - 1, ins, 0);
+    return spM_up(C, base - 1, ins), C->off += ins, 1;
 }
 
 static int spI_grow(sp_Cursor *C, sp_Delta ins, int growleft) {
@@ -937,7 +933,7 @@ static int spI_grow(sp_Cursor *C, sp_Delta ins, int growleft) {
         if (C->off > 0) return spI_growleft(C, ins), 1;
         if (spL_id(p, i) != 0) return 0;
     }
-    return p->bytes[i] += ins, spM_up(C, spK_levels(C) - 1, ins), 1;
+    return spA_touch(C, p, i, ins, 1), 1;
 }
 
 SP_API int sp_append(sp_Cursor *C, size_t ins) {
@@ -1031,7 +1027,7 @@ static int spF_filterleaf(sp_Cursor *C, size_t len, sp_Id in) {
     sp_Id    nid, oid = spL_id(p, i);
     sp_Mask  om = p->mask[i], m = om;
     size_t   left = C->poff, n = p->bytes[i], rlen = n - (left + len);
-    spA_born(C->tree, oid, NULL), nid = spA_arb(C, in, oid, &m);
+    spA_born(C->tree, oid, NULL), nid = spA_merge(C, in, oid, &m);
     if (nid == oid && m == om)
         return spA_died(C->tree, oid), (C->poff += len, spM_up(C, l - 1, 0)), 0;
     if (assert(rlen > 0), left > 0) spA_born(C->tree, oid, NULL);
@@ -1069,7 +1065,7 @@ static void spF_append(sp_Cursor *C, sp_Id in, int n, int keep) {
     int      i;
     for (i = 0; i < n; ++i) {
         sp_Mask m = rt[0].mask[i];
-        sp_Id   old = spL_id(&rt[0], i), nid = spA_arb(C, in, old, &m);
+        sp_Id   old = spL_id(&rt[0], i), nid = spA_merge(C, in, old, &m);
         size_t  len = rt[0].bytes[i];
         if (!nid) m = 0;
         if (!spF_appendspan(C, nid, len, m))
@@ -1209,7 +1205,7 @@ static void spC_clearnode(sp_Cursor *C, sp_Mask bit, sp_Id id) {
     if (!(p->mask[i] & bit)) return;
     for (w = i, cc = spN_cc(p); i < cc; ++i) {
         if (nid = spL_id(p, i), p->mask[i] & bit) {
-            nid = spA_arb(C, id, nid, &p->mask[i]);
+            nid = spA_merge(C, id, nid, &p->mask[i]);
             if (!nid) p->mask[i] = 0;
         }
         if (w > 0 && spL_id(p, w - 1) == nid) {

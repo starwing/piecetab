@@ -241,17 +241,22 @@ SP_STATIC sp_Tree *sp_mkstream(
     } while (0)
 
 /* Set namespace bit `ns` on the byte range [off, off+len) using only
- * the public API: a temporary arbiter adds the bit while re-filling each
- * existing segment with its own id.  Callers should pass whole segments
- * (or whole leaf containers) so no segment is split. */
+ * the public API.  Filling a segment with its own id short-circuits the
+ * merge arbiter (four-state contract), so each styled segment is
+ * re-filled with a distinct marker id that the arbiter folds back to the
+ * old id while adding the bit.  Id-0 holes cannot carry masks (the fill
+ * path zeroes them) and are skipped. */
+#define SP_NSMARK 0x7fff
+
 typedef struct {
     int ns;
 } sp_NsCfg;
 
 static sp_Id sp_ns_arb(void *ud, sp_Id id, sp_Id old, sp_Mask *mask) {
     sp_NsCfg *c = (sp_NsCfg *)ud;
+    (void)id;
     if (mask) (void)sp_addns(mask, c->ns);
-    return old ? old : id;
+    return old;
 }
 
 SP_STATIC void sp_setns(sp_Tree *t, size_t off, size_t len, int ns) {
@@ -266,7 +271,7 @@ SP_STATIC void sp_setns(sp_Tree *t, size_t off, size_t len, int ns) {
         assertok(sp_seek(&C, t, off) == SP_OK);
         id = sp_style(&C, &seglen, NULL);
         take = seglen < end - off ? seglen : end - off;
-        assertok(sp_fill(&C, id, take) == SP_OK);
+        if (id) assertok(sp_fill(&C, SP_NSMARK, take) == SP_OK);
         off += take;
     }
     sp_setarbiter(t, NULL, NULL);
@@ -448,6 +453,41 @@ SP_STATIC void sp_serialtree(sp_Tree *t, char *buf) {
 #pragma clang diagnostic pop
 #endif
 
+/* ---- four-state arbiter recorder ---- */
+
+#define SP_EVN 256
+
+typedef struct {
+    sp_Id ids[SP_EVN];
+    sp_Id olds[SP_EVN];
+    int   n;
+} SpEvt;
+
+/* log every arb shape; ret == id always satisfies the touch contract */
+SP_STATIC sp_Id spA_rec(void *ud, sp_Id id, sp_Id old, sp_Mask *mask) {
+    SpEvt *r = (SpEvt *)ud;
+    (void)mask;
+    assert(r->n < SP_EVN);
+    r->ids[r->n] = id, r->olds[r->n] = old, r->n += 1;
+    return id;
+}
+
+/* merge-shaped calls: both ids nonzero, in != old */
+SP_STATIC int spA_mergecount(const SpEvt *r) {
+    int i, n = 0;
+    for (i = 0; i < r->n; ++i)
+        if (r->ids[i] && r->olds[i] && r->ids[i] != r->olds[i]) n += 1;
+    return n;
+}
+
+/* touch-shaped calls: in == old, both nonzero */
+SP_STATIC int spA_touchcount(const SpEvt *r) {
+    int i, n = 0;
+    for (i = 0; i < r->n; ++i)
+        if (r->ids[i] && r->ids[i] == r->olds[i]) n += 1;
+    return n;
+}
+
 /* ---- id lifecycle (three-shape arbiter) utilities ---- */
 
 #define SP_REFN 256
@@ -466,6 +506,26 @@ SP_STATIC sp_Id spA_ref(void *ud, sp_Id id, sp_Id old, sp_Mask *mask) {
     r->calls += 1;
     if (id != 0) r->ref[id] += 1;
     if (old != 0) r->ref[old] -= 1;
+    return id;
+}
+
+/* combined refcount + event recorder: keeps the ref table honest and
+ * logs every arb shape for touch assertions in one pass */
+typedef struct {
+    SpRef ref;
+    SpEvt evt;
+} SpRefEvt;
+
+SP_STATIC sp_Id spA_refrec(void *ud, sp_Id id, sp_Id old, sp_Mask *mask) {
+    SpRefEvt *r = (SpRefEvt *)ud;
+    (void)mask;
+    assert(id < SP_REFN && old < SP_REFN);
+    assert(r->evt.n < SP_EVN);
+    r->ref.calls += 1;
+    if (id != 0) r->ref.ref[id] += 1;
+    if (old != 0) r->ref.ref[old] -= 1;
+    r->evt.ids[r->evt.n] = id, r->evt.olds[r->evt.n] = old;
+    r->evt.n += 1;
     return id;
 }
 

@@ -18,9 +18,9 @@
 /* build 144 one-byte segments through the public API; with fanout 8
  * this reaches the same two-level shape. */
 static void mk8tree(sp_State *S, sp_Tree *t) {
-    sp_Id   ids[144];
-    size_t  lens[144];
-    int     i;
+    sp_Id  ids[144];
+    size_t lens[144];
+    int    i;
     (void)S;
     for (i = 0; i < 144; ++i) ids[i] = (sp_Id)(i + 1), lens[i] = 1;
     sp_mkstream(t, ids, lens, 144);
@@ -108,7 +108,9 @@ TEST(edit8_sequence) {
  * four children (FANOUT/2), the fold chain keeps them legal */
 TEST(merge8_left) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 2, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 2, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1,
+            10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 0, 0);
     sp_Cursor C;
     char      buf[128];
     assertok(sp_checktree(t));
@@ -128,7 +130,9 @@ TEST(merge8_left) {
 /* deep mergeright on a three-level fanout-8 tree */
 TEST(merge8_right) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 2, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 2, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1,
+            10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 0, 0);
     sp_Cursor C;
     char      buf[128];
     assertok(sp_checktree(t));
@@ -149,7 +153,9 @@ TEST(merge8_right) {
  * link lands on a full parent and the while loop exits on cc >= 4 */
 TEST(merge8_fold_done) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 2, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 17, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 2, 5, 1, 6, 1, 7, 1, 8, 1,
+            9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 17, 1, 0, 0);
     sp_Cursor C;
     char      buf[128];
     assertok(sp_checktree(t));
@@ -252,7 +258,9 @@ TEST(ns8_differ) {
  * (mergeleft regression: the cursor used to dangle after the merge) */
 TEST(remove_mergeleft_gap) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 0, 42, 3, 18, 0, 61, 12, 7, 9, 10, 11, 5, 13, 5, 14, 5, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 0, 42, 3, 18, 0, 61, 12, 7, 9, 10, 11, 5, 13, 5, 14,
+            5, 0, 0);
     sp_Cursor C;
     char      buf[256];
     assertok(sp_checktree(t));
@@ -269,7 +277,12 @@ TEST(remove_mergeleft_gap) {
  * fork's first child folds rightward into the full cursor parent */
 TEST(remove_mergeleft_foldfirst) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 5, 7, 6, 170, 7, 9, 8, 9, 9, 9, 2, 1152, 2, 3, 2, 82, 3, 142, 4, 89, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 17, 1, 18, 1, 19, 1, 20, 1, 21, 1, 22, 1, 23, 1, 24, 1, 25, 1, 26, 1, 27, 1, 28, 1, 29, 1, 30, 1, 31, 1, 32, 1, 33, 1, 34, 1, 35, 1, 36, 1, 37, 1, 38, 1, 39, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 5, 7, 6, 170, 7, 9, 8, 9, 9, 9, 2, 1152, 2, 3, 2, 82,
+            3, 142, 4, 89, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 17,
+            1, 18, 1, 19, 1, 20, 1, 21, 1, 22, 1, 23, 1, 24, 1, 25, 1, 26, 1,
+            27, 1, 28, 1, 29, 1, 30, 1, 31, 1, 32, 1, 33, 1, 34, 1, 35, 1, 36,
+            1, 37, 1, 38, 1, 39, 1, 0, 0);
     sp_Cursor C;
     char      buf[256];
     assertok(sp_checktree_allow_unseamedspan(t, 1)); /* pre-merge input */
@@ -292,7 +305,9 @@ TEST(remove_mergeleft_foldfirst) {
  * tail id differs from the cut-side head, no pull happens */
 TEST(remove_mergeleft_idmismatch) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 40, 1, 5, 1, 6, 1, 4, 1, 7, 1, 8, 1, 9, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 40, 1, 5, 1, 6, 1, 4, 1, 7, 1, 8,
+            1, 9, 1, 0, 0);
     sp_Cursor C, R;
     char      buf[256];
     assertok(sp_checktree(t));
@@ -311,7 +326,12 @@ TEST(remove_mergeleft_idmismatch) {
  * the first chain node */
 TEST(remove_mergeleft_healthy) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 30, 1, 31, 1, 32, 1, 33, 1, 34, 1, 35, 1, 36, 1, 8, 1, 9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 17, 1, 18, 1, 12, 1, 19, 1, 20, 1, 21, 1, 22, 1, 40, 1, 41, 1, 42, 1, 43, 1, 44, 1, 45, 1, 46, 1, 47, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 30,
+            1, 31, 1, 32, 1, 33, 1, 34, 1, 35, 1, 36, 1, 8, 1, 9, 1, 10, 1, 11,
+            1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 17, 1, 18, 1, 12, 1, 19, 1,
+            20, 1, 21, 1, 22, 1, 40, 1, 41, 1, 42, 1, 43, 1, 44, 1, 45, 1, 46,
+            1, 47, 1, 0, 0);
     sp_Cursor C, R;
     char      buf[256];
     assertok(sp_checktree(t));
@@ -335,7 +355,9 @@ TEST(remove_mergeleft_healthy) {
  * forcing the balance path */
 TEST(remove_mergeleft_foldrightbal) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 5, 1, 8, 1, 9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 5, 1, 8, 1,
+            9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 0, 0);
     sp_Cursor C, R;
     char      buf[256];
     assertok(sp_checktree(t));
@@ -356,7 +378,11 @@ TEST(remove_mergeleft_foldrightbal) {
  * container's free slots, findroom chains a fresh leaf container */
 TEST(remove_stitch_findroom) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 10, 2, 10, 3, 10, 4, 10, 5, 10, 6, 10, 7, 10, 8, 10, 9, 10, 10, 10, 11, 10, 12, 10, 13, 10, 14, 10, 15, 10, 16, 10, 17, 10, 18, 10, 19, 10, 20, 10, 21, 10, 22, 10, 23, 10, 24, 10, 25, 10, 26, 10, 27, 10, 28, 10, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 10, 2, 10, 3, 10, 4, 10, 5, 10, 6, 10, 7, 10, 8,
+            10, 9, 10, 10, 10, 11, 10, 12, 10, 13, 10, 14, 10, 15, 10, 16, 10,
+            17, 10, 18, 10, 19, 10, 20, 10, 21, 10, 22, 10, 23, 10, 24, 10, 25,
+            10, 26, 10, 27, 10, 28, 10, 0, 0);
     sp_Cursor C, R;
     char      buf[256];
     assertok(sp_checktree(t));
@@ -420,7 +446,9 @@ TEST(idref8_differ) {
  * (cc=3) folds left into its sibling (merge path) */
 TEST(remove_mergeleft_foldleft) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 7, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 7, 1, 5, 1, 6, 1, 7, 1,
+            8, 1, 9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 0, 0);
     sp_Cursor C, R;
     char      buf[256];
     assertok(sp_checktree(t));
@@ -441,7 +469,9 @@ TEST(remove_mergeleft_foldleft) {
  * ride-along pulls, every pulled slot must stay silent */
 TEST(remove_mergeleft_pullref) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 9, 1, 10, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 5, 1, 8, 1, 11, 1, 12, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 9, 1, 10, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7,
+            1, 5, 1, 8, 1, 11, 1, 12, 1, 0, 0);
     sp_Cursor C, R;
     SpRef     r;
     long      counts[SP_REFN];
@@ -466,7 +496,10 @@ TEST(remove_mergeleft_pullref) {
  * of merging (cL + cc > FANOUT) */
 TEST(remove_mergeleft_foldleftbal) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 10, 1, 11, 1, 10, 1, 12, 1, 11, 1, 13, 1, 14, 1, 15, 1, 16, 1, 17, 1, 18, 1, 19, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1,
+            10, 1, 11, 1, 10, 1, 12, 1, 11, 1, 13, 1, 14, 1, 15, 1, 16, 1, 17,
+            1, 18, 1, 19, 1, 0, 0);
     sp_Cursor C, R;
     char      buf[256];
     assertok(sp_checktree(t));
@@ -487,7 +520,10 @@ TEST(remove_mergeleft_foldleftbal) {
  * foldbelow folds the underfilled container left into its sibling */
 TEST(remove_mergeleft_foldbelow) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 40, 1, 41, 1, 20, 1, 21, 1, 22, 1, 30, 1, 31, 1, 32, 1, 7, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 50, 1, 51, 1, 52, 1, 53, 1, 54, 1, 55, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 40, 1, 41, 1, 20, 1, 21, 1, 22, 1, 30, 1, 31,
+            1, 32, 1, 7, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 10, 1, 11, 1, 12, 1,
+            13, 1, 14, 1, 50, 1, 51, 1, 52, 1, 53, 1, 54, 1, 55, 1, 0, 0);
     sp_Cursor C, R;
     char      buf[256];
     assertok(sp_checktree(t));
@@ -509,7 +545,11 @@ TEST(remove_mergeleft_foldbelow) {
  * instead of merging (cL + cc > FANOUT) */
 TEST(remove_mergeleft_foldbelowbal) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 30, 1, 31, 1, 32, 1, 7, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 50, 1, 51, 1, 52, 1, 53, 1, 54, 1, 55, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1,
+            30, 1, 31, 1, 32, 1, 7, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 10, 1, 11,
+            1, 12, 1, 13, 1, 14, 1, 50, 1, 51, 1, 52, 1, 53, 1, 54, 1, 55, 1, 0,
+            0);
     sp_Cursor C, R;
     char      buf[256];
     assertok(sp_checktree(t));
@@ -531,7 +571,15 @@ TEST(remove_mergeleft_foldbelowbal) {
  * the first level (the child stays healthy) */
 TEST(rebalance_healthy) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 17, 1, 18, 1, 19, 1, 20, 1, 21, 1, 22, 1, 23, 1, 24, 1, 25, 1, 26, 1, 27, 1, 28, 1, 29, 1, 30, 1, 31, 1, 32, 1, 33, 1, 34, 1, 35, 1, 36, 1, 37, 1, 38, 1, 39, 1, 40, 1, 41, 1, 42, 1, 43, 1, 44, 1, 45, 1, 46, 1, 47, 1, 48, 1, 49, 1, 50, 1, 51, 1, 52, 1, 53, 1, 54, 1, 55, 1, 56, 1, 57, 1, 58, 1, 59, 1, 60, 1, 61, 1, 62, 1, 63, 1, 64, 1, 65, 1, 66, 1, 67, 1, 68, 1, 69, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1,
+            10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 17, 1, 18, 1, 19,
+            1, 20, 1, 21, 1, 22, 1, 23, 1, 24, 1, 25, 1, 26, 1, 27, 1, 28, 1,
+            29, 1, 30, 1, 31, 1, 32, 1, 33, 1, 34, 1, 35, 1, 36, 1, 37, 1, 38,
+            1, 39, 1, 40, 1, 41, 1, 42, 1, 43, 1, 44, 1, 45, 1, 46, 1, 47, 1,
+            48, 1, 49, 1, 50, 1, 51, 1, 52, 1, 53, 1, 54, 1, 55, 1, 56, 1, 57,
+            1, 58, 1, 59, 1, 60, 1, 61, 1, 62, 1, 63, 1, 64, 1, 65, 1, 66, 1,
+            67, 1, 68, 1, 69, 1, 0, 0);
     sp_Cursor C;
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 68), SP_OK);
@@ -546,7 +594,15 @@ TEST(rebalance_healthy) {
  * fold balances instead of merging (cL + cR > FANOUT) */
 TEST(rebalance_balance) {
     sp_State *S = sp_open(NULL, NULL);
-    sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 17, 1, 18, 1, 19, 1, 20, 1, 21, 1, 22, 1, 23, 1, 24, 1, 25, 1, 26, 1, 27, 1, 28, 1, 29, 1, 30, 1, 31, 1, 32, 1, 33, 1, 34, 1, 35, 1, 36, 1, 37, 1, 38, 1, 39, 1, 40, 1, 41, 1, 42, 1, 43, 1, 44, 1, 45, 1, 46, 1, 47, 1, 48, 1, 49, 1, 50, 1, 51, 1, 52, 1, 53, 1, 54, 1, 55, 1, 56, 1, 57, 1, 58, 1, 59, 1, 60, 1, 61, 1, 62, 1, 63, 1, 64, 1, 65, 1, 66, 1, 67, 1, 68, 1, 69, 1, 70, 1, 71, 1, 72, 1, 0, 0);
+    sp_Tree  *t = sp_mkstreamV(
+            sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1,
+            10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 17, 1, 18, 1, 19,
+            1, 20, 1, 21, 1, 22, 1, 23, 1, 24, 1, 25, 1, 26, 1, 27, 1, 28, 1,
+            29, 1, 30, 1, 31, 1, 32, 1, 33, 1, 34, 1, 35, 1, 36, 1, 37, 1, 38,
+            1, 39, 1, 40, 1, 41, 1, 42, 1, 43, 1, 44, 1, 45, 1, 46, 1, 47, 1,
+            48, 1, 49, 1, 50, 1, 51, 1, 52, 1, 53, 1, 54, 1, 55, 1, 56, 1, 57,
+            1, 58, 1, 59, 1, 60, 1, 61, 1, 62, 1, 63, 1, 64, 1, 65, 1, 66, 1,
+            67, 1, 68, 1, 69, 1, 70, 1, 71, 1, 72, 1, 0, 0);
     sp_Cursor C;
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 71), SP_OK);
@@ -555,6 +611,78 @@ TEST(rebalance_balance) {
     assertok(sp_checkcursor(&C, 71));
     asserteq(sp_bytes(t), 71);
     sp_freetree(t), sp_close(S);
+}
+
+/* ---- touch contract tests (fanout-8 lean) ---- */
+
+TEST(touch8_growleft_deep) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t = sp_newtree(S);
+    sp_Cursor C;
+    SpEvt     e;
+    mk8tree(S, t);
+    assertok(t->levels >= 2);
+    memset(&e, 0, sizeof(e));
+    sp_setarbiter(t, spA_rec, &e);
+    /* second leaf container starts at offset 8; appending at its head
+     * must grow the rightmost leaf of the left sibling subtree (id 8) */
+    asserteq(sp_seek(&C, t, 8), SP_OK);
+    asserteq(sp_append(&C, 1), SP_OK);
+    asserteq(e.n, 1);
+    asserteq(e.ids[0], 8);
+    asserteq(e.olds[0], 8);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 9));
+    sp_setarbiter(t, NULL, NULL);
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    sp_close(S);
+}
+
+TEST(touch8_ref_differ) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t = sp_newtree(S);
+    sp_Cursor C;
+    SpRefEvt  re;
+    long      counts[SP_REFN];
+    int       step, expected;
+    t = sp_mkstreamV(t, 1, 100, 2, 100, 0, 0);
+    memset(&re, 0, sizeof(re));
+    spA_seed(&re.ref, t);
+    sp_setarbiter(t, spA_refrec, &re);
+    for (step = 0; step < 200; ++step) {
+        int op = step % 5;
+        memset(&re.evt, 0, sizeof(re.evt));
+        asserteq(sp_seek(&C, t, 10), SP_OK);
+        if (op == 0) {
+            expected = 0;
+            asserteq(sp_fill(&C, 1, 2), SP_OK);
+        } else if (op == 1) {
+            expected = 1;
+            asserteq(sp_append(&C, 2), SP_OK);
+        } else if (op == 2) {
+            expected = 1;
+            asserteq(sp_insert(&C, 2), SP_OK);
+        } else if (op == 3) {
+            sp_Cursor R;
+            expected = 1;
+            asserteq(sp_seek(&R, t, 12), SP_OK);
+            asserteq(sp_remove(&C, &R), SP_OK);
+        } else {
+            expected = 2;
+            asserteq(sp_splice(&C, 2, 3), SP_OK);
+        }
+        asserteq(spA_touchcount(&re.evt), expected);
+        assertok(sp_checktree(t));
+        assertok(sp_checkcursor(
+                &C, op == 2 || op == 3 ? 10
+                    : op == 4          ? 13
+                                       : 12));
+        spA_tally(t, counts);
+        assertok(spA_check(&re.ref, counts));
+    }
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    sp_close(S);
 }
 
 #include "spantree_test_fanout8.gen.inc"

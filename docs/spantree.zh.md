@@ -88,13 +88,17 @@ typedef sp_Id sp_Arbiterf(void *ud, sp_Id id, sp_Id old, sp_Mask *mask);
 每次样式写入/合并/删除决策都会调用。参数序为“新值在前”：`id` 是写入
 值，`old` 是当前段 id，`mask` 是 in/out 的 namespace 集。
 
-三态契约：
+四态契约：
 
 - `arb(ud, 0, old, &mask)` — **死亡**事件（合并/删除/trim/freetree）。
 - `arb(ud, in, 0, &mask)` — **新生**事件（写空段、分裂碎片、继承）；
   必须原样返回 `in`。
 - `arb(ud, in, old, &mask)` — **合并决策**；返回新 id，并将 `mask` 设为
-  返回 id 的精确 ns 集（经 `sp_addns`/`sp_delns`）。
+  返回 id 的精确 ns 集（经 `sp_addns`/`sp_delns`）。`in == old` 时树
+  侧短路，no-op fill/clear 不调用混合回调。
+- `arb(ud, id, id, &mask)` — **touch 通知**：一次公开编辑改变了某叶的
+  字节长度（`id != 0`）。必须原样返回 `id` 且不改 `mask`；返回值
+  不写回。每次公开编辑最多 3 次 touch。
 
 返回 id 为 0 时，树强制 mask 为 0。mask 是剪枝 namespace 迭代的优化
 通道；mask 报错会导致剪枝假阴性（树不校验）。
@@ -155,6 +159,9 @@ arb(ud, in, old, mask):
     if (old != 0) refcnt[old] -= 1
     return ret
 ```
+
+touch 调用 `arb(id, id)` 在同一表达式中加一减一各一次引用——按上面的
+规则净效果为零。
 
 库保证：只要一个 id 仍可能被树引用（合法 id），它的 refcnt 就不会降到
 0；因此当某个 id 的 refcnt 为 0 时，说明它已不再被任何地方引用，可以
