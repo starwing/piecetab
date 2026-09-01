@@ -1,8 +1,9 @@
 # 讨论：spantree 的身份 / 搜索高亮失效（discuss_spantree_id）
 
-> 状态：**设计讨论中，不是最终方案**。
-> 本会话目标是把设计问题讨论清楚，最后写 handoff 文档交给另一个会话实现。
-> 本文件记录当前讨论状态、已确认方向、开放问题和已知约束。
+> 状态：**已收敛（2026-09-01）**——结论与最终方案见
+> `notes/design_spantree_identity.md`（定案）与
+> `notes/plans/plan_spantree_identity.md`（实现计划）。本文保留讨论过程
+> 供追溯，不再作为设计依据。
 
 ## 0. 动机：为什么讨论这个
 

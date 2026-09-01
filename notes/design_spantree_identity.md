@@ -131,6 +131,9 @@ fill/clear 的 no-op 同 id 路径因此不会产生 touch 事件。绑定层收
 - composite id 域必须恒小于 `CP_MARK_BASE`（`cpP_slotalloc` 守卫）。
 - slot 可回收：freelist + generation 递增；旧 handle 因 generation
   失配失效，不会误删新 mark。
+- 耗尽防护：generation 到顶的槽位退役（清 ns/attr，不再入 freelist，
+  旧 handle 永远失配）；`marknext` 达到 slot 上限时报
+  `spantree: mark space exhausted`，不会环绕。
 
 ### 4.2 mark 记录
 
@@ -210,14 +213,15 @@ typedef struct cp_Mark {
 ### 7.1 unmark(mark_id)
 
 1. 校验 mark record：id 域、slot、generation；不合法返回 0。
-2. 由 record 得到 ns；`sp_seek(0)` 后 `sp_next(C, ns)` mask 剪枝扫
-   树，用 `cp_expleaf` 找含目标 mark id 的段，累计最小起点与最大
-   终点。
-3. 命中则在 `[min, max)` 上 `sp_fill(C, op_clear_ns, max-min)`。
-   v1 同 ns mark 不重叠，该区间内该 ns 只有目标对象；其他层由
-   arbiter 无损保留。
-4. 返回 1/0。复杂度 O(含该 ns 的树段数)，v1 接受；核心 id 索引
-   列为 v2。
+2. 由 record 得到 ns；从树尾 `sp_prev(C, ns)` 自右向左 mask 剪枝扫
+   树，用 `cp_expleaf` 判断当前段是否含目标 mark id。
+3. 命中的段记录 `(start, len)`，**只对该段**执行
+   `sp_fill(C, op_clear_ns, len)`，然后 `sp_seek(start)` 继续向左。
+   注意：不能用 min/max 区间一次 fill —— 目标 mark 被 clear 分裂后，
+   同 ns 的另一个 mark 可能填入空洞，`[min, max)` 会连带删掉它
+   （audit finding #1；已被 `testUnmarkExactKeepsHoleMarks` 覆盖）。
+4. 返回 1/0。复杂度 O(含该 ns 的树段数 + 命中数·log n)，v1 接受；
+   核心 id 索引列为 v2。
 
 ### 7.2 span(ns) 完整 mark 遍历
 

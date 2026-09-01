@@ -2632,4 +2632,571 @@ function TestComp:testCursorFactory()
     assert_attr(comp, id, { fg = 1 })
 end
 
+-- ======== identity ns: mark ids / exact delete / full-mark traversal ========
+local MARK_BASE = 2 ^ 48
+
+local function identity_spans(t, ns, off, len)
+    local out = {}
+    for o, l, _, id in t:span(ns, off, len) do
+        out[#out + 1] = { o, l, id }
+    end
+    return out
+end
+
+TestIdentity = {}
+
+function TestIdentity:testFlagsAndQuery()
+    local comp = newcomp()
+    lu.assertIsNil(comp:namespace("fi1", 1, "i"))
+    lu.assertEquals(comp:namespace("fi1"), 1)
+    lu.assertIsNil(select(2, comp:namespace("fi1")))
+    lu.assertEquals(select(3, comp:namespace("fi1")), "identity")
+    -- priority-only re-register keeps the identity flags
+    lu.assertEquals(comp:namespace("fi1", 2), 1)
+    lu.assertEquals(select(3, comp:namespace("fi1")), "identity")
+    lu.assertErrorMsgContains("flags cannot change",
+        function() comp:namespace("fi1", 3, "is") end)
+    lu.assertErrorMsgContains("invalid namespace flags",
+        function() comp:namespace("fi1", 1, "s") end)
+    lu.assertErrorMsgContains("invalid namespace flags",
+        function() comp:namespace("fie", 1, "ie") end)
+    comp:namespace("fi1", nil)
+    lu.assertIsNil(comp:namespace("fi1", 1, "is"))
+    lu.assertEquals(select(3, comp:namespace("fi1")), "identity+sensitive")
+    comp:namespace("fi1", nil)
+end
+
+function TestIdentity:testMarkReturnsDistinctIds()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("mi1", 1, "i")
+    t:splice(0, 0, 10)
+    local attr = { fg = 1 }
+    local aid = comp:intern(attr)
+    local id1 = t:mark("mi1", attr, 0, 3)
+    local id2 = t:mark("mi1", aid, 5, 3)
+    lu.assertIsTrue(id1 >= MARK_BASE)
+    lu.assertIsTrue(id2 >= MARK_BASE)
+    lu.assertNotEquals(id1, id2)
+    lu.assertEquals(comp:attr(id1).fg, 1)
+    lu.assertEquals(comp:attr(id2).fg, 1)
+    -- identity marks need a positive length
+    lu.assertErrorMsgContains("identity mark length must be positive",
+        function() t:mark("mi1", aid, 0, 0) end)
+    lu.assertErrorMsgContains("identity mark length must be positive",
+        function() t:seek(0):mark("mi1", aid, 0) end)
+    local id3 = t:seek(1):mark("mi1", aid, 4)
+    lu.assertIsTrue(id3 >= MARK_BASE)
+    lu.assertNotEquals(id3, id1)
+    lu.assertEquals(t:unmark(id3), 1)
+    lu.assertEquals(t:unmark(id1), 1)
+    lu.assertEquals(t:unmark(id2), 1)
+end
+
+function TestIdentity:testRecycleAndStale()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("mr2", 1, "i")
+    t:splice(0, 0, 10)
+    local old = t:mark("mr2", { fg = 1 }, 0, 3)
+    lu.assertEquals(t:unmark(old), 1)
+    lu.assertEquals(t:unmark(old), 0)
+    lu.assertIsNil(comp:attr(old))
+    local fresh = t:mark("mr2", { fg = 1 }, 2, 4)
+    lu.assertNotEquals(fresh, old)
+    lu.assertNotIsNil(comp:attr(fresh))
+    -- the stale handle never affects the recycled slot
+    lu.assertEquals(t:unmark(old), 0)
+    lu.assertEquals(identity_spans(t, "mr2", 0, 10), { { 2, 4, fresh } })
+    lu.assertEquals(t:unmark(fresh), 1)
+end
+
+function TestIdentity:testOverwriteReleasesOld()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("mo1", 1, "i")
+    t:splice(0, 0, 10)
+    local old = t:mark("mo1", { fg = 1 }, 0, 5)
+    local new = t:mark("mo1", { fg = 2 }, 0, 5)
+    lu.assertEquals(t:unmark(old), 0)
+    lu.assertIsNil(comp:attr(old))
+    lu.assertEquals(identity_spans(t, "mo1", 0, 10), { { 0, 5, new } })
+    lu.assertEquals(t:unmark(new), 1)
+end
+
+function TestIdentity:testUnmarkExact()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("ue1", 1, "i")
+    t:splice(0, 0, 10)
+    local aid = comp:intern({ fg = 1 })
+    local id1 = t:mark("ue1", aid, 0, 3)
+    local id2 = t:mark("ue1", aid, 5, 3)
+    lu.assertEquals(t:unmark(id1), 1)
+    lu.assertEquals(identity_spans(t, "ue1", 0, 10), { { 5, 3, id2 } })
+    lu.assertEquals(t:unmark(id1), 0)
+    lu.assertEquals(t:unmark(id2), 1)
+end
+
+function TestIdentity:testClearSplitsAndUnmarkAll()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("cu1", 1, "i")
+    t:splice(0, 0, 20)
+    local id = t:mark("cu1", { fg = 1 }, 0, 10)
+    t:clear("cu1", 4, 2)
+    local spans = identity_spans(t, "cu1", 0, 20)
+    lu.assertEquals(spans, { { 0, 4, id }, { 6, 4, id } })
+    lu.assertEquals(t:unmark(id), 1)
+    lu.assertEquals(identity_spans(t, "cu1", 0, 20), {})
+    lu.assertEquals(t:unmark(id), 0)
+end
+
+function TestIdentity:testUnmarkExactKeepsHoleMarks()
+    -- regression: exact delete must clear only the target mark's fragments,
+    -- not a same-ns mark that was later placed in a hole between them
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("uh1", 1, "i")
+    t:splice(0, 0, 10)
+    local attr = comp:intern({ fg = 1 })
+    local idA = t:mark("uh1", attr, 0, 10)
+    t:clear("uh1", 4, 2)
+    local idB = t:mark("uh1", attr, 4, 2)
+    lu.assertEquals(identity_spans(t, "uh1", 0, 10),
+        { { 0, 4, idA }, { 4, 2, idB }, { 6, 4, idA } })
+    lu.assertEquals(t:unmark(idA), 1)
+    lu.assertEquals(identity_spans(t, "uh1", 0, 10), { { 4, 2, idB } })
+    lu.assertEquals(t:unmark(idB), 1)
+    lu.assertEquals(identity_spans(t, "uh1", 0, 10), {})
+    lu.assertEquals(t:unmark(idB), 0)
+end
+
+function TestIdentity:testUnmarkAttrDeadLoop()
+    -- regression: single ordinary ns, single mark, unmark(attr id) must
+    -- return 1 instead of looping forever
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("ud1", 1)
+    t:splice(0, 0, 10)
+    local aid = t:mark("ud1", { fg = 1 }, 0, 3)
+    lu.assertEquals(t:unmark(aid), 1)
+    lu.assertEquals(identity_spans(t, "ud1", 0, 10), {})
+end
+function TestIdentity:testAdjacentSameAttrStaySplit()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("ag1", 1, "i")
+    t:splice(0, 0, 20)
+    local aid = comp:intern({ fg = 1 })
+    local id1 = t:mark("ag1", aid, 0, 3)
+    local id2 = t:mark("ag1", aid, 5, 3)
+    t:remove(3, 2)
+    local spans = identity_spans(t, "ag1", 0, 18)
+    lu.assertEquals(spans, { { 0, 3, id1 }, { 3, 3, id2 } })
+    lu.assertEquals(t:unmark(id1), 1)
+    lu.assertEquals(t:unmark(id2), 1)
+end
+
+function TestIdentity:testReprioPreservesIds()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("rp1", 1, "i")
+    comp:namespace("rp2", 2)
+    t:splice(0, 0, 20)
+    local aid = comp:intern({ fg = 1 })
+    local id1 = t:mark("rp1", aid, 0, 10)
+    local id2 = t:mark("rp1", aid, 12, 4)
+    t:mark("rp2", { bg = 9 }, 2, 12)
+    lu.assertEquals(comp:namespace("rp1", 5), 1)
+    local spans = identity_spans(t, "rp1", 0, 20)
+    lu.assertEquals(spans, { { 0, 10, id1 }, { 12, 4, id2 } })
+    lu.assertEquals(t:unmark(id1), 1)
+    lu.assertEquals(t:unmark(id2), 1)
+end
+
+function TestIdentity:testSpanGroupsAndDoesNotClip()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("sg1", 1, "i")
+    comp:namespace("sg2", 2)
+    t:splice(0, 0, 10)
+    local id1 = t:mark("sg1", { fg = 1 }, 0, 3)
+    local id2 = t:mark("sg1", { fg = 2 }, 5, 3)
+    t:mark("sg2", { bg = 3 }, 1, 1) -- cuts the first mark into pieces
+    lu.assertEquals(
+        identity_spans(t, "sg1", 0, 10), { { 0, 3, id1 }, { 5, 3, id2 } })
+    -- range queries emit the full logical mark, never a clipped piece
+    lu.assertEquals(identity_spans(t, "sg1", 1, 1), { { 0, 3, id1 } })
+    lu.assertEquals(identity_spans(t, "sg1", 4, 2), { { 5, 3, id2 } })
+    lu.assertEquals(identity_spans(t, "sg1", 6, 1), { { 5, 3, id2 } })
+    lu.assertEquals(identity_spans(t, "sg1", 3, 3), { { 5, 3, id2 } })
+    lu.assertEquals(identity_spans(t, "sg1", 3, 2), {})
+    lu.assertEquals(identity_spans(t, "sg1", 0, 0), {})
+    lu.assertEquals(t:unmark(id1), 1)
+    lu.assertEquals(t:unmark(id2), 1)
+end
+
+function TestIdentity:testCompositeAttrDecode()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("ca1", 1, "i")
+    comp:namespace("ca2", 2)
+    t:splice(0, 0, 10)
+    local id = t:mark("ca1", { fg = 1 }, 0, 3)
+    t:mark("ca2", { bg = 3 }, 1, 1)
+    local mid = collect(t, "styled", 1, 1)[1][1]
+    assert_attr(comp, mid, { fg = 1, bg = 3 })
+    t:mark("ca2", { bg = 4 }, 1, 1) -- re-folds the composite leaf
+    mid = collect(t, "styled", 1, 1)[1][1]
+    assert_attr(comp, mid, { fg = 1, bg = 4 })
+    lu.assertEquals(identity_spans(t, "ca1", 0, 10), { { 0, 3, id } })
+    lu.assertEquals(t:unmark(id), 1)
+end
+
+function TestIdentity:testCompositeEditSplits()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("ce1", 1, "i")
+    comp:namespace("ce2", 2)
+    t:splice(0, 0, 20)
+    local id = t:mark("ce1", { fg = 1 }, 0, 10)
+    t:mark("ce2", { bg = 2 }, 2, 4)
+    t:remove(3, 2) -- trims through a composite leaf holding the identity mark
+    lu.assertEquals(identity_spans(t, "ce1", 0, 18), { { 0, 8, id } })
+    lu.assertEquals(t:unmark(id), 1)
+end
+
+function TestIdentity:testUnregisterReleasesMarks()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("ux1", 1, "i")
+    t:splice(0, 0, 10)
+    local id = t:mark("ux1", { fg = 1 }, 0, 4)
+    lu.assertEquals(comp:namespace("ux1", nil), 1)
+    lu.assertEquals(t:unmark(id), 0)
+    lu.assertIsNil(comp:attr(id))
+    lu.assertIsNil(comp:namespace("ux1", 1, "i"))
+    local fresh = t:mark("ux1", { fg = 2 }, 1, 3)
+    lu.assertNotEquals(fresh, id)
+    lu.assertEquals(t:unmark(fresh), 1)
+    comp:namespace("ux1", nil)
+end
+
+function TestIdentity:testRandomModel()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("rd1", 1, "i")
+    comp:namespace("rd2", 2)
+    local bytes = 80
+    t:splice(0, 0, bytes)
+    local marks = {}
+    local removed = {}
+    local rng = 42
+    local aid = comp:intern({ fg = 1 })
+
+    local function nextrnd()
+        rng = (rng * 1103515245 + 12345) % 2 ^ 31
+        return rng
+    end
+    local function del_range(list, off, len)
+        local out = {}
+        local de = off + len
+        for _, m in ipairs(list) do
+            if m[1] < de and off < m[2] then
+                if off > m[1] then out[#out + 1] = { m[1], off, m[3] } end
+                if de < m[2] then out[#out + 1] = { de, m[2], m[3] } end
+            else
+                out[#out + 1] = m
+            end
+        end
+        return out
+    end
+    local function splice_model(list, total, off, del, ins)
+        local out = {}
+        list = del_range(list, off, del)
+        for _, m in ipairs(list) do
+            local s, e = m[1], m[2]
+            if s >= off + del then
+                s = s - del + ins
+                e = e - del + ins
+            elseif e == off then
+                e = e + ins -- append inherits the mark at its left edge
+            end
+            if e > s then out[#out + 1] = { s, e, m[3] } end
+        end
+        return out, total - del + ins
+    end
+    local function norm(list, is_spans)
+        local sorted = {}
+        for _, m in ipairs(list) do
+            sorted[#sorted + 1] = is_spans and { m[1], m[1] + m[2], m[3] }
+                or { m[1], m[2], m[3] }
+        end
+        table.sort(sorted, function(x, y)
+            if x[1] ~= y[1] then return x[1] < y[1] end
+            return x[3] < y[3]
+        end)
+        local out = {}
+        for _, m in ipairs(sorted) do
+            if #out > 0 and out[#out][2] == m[1] and out[#out][3] == m[3] then
+                out[#out][2] = m[2]
+            else
+                out[#out + 1] = { m[1], m[2], m[3] }
+            end
+        end
+        for _, m in ipairs(out) do m[2] = m[2] - m[1] end
+        return out
+    end
+
+    local step
+    for step = 1, 120 do
+        local op = nextrnd() % 100
+        if op < 25 then
+            table.sort(marks, function(a, b)
+                if a[1] ~= b[1] then return a[1] < b[1] end
+                return a[3] < b[3]
+            end)
+            local gaps = {}
+            local cur = 0
+            for _, m in ipairs(marks) do
+                if m[1] > cur then gaps[#gaps + 1] = { cur, m[1] } end
+                if m[2] > cur then cur = m[2] end
+            end
+            if cur < bytes then gaps[#gaps + 1] = { cur, bytes } end
+            local g = gaps[1 + nextrnd() % #gaps]
+            local room = g[2] - g[1]
+            if room >= 2 then
+                local len = 1 + nextrnd() % math.min(room, 8)
+                local off = g[1] + nextrnd() % (room - len + 1)
+                marks[#marks + 1] = { off, off + len, t:mark("rd1", aid, off, len) }
+            end
+        elseif op < 45 and #marks > 0 then
+            local off = nextrnd() % bytes
+            local len = nextrnd() % 12
+            if off + len > bytes then len = bytes - off end
+            t:clear("rd1", off, len)
+            marks = del_range(marks, off, len)
+        elseif op < 75 then
+            local off = nextrnd() % (bytes + 1)
+            local del = nextrnd() % 6
+            local ins = nextrnd() % 6
+            if off + del > bytes then del = bytes - off end
+            t:splice(off, del, ins)
+            marks, bytes = splice_model(marks, bytes, off, del, ins)
+        elseif op < 85 and #marks > 0 then
+            local id = marks[1 + nextrnd() % #marks][3]
+            lu.assertEquals(t:unmark(id), 1)
+            local keep = {}
+            for _, m in ipairs(marks) do
+                if m[3] ~= id then keep[#keep + 1] = m end
+            end
+            marks = keep
+            removed[#removed + 1] = id
+        elseif op < 95 then
+            comp:namespace("rd1", 1 + nextrnd() % 3)
+        else
+            local off = nextrnd() % bytes
+            local len = 1 + nextrnd() % 8
+            if off + len > bytes then len = bytes - off end
+            if op % 2 == 0 then
+                t:mark("rd2", { bg = nextrnd() % 4 }, off, len)
+            else
+                t:clear("rd2", off, len)
+            end
+        end
+        local actual = norm(identity_spans(t, "rd1", 0, bytes), true)
+        local expected = norm(marks, false)
+        lu.assertEquals(#actual, #expected, "model count at step " .. step)
+        local i
+        for i = 1, #actual do
+            lu.assertEquals(actual[i], expected[i], "model span at step " .. step)
+        end
+        for _, m in ipairs(marks) do
+            lu.assertNotIsNil(comp:attr(m[3]), "model attr at step " .. step)
+        end
+        for _, id in ipairs(removed) do
+            lu.assertEquals(t:unmark(id), 0, "stale id at step " .. step)
+        end
+    end
+    comp:namespace("rd1", nil)
+    comp:namespace("rd2", nil)
+end
+
+function TestIdentity:testTreeGcReclaimsSlot()
+    local comp = newcomp()
+    local function build()
+        local t = newtree(comp)
+        comp:namespace("gc1", 1, "i")
+        t:splice(0, 0, 4)
+        return t:mark("gc1", { fg = 1 }, 0, 4)
+    end
+    local old = build()
+    collectgarbage("collect")
+    local t = newtree(comp)
+    t:splice(0, 0, 4)
+    local fresh = t:mark("gc1", { fg = 2 }, 0, 4)
+    lu.assertNotEquals(fresh, old)
+    lu.assertIsNil(comp:attr(old))
+    lu.assertEquals(t:unmark(fresh), 1)
+    comp:namespace("gc1", nil)
+end
+
+function TestIdentity:tearDown()
+    unregister_names(newcomp(), { "fi1", "fie", "mi1", "mr2", "mo1", "ue1",
+        "cu1", "ud1", "ag1", "rp1", "rp2", "sg1", "sg2", "ca1", "ca2",
+        "ux1", "gc1", "rd1", "rd2", "ce1", "ce2" })
+end
+
+-- ======== content-sensitive identity ns: edits invalidate marks ========
+TestSensitive = {}
+
+function TestSensitive:testInsertInsideAndAtStart()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("sen1", 1, "is")
+    t:splice(0, 0, 20)
+    local aid = comp:intern({ fg = 1 })
+    local id1 = t:mark("sen1", aid, 2, 5)
+    local id2 = t:mark("sen1", aid, 9, 5)
+    t:splice(3, 0, 1) -- inside id1: id1 disappears, id2 shifts
+    lu.assertEquals(identity_spans(t, "sen1", 0, 21), { { 10, 5, id2 } })
+    lu.assertEquals(t:unmark(id1), 0)
+    -- a pure left-inheriting insert at the mark start only translates it
+    local t2 = newtree(comp)
+    t2:splice(0, 0, 20)
+    local id3 = t2:mark("sen1", aid, 2, 5)
+    t2:splice(2, 0, 1)
+    lu.assertEquals(identity_spans(t2, "sen1", 0, 21), { { 3, 5, id3 } })
+    lu.assertEquals(t2:unmark(id3), 1)
+    lu.assertEquals(t:unmark(id2), 1)
+end
+
+function TestSensitive:testInsertAtEndRemoves()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("sen2", 1, "is")
+    t:splice(0, 0, 20)
+    local aid = comp:intern({ fg = 1 })
+    local id1 = t:mark("sen2", aid, 2, 5)
+    local id2 = t:mark("sen2", aid, 9, 5)
+    t:splice(7, 0, 1) -- grows id1 (left inheritance at its end)
+    lu.assertEquals(identity_spans(t, "sen2", 0, 21), { { 10, 5, id2 } })
+    lu.assertEquals(t:unmark(id1), 0)
+    lu.assertEquals(t:unmark(id2), 1)
+end
+
+function TestSensitive:testDeleteInsideAndAfter()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("sen3", 1, "is")
+    t:splice(0, 0, 20)
+    local aid = comp:intern({ fg = 1 })
+    local id1 = t:mark("sen3", aid, 2, 5)
+    t:remove(4, 1)
+    lu.assertEquals(identity_spans(t, "sen3", 0, 19), {})
+    lu.assertEquals(t:unmark(id1), 0)
+    local t2 = newtree(comp)
+    t2:splice(0, 0, 20)
+    local id2 = t2:mark("sen3", aid, 2, 5)
+    t2:remove(7, 1) -- deletion right after the mark end: mark survives
+    lu.assertEquals(identity_spans(t2, "sen3", 0, 19), { { 2, 5, id2 } })
+    lu.assertEquals(t2:unmark(id2), 1)
+end
+
+function TestSensitive:testEditOutsideKeepsAll()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("sen4", 1, "is")
+    t:splice(0, 0, 20)
+    local aid = comp:intern({ fg = 1 })
+    local id1 = t:mark("sen4", aid, 2, 5)
+    local id2 = t:mark("sen4", aid, 9, 5)
+    t:splice(0, 0, 2)
+    lu.assertEquals(
+        identity_spans(t, "sen4", 0, 22), { { 4, 5, id1 }, { 11, 5, id2 } })
+    lu.assertEquals(t:unmark(id1), 1)
+    lu.assertEquals(t:unmark(id2), 1)
+end
+
+function TestSensitive:testCompositeOverlayTouch()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("sen5", 1, "is")
+    comp:namespace("sen5o", 2)
+    t:splice(0, 0, 20)
+    local id = t:mark("sen5", { fg = 1 }, 2, 8)
+    t:mark("sen5o", { bg = 2 }, 4, 2)
+    t:splice(3, 0, 1)
+    lu.assertEquals(identity_spans(t, "sen5", 0, 21), {})
+    lu.assertEquals(t:unmark(id), 0)
+end
+
+function TestSensitive:testManyMarksBoundaryDelete()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("sen6", 1, "is")
+    t:splice(0, 0, 40)
+    local aid = comp:intern({ fg = 1 })
+    local ids = {}
+    local i
+    for i = 0, 9 do
+        ids[i + 1] = t:mark("sen6", aid, i * 4, 2)
+    end
+    t:remove(3, 30)
+    local spans = identity_spans(t, "sen6", 0, 10)
+    lu.assertEquals(spans, { { 0, 2, ids[1] }, { 6, 2, ids[10] } })
+    for i = 2, 9 do
+        lu.assertEquals(t:unmark(ids[i]), 0)
+    end
+    lu.assertEquals(t:unmark(ids[1]), 1)
+    lu.assertEquals(t:unmark(ids[10]), 1)
+end
+
+function TestSensitive:testHoleMarkSurvivesOtherInvalidation()
+    -- regression: auto-invalidation of a split mark must not delete the
+    -- same-ns mark that was later placed in the hole between its fragments
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("sen6b", 1, "is")
+    t:splice(0, 0, 10)
+    local aid = comp:intern({ fg = 1 })
+    local idA = t:mark("sen6b", aid, 0, 10)
+    t:clear("sen6b", 4, 2)
+    local idB = t:mark("sen6b", aid, 4, 2)
+    t:remove(1, 1) -- shrink idA; idB is untouched and must survive
+    lu.assertEquals(identity_spans(t, "sen6b", 0, 9), { { 3, 2, idB } })
+    lu.assertEquals(t:unmark(idA), 0)
+    lu.assertEquals(t:unmark(idB), 1)
+end
+
+function TestSensitive:testCursorVerbsMatchTree()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("sen7", 1, "is")
+    t:splice(0, 0, 20)
+    local aid = comp:intern({ fg = 1 })
+    local id1 = t:mark("sen7", aid, 2, 5)
+    local id2 = t:mark("sen7", aid, 9, 5)
+    local c = t:seek(4)
+    c:splice(0, 1) -- cursor edit inside id1
+    lu.assertEquals(identity_spans(t, "sen7", 0, 21), { { 10, 5, id2 } })
+    lu.assertEquals(c:offset(), 5)
+    lu.assertEquals(t:unmark(id1), 0)
+    lu.assertEquals(t:unmark(id2), 1)
+    local c2 = t:seek(8)
+    c2:remove(1) -- inside the surviving mark
+    lu.assertEquals(identity_spans(t, "sen7", 0, 20), {})
+    c2:offset()
+end
+
+function TestSensitive:testNonSensitiveKeepsIdentity()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("sen8", 1, "i")
+    t:splice(0, 0, 20)
+    local id = t:mark("sen8", { fg = 1 }, 2, 5)
+    t:splice(4, 0, 1) -- length edit: identity survives, only content-sensitive dies
+    lu.assertEquals(identity_spans(t, "sen8", 0, 21), { { 2, 6, id } })
+    lu.assertEquals(t:unmark(id), 1)
+end
+
+function TestSensitive:testTwoSensitiveNamespaces()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("sen9a", 1, "is")
+    comp:namespace("sen9b", 2, "is")
+    t:splice(0, 0, 20)
+    local id1 = t:mark("sen9a", { fg = 1 }, 0, 5)
+    local id2 = t:mark("sen9b", { fg = 2 }, 0, 5)
+    t:splice(2, 0, 1) -- one composite leaf carries both sensitive marks
+    lu.assertEquals(identity_spans(t, "sen9a", 0, 21), {})
+    lu.assertEquals(identity_spans(t, "sen9b", 0, 21), {})
+    lu.assertEquals(t:unmark(id1), 0)
+    lu.assertEquals(t:unmark(id2), 0)
+    comp:namespace("sen9a", nil)
+    comp:namespace("sen9b", nil)
+end
+
+function TestSensitive:tearDown()
+    unregister_names(newcomp(), { "sen1", "sen2", "sen3", "sen4", "sen5",
+        "sen5o", "sen6", "sen7", "sen8", "sen9a", "sen9b" })
+end
+
 os.exit(lu.LuaUnit.run(), true)

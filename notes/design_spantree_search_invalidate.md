@@ -1,8 +1,11 @@
 # spantree 搜索编辑失效需求（供 C 开发）
 
-Status: proposed — 待 C 开发。
+Status: superseded — 已由 `notes/design_spantree_identity.md` 的 identity ns +
+content-sensitive（"is"）方案取代并落地。本文保留旧 `add_mark` /
+`remove_mark` / `invalidate` 候选作为需求背景；搜索接入 API 以
+`notes/design_spantree_identity.md` §2 为准。
 
-Date: 2026-08-30
+Date: 2026-08-30（原需求）；2026-09-01 收敛为 identity ns 方案。
 
 ## 背景
 

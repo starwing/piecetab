@@ -1,10 +1,15 @@
-# spantree Lua 绑定设计（v5 定案）
+# spantree Lua 绑定设计（v5 定案 + v7 identity 增量）
 
 > 状态：**v5 定案（2026-08-19，组件化重写）**。v4（2026-08-16）
 > 单对象 Tree 内嵌 Comp；v5 推翻重建（触发：绑定结构应为组件
 > 组合而非 Tree 内嵌转发——样式服务（intern/id↔attr/ns 注册）
 > 属 Compositor 组件，Tree 构建时绑定并消费之；Tree 不得转发
 > 样式接口）：
+>
+> **2026-09-01 增量（v7）**：identity ns / mark id / content-sensitive
+> 失效按 `notes/design_spantree_identity.md` 落地；本文文末 §八记录
+> 绑定层实现增量，API 形状以 §二表内 `"i"`/`"s"` 与 span/unmark 说明
+> 为准。
 >
 > - **独立 Compositor 组件**：`sp.compositor()` → 全新 cp_State
 >   （每次调用独立态，互不连通）；`sp.new(comp)` 创建 Tree 并
@@ -768,3 +773,77 @@ id 到 ns mask 的解码；绑定层 `lst_merge` / `lst_sty` 只做薄转发。
 - eph（sv_）数组 cap 保留不回收（清空 = n 置零；段数峰值视口
   级）。eph ns 注销槽不复用（数量不限）。
 - 合成链的链结构 hash 细节（FNV-1a 常数/表容量/探测策略）实施定。
+
+## 八、v7 identity 层实现增量（2026-09-01）
+
+依据 `notes/design_spantree_identity.md`；本节只记绑定层（cp/lst）落地
+形状，语义契约以该文为准。
+
+### 8.1 id 域与 mark 记录
+
+- 编译期守卫 `sizeof(sp_Id) >= 8` 且 `CP_COMP_START < CP_MARK_BASE`。
+- `CP_MARK_BASE = 1 << 48`；`mark_id = base | (gen << 28) | slot`；
+  slot 28 位、generation 20 位。
+- `cp_State` 增 `cp_Mark *marks`（dense 槽）、`marknext`、`markfree`
+  freelist。`cp_Mark { ns, attr, gen, refcnt, idfree }`。
+- `cp_markalloc` 分配（freelist 优先，新槽清零）；`cp_markfree` 在
+  `refcnt == 0` 时回收并 `gen += 1`。`cpM_get(id)` 先验 slot/gen/ns，
+  stale 一律视为不存在。
+
+### 8.2 生命周期与 leaf-preserving cons chain
+
+- `cp_refup/refdown` 先查 mark 域再查 composite 域；mark 子叶在
+  `cpP_chain` 构造时 refup（base `p[0]` 一次、每个 `b` 一次），
+  `cpP_release` 经既有 `cp_refdown(a/b)` 级联回收。
+- 新增 `cp_Leaf { id, ns, attr }` 与 `cp_expleaf`：平铺任意树 id 的
+  **实际叶 id**（attr / op / mark / composite），mark 域优先于
+  composite 域判定。
+- `cp_applyleaf` 按 op 种类作用在叶列表上（WRITE 替换/追加同 ns 槽、
+  CLEAR 删除同 ns 全部叶、REORDER 原样保留）；普通 ns0 的 op 叶
+  canonicalize 成 attr id（保持普通 ns 行为不变）。
+- `cp_merge` 重建：`n==0 → 0`、`n==1 → 直接返回叶 id`（identity
+  保留关键）、`n>1 → cpP_chain(叶 id 序列)`；链 hash key 改叶 id
+  十进制序列（CP_KEY_SZ 按 64 叶 × 20 数字 + 分隔符核算）。
+- namespace reprio 全树 REORDER 走同一条 `cp_merge` 路径，身份不丢。
+
+### 8.3 ns flags 与 API
+
+- `cp_NSReg` 增 `flags`：`CP_NSF_IDENTITY` / `CP_NSF_SENSITIVE`。
+- `lst_flags` 解析 `"i"`/`"s"`；`"s"` 必须与 `"i"` 同用，`"i"` 与
+  `"e"` 互斥；已注册 ns 的 identity flags 就地变更报错（先注销再注册）。
+- `namespace(name)` query 对 identity ns 返回第三值
+  `"identity"` / `"identity+sensitive"`。
+- `mark`：identity ns 分配 mark id 并 `sp_fill(mark_id)`，`len > 0`
+  必填；普通 ns 返回 attr id 不变。
+- `unmark(mark_id)`：`cpM_get` 校验 → 自树尾 `sp_prev(ns)` 扫描含目标
+  id 的段，逐段 `sp_fill(CLEAR(ns), len)` 后回 `sp_seek(start)` 继续向
+  左；返回 1/0。不能用 min/max 一次 fill：目标 mark 分裂后的空洞可被
+  同 ns 新 mark 填入，会误删（audit #1）。
+  普通 attr id 仍走原路径，`lst_unmark_apply` 改为按**完整段长**推进，
+  修复单层单 mark 死循环。
+- `span(ns)` identity 分支：连续同 mark id 段分组输出完整
+  `[start,end)`；范围查询从 `off` 向前补一段（必要时回扫整条相邻同
+  id 链求完整起点），输出不裁剪。普通 ns/eph 路径不变。
+- `styled` 不新增分支：`cp_attr` 解 mark id 返回记录 attr，
+  `cp_segmask` 解 mark id 返回记录 ns 位。
+
+### 8.4 content-sensitive 队列
+
+- `lst_Tree` 固定 `pending[SP_MASK_BITS * 3]` + `pendingn`。
+- `lst_arb` 的 `in == old` 态只来自 touch：`lst_touch` 用 `cp_expleaf`
+  展开叶，`SENSITIVE` ns 的 mark id 去重入队；零 Lua 调用、零分配、
+  不碰树。
+- tree/cursor 两面的 splice/append/insert/remove 统一：清队列 → 核心
+  编辑 → 逐个 `lst_remove_mark` → epoch++；cursor 面 commit 后以原
+  offset 重 seek 修复 paths（额外的树结构操作会失效原 paths）。
+- v1 性能风险：队列最多 `SP_MASK_BITS * 3` 个 mark，逐个删除各扫一次
+  树（O(k·N)）；变热时改成一次遍历收集所有受影响 mark 或上 id 索引
+  （v2）。
+
+### 8.5 顺带修复
+
+- `ref_trees` 弱表原本把 `__mode` 写成普通字段（表未挂 metatable），
+  Comp 强引用 Tree 导致树永不 GC。改为先建 metatable 再 `__mode="k"`；
+  `lst_compwalk` 同时跳过已 finalize 的树（`T == NULL`）。
+- mark 槽回收路径由树 GC / unmark / clear / 文本删除共同经 refcnt 归零
+  触发，无特例。

@@ -63,12 +63,25 @@ static int lua53_rawgetp(lua_State *L, int idx, const void *p) {
 #define LSP_CUR_TYPE   "spantree.Cursor"
 
 #define LSP_EPOCH_MSG "spantree: cursor invalidated by tree edit"
+#define LSP_FLAGS_MSG "spantree: namespace flags cannot change in place"
 
 /* id domains: attr ids and op ids interleave in [0, CP_COMP_START)
  * (plain region, tree segments tell them apart by mask: mask 0 = flat
  * attr segment, mask != 0 = single-ns op segment); composite ids start
- * at CP_COMP_START (dense k = id - CP_COMP_START, two chain slots each) */
-#define CP_COMP_START ((sp_Id)1 << 24)
+ * at CP_COMP_START (dense k = id - CP_COMP_START, two chain slots each);
+ * mark ids start at CP_MARK_BASE (slot 28 bits + generation 20 bits) */
+#define CP_COMP_START    ((sp_Id)1 << 24)
+#define CP_MARK_BASE     ((sp_Id)1 << 48)
+#define CP_MARK_SLOTS    ((sp_Id)1 << 28)
+#define CP_MARK_SLOTMASK (CP_MARK_SLOTS - 1)
+#define CP_MARK_GENSHIFT 28
+#define CP_MARK_GENMASK  ((sp_Id)1 << 20)
+#define CP_KEY_SZ        1400
+
+typedef char cpM_id64[(sizeof(sp_Id) >= 8) ? 1 : -1];
+typedef char cpM_domain[(CP_COMP_START < CP_MARK_BASE) ? 1 : -1];
+/* 20 digits (sp_Id max) + ';' per leaf, at most SP_MASK_BITS + 1 leaves */
+typedef char cpM_keysize[(CP_KEY_SZ > (SP_MASK_BITS + 1) * 21) ? 1 : -1];
 
 typedef struct lsp_State {
     sp_State *S;
@@ -94,27 +107,50 @@ typedef struct cp_NSAttr {
     cp_Attr attr;
 } cp_NSAttr;
 
-/* one ns registration: priority (sort key) + sequence (tie-break) */
+/* one identity-preserving leaf: actual tree id + its (ns, attr) face */
+typedef struct cp_Leaf {
+    sp_Id   id;
+    cp_NS   ns;
+    cp_Attr attr;
+} cp_Leaf;
+
+#define CP_NSF_IDENTITY  (1u << 0)
+#define CP_NSF_SENSITIVE (1u << 1)
+
+/* one ns registration: priority (sort key) + sequence (tie-break) +
+ * identity flags (identity/content-sensitive, zero for plain ns) */
 typedef struct cp_NSReg {
     lua_Number prio;
     unsigned   reg;
+    unsigned   flags;
 } cp_NSReg;
 
-/* one composite slot: a = chain head (a composite id or the plain
- * op/attr start), b = op leaf (plain op id); idfree = freelist link
- * (next free slot + 1, 0 = tail); refcnt = tree references */
+/* one composite slot: a = chain head (a composite id or a leaf id),
+ * b = leaf id (op/attr/mark); idfree = freelist link (next free slot
+ * + 1, 0 = tail); refcnt = tree references */
 typedef struct cp_Slot {
     sp_Id    a, b;
     unsigned idfree;
     unsigned refcnt;
 } cp_Slot;
 
+/* one identity mark record: owning ns + visual attr id; gen advances
+ * on slot reclaim so stale handles fail; refcnt = direct-leaf plus
+ * cons-chain child references; idfree = mark freelist link */
+typedef struct cp_Mark {
+    cp_NS    ns;
+    cp_Attr  attr;
+    unsigned gen;
+    unsigned refcnt;
+    unsigned idfree;
+} cp_Mark;
+
 /* minispan: one flat segment per ephemeral ns (ordered, disjoint,
  * adjacent ids differ; stV_ vec of sv_Span; no mask, no B+ structure) */
 typedef struct sv_Span {
-    size_t  off; /* segment start offset */
-    size_t  len; /* segment length */
-    cp_Attr id;  /* segment attr id */
+    size_t off; /* segment start offset */
+    size_t len; /* segment length */
+    sp_Id  id;  /* segment id */
 } sv_Span;
 
 /* vec handle for one ephemeral-ns segment list (grow mutates the
@@ -144,14 +180,17 @@ typedef struct cp_State {
     int       nsstack[SP_MASK_BITS]; /* freed ordinary ns ids */
     int       nsstackn;              /* nsstack length */
     unsigned  nsnext;                /* next ordinary ns id (1..SP_MASK_BITS) */
-    unsigned  ephnext;   /* next ephemeral ns id (SP_MASK_BITS+1 up) */
-    int       ref_nsb;   /* registry hash: ns name -> ns id */
-    cp_Op    *ops;       /* vec: op id -> cp_Op {kind, ns, attr} */
-    int       ref_byop;  /* registry hash: op payload key -> op id */
-    cp_Slot  *slots;     /* vec: composite slot {a, b, idfree, refcnt} */
-    size_t    chainnext; /* first never-used composite slot */
-    unsigned  freehead;  /* freelist head + 1 (0 = empty) */
-    int ref_chainhash;   /* registry hash: chain structure -> composite id */
+    unsigned  ephnext;      /* next ephemeral ns id (SP_MASK_BITS+1 up) */
+    int       ref_nsb;      /* registry hash: ns name -> ns id */
+    cp_Op    *ops;          /* vec: op id -> cp_Op {kind, ns, attr} */
+    int       ref_byop;     /* registry hash: op payload key -> op id */
+    cp_Slot  *slots;        /* vec: composite slot {a, b, idfree, refcnt} */
+    size_t    chainnext;    /* first never-used composite slot */
+    unsigned  freehead;     /* composite freelist head + 1 (0 = empty) */
+    int      ref_chainhash; /* registry hash: chain structure -> composite id */
+    cp_Mark *marks;         /* vec: identity mark records (dense slots) */
+    size_t   marknext;      /* first never-used mark slot */
+    unsigned markfree;      /* mark freelist head + 1 (0 = empty) */
 } cp_State;
 
 /* Compositor userdata: owns one cp_State (inline, zero second-level
@@ -178,6 +217,9 @@ typedef struct lst_Tree {
     size_t     ephcnt; /* highest eph slot index + 1 */
     size_t     epoch;  /* tree edit counter (cursor invalidation) */
     cp_NSAttr *rtmp;   /* vec: styled fold scratch pairs */
+    sp_Id      pending[SP_MASK_BITS * 3]; /* content-sensitive marks hit
+                                           * by the current edit */
+    size_t pendingn;                      /* pending queue length */
 } lst_Tree;
 
 /* cursor mode: 0 = user handle (seek/locate/style/next/prev/edits),
@@ -196,6 +238,7 @@ typedef struct lst_Cur {
     size_t    midx; /* in-segment mark index (valid while mlen > 0) */
     size_t    mbase;
     size_t    mlen; /* current segment [mbase, mbase+mlen); 0 = none */
+    sp_Id     mid;  /* identity iterator: current grouped mark id */
 } lst_Cur;
 
 /* ================================================================== */
@@ -335,6 +378,7 @@ static void cp_free(lua_State *L, cp_State *S) {
     stV_free(S->ensreg);
     stV_free(S->ops);
     stV_free(S->slots);
+    stV_free(S->marks);
     luaL_unref(L, LUA_REGISTRYINDEX, S->ref_byattr);
     luaL_unref(L, LUA_REGISTRYINDEX, S->ref_nsb);
     luaL_unref(L, LUA_REGISTRYINDEX, S->ref_byop);
@@ -440,15 +484,77 @@ static cp_Attr cp_internattr(lua_State *L, cp_State *S, int attr) {
     return id;
 }
 
-static int     cp_expand(const cp_State *S, sp_Id id, cp_NSAttr *ps);
+static cp_Mark *cpM_get(const cp_State *S, sp_Id id) {
+    size_t k;
+    if (id < CP_MARK_BASE) return NULL;
+    k = (size_t)((id - CP_MARK_BASE) & CP_MARK_SLOTMASK);
+    if (k >= stV_len(S->marks)) return NULL;
+    if ((id - CP_MARK_BASE) >> CP_MARK_GENSHIFT != S->marks[k].gen) return NULL;
+    return S->marks[k].ns ? S->marks + k : NULL;
+}
+
+static int cpM_oneleaf(const cp_State *S, sp_Id id, cp_Leaf *leaf) {
+    cp_Mark *m;
+    if (id >= CP_MARK_BASE) {
+        if ((m = cpM_get(S, id)) == NULL) return 0;
+        leaf->id = id, leaf->ns = m->ns, leaf->attr = m->attr;
+        return 1;
+    }
+    if (id < (sp_Id)stV_len(S->ops) && S->ops[id].kind == CP_K_WRITE) {
+        leaf->id = id;
+        leaf->ns = (cp_NS)S->ops[id].ns, leaf->attr = S->ops[id].attr;
+        if (leaf->ns == 0) leaf->id = leaf->attr;
+        return 1;
+    }
+    if (id < (sp_Id)S->next) {
+        leaf->id = id, leaf->ns = 0, leaf->attr = (cp_Attr)id;
+        return 1;
+    }
+    return 0;
+}
+
+static int cp_expleaf(const cp_State *S, sp_Id id, cp_Leaf *ps) {
+    sp_Id   cur;
+    size_t  k;
+    cp_Leaf v;
+    int     n = 0, i;
+    if (id >= CP_MARK_BASE) return cpM_oneleaf(S, id, ps);
+    cur = id;
+    while (cur >= CP_COMP_START && cur < CP_MARK_BASE) {
+        k = (size_t)(cur - CP_COMP_START);
+        if (k >= stV_len(S->slots)) return 0;
+        if (S->slots[k].a == 0 && S->slots[k].b == 0) return 0;
+        if (!cpM_oneleaf(S, S->slots[k].b, ps + n)) return 0;
+        n += 1, cur = S->slots[k].a;
+    }
+    if (!cpM_oneleaf(S, cur, ps + n)) return 0;
+    n += 1;
+    for (i = 0; i < n / 2; ++i)
+        v = ps[i], ps[i] = ps[n - 1 - i], ps[n - 1 - i] = v;
+    return n;
+}
+
+static int cp_expand(const cp_State *S, sp_Id id, cp_NSAttr *ps) {
+    cp_Leaf ls[SP_MASK_BITS + 1];
+    int     n = cp_expleaf(S, id, ls), i;
+    for (i = 0; i < n; ++i) ps[i].ns = ls[i].ns, ps[i].attr = ls[i].attr;
+    return n;
+}
+
 static cp_Attr cpF_fold(lua_State *L, cp_State *S, const cp_NSAttr *p, int n);
 static void    cp_refup(cp_State *S, sp_Id id);
 static void    cp_refdown(lua_State *L, cp_State *S, sp_Id id);
 
 static void cp_attr(lua_State *L, cp_State *S, sp_Id id) {
     cp_NSAttr ps[SP_MASK_BITS + 1];
+    cp_Mark  *m;
     int       n;
     cp_Attr   aid;
+    if (id >= CP_MARK_BASE) {
+        if ((m = cpM_get(S, id)) == NULL) return lua_pushnil(L);
+        lua_rawgeti(L, LUA_REGISTRYINDEX, S->attrs[m->attr]);
+        return;
+    }
     if (id < (sp_Id)stV_len(S->ops) && S->ops[id].kind != 0) {
         lua_rawgeti(L, LUA_REGISTRYINDEX, S->attrs[S->ops[id].attr]);
         return;
@@ -508,29 +614,6 @@ static sp_Id cp_op(lua_State *L, cp_State *S, cp_Op op) {
 
 /* ---- cp composite region ---- */
 
-static int cp_expand(const cp_State *S, sp_Id id, cp_NSAttr *ps) {
-    sp_Id     cur, b;
-    size_t    k;
-    cp_NSAttr v;
-    int       n = 0, i;
-    cur = id;
-    while (cur >= CP_COMP_START) {
-        k = (size_t)(cur - CP_COMP_START);
-        b = S->slots[k].b;
-        ps[n].ns = (cp_NS)S->ops[b].ns, ps[n].attr = S->ops[b].attr;
-        n += 1;
-        cur = S->slots[k].a;
-    }
-    if (cur < (sp_Id)stV_len(S->ops) && S->ops[cur].kind != 0)
-        ps[n].ns = (cp_NS)S->ops[cur].ns, ps[n].attr = S->ops[cur].attr;
-    else
-        ps[n].ns = 0, ps[n].attr = (cp_Attr)cur;
-    n += 1;
-    for (i = 0; i < n / 2; ++i)
-        v = ps[i], ps[i] = ps[n - 1 - i], ps[n - 1 - i] = v;
-    return n;
-}
-
 static void cp_foldinto(lua_State *L, int fold) {
     int tab = lua_gettop(L);
     lua_pushnil(L);
@@ -561,13 +644,22 @@ static cp_Attr cpF_fold(lua_State *L, cp_State *S, const cp_NSAttr *p, int n) {
     return id;
 }
 
-static int cpP_hashkey(const cp_NSAttr *ps, int n, char *buf, size_t cap) {
+static int cpP_hashkey(const cp_Leaf *ps, int n, char *buf, size_t cap) {
+    char   rev[20];
+    sp_Id  id;
     size_t off = 0;
-    int    i, w;
+    int    i, j;
+    (void)cap; /* runtime bounds are compile-time guarded by cpM_keysize */
     for (i = 0; i < n; ++i) {
-        w = snprintf(buf + off, cap - off, "%u:%u;", ps[i].ns, ps[i].attr);
-        off += (size_t)w;
+        id = ps[i].id, j = 0;
+        do {
+            rev[j++] = (char)('0' + (int)(id % 10)), id /= 10;
+        } while (id);
+        assert(off + (size_t)j + 1 < cap); /* cpM_keysize guards releases */
+        while (j > 0) buf[off++] = rev[--j];
+        buf[off++] = ';';
     }
+    buf[off] = '\0';
     return (int)off;
 }
 
@@ -580,16 +672,17 @@ static size_t cpP_slotalloc(lua_State *L, cp_State *S) {
         if (stV_keep(S->slots, (unsigned)k + 1) != 0)
             luaL_error(L, "spantree: out of memory");
     }
-    return k;
+    return assert(k + CP_COMP_START < CP_MARK_BASE), k;
 }
 
 static sp_Id cpP_chain(
-        lua_State *L, cp_State *S, const cp_NSAttr *p, int n, sp_Id a) {
+        lua_State *L, cp_State *S, const cp_Leaf *p, int n, sp_Id a) {
     int i;
     for (i = 0; i < n - 1; ++i) {
-        sp_Id b = cp_op(
-                L, S, cp_opmake(CP_K_WRITE, p[i + 1].ns, p[i + 1].attr));
+        sp_Id  b = p[i + 1].id;
         size_t k = cpP_slotalloc(L, S);
+        if (i == 0) cp_refup(S, a);
+        cp_refup(S, b);
         S->slots[k].a = a, S->slots[k].b = b, S->slots[k].refcnt = 0;
         a = (sp_Id)(k + CP_COMP_START);
         if (i < n - 2) cp_refup(S, a);
@@ -597,9 +690,9 @@ static sp_Id cpP_chain(
     return a;
 }
 
-static sp_Id cp_composite(lua_State *L, cp_State *S, cp_NSAttr *p, int n) {
-    char  key[1400];
-    sp_Id a, id;
+static sp_Id cp_composite(lua_State *L, cp_State *S, cp_Leaf *p, int n) {
+    char  key[CP_KEY_SZ];
+    sp_Id id;
     cpP_hashkey(p, n, key, sizeof(key));
     lua_rawgeti(L, LUA_REGISTRYINDEX, S->ref_chainhash);
     lua_pushstring(L, key);
@@ -612,25 +705,22 @@ static sp_Id cp_composite(lua_State *L, cp_State *S, cp_NSAttr *p, int n) {
         return id;
     }
     lua_pop(L, 1);
-    if (p[0].ns == 0)
-        a = p[0].attr;
-    else
-        a = cp_op(L, S, cp_opmake(CP_K_WRITE, p[0].ns, p[0].attr));
-    a = cpP_chain(L, S, p, n, a);
-    lua_pushstring(L, key), lua_pushinteger(L, (lua_Integer)a);
+    id = cpP_chain(L, S, p, n, p[0].id);
+    lua_pushstring(L, key), lua_pushinteger(L, (lua_Integer)id);
     lua_rawset(L, -3);
     lua_pop(L, 1);
-    return a;
+    return id;
 }
 
 static void cpP_release(lua_State *L, cp_State *S, sp_Id id) {
-    cp_NSAttr ps[SP_MASK_BITS + 1];
-    char      key[1400];
-    size_t    k = (size_t)(id - CP_COMP_START);
-    sp_Id     a = S->slots[k].a, b = S->slots[k].b;
-    int       n;
+    cp_Leaf ps[SP_MASK_BITS + 1];
+    char    key[CP_KEY_SZ];
+    size_t  k = (size_t)(id - CP_COMP_START);
+    sp_Id   a = S->slots[k].a, b = S->slots[k].b;
+    int     n;
     if (a == 0 && b == 0) return;
-    n = cp_expand(S, id, ps);
+    n = cp_expleaf(S, id, ps);
+    assert(n > 0);
     cpP_hashkey(ps, n, key, sizeof(key));
     lua_rawgeti(L, LUA_REGISTRYINDEX, S->ref_chainhash);
     lua_pushstring(L, key);
@@ -644,13 +734,60 @@ static void cpP_release(lua_State *L, cp_State *S, sp_Id id) {
     cp_refdown(L, S, b);
 }
 
+static sp_Id cp_markalloc(lua_State *L, cp_State *S, cp_NS ns, cp_Attr attr) {
+    cp_Mark *m;
+    size_t   k;
+    if (S->markfree > 0) {
+        k = (size_t)(S->markfree - 1), m = S->marks + k;
+        S->markfree = m->idfree + 1;
+    } else {
+        if (S->marknext >= CP_MARK_SLOTS)
+            luaL_error(L, "spantree: mark space exhausted");
+        k = S->marknext++;
+        if (stV_keep(S->marks, (unsigned)k + 1) != 0)
+            luaL_error(L, "spantree: out of memory");
+        m = S->marks + k, memset(m, 0, sizeof(*m));
+    }
+    m->ns = ns, m->attr = attr, m->refcnt = 0;
+    return CP_MARK_BASE | ((sp_Id)m->gen << CP_MARK_GENSHIFT) | (sp_Id)k;
+}
+
+static void cp_markfree(cp_State *S, cp_Mark *m) {
+    size_t k = (size_t)(m - S->marks);
+    m->ns = 0, m->attr = 0;
+    if (m->gen + 1 >= CP_MARK_GENMASK) return; /* retire slot; never alias */
+    m->idfree = S->markfree - 1;
+    S->markfree = (unsigned)k + 1;
+    m->gen += 1;
+}
+
+static void cpM_markfill(
+        lua_State *L, cp_State *S, sp_Cursor *C, sp_Id op, size_t len) {
+    int r = sp_fill(C, op, len);
+    if (r == 0) return;
+    cp_markfree(S, cpM_get(S, op)); /* roll the fresh mark back; no leak */
+    luaL_error(L, "spantree: error(%d)", r);
+}
+
 static void cp_refup(cp_State *S, sp_Id id) {
-    if (id < CP_COMP_START) return;
+    cp_Mark *m;
+    if ((m = cpM_get(S, id)) != NULL) {
+        m->refcnt += 1;
+        return;
+    }
+    if (id < CP_COMP_START || id >= CP_MARK_BASE) return;
     S->slots[(size_t)(id - CP_COMP_START)].refcnt += 1;
 }
 
 static void cp_refdown(lua_State *L, cp_State *S, sp_Id id) {
-    if (id < CP_COMP_START) return;
+    cp_Mark *m;
+    if ((m = cpM_get(S, id)) != NULL) {
+        if (m->refcnt == 0) return;
+        m->refcnt -= 1;
+        if (m->refcnt == 0) cp_markfree(S, m);
+        return;
+    }
+    if (id < CP_COMP_START || id >= CP_MARK_BASE) return;
     if (S->slots[(size_t)(id - CP_COMP_START)].refcnt == 0) return;
     S->slots[(size_t)(id - CP_COMP_START)].refcnt -= 1;
     if (S->slots[(size_t)(id - CP_COMP_START)].refcnt == 0)
@@ -672,6 +809,12 @@ static lua_Number cp_prio(const cp_State *S, cp_NS ns) {
 static unsigned cp_reg(const cp_State *S, cp_NS ns) {
     if (ns > (int)SP_MASK_BITS) return S->ensreg[ns - SP_MASK_BITS - 1].reg;
     return S->nsreg[ns].reg;
+}
+
+static unsigned cp_flags(const cp_State *S, cp_NS ns) {
+    if (ns == 0) return 0;
+    if (ns > (int)SP_MASK_BITS) return S->ensreg[ns - SP_MASK_BITS - 1].flags;
+    return S->nsreg[ns].flags;
 }
 
 static cp_NS cpN_salloc(lua_State *L, cp_State *S, int eph) {
@@ -716,6 +859,7 @@ typedef struct cp_NsArg {
     const char *nm;
     lua_Number  p;
     int         e;
+    unsigned    flags;
 } cp_NsArg;
 
 static int cp_nsreg(lua_State *L, cp_State *S, const cp_NsArg *a) {
@@ -728,6 +872,7 @@ static int cp_nsreg(lua_State *L, cp_State *S, const cp_NsArg *a) {
     cpN_sset(L, S, a->nm, ns);
     cpP_nsreg(S, ns)->prio = a->p;
     cpP_nsreg(S, ns)->reg = ++S->regcnt;
+    cpP_nsreg(S, ns)->flags = a->flags;
     return 0;
 }
 
@@ -743,15 +888,24 @@ static lua_Number cp_nsunreg(lua_State *L, cp_State *S, const char *nm) {
     }
     cpN_sdel(L, S, nm);
     cpP_nsreg(S, ns)->prio = 0, cpP_nsreg(S, ns)->reg = 0;
+    cpP_nsreg(S, ns)->flags = 0;
     return old;
 }
 
+static int cpS_less2(const cp_State *S, cp_NS an, cp_NS bn) {
+    lua_Number pa = cp_prio(S, an), pb = cp_prio(S, bn);
+    if (an == 0) return bn != 0;
+    if (bn == 0) return 0;
+    if (pa != pb) return pa < pb;
+    return cp_reg(S, an) < cp_reg(S, bn);
+}
+
 static int cpS_less(const cp_State *S, cp_NSAttr a, cp_NSAttr b) {
-    if (a.ns == 0) return b.ns != 0;
-    if (b.ns == 0) return 0;
-    if (cp_prio(S, a.ns) != cp_prio(S, b.ns))
-        return cp_prio(S, a.ns) < cp_prio(S, b.ns);
-    return cp_reg(S, a.ns) < cp_reg(S, b.ns);
+    return cpS_less2(S, a.ns, b.ns);
+}
+
+static int cpS_lessleaf(const cp_State *S, cp_Leaf a, cp_Leaf b) {
+    return cpS_less2(S, a.ns, b.ns);
 }
 
 static void cp_sort(const cp_State *S, cp_NSAttr *ps, int n) {
@@ -764,19 +918,43 @@ static void cp_sort(const cp_State *S, cp_NSAttr *ps, int n) {
     }
 }
 
-static void cp_apply(const cp_State *S, sp_Id in, cp_NSAttr *tmp, int *pn) {
-    int i, n = *pn;
-    if (S->ops[in].kind == CP_K_WRITE) {
-        for (i = 0; i < n && tmp[i].ns != (cp_NS)S->ops[in].ns; ++i) continue;
-        if (i < n)
-            tmp[i].attr = S->ops[in].attr;
-        else
-            tmp[n].ns = (cp_NS)S->ops[in].ns, tmp[n].attr = S->ops[in].attr,
-            n += 1;
-    } else if (S->ops[in].kind == CP_K_CLEAR) {
-        for (i = 0; i < n && tmp[i].ns != (cp_NS)S->ops[in].ns; ++i) continue;
-        if (i < n) tmp[i] = tmp[n - 1], n -= 1;
+static void cp_sortleaf(const cp_State *S, cp_Leaf *ps, int n) {
+    int     i, j;
+    cp_Leaf v;
+    for (i = 1; i < n; ++i) {
+        v = ps[i];
+        for (j = i; j > 0 && cpS_lessleaf(S, v, ps[j - 1]); --j)
+            ps[j] = ps[j - 1];
+        ps[j] = v;
     }
+}
+
+static void cp_applyleaf(const cp_State *S, sp_Id in, cp_Leaf *tmp, int *pn) {
+    cp_Leaf  leaf;
+    cp_Mark *m;
+    cp_Kind  kind;
+    int      i, j, n = *pn;
+    if (in >= CP_MARK_BASE) {
+        if ((m = cpM_get(S, in)) == NULL) return;
+        kind = CP_K_WRITE, leaf.id = in, leaf.ns = m->ns, leaf.attr = m->attr;
+    } else {
+        assert(in < (sp_Id)stV_len(S->ops) && S->ops[in].kind != 0);
+        kind = S->ops[in].kind, leaf.id = in;
+        leaf.ns = (cp_NS)S->ops[in].ns, leaf.attr = S->ops[in].attr;
+        if (kind == CP_K_WRITE && leaf.ns == 0) leaf.id = leaf.attr;
+    }
+    if (kind == CP_K_REORDER) return;
+    if (kind == CP_K_CLEAR) {
+        for (i = j = 0; i < n; ++i)
+            if (tmp[i].ns != leaf.ns) tmp[j++] = tmp[i];
+        *pn = j;
+        return;
+    }
+    for (i = 0; i < n && tmp[i].ns != leaf.ns; ++i) continue;
+    if (i < n)
+        tmp[i] = leaf;
+    else
+        tmp[n++] = leaf;
     *pn = n;
 }
 
@@ -799,7 +977,7 @@ static sp_Mask cp_segmask(const cp_State *S, sp_Id id) {
     cp_NSAttr ps[SP_MASK_BITS + 1];
     sp_Mask   m = 0;
     int       n, i;
-    if (id >= CP_COMP_START) {
+    if (id >= CP_MARK_BASE || id >= CP_COMP_START) {
         n = cp_expand(S, id, ps);
         for (i = 0; i < n; ++i)
             if (ps[i].ns > 0) sp_addns(&m, (int)ps[i].ns);
@@ -811,17 +989,15 @@ static sp_Mask cp_segmask(const cp_State *S, sp_Id id) {
 
 static sp_Id cp_merge(
         lua_State *L, cp_State *S, sp_Id in, sp_Id old, int *pn, cp_NS *ns) {
-    cp_NSAttr ps[SP_MASK_BITS + 1];
-    sp_Id     ret;
-    int       n, k = 0, i;
-    n = cp_expand(S, old, ps);
-    cp_apply(S, in, ps, &n);
+    cp_Leaf ps[SP_MASK_BITS + 1];
+    sp_Id   ret;
+    int     n, k = 0, i;
+    n = cp_expleaf(S, old, ps);
+    cp_applyleaf(S, in, ps, &n);
     if (n == 0) return *pn = 0, 0;
-    cp_sort(S, ps, n);
-    if (n == 1 && ps[0].ns == 0)
-        ret = ps[0].attr;
-    else if (n == 1)
-        ret = cp_op(L, S, cp_opmake(CP_K_WRITE, ps[0].ns, ps[0].attr));
+    cp_sortleaf(S, ps, n);
+    if (n == 1)
+        ret = ps[0].id;
     else
         ret = cp_composite(L, S, ps, n);
     for (i = 0; i < n; ++i)
@@ -899,7 +1075,7 @@ static void svN_norm(sv_Span *S, size_t j) {
 
 static void svN_place(
         sv_Span *p, size_t s, size_t n, size_t off, size_t len, cp_Attr id,
-        int right, size_t ohlen, cp_Attr ohid) {
+        int right, size_t ohlen, sp_Id ohid) {
     if (right) {
         memmove(p + s + 2, p + s, (n - s) * sizeof(sv_Span));
         p[s].off = off, p[s].len = len, p[s].id = id;
@@ -917,7 +1093,7 @@ static void svN_place(
 static int sv_fill(sv_List *S, size_t off, size_t len, cp_Attr id) {
     sv_Span *p = *S;
     size_t   s, t, ohlen, n;
-    cp_Attr  ohid;
+    sp_Id    ohid;
     int      left, right;
     if (len == 0) return 0;
     s = sv_upper(p, off), t = sv_lower(p, off + len);
@@ -1072,7 +1248,7 @@ static size_t lst_ephpairs(lst_Eph *e, size_t n, size_t x, cp_NSAttr *rt) {
         sv_cover(ph, x, &cv);
         if (cv.id == 0) continue;
         rt[c].ns = e[i].ns;
-        rt[c].attr = cv.id;
+        rt[c].attr = (cp_Attr)cv.id; /* eph layers only store attr ids */
         c += 1;
     }
     return c;
@@ -1091,6 +1267,7 @@ static void lst_curinit(
     c->midx = 0;
     c->mbase = 0;
     c->mlen = 0;
+    c->mid = 0;
 }
 
 static unsigned lst_attrid(lua_State *L, lst_Tree *t, int idx) {
@@ -1152,9 +1329,26 @@ static sp_Id lst_arb_merge(
     return lua_settop(L, base), ret;
 }
 
+static void lst_touch(lst_Tree *t, sp_Id id) {
+    cp_Leaf ps[SP_MASK_BITS + 1];
+    int     n = cp_expleaf(t->cp, id, ps), i;
+    size_t  j;
+    for (i = 0; i < n; ++i) {
+        if (ps[i].id < CP_MARK_BASE) continue;
+        if (!(cp_flags(t->cp, ps[i].ns) & CP_NSF_SENSITIVE)) continue;
+        for (j = 0; j < t->pendingn && t->pending[j] != ps[i].id; ++j) continue;
+        if (j < t->pendingn) continue;
+        assert(t->pendingn < SP_MASK_BITS * 3);
+        t->pending[t->pendingn++] = ps[i].id;
+    }
+}
+
 static sp_Id lst_arb(void *ud, sp_Id in, sp_Id old, sp_Mask *mask) {
     lst_Tree *t = (lst_Tree *)ud;
-    if (in == old) return in; /* touch: notify only, ids stay in place */
+    if (in == old) {
+        if (in != 0) lst_touch(t, in);
+        return in;
+    }
     if (in == 0) return lst_arb_death(t->L, t, old, mask);
     if (old == 0) return lst_arb_birth(t, in, mask);
     return lst_arb_merge(t->L, t, in, old, mask);
@@ -1191,7 +1385,7 @@ static sp_Id lst_sty(lua_State *L, lst_Cur *c, size_t *pe) {
 
 static sv_Span lst_span(size_t off, size_t len, sp_Id id) {
     sv_Span s;
-    return s.off = off, s.len = len, s.id = (cp_Attr)id, s;
+    return s.off = off, s.len = len, s.id = id, s;
 }
 
 static int lst_pushspan(lua_State *L, lst_Tree *t, sv_Span s) {
@@ -1203,6 +1397,22 @@ static int lst_pushspan(lua_State *L, lst_Tree *t, sv_Span s) {
 }
 
 /* ---- edit helper ---- */
+
+static int lst_remove_mark(lua_State *L, lst_Tree *t, sp_Id id);
+
+static void lst_editcommit(lua_State *L, lst_Tree *t) {
+    size_t i;
+    for (i = 0; i < t->pendingn; ++i) lst_remove_mark(L, t, t->pending[i]);
+    t->pendingn = 0;
+    t->epoch += 1;
+}
+
+static void lst_curedit(lua_State *L, lst_Cur *c) {
+    size_t off = sp_offset(&c->C);
+    lst_editcommit(L, c->tree);
+    sp_seek(&c->C, c->tree->T, off);
+    c->epoch = c->tree->epoch;
+}
 
 static void lst_edit(lua_State *L, lst_Cur *c) {
     c->tree->epoch += 1;
@@ -1219,7 +1429,7 @@ static void lst_compwalk(lua_State *L, lst_Comp *c, lst_walkf fn, void *ctx) {
     lua_pushnil(L);
     while (lua_next(L, -2)) {
         lst_Tree *t = (lst_Tree *)lua_touserdata(L, -2);
-        if (t != NULL) fn(L, t, ctx);
+        if (t != NULL && t->T != NULL) fn(L, t, ctx);
         lua_pop(L, 1);
     }
     lua_pop(L, 1);
@@ -1348,20 +1558,28 @@ static int Ltree_mark(lua_State *L) {
     lua_Integer len = luaL_checkinteger(L, 5);
     sp_Cursor   C;
     sp_Id       op;
-    unsigned    a;
+    unsigned    flags = cp_flags(t->cp, nsid), a = lst_attrid(L, t, 3);
     luaL_argcheck(L, off >= 0, 4, "spantree: invalid offset");
     luaL_argcheck(L, len >= 0, 5, "spantree: invalid length");
-    a = lst_attrid(L, t, 3);
+    if ((flags & CP_NSF_IDENTITY) && len == 0)
+        luaL_error(L, "spantree: identity mark length must be positive");
     if (lst_iseph(nsid)) {
         if (sv_fill(lst_ephslot(L, t, nsid), (size_t)off, (size_t)len, a) != 0)
             luaL_error(L, "spantree: out of memory");
         return lua_pushinteger(L, (lua_Integer)a), 1;
     }
-    op = cp_op(L, t->cp, cp_opmake(CP_K_WRITE, nsid, a));
+    if (flags & CP_NSF_IDENTITY)
+        op = cp_markalloc(L, t->cp, nsid, a);
+    else
+        op = cp_op(L, t->cp, cp_opmake(CP_K_WRITE, nsid, a));
     sp_seek(&C, t->T, (size_t)off);
-    lst_checkerror(L, sp_fill(&C, op, (size_t)len));
+    if (flags & CP_NSF_IDENTITY)
+        cpM_markfill(L, t->cp, &C, op, (size_t)len);
+    else
+        lst_checkerror(L, sp_fill(&C, op, (size_t)len));
     t->epoch += 1;
-    return lua_pushinteger(L, (lua_Integer)a), 1;
+    if (!(flags & CP_NSF_IDENTITY)) op = a;
+    return lua_pushinteger(L, (lua_Integer)op), 1;
 }
 
 static int lst_cleartree(lua_State *L, lst_Tree *t, size_t off, size_t len) {
@@ -1437,11 +1655,11 @@ static int Ltree_splice(lua_State *L) {
     luaL_argcheck(L, off >= 0, 2, "spantree: invalid offset");
     luaL_argcheck(L, del >= 0, 3, "spantree: invalid length");
     luaL_argcheck(L, ins >= 0, 4, "spantree: invalid length");
+    t->pendingn = 0;
     lst_ephresetall(t);
     sp_seek(&C, t->T, (size_t)off);
     lst_checkerror(L, sp_splice(&C, (size_t)del, (size_t)ins));
-    t->epoch += 1;
-    return lua_settop(L, 1), 1;
+    return lua_settop(L, 1), lst_editcommit(L, t), 1;
 }
 
 static int Ltree_append(lua_State *L) {
@@ -1451,11 +1669,11 @@ static int Ltree_append(lua_State *L) {
     sp_Cursor   C;
     luaL_argcheck(L, off >= 0, 2, "spantree: invalid offset");
     luaL_argcheck(L, ins >= 0, 3, "spantree: invalid length");
+    t->pendingn = 0;
     lst_ephresetall(t);
     sp_seek(&C, t->T, (size_t)off);
     lst_checkerror(L, sp_append(&C, (size_t)ins));
-    t->epoch += 1;
-    return lua_settop(L, 1), 1;
+    return lua_settop(L, 1), lst_editcommit(L, t), 1;
 }
 
 static int Ltree_insert(lua_State *L) {
@@ -1465,11 +1683,11 @@ static int Ltree_insert(lua_State *L) {
     sp_Cursor   C;
     luaL_argcheck(L, off >= 0, 2, "spantree: invalid offset");
     luaL_argcheck(L, ins >= 0, 3, "spantree: invalid length");
+    t->pendingn = 0;
     lst_ephresetall(t);
     sp_seek(&C, t->T, (size_t)off);
     lst_checkerror(L, sp_insert(&C, (size_t)ins));
-    t->epoch += 1;
-    return lua_settop(L, 1), 1;
+    return lua_settop(L, 1), lst_editcommit(L, t), 1;
 }
 
 static int Ltree_remove(lua_State *L) {
@@ -1479,12 +1697,12 @@ static int Ltree_remove(lua_State *L) {
     sp_Cursor   A, B;
     luaL_argcheck(L, off >= 0, 2, "spantree: invalid offset");
     luaL_argcheck(L, len >= 0, 3, "spantree: invalid length");
+    t->pendingn = 0;
     lst_ephresetall(t);
     sp_seek(&A, t->T, (size_t)off);
     sp_seek(&B, t->T, (size_t)(off + len));
     lst_checkerror(L, sp_remove(&A, &B));
-    t->epoch += 1;
-    return lua_settop(L, 1), 1;
+    return lua_settop(L, 1), lst_editcommit(L, t), 1;
 }
 
 static size_t lst_unmark_count(lst_Tree *t, lua_Integer id) {
@@ -1512,26 +1730,57 @@ static void lst_unmark_apply(lua_State *L, lst_Tree *t, lua_Integer id) {
     int       n, i;
     sp_seek(&C, t->T, 0);
     for (;;) {
-        size_t segstart;
+        size_t segstart, seglen;
         sid = sp_style(&C, &len, NULL);
         if (len == 0) break;
         segstart = sp_offset(&C) - C.poff;
+        if (C.poff != 0) sp_locate(&C, segstart);
+        sid = sp_style(&C, &seglen, NULL);
         n = cp_expand(t->cp, sid, ps);
         for (i = 0; i < n; ++i) {
             if ((lua_Integer)ps[i].attr != id) continue;
             sp_locate(&C, segstart);
             op = cp_op(L, t->cp, cp_opmake(CP_K_CLEAR, ps[i].ns, 0));
-            lst_checkerror(L, sp_fill(&C, op, len));
+            lst_checkerror(L, sp_fill(&C, op, seglen));
         }
-        sp_seek(&C, t->T, segstart + len); /* fills move the cursor; seek
-                                            * to the next seg explicitly */
+        sp_seek(&C, t->T, segstart + seglen); /* advance by the full segment */
     }
+}
+
+static int lst_remove_mark(lua_State *L, lst_Tree *t, sp_Id id) {
+    cp_Mark  *m = cpM_get(t->cp, id);
+    sp_Cursor C;
+    sp_Id     sid, op;
+    size_t    len, start;
+    int       found = 0, i, n;
+    cp_Leaf   ps[SP_MASK_BITS + 1];
+    if (m == NULL) return 0;
+    op = cp_op(L, t->cp, cp_opmake(CP_K_CLEAR, m->ns, 0));
+    sp_seek(&C, t->T, sp_bytes(t->T));
+    for (;;) {
+        sid = sp_prev(&C, m->ns, &len);
+        if (sid == SP_NONE) break;
+        n = cp_expleaf(t->cp, sid, ps);
+        for (i = 0; i < n && ps[i].id != id; ++i) continue;
+        if (i == n) continue; /* other same-ns mark; keep scanning left */
+        start = sp_offset(&C);
+        lst_checkerror(L, sp_fill(&C, op, len)); /* clear this fragment only */
+        found = 1;
+        sp_seek(&C, t->T, start);
+    }
+    return found;
 }
 
 static int Ltree_unmark(lua_State *L) {
     lst_Tree   *t = ltree_check(L, 1);
     lua_Integer id = luaL_checkinteger(L, 2);
-    size_t      count = lst_unmark_count(t, id);
+    size_t      count;
+    if ((sp_Id)id >= CP_MARK_BASE) {
+        if (!lst_remove_mark(L, t, (sp_Id)id)) return lua_pushinteger(L, 0), 1;
+        t->epoch += 1;
+        return lua_pushinteger(L, 1), 1;
+    }
+    count = lst_unmark_count(t, id);
     if (count > 0) {
         lst_unmark_apply(L, t, id);
         t->epoch += 1;
@@ -1595,17 +1844,26 @@ static int Ltree_seek(lua_State *L) {
     return 1;
 }
 
-static int lst_flags(lua_State *L, int idx, int *peph) {
+static int lst_flags(lua_State *L, int idx, int *peph, unsigned *pflags) {
     const char *flags = luaL_checklstring(L, idx, NULL), *fp;
     int         strict = 0;
+    *peph = 0, *pflags = 0;
     for (fp = flags; *fp; ++fp) {
         if (*fp == 'c')
             strict = 1;
         else if (*fp == 'e')
             *peph = 1;
+        else if (*fp == 'i')
+            *pflags |= CP_NSF_IDENTITY;
+        else if (*fp == 's')
+            *pflags |= CP_NSF_SENSITIVE;
         else
             luaL_error(L, "spantree: invalid namespace flags");
     }
+    if (*peph && (*pflags & CP_NSF_IDENTITY))
+        luaL_error(L, "spantree: invalid namespace flags");
+    if ((*pflags & CP_NSF_SENSITIVE) && !(*pflags & CP_NSF_IDENTITY))
+        luaL_error(L, "spantree: invalid namespace flags");
     return strict;
 }
 
@@ -1617,6 +1875,13 @@ static int lst_nsquery(lua_State *L, cp_State *cp, const char *name) {
         lua_pushliteral(L, "ephemeral");
     else
         lua_pushnil(L);
+    if (cp_flags(cp, ns) & CP_NSF_IDENTITY) {
+        if (cp_flags(cp, ns) & CP_NSF_SENSITIVE)
+            lua_pushliteral(L, "identity+sensitive");
+        else
+            lua_pushliteral(L, "identity");
+        return 3;
+    }
     return 2;
 }
 
@@ -1624,10 +1889,17 @@ static int lst_nsregister(lua_State *L, lst_Comp *comp, const char *name) {
     cp_State  *cp = &comp->cp;
     int        top = lua_gettop(L), ns, eph = 0, strict = 0, existed;
     lua_Number p, old = 0;
+    unsigned   oldflags, flags;
     cp_NsArg   a;
     p = luaL_checknumber(L, 3);
-    if (top >= 4) strict = lst_flags(L, 4, &eph);
     ns = cp_nsget(L, cp, name);
+    oldflags = ns != 0 ? cp_flags(cp, ns) : 0;
+    flags = oldflags;
+    if (top >= 4) {
+        strict = lst_flags(L, 4, &eph, &flags);
+        if (ns != 0 && flags != oldflags)
+            return luaL_error(L, LSP_FLAGS_MSG), 0;
+    }
     if (strict && ns != 0)
         return luaL_error(L, "spantree: namespace already registered"), 0;
     existed = ns != 0 && lst_iseph(ns) != eph;
@@ -1635,13 +1907,12 @@ static int lst_nsregister(lua_State *L, lst_Comp *comp, const char *name) {
         old = lst_compnsunreg(L, comp, name);
     else if (ns != 0)
         old = cp_prio(cp, ns);
-    a.nm = name, a.p = p, a.e = eph;
+    a.nm = name, a.p = p, a.e = eph, a.flags = flags;
     if (cp_nsreg(L, cp, &a)) {
         if (!eph && p != old) lst_compwalk(L, comp, lst_comprefold, NULL);
         return lua_pushnumber(L, old), 1;
     }
-    if (existed) return lua_pushnumber(L, old), 1;
-    return lua_pushnil(L), 1;
+    return existed ? (lua_pushnumber(L, old), 1) : (lua_pushnil(L), 1);
 }
 
 static int Lcomp_namespace(lua_State *L) {
@@ -1683,6 +1954,91 @@ static int lst_itereph(lua_State *L, lst_Cur *c) {
     start = p[s].off > x ? p[s].off : x;
     lst_pushspan(L, t, lst_span(start, e2 - start, p[s].id));
     c->mcur = e2;
+    return 4;
+}
+
+static int lst_identityid(lst_Tree *t, sp_Id sid, int nsid, sp_Id *pm) {
+    cp_Leaf ps[SP_MASK_BITS + 1];
+    int     n = cp_expleaf(t->cp, sid, ps), i;
+    for (i = 0; i < n && (int)ps[i].ns != nsid; ++i) continue;
+    if (i == n || ps[i].id < CP_MARK_BASE) return 0;
+    return *pm = ps[i].id, 1;
+}
+
+static size_t lst_identityhead(lst_Cur *c, size_t start, sp_Id id) {
+    sp_Id  nid;
+    size_t len;
+    for (;;) {
+        nid = sp_prev(&c->C, c->nsid, &len);
+        if (nid == SP_NONE) break;
+        if (c->C.off + len != start) break;
+        if (!lst_identityid(c->tree, nid, c->nsid, &nid)) break;
+        if (nid != id) break;
+        start = c->C.off;
+    }
+    return start;
+}
+
+static int lst_identityfirst(lst_Cur *c) {
+    lst_Tree *t = c->tree;
+    size_t    len, start, end, orig;
+    sp_Id     id;
+    if (sp_prev(&c->C, c->nsid, &len) == SP_NONE) {
+        id = sp_style(&c->C, &len, NULL);
+        if (len == 0 || !lst_identityid(t, id, c->nsid, &id)) {
+            id = sp_next(&c->C, c->nsid, &len);
+            if (id == SP_NONE) return 0;
+        }
+    } else {
+        id = sp_style(&c->C, &len, NULL);
+        if (c->C.off + len <= c->mcur) {
+            id = sp_next(&c->C, c->nsid, &len);
+            if (id == SP_NONE) return 0;
+        }
+    }
+    if (!lst_identityid(t, id, c->nsid, &id)) return 0;
+    orig = start = c->C.off, end = start + len;
+    c->mbase = lst_identityhead(c, start, id), c->mlen = end, c->mid = id;
+    sp_seek(&c->C, t->T, orig);
+    return 1;
+}
+
+static size_t lst_identitytail(lst_Cur *c, size_t end, sp_Id id) {
+    sp_Id  nid;
+    size_t len;
+    int    got;
+    for (;;) {
+        nid = sp_next(&c->C, c->nsid, &len);
+        if (nid == SP_NONE) {
+            c->mlen = 0, c->mcur = end;
+            return end;
+        }
+        got = lst_identityid(c->tree, nid, c->nsid, &nid);
+        if (!got) {
+            c->mlen = 0, c->mcur = c->C.off + len;
+            return end;
+        }
+        if (c->C.off != end || nid != id) {
+            c->mbase = c->C.off, c->mlen = c->C.off + len, c->mid = nid;
+            c->mcur = end;
+            return end;
+        }
+        end = c->C.off + len;
+    }
+}
+
+static int lst_iteridentity(lua_State *L, lst_Cur *c) {
+    size_t start, end;
+    sp_Id  id;
+    if (c->mcur >= c->endoff) return 0;
+    if (c->mlen == 0) {
+        sp_seek(&c->C, c->tree->T, c->mcur);
+        if (!lst_identityfirst(c)) return 0;
+    }
+    start = c->mbase, end = c->mlen, id = c->mid;
+    if (start >= c->endoff) return 0;
+    end = lst_identitytail(c, end, id);
+    lst_pushspan(L, c->tree, lst_span(start, end - start, id));
     return 4;
 }
 
@@ -1754,7 +2110,11 @@ static int Lcur_iter(lua_State *L) {
     if (c->mcur >= c->endoff) return 0;
     if (c->mode == LSP_ITER_STYLED) return lst_iterstyled(L, c);
     if (lst_iseph(c->nsid)) return lst_itereph(L, c);
-    if (c->nsid > 0) return lst_iterns(L, c);
+    if (c->nsid > 0) {
+        if (cp_flags(c->tree->cp, c->nsid) & CP_NSF_IDENTITY)
+            return lst_iteridentity(L, c);
+        return lst_iterns(L, c);
+    }
     return lst_iterany(L, c);
 }
 
@@ -1957,8 +2317,10 @@ static int Lcur_mark(lua_State *L) {
     int         nsid = lst_nsid(L, c->tree, 2);
     lua_Integer len = luaL_checkinteger(L, 4);
     sp_Id       op;
-    unsigned    a;
+    unsigned    a, flags = cp_flags(c->tree->cp, nsid);
     luaL_argcheck(L, len >= 0, 4, "spantree: invalid length");
+    if ((flags & CP_NSF_IDENTITY) && len == 0)
+        luaL_error(L, "spantree: identity mark length must be positive");
     a = lst_attrid(L, c->tree, 3);
     if (lst_iseph(nsid)) {
         sv_List *sl = lst_ephslot(L, c->tree, nsid);
@@ -1966,10 +2328,17 @@ static int Lcur_mark(lua_State *L) {
             luaL_error(L, "spantree: out of memory");
         return lua_pushinteger(L, (lua_Integer)a), 1;
     }
-    op = cp_op(L, c->tree->cp, cp_opmake(CP_K_WRITE, nsid, a));
-    lst_checkerror(L, sp_fill(&c->C, op, (size_t)len));
+    if (flags & CP_NSF_IDENTITY)
+        op = cp_markalloc(L, c->tree->cp, nsid, a);
+    else
+        op = cp_op(L, c->tree->cp, cp_opmake(CP_K_WRITE, nsid, a));
+    if (flags & CP_NSF_IDENTITY)
+        cpM_markfill(L, c->tree->cp, &c->C, op, (size_t)len);
+    else
+        lst_checkerror(L, sp_fill(&c->C, op, (size_t)len));
     lst_edit(L, c);
-    return lua_pushinteger(L, (lua_Integer)a), 1;
+    if (!(flags & CP_NSF_IDENTITY)) op = a;
+    return lua_pushinteger(L, (lua_Integer)op), 1;
 }
 
 static int lst_cur_clearall(lua_State *L, lst_Cur *c, lua_Integer len) {
@@ -2021,9 +2390,10 @@ static int Lcur_splice(lua_State *L) {
     lua_Integer ins = luaL_checkinteger(L, 3);
     luaL_argcheck(L, del >= 0, 2, "spantree: invalid length");
     luaL_argcheck(L, ins >= 0, 3, "spantree: invalid length");
+    c->tree->pendingn = 0;
     lst_ephresetall(c->tree);
     lst_checkerror(L, sp_splice(&c->C, (size_t)del, (size_t)ins));
-    lst_edit(L, c);
+    lst_curedit(L, c);
     return lua_settop(L, 1), 1;
 }
 
@@ -2031,9 +2401,10 @@ static int Lcur_append(lua_State *L) {
     lst_Cur    *c = lcur_check(L, 1);
     lua_Integer ins = luaL_checkinteger(L, 2);
     luaL_argcheck(L, ins >= 0, 2, "spantree: invalid length");
+    c->tree->pendingn = 0;
     lst_ephresetall(c->tree);
     lst_checkerror(L, sp_append(&c->C, (size_t)ins));
-    lst_edit(L, c);
+    lst_curedit(L, c);
     return lua_settop(L, 1), 1;
 }
 
@@ -2041,9 +2412,10 @@ static int Lcur_insert(lua_State *L) {
     lst_Cur    *c = lcur_check(L, 1);
     lua_Integer ins = luaL_checkinteger(L, 2);
     luaL_argcheck(L, ins >= 0, 2, "spantree: invalid length");
+    c->tree->pendingn = 0;
     lst_ephresetall(c->tree);
     lst_checkerror(L, sp_insert(&c->C, (size_t)ins));
-    lst_edit(L, c);
+    lst_curedit(L, c);
     return lua_settop(L, 1), 1;
 }
 
@@ -2052,11 +2424,12 @@ static int Lcur_remove(lua_State *L) {
     lua_Integer len = luaL_checkinteger(L, 2);
     sp_Cursor   R;
     luaL_argcheck(L, len >= 0, 2, "spantree: invalid length");
+    c->tree->pendingn = 0;
     lst_ephresetall(c->tree);
     sp_seek(&R, c->tree->T, sp_offset(&c->C));
     sp_advance(&R, (sp_Delta)len);
     lst_checkerror(L, sp_remove(&c->C, &R));
-    lst_edit(L, c);
+    lst_curedit(L, c);
     return lua_settop(L, 1), 1;
 }
 
@@ -2075,7 +2448,9 @@ static int Lsp_compositor(lua_State *L) {
     S->L = L;
     cp_init(L, &S->cp);
     lua_createtable(L, 0, 1);
+    lua_newtable(L);
     lua_pushliteral(L, "__mode"), lua_pushliteral(L, "k"), lua_rawset(L, -3);
+    lua_setmetatable(L, -2);
     S->ref_trees = luaL_ref(L, LUA_REGISTRYINDEX);
     luaL_setmetatable(L, LSP_COMP_TYPE);
     return 1;

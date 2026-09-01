@@ -42,19 +42,25 @@ function Compositor:attr(id) end
 
 ---Namespace registry (ns = writer identity, extmark-style).
 ---
----1 arg: query — returns the priority and the mode ("ephemeral" for
----eph ns, nil for ordinary), or a single nil when unregistered.
+---1 arg: query — returns the priority, the mode ("ephemeral" for eph
+---ns, nil for ordinary) and the identity flags ("identity" /
+---"identity+sensitive", omitted for plain ns), or a single nil when
+---unregistered.
 ---2 args, nil priority: unregister — prunes every bound tree's layer
 ---and returns the old priority.
 ---2 args, numeric priority: register — on an existing name updates
 ---the priority (re-folds every bound tree) and returns the old one;
 ---fresh registration returns nil.
 ---3 args: flags string, chars parsed individually: "c" = strict
----register (raises when the name exists), "e" = ephemeral mode; both
----may combine ("ce"/"ec").
+---register (raises when the name exists), "e" = ephemeral mode, "i" =
+---identity ns (mark returns unique mark ids), "s" = content-sensitive
+---(identity only; edits that change a mark's byte length delete it).
+---"i" and "e" are mutually exclusive; identity flags cannot change in
+---place — unregister first to switch the identity mode.
 ---@param name string  namespace name (non-empty)
 ---@return number?  priority (nil = unregistered)
 ---@return string?  "ephemeral" (query only; nil = ordinary)
+---@return string?  "identity"|"identity+sensitive" (query only)
 ---@overload fun(self: spantree.Compositor, name: string, p: number, flags?: string): number?
 ---@overload fun(self: spantree.Compositor, name: string, p: nil): number?
 function Compositor:namespace(name) end
@@ -75,12 +81,14 @@ function Tree:bytes() end
 
 ---Write attr (or an interned attr id) into the ns layer over
 ---[off, off+len). Same ns overwrites; other layers survive by
----priority. ns nil = unaffiliated (lowest layer). Returns the attr id.
+---priority. ns nil = unaffiliated (lowest layer). Plain ns returns the
+---attr id; an identity ns returns a fresh, globally unique mark id
+---(stable until deleted or invalidated; len must be positive there).
 ---@param ns   string?        namespace name (registered; nil = unaffiliated)
 ---@param attr table|integer  attr table or attr id
 ---@param off  integer        0-based byte offset
 ---@param len  integer        length
----@return integer  attr id
+---@return integer  attr id (plain ns) or mark id (identity ns)
 function Tree:mark(ns, attr, off, len) end
 
 ---Clear spans. clear(ns) = whole-tree clear of the ns layer;
@@ -93,7 +101,8 @@ function Tree:mark(ns, attr, off, len) end
 function Tree:clear(ns) end
 
 ---Edit sync: delete del bytes at off, insert ins bytes (inherits the
----left segment id). Every eph layer resets.
+---left segment id). Every eph layer resets. A content-sensitive ns
+---("s") drops every identity mark whose byte length this edit changed.
 ---@param off integer  0-based byte offset
 ---@param del integer  bytes to delete
 ---@param ins integer  bytes to insert
@@ -119,12 +128,15 @@ function Tree:insert(off, ins) end
 function Tree:remove(off, len) end
 
 ---Mark-flow iterator over [off, off+len): yields (off, len, attr, id)
----per mark — attr = the mark's attr table, id = its attr id (both
----stable). The segment at off is included (inclusive start: a mark
----whose span begins exactly at off is yielded). A merged segment
----holding several marks yields each mark separately (overlapping,
----priority order). With ns, only that layer's slots; nil = any mark.
----Editing the tree inside the loop raises.
+---per mark — attr = the mark's attr table, id = its attr id for plain
+---layers (both stable). The segment at off is included (inclusive
+---start: a mark whose span begins exactly at off is yielded). A merged
+---segment holding several marks yields each mark separately
+---(overlapping, priority order). With ns, only that layer's slots;
+---nil = any mark. For an identity ns, consecutive pieces of one mark
+---are grouped into a single full (off, len, mark_id) yield; a range
+---query emits the full mark whenever any part intersects and never
+---clips it. Editing the tree inside the loop raises.
 ---@param ns?  string?  namespace filter (nil = any mark)
 ---@param off  integer  0-based start offset
 ---@param len  integer  range length
@@ -151,10 +163,12 @@ function Tree:span(ns, off, len) end
 ---@return fun(): integer, integer, table, integer  iterator (off, len, attr, id)
 function Tree:styled(off, len) end
 
----Delete every mark carrying the given attr id (all namespaces).
----Returns the number of cleared segments; unknown id returns 0.
----@param id integer  attr id
----@return integer  cleared segment count
+---Delete by id. A mark id (identity ns) deletes exactly that object and
+---returns 1 (stale/unknown mark ids return 0). An attr id keeps the
+---plain-ns semantics: every mark carrying it is cleared and the count
+---of cleared segments is returned.
+---@param id integer  mark id or attr id
+---@return integer  1 (mark id) or cleared segment count (attr id)
 function Tree:unmark(id) end
 
 ---Create a reusable cursor handle positioned at offset 0. Rebinds
@@ -225,11 +239,12 @@ function Cursor:next(ns) end
 function Cursor:prev(ns) end
 
 ---Write attr (or an interned attr id) into the ns layer for len bytes
----from the cursor. ns nil = unaffiliated. Returns the attr id.
+---from the cursor. ns nil = unaffiliated. Plain ns returns the attr id;
+---an identity ns returns a fresh mark id (len must be positive).
 ---@param ns   string?        namespace name
 ---@param attr table|integer  attr table or attr id
 ---@param len  integer        length
----@return integer  attr id
+---@return integer  attr id (plain ns) or mark id (identity ns)
 function Cursor:mark(ns, attr, len) end
 
 ---Clear len bytes from the cursor. clear(len) = every layer;
