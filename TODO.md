@@ -66,6 +66,15 @@
 
 ## 下一步候选（未完成）
 
+- **spantree.h：touch 写回 + expansion split（供 compositor object 语义）**
+  - 设计结论（2026-09，探索中）：`spA_touch` 扩展为允许返回新 id；
+    - 扩展（`db > 0`）返回原 id：run 整体变长；
+    - 扩展返回新 id：把新增区切出为独立 run，旧区保持原 id；
+    - 收缩（`db < 0`）返回新 id：丢弃，不写回；
+    - 无 hole object 语义下，内部扩展必须返回原 id；只有左/右边界扩展可切分。
+  - 需要 spantree 能区分左边界/右边界/内部扩展，并在切分后维护 bytes/mask/refcount。
+  - 该能力用于支持 compositor 在 arbiter 内按 object gravity 实时修正，而非事后补写。
+  - 状态：尚未实现，等待完整推演与 compositor object 层设计。
 - **textmatch 接入 editor.lua 搜索**
   - 基于已落地的 `lua/textmatch.c`，把 `/`、`?` 搜索接到 editor.lua。
   - 反向搜索按设计用 forward 反复找；空匹配推进由调用方处理。

@@ -57,7 +57,9 @@ Ed.open(filename, term?, grid?)    -- 读文件
 | `grid` / `term` / `tf` | 屏幕、终端输出、输入解析 |
 | `comp` / `tree` | `spantree.Compositor` / `Tree`，样式与 span 层 |
 | `styles` | 预 intern 的 style handle 表 |
-| `search_pat` | 最近一次搜索 pattern（空 pattern 时重复用） |
+| `tm` | 可复用的 `textmatch.State` matcher（`tm.new("")` 初始化，每次 `reset` 使用） |
+| `search_reg` | `/` 与 `?` 各自的上次搜索 pattern：`{ ["/"]=pat, ["?"]=pat }` |
+| `search_dir` | 最近一次搜索方向：`1` = forward，`-1` = backward |
 | `hl` | tree-sitter 高亮器（可空） |
 | `lsp` | `lsp.Client`（可空） |
 | `show_pieces` | piece 边界可视化（debug） |
@@ -73,6 +75,11 @@ Ed.open(filename, term?, grid?)    -- 读文件
 - 两键组合（`gg`/`dd`）通过 `pending_key` 实现：某键是组合前缀且自身无
   绑定时等待下一键。
 - `:命令` 解析：`line:match("^(%a+)(!?)(.*)")`，`q!`/`wq!` 语义正确。
+- 搜索键：`/`、`?` 进入 `SEARCH` 并**直接搜索跳转，不写高亮**；
+  `n` / `N` 重复上次搜索、跳转并**把命中写进 `search` 层**；`:nohl`
+  直接 `tree:clear("search")`。方向记录在 `search_dir`，pattern 分存
+  `search_reg["/"]` / `search_reg["?"]`；上次是 `?` 时 `n` 向上、`N` 向下。
+  不使用 `search_hl` 布尔开关，也不在 render 里搜索。
 
 **keymap/cmdmap 是实现细节，工具函数不外露**：
 
@@ -101,7 +108,7 @@ Ed.open(filename, term?, grid?)    -- 读文件
 | `sem` | 2 | LSP semantic tokens |
 | `diag` | 3 | LSP diagnostics |
 | `piece` | 4 | piece 边界可视化（快速层，每帧重填） |
-| `search` | 4 | 搜索命中高亮（快速层，每帧清空重填，直接写树） |
+| `search` | 4 | 搜索命中高亮（命令触发时写树；`/`、`?` 不写，`n` / `N` 写；`:nohl` 清） |
 | `visual` | 5 | 视觉选择反色（快速层，每帧重填） |
 
 `tree:styled(s_off, e_off)` 返回已按 namespace/优先级折叠好的非重叠 run，
@@ -117,8 +124,8 @@ Lua 侧不再有 `merge_layers`。
 3. 填 `piece`/`visual` 快速层：piece 直接内联遍历
    `doc:buffer():pieces()` 并 `tree:mark("piece", ...)`，不建中间 table
    （不保留 `piece_spans` 函数）。
-4. 若启用搜索：清 `search` 层可视区间，用 textmatch 遍历匹配并
-   `tree:mark("search", ...)` **直接写树**，不先收集匹配区间到 Lua table。
+4. **搜索不在 render 做**：`search` 层只由 `n` / `N` 在命令触发时写入，
+   `/`、`?` 与 `:nohl` 清树；render 只消费已有 mark。
 5. `tree:styled(s_off, e_off)` 收集 viewport 级 spans（仅供非行内用途；
    `_render_line` 不再依赖 `self._spans`）。
 6. `g:begin` + 行号列。
@@ -128,6 +135,21 @@ Lua 侧不再有 `merge_layers`。
 8. `g:diff` 生成 CSI 输出。
 9. `render_status` + `render_cursor`，`g:freeze`。
 10. `lsp:post_render()` 异步刷新。
+
+### 搜索编辑失效（验证重点）
+
+搜索高亮存在 `search` 层后，编辑必须删除**对应的**搜索项。当前
+`spantree` API 核查结论（2026-08-30 实测）：
+
+- `span` 子区间返回的是段前缀裁剪，拿完整 mark 要查到文档尾再过滤；
+- `unmark(id)` 在“目标 mark 是所在段唯一层”时会死循环；
+- `clear(ns, off, len)` 只裁剪不删整 mark；
+- `splice` 边界会腐蚀 mark（末尾插入会延长、起点删除会异常延伸）；
+- 没有编辑回调 / 受影响 mark 返回。
+
+因此需要 spantree 新增：`remove_mark(mark_id)`、`invalidate(ns, off, del)`
+或让 `splice` 返回受影响 mark；否则 editor 只能用近似方案并在结论里报告
+摩擦，**不在 Lua 里维护搜索列表**。
 
 ### `Ed:_render_line`（目标算法，2026-08 用户澄清后修订）
 

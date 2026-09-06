@@ -11,7 +11,8 @@
                 "UT_IMPLEMENTATION",
                 "CG_IMPLEMENTATION",
                 "SP_IMPLEMENTATION",
-                "TM_IMPLEMENTATION"
+                "TM_IMPLEMENTATION",
+                "AT_IMPLEMENTATION"
             ],
             "compilerPath": "/usr/bin/clang",
             "cStandard": "c89",

@@ -14,11 +14,21 @@ alias pt := t::pt
 alias sp4 := t::sp4
 alias sp8 := t::sp8
 alias sp := t::sp
+alias at4 := t::at4
+alias at8 := t::at8
+alias at := t::at
+alias comp := t::comp
 alias ut := t::ut
 alias cg := t::cg
 alias tf := t::tf
 alias tm := t::tm
 alias cov := t::cov
+alias comp-cov := t::comp-cov
+alias comp-lines := t::comp-lines
+alias comp-unbranched := t::comp-unbranched
+alias at-cov := t::at-cov
+alias at-lines := t::at-lines
+alias at-unbranched := t::at-unbranched
 
 # capture an SVG screenshot of the editor demo (needs tmux + ansisvg;
 # assumes the Lua modules are already built)

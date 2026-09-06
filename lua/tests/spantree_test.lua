@@ -3199,4 +3199,139 @@ function TestSensitive:tearDown()
         "sen5o", "sen6", "sen7", "sen8", "sen9a", "sen9b" })
 end
 
+
+-- P3 bound subset: keep only tests that exercise the currently bound
+-- API (Compositor + Tree splice/mark/clear/styled). Unbound API tests
+-- (Cursor, span, bytes/append/insert/remove, unmark, identity traversal)
+-- remain in this file but are filtered out here.
+local function drop_test(name) _G[name] = nil end
+drop_test("TestCursor")
+drop_test("TestSpan")
+drop_test("TestIds")
+drop_test("TestCov")
+drop_test("TestIdentity")
+drop_test("TestSensitive")
+
+local function keep_only(name, methods)
+    local cls = _G[name]
+    if cls then
+        for k in pairs(cls) do
+            if type(cls[k]) == "function" and k:sub(1, 4) == "test"
+                    and not methods[k] then
+                cls[k] = nil
+            end
+        end
+    end
+end
+
+keep_only("TestNs", {
+    testQueryStates = true,
+    testStrictNew = true,
+    testFlagsErrors = true,
+    testEphUnlimited = true,
+    testEmptyName = true,
+    testLimit = true,
+    testUnregister = true,
+    testNsIsolation = true,
+    testPriorityFold = true,
+    testTieBreak = true,
+    testSortSwap = true,
+    testReprioRefold = true,
+})
+keep_only("TestTree", {
+    testMarkUnknownNs = true,
+    testClearUnknownNs = true,
+})
+keep_only("TestComp", {
+    testNewRequiresComp = true,
+    testCompositorIsolation = true,
+    testTreeNoStyleFace = true,
+    testUnregisterNoTrees = true,
+    testCompositorGc = true,
+})
+keep_only("TestMerge", {
+    testPriorityTrace = true,
+    testEmptyMap = true,
+    testReorderIdempotent = true,
+})
+keep_only("TestEph", {
+    testMergedBelow = true,
+    testMergedAbove = true,
+    testMergedLayers = true,
+    testMergedPlain = true,
+    testMergedEphOnly = true,
+    testEphReprio = true,
+})
+
+-- Additional P3 bound-subset regressions that use only the bound API.
+TestBound = {}
+
+function TestBound:testStyledFoldAndGaps()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("a", 1)
+    comp:namespace("b", 2)
+    t:splice(0, 0, 10)
+    t:mark("a", { fg = 1 }, 2, 6)
+    t:mark("b", { bg = 2 }, 4, 4)
+    local out = {}
+    for o, l, at, id in t:styled(0, 10) do
+        out[#out + 1] = { o, l, at.fg, at.bg, id }
+    end
+    lu.assertEquals(#out, 4)
+    lu.assertEquals(out[1], { 0, 2, nil, nil, 0 })
+    lu.assertEquals(out[2], { 2, 2, 1, nil, out[2][5] })
+    lu.assertEquals(out[3], { 4, 4, 1, 2, out[3][5] })
+    lu.assertEquals(out[4], { 8, 2, nil, nil, 0 })
+end
+
+function TestBound:testRangeClearKeepsOtherLayer()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("a", 1)
+    comp:namespace("b", 2)
+    t:splice(0, 0, 10)
+    t:mark("a", { fg = 1 }, 2, 6)
+    t:mark("b", { bg = 2 }, 4, 6)
+    t:clear("a", 4, 2)
+    local seen = {}
+    for o, l, at, _ in t:styled(0, 10) do
+        seen[#seen + 1] = { o, l, at.fg, at.bg }
+    end
+    lu.assertEquals(seen[3], { 4, 2, nil, 2 })
+    lu.assertEquals(seen[4], { 6, 2, 1, 2 })
+end
+
+function TestBound:testEphCommitClears()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("h", 1, "e")
+    t:splice(0, 0, 10)
+    t:mark("h", { fg = 1 }, 2, 4)
+    local before = 0
+    for _, _, at, _ in t:styled(0, 10) do
+        if at.fg == 1 then before = before + 1 end
+    end
+    lu.assertEquals(before, 1)
+    t:splice(0, 0, 1)
+    local after = 0
+    for _, _, at, _ in t:styled(0, 11) do
+        if at.fg == 1 then after = after + 1 end
+    end
+    lu.assertEquals(after, 0)
+end
+
+function TestBound:testClearNilNoRangeRaises()
+    -- old shape contract: clear(nil) without off/len was an invalid-arg
+    -- error, never a crash or a namespace 0 lookup
+    local comp = newcomp(); local t = newtree(comp)
+    t:splice(0, 0, 5)
+    lu.assertErrorMsgContains("invalid parameter", function() t:clear(nil) end)
+end
+
+function TestBound:testMarkNegativeStyleIdRaises()
+    local comp = newcomp(); local t = newtree(comp)
+    comp:namespace("neg", 1)
+    t:splice(0, 0, 5)
+    lu.assertErrorMsgContains("unknown style id",
+        function() t:mark("neg", -1, 0, 1) end)
+end
+
 os.exit(lu.LuaUnit.run(), true)

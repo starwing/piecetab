@@ -51,3 +51,5 @@ __pycache__/
 
 # DSH project skills (local, mirrors .opencode/agents)
 .dsh/
+tests/anchortree_test_fanout4
+tests/anchortree_test_fanout8

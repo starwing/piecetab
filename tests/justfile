@@ -7,7 +7,7 @@ INCS := "-I."
 
 # run all C test runners
 [default]
-all: root lc4 lc8 pt sp4 sp8 ut cg tf tm
+all: root at4 at8 lc4 lc8 pt sp4 sp8 ut cg tf tm comp
 
 # linecache fanout-4 tests (ASan/UBSan)
 lc4 *args='': root (c-dbg-run "linecache_test_fanout4" INCS args)
@@ -36,6 +36,22 @@ sp8 *args='': root (c-dbg-run "spantree_test_fanout8" INCS args)
 # spantree tests on both fanout variants
 sp *args='': root (c-dbg-run "spantree_test_fanout4" INCS "?" + args) (c-dbg-run "spantree_test_fanout8" INCS "?" + args)
 
+# anchortree fanout-4 tests (ASan/UBSan)
+at4 *args='': root (c-dbg-run "anchortree_test_fanout4" INCS args)
+# anchortree fanout-8 tests (ASan/UBSan)
+at8 *args='': root (c-dbg-run "anchortree_test_fanout8" INCS args)
+# anchortree tests on both fanout variants
+at *args='': root (c-dbg-run "anchortree_test_fanout4" INCS "?" + args) (c-dbg-run "anchortree_test_fanout8" INCS "?" + args)
+
+# compositor tests (ASan/UBSan)
+comp *args='': root (c-dbg-run "compositor_test" INCS args)
+# compositor coverage
+comp-cov: root clean-gcda (c-cov-run "compositor_test" INCS) (cov-show ".." "compositor.h")
+# compositor uncovered lines
+comp-lines: (cov-lines "compositor.h" "../lcov.info")
+# compositor uncovered branches
+comp-unbranched: (cov-unbranched "compositor.h" "../lcov.info")
+
 # coverage: build and run all C tests, then report combined coverage
 cov: root clean-gcda (c-cov-run "linecache_test_fanout4" INCS) (c-cov-run "linecache_test_fanout8" INCS) (c-cov-run "piecetab_test_fanout4" INCS) (c-cov-run "undotree_test" INCS) (c-cov-run "cellgrid_test" INCS) (c-cov-run "termfeed_test" INCS) (c-cov-run "spantree_test_fanout4" INCS) (c-cov-run "textmatch_test" INCS) (cov-show ".." "piecetab.h linecache.h undotree.h cellgrid.h termfeed.h spantree.h textmatch.h")
 
@@ -53,36 +69,42 @@ tf-cov: root clean-gcda (c-cov-run "termfeed_test" INCS) (cov-show ".." "termfee
 tm-cov: root clean-gcda (c-cov-run "textmatch_test" INCS) (cov-show ".." "textmatch.h")
 # spantree coverage
 sp-cov: root clean-gcda (c-cov-run "spantree_test_fanout4" INCS) (c-cov-run "spantree_test_fanout8" INCS) (cov-show ".." "spantree.h")
+# anchortree coverage
+at-cov: root clean-gcda (c-cov-run "anchortree_test_fanout4" INCS) (c-cov-run "anchortree_test_fanout8" INCS) (cov-show ".." "anchortree.h")
 
 # linecache uncovered lines
-lc-lines: (cov-lines "linecache.h" "../lcov.info")
+lc-lines: (cov-lines "../linecache.h" "../lcov.info")
 # piecetab uncovered lines
-pt-lines: (cov-lines "piecetab.h" "../lcov.info")
+pt-lines: (cov-lines "../piecetab.h" "../lcov.info")
 # undotree uncovered lines
-ut-lines: (cov-lines "undotree.h" "../lcov.info")
+ut-lines: (cov-lines "../undotree.h" "../lcov.info")
 # cellgrid uncovered lines
-cg-lines: (cov-lines "cellgrid.h" "../lcov.info")
+cg-lines: (cov-lines "../cellgrid.h" "../lcov.info")
 # termfeed uncovered lines
-tf-lines: (cov-lines "termfeed.h" "../lcov.info")
+tf-lines: (cov-lines "../termfeed.h" "../lcov.info")
 # textmatch uncovered lines
-tm-lines: (cov-lines "textmatch.h" "../lcov.info")
+tm-lines: (cov-lines "../textmatch.h" "../lcov.info")
 # spantree uncovered lines
-sp-lines: (cov-lines "spantree.h" "../lcov.info")
+sp-lines: (cov-lines "../spantree.h" "../lcov.info")
+# anchortree uncovered lines
+at-lines: (cov-lines "../anchortree.h" "../lcov.info")
 
 # linecache uncovered branches
-lc-unbranched: (cov-unbranched "linecache.h" "../lcov.info")
+lc-unbranched: (cov-unbranched "../linecache.h" "../lcov.info")
 # piecetab uncovered branches
-pt-unbranched: (cov-unbranched "piecetab.h" "../lcov.info")
+pt-unbranched: (cov-unbranched "../piecetab.h" "../lcov.info")
 # undotree uncovered branches
-ut-unbranched: (cov-unbranched "undotree.h" "../lcov.info")
+ut-unbranched: (cov-unbranched "../undotree.h" "../lcov.info")
 # cellgrid uncovered branches
-cg-unbranched: (cov-unbranched "cellgrid.h" "../lcov.info")
+cg-unbranched: (cov-unbranched "../cellgrid.h" "../lcov.info")
 # termfeed uncovered branches
-tf-unbranched: (cov-unbranched "termfeed.h" "../lcov.info")
+tf-unbranched: (cov-unbranched "../termfeed.h" "../lcov.info")
 # textmatch uncovered branches
-tm-unbranched: (cov-unbranched "textmatch.h" "../lcov.info")
+tm-unbranched: (cov-unbranched "../textmatch.h" "../lcov.info")
 # spantree uncovered branches
-sp-unbranched: (cov-unbranched "spantree.h" "../lcov.info")
+sp-unbranched: (cov-unbranched "../spantree.h" "../lcov.info")
+# anchortree uncovered branches
+at-unbranched: (cov-unbranched "../anchortree.h" "../lcov.info")
 
 # remove C coverage artifacts in this directory
 clean-gcda:

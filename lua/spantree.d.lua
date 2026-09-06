@@ -1,4 +1,8 @@
 --- @meta spantree
+---
+--- P3 binding status: Compositor (fields/intern/attr/namespace) and
+--- Tree (splice/mark/clear/styled) are currently bound. All other APIs
+--- below remain documented contract but are NOT bound in P3.
 
 --------------------------------------------------------------------------------
 ---@class spantree.Compositor
@@ -77,6 +81,7 @@ local Tree
 
 ---Total bytes in the tree (edit-sync length, no content).
 ---@return integer
+--- P3: NOT BOUND (kept as contract documentation only)
 function Tree:bytes() end
 
 ---Write attr (or an interned attr id) into the ns layer over
@@ -113,18 +118,21 @@ function Tree:splice(off, del, ins) end
 ---@param off integer  0-based byte offset
 ---@param ins integer  bytes to insert
 ---@return self
+--- P3: NOT BOUND (kept as contract documentation only)
 function Tree:append(off, ins) end
 
 ---Insert ins bytes at off, inheriting the right segment id.
 ---@param off integer  0-based byte offset
 ---@param ins integer  bytes to insert
 ---@return self
+--- P3: NOT BOUND (kept as contract documentation only)
 function Tree:insert(off, ins) end
 
 ---Delete [off, off+len).
 ---@param off integer  0-based byte offset
 ---@param len integer  length
 ---@return self
+--- P3: NOT BOUND (kept as contract documentation only)
 function Tree:remove(off, len) end
 
 ---Mark-flow iterator over [off, off+len): yields (off, len, attr, id)
@@ -148,6 +156,7 @@ function Tree:remove(off, len) end
 ---  -- attr: interned attr table, id: attr id
 ---end
 ---```
+--- P3: NOT BOUND (kept as contract documentation only)
 function Tree:span(ns, off, len) end
 
 ---Style-flow iterator over [off, off+len): yields (off, len, attr, id)
@@ -169,11 +178,13 @@ function Tree:styled(off, len) end
 ---of cleared segments is returned.
 ---@param id integer  mark id or attr id
 ---@return integer  1 (mark id) or cleared segment count (attr id)
+--- P3: NOT BOUND (kept as contract documentation only)
 function Tree:unmark(id) end
 
 ---Create a reusable cursor handle positioned at offset 0. Rebinds
 ---cheaply via seek; keeps its bound tree alive.
 ---@return spantree.Cursor
+--- P3: NOT BOUND (kept as contract documentation only)
 function Tree:cursor() end
 
 ---Cursor entry point: seek(off) creates a fresh cursor at off;
@@ -182,6 +193,7 @@ function Tree:cursor() end
 ---@param off integer  0-based byte offset
 ---@param c?  spantree.Cursor  cursor to reuse
 ---@return spantree.Cursor
+--- P3: NOT BOUND (kept as contract documentation only)
 function Tree:seek(off, c) end
 
 --------------------------------------------------------------------------------
@@ -196,20 +208,24 @@ local Cursor
 ---@param t   spantree.Tree
 ---@param off integer  0-based byte offset
 ---@return self
+--- P3: NOT BOUND (kept as contract documentation only)
 function Cursor:seek(t, off) end
 
 ---Move the cursor to a byte offset (incremental walk).
 ---@param off integer  0-based byte offset
 ---@return self
+--- P3: NOT BOUND (kept as contract documentation only)
 function Cursor:locate(off) end
 
 ---Advance the cursor by a signed byte delta.
 ---@param d integer  signed byte delta
 ---@return self
+--- P3: NOT BOUND (kept as contract documentation only)
 function Cursor:advance(d) end
 
 ---Current byte offset.
 ---@return integer
+--- P3: NOT BOUND (kept as contract documentation only)
 function Cursor:offset() end
 
 ---Current mark at the cursor: off, len, attr table and attr id, or
@@ -218,6 +234,7 @@ function Cursor:offset() end
 ---@return integer? len
 ---@return table?   attr
 ---@return integer? attr id
+--- P3: NOT BOUND (kept as contract documentation only)
 function Cursor:style() end
 
 ---Move onto the next matching mark and return it (same 4-tuple as
@@ -227,6 +244,7 @@ function Cursor:style() end
 ---@return integer? len
 ---@return table?   attr
 ---@return integer? attr id
+--- P3: NOT BOUND (kept as contract documentation only)
 function Cursor:next(ns) end
 
 ---Move onto the previous matching mark and return it (same 4-tuple as
@@ -236,6 +254,7 @@ function Cursor:next(ns) end
 ---@return integer? len
 ---@return table?   attr
 ---@return integer? attr id
+--- P3: NOT BOUND (kept as contract documentation only)
 function Cursor:prev(ns) end
 
 ---Write attr (or an interned attr id) into the ns layer for len bytes
@@ -245,6 +264,7 @@ function Cursor:prev(ns) end
 ---@param attr table|integer  attr table or attr id
 ---@param len  integer        length
 ---@return integer  attr id (plain ns) or mark id (identity ns)
+--- P3: NOT BOUND (kept as contract documentation only)
 function Cursor:mark(ns, attr, len) end
 
 ---Clear len bytes from the cursor. clear(len) = every layer;
@@ -253,27 +273,32 @@ function Cursor:mark(ns, attr, len) end
 ---@param len integer   length
 ---@return self
 ---@overload fun(self: spantree.Cursor, len: integer): self
+--- P3: NOT BOUND (kept as contract documentation only)
 function Cursor:clear(ns, len) end
 
 ---Delete del bytes and insert ins bytes at the cursor.
 ---@param del integer  bytes to delete
 ---@param ins integer  bytes to insert
 ---@return self
+--- P3: NOT BOUND (kept as contract documentation only)
 function Cursor:splice(del, ins) end
 
 ---Insert ins bytes at the cursor, inheriting the left segment id.
 ---@param ins integer  bytes to insert
 ---@return self
+--- P3: NOT BOUND (kept as contract documentation only)
 function Cursor:append(ins) end
 
 ---Insert ins bytes at the cursor, inheriting the right segment id.
 ---@param ins integer  bytes to insert
 ---@return self
+--- P3: NOT BOUND (kept as contract documentation only)
 function Cursor:insert(ins) end
 
 ---Delete len bytes from the cursor.
 ---@param len integer  length
 ---@return self
+--- P3: NOT BOUND (kept as contract documentation only)
 function Cursor:remove(len) end
 
 --------------------------------------------------------------------------------
