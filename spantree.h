@@ -572,20 +572,19 @@ static void spD_trimleft(sp_Cursor *R) {
 }
 
 static void spD_cutrange(sp_Cursor *L, sp_Cursor *R, sp_Node *rt, int fl) {
-    int      kl, k, i, cc, l = spK_levels(L);
+    int      i, k, kl, cc, l = spK_levels(L);
     sp_Delta db = 0;
     sp_Node *p;
     for (kl = l; kl > fl; --kl) {
-        p = spK_parent(L, kl), i = spK_idx(L, p, kl), cc = spN_cc(p);
+        i = spK_idx(L, p = spK_parent(L, kl), kl), cc = spN_cc(p);
         p->bytes[i] -= db, db += spN_sumbytes(p, i + 1, cc);
         k = l - kl, spN_remove(L->tree, p, k, i + 1, cc);
         i = spK_idx(R, p = spK_parent(R, kl), kl), cc = spN_cc(p);
         i += (k || p->bytes[i] == 0);
-        spN_copy(&rt[k], 0, p, i, cc - i), spN_setcc(&rt[k], cc - i);
-        spN_purge(L->tree, p, k, 0, i);
-        spN_setcc(p, 0);
+        spN_copy(&rt[k], 0, p, i, spN_setcc(&rt[k], cc - i));
+        spN_purge(L->tree, p, k, 0, i), spN_setcc(p, 0);
     }
-    p = spK_parent(R, fl), i = spK_idx(R, p, fl), cc = spN_cc(p);
+    i = spK_idx(R, p = spK_parent(R, fl), fl), cc = spN_cc(p);
     k = l - fl, i += (k || p->bytes[i] == 0);
     spN_copy(&rt[k], 0, p, i, spN_setcc(&rt[k], cc - i));
     spN_setcc(p, i), i = spK_idx(L, p, fl);
@@ -636,20 +635,18 @@ static int spD_balancenode(sp_Node **ns, int left, sp_Delta *ds) {
     int d, l = spN_cc(ns[0]), r = spN_cc(ns[1]);
     d = l - ((l + r + (left != 0)) >> 1);
     if (assert(d != 0), d < 0) {
-        spN_copy(ns[0], l, ns[1], 0, -d);
-        spN_move(ns[1], 0, -d, r + d);
+        spN_copy(ns[0], l, ns[1], 0, -d), spN_move(ns[1], 0, -d, r + d);
         *ds = -(sp_Delta)spN_sumbytes(ns[0], l, l - d);
     } else {
-        spN_move(ns[1], d, 0, r);
-        spN_copy(ns[1], 0, ns[0], l - d, d);
+        spN_move(ns[1], d, 0, r), spN_copy(ns[1], 0, ns[0], l - d, d);
         *ds = (sp_Delta)spN_sumbytes(ns[1], 0, d);
     }
     return spN_setcc(ns[0], l - d), spN_setcc(ns[1], r + d), d;
 }
 
 static int spD_foldnode(sp_Cursor *C, int lfirst, int l) {
-    sp_Node  *p = spK_parent(C, l), ***cp = &C->paths[l];
-    int       cL, cR, dn, r = 0, i = spK_idx(C, p, l);
+    sp_Node  *p, ***cp = &C->paths[l];
+    int       dn, cL, cR, r = 0, i = spK_idx(C, p = spK_parent(C, l), l);
     sp_Node **ns = &p->children[i];
     sp_Delta  ds;
     if (assert(spN_cc(p) > 1), spN_cc(ns[0]) > SP_FANOUT / 2) return 0;
@@ -716,13 +713,12 @@ static int spD_makechain(sp_Cursor *C, int from, int to) {
     for (l = from; l < to; ++l) {
         nn = (sp_Node *)spP_ralloc(&C->tree->S->nodes);
         memset(nn, 0, sizeof(sp_Node));
-        p = spK_parent(C, l), nn->child_count = 0;
+        p = spK_parent(C, l);
         p->bytes[spN_cc(p)] = 0, p->mask[spN_cc(p)] = 0;
         C->paths[l] = &p->children[spN_cc(p)];
         p->children[spN_cc(p)] = nn, p->child_count += 1;
     }
-    *cp = &nn->children[0];
-    return r;
+    return (*cp = &nn->children[0]), r;
 }
 
 static int spD_findroom(sp_Cursor *C, sp_Node *rt, int l) {
@@ -735,10 +731,8 @@ static int spD_findroom(sp_Cursor *C, sp_Node *rt, int l) {
     if (fl >= 0 && (c = spN_cc(p) - i - 1) > 0) {
         int      k = spK_levels(C) - fl;
         sp_Delta db = (sp_Delta)spN_sumbytes(p, i + 1, spN_cc(p));
-        assert(spN_cc(&rt[k]) == 0);
-        spM_up(C, fl - 1, -db);
-        spN_copy(&rt[k], 0, p, i + 1, c);
-        spN_setcc(&rt[k], c), spN_setcc(p, i + 1);
+        spM_up(C, fl - 1, -db), assert(spN_cc(&rt[k]) == 0);
+        spN_copy(&rt[k], 0, p, spN_setcc(p, i + 1), spN_setcc(&rt[k], c));
     }
     return spD_makechain(C, fl, l);
 }
@@ -856,7 +850,7 @@ static void spI_splitroot(sp_Cursor *C) {
     int      i = spK_idx(C, r, 0), mid = spN_cc(&save) / 2;
     int      nc = spN_cc(&save) - mid;
     *pp = save, spN_setcc(pp, mid);
-    spN_copy(nw, 0, &save, mid, nc), spN_setcc(nw, nc);
+    spN_copy(nw, 0, &save, mid, spN_setcc(nw, nc));
     r->children[0] = pp, r->children[1] = nw, spN_setcc(r, 2);
     r->bytes[0] = spN_sumbytes(pp, 0, mid);
     r->bytes[1] = spK_bytes(C) - r->bytes[0];
@@ -873,7 +867,7 @@ static void spI_splitchild(sp_Cursor *C, int l) {
     i = spK_idx(C, p = spK_parent(C, l), l);
     nd = p->children[i], mid = spN_cc(nd) / 2, nc = spN_cc(nd) - mid;
     nw = (sp_Node *)spP_ralloc(&C->tree->S->nodes);
-    spN_copy(nw, 0, nd, mid, nc), spN_setcc(nw, nc);
+    spN_copy(nw, 0, nd, mid, spN_setcc(nw, nc));
     assert(mid >= SP_FANOUT / 2), spN_setcc(nd, mid);
     spN_makespace(p, i + 1, 1), p->children[i + 1] = nw;
     p->bytes[i] = spN_sumbytes(nd, 0, mid);
@@ -1090,7 +1084,7 @@ static int spF_peel(sp_Cursor *C, sp_Id in, int n, int k, int keep) {
     if (assert(n), k == 0) return spF_append(C, in, n, keep), 1;
     for (i = 0; i < n; ++i) {
         c = rt[k].children[i], cn = spN_cc(c);
-        spN_copy(&rt[k - 1], 0, c, 0, cn), spN_setcc(&rt[k - 1], cn);
+        spN_copy(&rt[k - 1], 0, c, 0, spN_setcc(&rt[k - 1], cn));
         spP_free(&C->tree->S->nodes, c), spF_peel(C, in, cn, k - 1, keep);
     }
     return keep ? 1 : (spF_flushrt(&rt[k], n), 1);
@@ -1123,7 +1117,7 @@ static void spF_peeldown(sp_Cursor *C, sp_Cursor *R, sp_Id in, int l) {
         if (l == spK_levels(C)) break;
         rn = rt[k].children[0], cn = spN_cc(rn);
         R->paths[l + 1] = rt[k - 1].children + (R->paths[l + 1] - rn->children);
-        spN_copy(&rt[k - 1], 0, rn, 0, cn), spN_setcc(&rt[k - 1], cn);
+        spN_copy(&rt[k - 1], 0, rn, 0, spN_setcc(&rt[k - 1], cn));
         spP_free(&C->tree->S->nodes, rn);
         spN_move(&rt[k], 0, 1, spN_cc(&rt[k]) - 1);
         spN_setcc(&rt[k], spN_cc(&rt[k]) - 1);

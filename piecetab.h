@@ -790,7 +790,7 @@ static void ptI_splitroot(pt_Cursor *C) {
     int      i = ptK_idx(C, r, 0), mid = ptN_cc(&save) / 2;
     int      nc = ptN_cc(&save) - mid;
     *pp = save, ptN_setcc(pp, mid), ptM_clamp(pp);
-    nw->mask = 0, ptN_copy(nw, 0, &save, mid, nc), ptN_setcc(nw, nc);
+    nw->mask = 0, ptN_copy(nw, 0, &save, mid, ptN_setcc(nw, nc));
     pp->version = nw->version = C->tree->root.version;
     r->children[0] = pp, r->children[1] = nw, ptN_setcc(r, 2);
     r->bytes[0] = ptN_sumbytes(pp, 0, mid);
@@ -809,7 +809,7 @@ static void ptI_splitchild(pt_Cursor *C, int l) {
     int       cs, mid = ptN_cc(nd) / 2, nc = ptN_cc(nd) - mid;
     int       i = ptK_idx(C, p = ptK_parent(C, l), l);
     nw = (pt_Node *)ptP_ralloc(&S->nodes), nw->version = C->tree->root.version;
-    nw->mask = 0, ptN_copy(nw, 0, nd, mid, nc), ptN_setcc(nw, nc);
+    nw->mask = 0, ptN_copy(nw, 0, nd, mid, ptN_setcc(nw, nc));
     assert(mid >= PT_FANOUT / 2), ptN_setcc(nd, mid), ptM_clamp(nd);
     ptN_makespace(p, i + 1, 1), p->children[i + 1] = nw;
     p->bytes[i] = ptN_sumbytes(nd, 0, mid);
@@ -961,19 +961,19 @@ static void ptD_trimleft(pt_Cursor *R) {
 
 static void ptD_cutrange(pt_Cursor *L, pt_Cursor *R, pt_Node *rt, int fl) {
     pt_State *S = L->tree->S;
-    int       kl, k, i, cc, l = ptK_levels(L);
+    int       i, k, kl, cc, l = ptK_levels(L);
     pt_Delta  db = 0;
     pt_Node  *p;
     for (kl = l; kl > fl; --kl) {
-        p = ptK_parent(L, kl), i = ptK_idx(L, p, kl), cc = ptN_cc(p);
+        i = ptK_idx(L, p = ptK_parent(L, kl), kl), cc = ptN_cc(p);
         p->bytes[i] -= db, db += ptN_sumbytes(p, i + 1, cc);
         k = l - kl, ptN_remove(S, p, k, i + 1, cc);
         i = ptK_idx(R, p = ptK_parent(R, kl), kl), cc = ptN_cc(p);
         i += (k || p->bytes[i] == 0);
-        ptN_copy(&rt[k], 0, p, i, cc - i), ptN_setcc(&rt[k], cc - i);
+        ptN_copy(&rt[k], 0, p, i, ptN_setcc(&rt[k], cc - i));
         ptN_purge(S, p, k, 0, i, rt->version), ptN_setcc(p, 0);
     }
-    p = ptK_parent(R, fl), i = ptK_idx(R, p, fl), cc = ptN_cc(p);
+    i = ptK_idx(R, p = ptK_parent(R, fl), fl), cc = ptN_cc(p);
     k = l - fl, i += (k || p->bytes[i] == 0);
     ptN_copy(&rt[k], 0, p, i, ptN_setcc(&rt[k], cc - i));
     ptN_setcc(p, i), i = ptK_idx(L, p, fl);
@@ -1033,12 +1033,10 @@ static int ptD_balancenode(pt_Node **ns, int left, pt_Delta *ds) {
     int d, l = ptN_cc(ns[0]), r = ptN_cc(ns[1]);
     d = l - ((l + r + (left != 0)) >> 1);
     if (assert(d != 0), d < 0) {
-        ptN_copy(ns[0], l, ns[1], 0, -d);
-        ptN_move(ns[1], 0, -d, r + d);
+        ptN_copy(ns[0], l, ns[1], 0, -d), ptN_move(ns[1], 0, -d, r + d);
         *ds = -(pt_Delta)ptN_sumbytes(ns[0], l, l - d);
     } else {
-        ptN_move(ns[1], d, 0, r);
-        ptN_copy(ns[1], 0, ns[0], l - d, d);
+        ptN_move(ns[1], d, 0, r), ptN_copy(ns[1], 0, ns[0], l - d, d);
         *ds = (pt_Delta)ptN_sumbytes(ns[1], 0, d);
     }
     ptN_setcc(ns[0], l - d), ptN_setcc(ns[1], r + d);
@@ -1046,8 +1044,8 @@ static int ptD_balancenode(pt_Node **ns, int left, pt_Delta *ds) {
 }
 
 static int ptD_foldnode(pt_Cursor *C, int lfirst, int l) {
-    pt_Node  *p = ptK_parent(C, l), ***cp = &C->paths[l];
-    int       r = 0, cL, cR, dn, i = ptK_idx(C, p, l);
+    pt_Node  *p, ***cp = &C->paths[l];
+    int       dn, cL, cR, r = 0, i = ptK_idx(C, p = ptK_parent(C, l), l);
     pt_Node **ns = &p->children[i];
     pt_Delta  ds;
     if (assert(ptN_cc(p) > 1), ptN_cc(ns[0]) > PT_FANOUT / 2) return 0;
@@ -1126,7 +1124,7 @@ static int ptD_makechain(pt_Cursor *C, int from, int to, int nofail) {
         p->children[ptN_cc(p)] = nn, p->child_count += 1;
         ptM_sethole(p, ptN_cc(p) - 1, 0);
     }
-    return *cp = &nn->children[0], r;
+    return (*cp = &nn->children[0]), r;
 }
 
 static void ptD_findroom(pt_Cursor *C, int l) {

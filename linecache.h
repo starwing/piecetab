@@ -103,7 +103,7 @@ LC_API int lc_splice(lc_Cursor *C, size_t del, unsigned ins);
 
 /* struct definition */
 #ifndef LC_MAX_LEVEL
-# define LC_MAX_LEVEL 21 /* safe for LC_FANOUT=16 LC_LEAF_FANOUT=34; see docs */
+# define LC_MAX_LEVEL 21 /* safe for LC_FANOUT=16 LC_LEAF_FANOUT=34 */
 #endif
 
 struct lc_Cursor {
@@ -598,7 +598,7 @@ static void lcD_cutrange(lc_Cursor *L, lc_Cursor *R, lc_Node *rt, int fl) {
         k = l - kl, lcN_remove(S, p, k, i + 1, cc);
         i = lcK_idx(R, p = lcK_parent(R, kl), kl), cc = lcN_cc(p);
         i += (k || p->breaks[i] == 0);
-        lcN_copy(&rt[k], 0, p, i, cc - i), lcN_setcc(&rt[k], cc - i);
+        lcN_copy(&rt[k], 0, p, i, lcN_setcc(&rt[k], cc - i));
         lcN_purge(S, p, k, 0, i), lcN_setcc(p, 0);
     }
     i = lcK_idx(R, p = lcK_parent(R, fl), fl), cc = lcN_cc(p);
@@ -735,7 +735,7 @@ static int lcD_makechain(lc_Cursor *C, int from, int to, int nofail) {
         C->paths[l] = &p->children[lcN_cc(p)], p->children[lcN_cc(p)] = nn;
         p->child_count += 1;
     }
-    return *cp = &nn->children[0], r;
+    return (*cp = &nn->children[0]), r;
 }
 
 static int lcD_findroom(lc_Cursor *C, lc_Node *rt, int nofail, int l) {
@@ -747,9 +747,8 @@ static int lcD_findroom(lc_Cursor *C, lc_Node *rt, int nofail, int l) {
         int      k = lcK_levels(C) - fl;
         lc_Delta db = lcN_sumbytes(p, i + 1, lcN_cc(p));
         lc_Delta dl = lcN_sumbreaks(p, i + 1, lcN_cc(p));
-        lcM_up(C, fl - 1, -db, -dl);
-        assert(lcN_cc(&rt[k]) == 0), lcN_copy(&rt[k], 0, p, i + 1, c);
-        lcN_setcc(p, i + 1), lcN_setcc(&rt[k], c);
+        lcM_up(C, fl - 1, -db, -dl), assert(lcN_cc(&rt[k]) == 0);
+        lcN_copy(&rt[k], 0, p, lcN_setcc(p, i + 1), lcN_setcc(&rt[k], c));
     }
     return lcD_makechain(C, fl, l, nofail);
 }
@@ -933,7 +932,7 @@ static void lcB_splitroot(lc_Cursor *C, lc_Node *n, lc_Node *pp) {
     int       mid = lcN_cc(&c->root) / 2;
     int       i = lcK_idx(C, &c->root, 0);
     int       nc = lcN_cc(&c->root) - mid;
-    lcN_copy(n, 0, &c->root, mid, nc), lcN_setcc(n, nc);
+    lcN_copy(n, 0, &c->root, mid, lcN_setcc(n, nc));
     *(c->root.children[0] = pp) = save;
     lcN_setcc(c->root.children[0], mid);
     c->root.bytes[0] = lcN_sumbytes(c->root.children[0], 0, mid);
@@ -953,7 +952,7 @@ static void lcB_splitchild(lc_Cursor *C, int l, lc_Node *n) {
     lc_Node *old = p->children[i];
     int      mid = lcN_cc(old) / 2, nc = lcN_cc(old) - mid;
     size_t   ob = p->bytes[i], ol = p->breaks[i];
-    lcN_copy(n, 0, old, mid, nc), lcN_setcc(n, nc), lcN_setcc(old, mid);
+    lcN_copy(n, 0, old, mid, lcN_setcc(n, nc)), lcN_setcc(old, mid);
     p->bytes[i] = lcN_sumbytes(old, 0, mid);
     p->breaks[i] = lcN_sumbreaks(old, 0, mid);
     lcN_makespace(p, i + 1, 1), p->children[i + 1] = n;
