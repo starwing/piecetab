@@ -298,8 +298,8 @@ UT_API void ut_setcleaner(ut_State *S, ut_Cleaner *f, void *ud)
 static void *utS_defallocf(void *ud, void *p, size_t osize, size_t nsize) {
     void *np;
     (void)ud, (void)osize;
-    if (nsize == 0) return free(p), NULL;
-    return (np = realloc(p, nsize)) ? np : ((void)abort(), NULL);
+    if (nsize == 0) return free(p), (void *)0;
+    return (np = realloc(p, nsize)) ? np : (abort(), (void *)0);
 }
 
 UT_API ut_State *ut_open(ut_Alloc *allocf, void *ud) {

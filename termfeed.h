@@ -1150,8 +1150,8 @@ TF_API int tf_setflag(tf_State *S, int flag)
 static void *tfS_defalloc(void *ud, void *p, size_t osize, size_t nsize) {
     void *np;
     (void)ud, (void)osize;
-    if (nsize == 0) return (void)free(p), NULL;
-    return (np = realloc(p, nsize)) ? np : ((void)abort(), NULL);
+    if (nsize == 0) return free(p), (void *)0;
+    return (np = realloc(p, nsize)) ? np : (abort(), (void *)0);
 }
 
 TF_API void tf_init(tf_State *S, tf_Alloc *allocf, void *alloc_ud) {

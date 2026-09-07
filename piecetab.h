@@ -472,8 +472,8 @@ PT_API pt_Alloc *pt_getallocf(pt_State *S, void **pud)
 static void *ptS_defallocf(void *ud, void *p, size_t osize, size_t nsize) {
     void *np;
     (void)ud, (void)osize;
-    if (nsize == 0) return (void)free(p), NULL;
-    return (np = realloc(p, nsize)) ? np : ((void)abort(), NULL);
+    if (nsize == 0) return free(p), (void *)0;
+    return (np = realloc(p, nsize)) ? np : (abort(), (void *)0);
 }
 
 PT_API pt_State *pt_open(pt_Alloc *allocf, void *ud) {

@@ -343,8 +343,8 @@ LC_API void lc_close(lc_State *S)
 static void *lcS_defallocf(void *ud, void *p, size_t osize, size_t nsize) {
     void *np;
     (void)ud, (void)osize;
-    if (nsize == 0) return (void)free(p), NULL;
-    return (np = realloc(p, nsize)) ? np : ((void)abort(), NULL);
+    if (nsize == 0) return free(p), (void *)0;
+    return (np = realloc(p, nsize)) ? np : (abort(), (void *)0);
 }
 
 LC_API lc_State *lc_open(lc_Alloc *allocf, void *ud) {

@@ -354,8 +354,8 @@ SP_API size_t sp_bytes(const sp_Tree *t) { return t ? t->bytes : 0; }
 static void *spS_defallocf(void *ud, void *p, size_t osize, size_t nsize) {
     void *np;
     (void)ud, (void)osize;
-    if (nsize == 0) return (void)free(p), NULL;
-    return (np = realloc(p, nsize)) ? np : ((void)abort(), NULL);
+    if (nsize == 0) return free(p), (void *)0;
+    return (np = realloc(p, nsize)) ? np : (abort(), (void *)0);
 }
 
 SP_API sp_State *sp_open(sp_Alloc *allocf, void *ud) {
