@@ -6,7 +6,7 @@
 
 ## 规则
 
-### 1. 公共基建 → `tests/tests.h`（stb 风格单头，C89）
+### 1. 公共基建 → `tests/tests.h`（stb 风格单头，Clean C）
 
 - `TEST(name)` 宏 → `static void test_name(void)`
 - 断言（失败即 abort，打印 file:line）：

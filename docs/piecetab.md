@@ -2,7 +2,7 @@
 
 **English** | [中文](piecetab.zh.md)
 
-> Single-header C89 library that maintains a pure byte-level piece table via a B+ tree,
+> Single-header Clean C library that maintains a pure byte-level piece table via a B+ tree,
 > supporting COW snapshots (Buffer), mutable transient state (hole leaves), and
 > transaction commit/rollback. Prefix `pt_`.
 > Line/character mapping is fully externalized to `linecache.h` (prefix `lc_`);

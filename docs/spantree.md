@@ -2,7 +2,7 @@
 
 **English** | [中文](spantree.zh.md)
 
-> Single-header C89 library that stores **result ids** as a
+> Single-header Clean C library that stores **result ids** as a
 > full-coverage partition of byte spans: every byte belongs to exactly one
 > span `(len > 0, sp_Id)`. Prefix `sp_`. It shares the B+ tree skeleton and
 > pool allocator style of `piecetab.h`/`linecache.h`, but stores only byte

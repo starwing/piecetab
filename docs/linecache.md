@@ -2,7 +2,7 @@
 
 **English** | [中文](linecache.zh.md)
 
-> Single-header C89 library that maintains byte-offset→line-number mapping via a Metric B+ Tree.
+> Single-header Clean C library that maintains byte-offset→line-number mapping via a Metric B+ Tree.
 > Prefix `lc_`. Tests use minimal fanout (`LC_FANOUT=4`, `LC_LEAF_FANOUT=4`) to force tree splits.
 
 ---

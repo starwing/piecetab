@@ -7,7 +7,7 @@
 
 ## 一、目标
 
-1. 建立可复用的 C89 benchmark harness：
+1. 建立可复用的 Clean C benchmark harness：
    - 支持 `-O2 -DNDEBUG` release 构建；
    - 支持同一份 bench 源码以不同编译期宏（如 `PT_FANOUT`）重复编译；
    - 每次运行输出 JSON，包含机器/编译器/flags/git/参数/逐 case 数据；
@@ -25,7 +25,7 @@
 
 ```text
 bench/
-  bench.h           # C89 harness：CLI、计时、统计、JSON 输出
+  bench.h           # Clean C harness：CLI、计时、统计、JSON 输出
   bench_pt.c        # piecetab API 维度 cases
   bench_sp.c        # spantree API 维度 cases
   bench_data.h      # piecetab 确定性 corpus 生成器（结构基数驱动）

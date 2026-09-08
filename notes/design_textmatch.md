@@ -2,7 +2,7 @@
 
 > 目标：把 `lua/lutf8lib.c` 的 Unicode Lua pattern 匹配移植成独立头文件
 > `textmatch.h`，直接跑在 piecetab 的 piece 表上。
-> 前缀 `tm_`，stb-style 纯头文件，C89，无堆分配。
+> 前缀 `tm_`，stb-style 纯头文件，Clean C，无堆分配。
 
 ## 一、定位
 

@@ -10,7 +10,7 @@
 - **零依赖**：不碰文本、不依赖 piecetab/linecache。只管
   `(off, del, ins)` 记录与区间代数。
 - **单头文件 stb 风格**：`UT_NS_BEGIN/END`、`UT_STATIC_API`/
-  `UT_IMPLEMENTATION`、`UT_API` 导出宏。C89 + `-pedantic`。
+  `UT_IMPLEMENTATION`、`UT_API` 导出宏。Clean C + `-pedantic`。
 - **payload = 不透明指针**：`typedef struct ut_Payload ut_Payload;`
   调用方 cast 存入（绑定层放 retained pt_Buffer）。释放经
   `ut_Cleaner` 回调，undotree 不解释 payload。

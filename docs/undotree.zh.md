@@ -2,7 +2,7 @@
 
 [English](undotree.md) | **中文**
 
-> 单头文件 C89 库，提供基于 `(off, del, ins)` 区间代数的版本图 + 编辑日志 +
+> 单头文件 Clean C 库，提供基于 `(off, del, ins)` 区间代数的版本图 + 编辑日志 +
 > 差分服务。前缀 `ut_`。骑在 `pt_Buffer` COW 快照之上（payload 携带任意版本的
 > 完整文本）；**非** COW 的替代品。
 

@@ -2,7 +2,7 @@
 
 **中文** | [English](piecetab.md)
 
-> 单头文件 C89 库，通过 B+ 树维护纯字节级 piece table，支持 COW 快照
+> 单头文件 Clean C 库，通过 B+ 树维护纯字节级 piece table，支持 COW 快照
 > （Buffer）、可变编辑态（hole 叶）以及事务式 commit/rollback。前缀 `pt_`。
 > 行/字符映射完全外置给 `linecache.h`（前缀 `lc_`）；piecetab 不关心行、
 > 编码——只处理干净的字节流。

@@ -2,7 +2,7 @@
 
 **English** | [中文](undotree.zh.md)
 
-> Single-header C89 library providing version-tree + edit journal + diff service
+> Single-header Clean C library providing version-tree + edit journal + diff service
 > on top of the `(off, del, ins)` interval algebra. Prefix `ut_`.
 > Rides on `pt_Buffer` COW snapshots (payload carries the full text for any
 > version); **not** a COW replacement.

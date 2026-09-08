@@ -2,7 +2,7 @@
 
 > 当前状态（2026-08-30 更新）：
 > - 核心 C 库已落地：linecache / piecetab / undotree / cellgrid / termfeed /
->   spantree / **textmatch**，均为 C89 单头 + 测试/CI/覆盖率。
+>   spantree / **textmatch**，均为 Clean C 单头 + 测试/CI/覆盖率。
 > - editor.lua 已完成多层高亮、spantree/vtext、LSP 集成、光标同步与渲染整理。
 > - 行覆盖 100%、分支覆盖目标 95%（覆盖构建用 -DNDEBUG，assert 分支不纳入）。
 > - textmatch.h 独立库 + Lua 绑定（`tm.find/match/gmatch`）已落地；
@@ -12,7 +12,7 @@
 
 ### textmatch.h（新落地）
 
-- [x] **独立库**：stb-style 单头 C89、无堆分配、前缀 `tm_`；`tm_Reader`
+- [x] **独立库**：stb-style 单头 Clean C、无堆分配、前缀 `tm_`；`tm_Reader`
       可 seek 的 piece 源抽象，可直接跑在 piecetab 的 piece 表上。
 - [x] **Lua pattern**：按 Unicode codepoint 匹配；`^ $ * + - ?`、字符类 /
       `[...]` / `%b` / `%f` / `%1..%9` / `()` captures；`TM_LITERAL`、
@@ -50,7 +50,7 @@
 
 ### bench / 调优
 
-- [x] bench 骨架（C89 harness + JSON + 绘图）。
+- [x] bench 骨架（Clean C harness + JSON + 绘图）。
 - [x] PT/LC/SP FANOUT 调优 + README 性能表。
 
 ### editor 与基础库整理

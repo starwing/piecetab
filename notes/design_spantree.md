@@ -504,7 +504,7 @@ peeldown(l, rt):                 # 层 l 的内容已在 rt[levels-l]
 ### 9.1 模型与 API
 
 命名 ns（namespace，与 marktree 一致）；**0 = 无归属**；1..上限有效
-（上限 = sp_Mask 位宽：64 位平台 64、32 位平台 32——C89 无 long
+（上限 = sp_Mask 位宽：64 位平台 64、32 位平台 32——Clean C 无 long
 long，sp_Mask = size_t）。位布局（bit(ns-1)）对用户隐藏，全部经
 sp_addns/sp_delns。
 

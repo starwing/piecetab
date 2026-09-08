@@ -1,6 +1,6 @@
 # termfeed 设计草案
 
-> stb-style 纯头文件 C89 库，前缀 `tf_`。
+> stb-style 纯头文件 Clean C 库，前缀 `tf_`。
 > ZIO reader + DSA（确定性状态自动机）终端输入流解析器。
 > 目标: 完整替换 Neovim 内部 vendored libtermkey，接口更正交清晰。
 > 行为上除刻意的设计变更外，与 libtermkey 兼容以保证可无缝迁移。

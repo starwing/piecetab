@@ -4,7 +4,7 @@
 
 ## 一、项目概要
 
-单头文件 C89 库，前缀 `lc_`。以 B+ 计量树 (Metric B+ Tree) 维护字节偏移→行号之映射。
+单头文件 Clean C 库，前缀 `lc_`。以 B+ 计量树 (Metric B+ Tree) 维护字节偏移→行号之映射。
 
 **功用**: 文本编辑器中维护行号缓存。支持行断点插入/删除 (`lc_markbreak`/`lc_clearbreaks`)、区间删除 (`lc_remove`)、区间删插字节 (`lc_splice`)、中部插入 (`lc_append`/`lc_insert`)、批量加载 (`lc_scan`)。
 
@@ -208,7 +208,7 @@ grep '^    X(' tests/lc_test4.c
 
 ## 十二、编码铁律 (AGENTS.md)
 
-- C89 唯。函数 25/30 行限。签名 ≤79 字。
+- Clean C 唯。函数 25/30 行限。签名 ≤79 字。
 - static helper 不校验参数 — assert 保不变式。
 - 内部函数前缀 `lcX_` (如 `lcK_findleaf`)，X 为单字母分类码。
 - **禁止删测试**。先修测试后改代码。

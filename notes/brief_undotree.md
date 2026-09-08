@@ -4,7 +4,7 @@
 
 ## 一、项目概要
 
-单头文件 C89 库，前缀 `ut_`。以 `(off, del, ins)` 区间代数维护**版本图 + 编辑日志 + 差分服务**，是库族第三成员（piecetab、linecache 之后）。
+单头文件 Clean C 库，前缀 `ut_`。以 `(off, del, ins)` 区间代数维护**版本图 + 编辑日志 + 差分服务**，是库族第三成员（piecetab、linecache 之后）。
 
 **功用**: 骑在 `pt_Buffer` COW 之上（payload 提供任意版本完整快照），**非** COW 的替代品。消费者自持 `ut_Vid`，按需调 `ut_diff` 拉差分自行 apply。
 

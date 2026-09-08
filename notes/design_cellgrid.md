@@ -1,7 +1,7 @@
 # cellgrid 设计
 
 > 基于 `editor.lua` Section 2 的 Lua Grid 模块经验，
-> 综合 `neovim_grid_api.md` 调研，设计 C89 单头文件库。
+> 综合 `neovim_grid_api.md` 调研，设计 Clean C 单头文件库。
 > 前缀 `cg_`。
 >
 > **职责边界**：纯终端帧缓冲——存 cell、记脏、出 diff。
@@ -26,7 +26,7 @@ cellgrid 是**终端帧缓冲**——矩形 cell 网格，双重缓冲、滚动�
 与 Neovim grid 的取舍：
 - **取**：双重缓冲 + 全量比较 diff、滚动检测、宽字符处理
 - **舍**：glyph cache、arab shaping、compositor 多层合成、
-  msgpack 编码、TUI 集成——均非 C89 库职责
+  msgpack 编码、TUI 集成——均非 Clean C 库职责
 
 与 piecetab/linecache 的关系：**完全独立**。
 

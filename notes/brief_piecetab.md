@@ -5,7 +5,7 @@
 
 ## 一、项目概要
 
-单头文件 C89 库，前缀 `pt_`。以 B+ 树维护纯字节级 piece table，
+单头文件 Clean C 库，前缀 `pt_`。以 B+ 树维护纯字节级 piece table，
 支持 COW 快照（Buffer）、可变编辑态（hole 叶）、事务 commit/rollback、
 分代 arena 压缩（pt_compact）。
 

@@ -39,7 +39,7 @@ Never delete existing tests.
 
 ## Coding Rules
 
-- **C89 only** — no C99/C11 features.
+- **Clean C only** — keep the intersection of C89 and C++03; no C99/C11 extensions; code must compile under both C and C++ compilers.
 - **Functions: 25 lines soft limit, 30 lines hard limit.** Simplify control
   flow before splitting; never split merely to satisfy the line count. Split
   by cohesive logic, not arbitrary line boundaries.

@@ -6,7 +6,7 @@
 ## 0. 定位与边界
 
 - `compositor.h` 是与 `spantree.h` 平行的 stb 风格单头文件库，使用
-  C89 与 C++ 的交集（Clean C），可独立编译；不能为了 C89 特性牺牲
+  C89 与 C++ 的交集（Clean C），可独立编译；不能为了 C89-only 特性牺牲
   C++ 兼容性。
 - 层级：`compositor.h` 实现 mark/attr/priority/namespace 语义；绑定层
   平行组装 `spantree.h + compositor.h + 本地存储适配`；`editor.lua` 是
@@ -306,7 +306,7 @@ public id 使用 generation”等旧草案取向已在 §1.4 候选记录与 §1
 
 ### 1.8 `cp_State` 内部组织
 
-下面给出 `cp_State` 内部组织的结构骨架。C89 实现可能需要“头部分配 +
+下面给出 `cp_State` 内部组织的结构骨架。Clean C 实现可能需要“头部分配 +
 零长度数组”之类的技巧，此处先表达逻辑布局。
 
 ```c

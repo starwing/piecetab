@@ -2,7 +2,7 @@
 
 [English](spantree.md) | **中文**
 
-> 单头文件 C89 库，保存**结果 id** 的全覆盖字节 span 分区：每个字节
+> 单头文件 Clean C 库，保存**结果 id** 的全覆盖字节 span 分区：每个字节
 > 恰好属于一个 `(len > 0, sp_Id)` 段。前缀 `sp_`。与 `piecetab.h`/
 > `linecache.h` 共用 B+ 树骨架与池分配风格，但只存字节长度与属性 id——
 > 不存文本内容，也没有 COW 快照。

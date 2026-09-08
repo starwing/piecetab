@@ -68,7 +68,7 @@
 
 - 目标：**Lua 5.1–5.5 + LuaJIT**，`LUA_VERSION_NUM` 条件编译，
   垫层宏集中 `piecetab.c` 文件头（单文件自足，见 §九）。
-- 编译：C89 但**不加 -pedantic**（Lua 头 5.3+ 用 long long；Lua
+- 编译：Clean C 但**不加 -pedantic**（Lua 头 5.3+ 用 long long；Lua
   自身亦不用 pedantic）。justfile 的 `build`/`run` 以
   PUC 5.5 + LuaJIT 两端点覆盖兼容区间。测试框架 luaunit
   （vendored 于 `tests/lua/luaunit.lua`）。

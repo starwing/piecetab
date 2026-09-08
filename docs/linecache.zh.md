@@ -2,7 +2,7 @@
 
 [English](linecache.md) | **中文**
 
-> 单头文件 C89 库，以 B+ 计量树 (Metric B+ Tree) 维护字节偏移→行号之映射。
+> 单头文件 Clean C 库，以 B+ 计量树 (Metric B+ Tree) 维护字节偏移→行号之映射。
 > 前缀 `lc_`。测试时以极小扇出 (`LC_FANOUT=4`, `LC_LEAF_FANOUT=4`) 逼树分裂。
 
 ---

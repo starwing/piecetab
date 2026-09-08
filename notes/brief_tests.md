@@ -109,7 +109,7 @@
 - **严禁 LCOV_EXCL** — 不得用 `LCOV_EXCL_BR_LINE` / `LCOV_EXCL_START` 排除标记，这是作弊
 - **行覆盖率必须 100%**；**分支覆盖率基准线 95%**，到不了须写报告说明每一条未覆盖分支原因
 - **覆盖构建已带 `-DNDEBUG`**（build.just 的 c-cov-run / lua-cov-run），assert 分支不纳入统计；95% 针对的是实际可执行分支
-- **宏幻影分支**：`utV_len`（`?:`）、`utV_free`（`&&`）、`utOK` 等 C89 宏展开的伪分支，gcov 可见但逻辑不可达，允许不覆盖但须列入报告
+- **宏幻影分支**：`utV_len`（`?:`）、`utV_free`（`&&`）、`utOK` 等 Clean C 宏展开的伪分支，gcov 可见但逻辑不可达，允许不覆盖但须列入报告
 - **reserve 守卫分支**：`utV_push` 在 `utV_reserve` 成功后理论永不失败，push 错误路径为防御代码，允许不覆盖但须列入报告
 - **可覆盖的 OOM 路径必须覆盖**：`drainpool` + `oom_alloc` 精准触发，不留未覆盖 OOM 分支
 - **可覆盖的逻辑分支必须覆盖**：确无法覆盖须写 **brute test（穷举）** 证明各输入组合正确
@@ -141,6 +141,6 @@
   checkcursor，spantree 补齐）。游标期望位置按操作语义给：append/
   splice/fill = pos+len，insert/remove = pos
 - 边界/内部路径首选 `cacheV` 精确树，大量 break 用 `lc_rscanV`
-- C89：局部变量声明在函数开头（`-Wdeclaration-after-statement` 报错）
+- Clean C：局部变量声明在函数开头（`-Wdeclaration-after-statement` 报错）
 - `lc_rscanner` 原地修改数组，重复使用须重建
 - 测试注释描述功能，不写行号（行号随编辑变化，注定过时）
