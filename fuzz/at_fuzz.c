@@ -163,7 +163,7 @@ static int fz_iter_ok(at_Tree *T, size_t pos) {
 }
 
 static void runop(at_Cursor *C, fz_Op *o, FILE *lf) {
-    at_Tree *T = C->T;
+    at_Tree *T = C->tree;
     size_t   exp;
     if (lf) fz_write(lf, o);
     ++fz_opno;
@@ -177,7 +177,7 @@ static void runop(at_Cursor *C, fz_Op *o, FILE *lf) {
         size_t len = o->len % 40;
         int    g = (int)(o->extra % 4);
         if (fz_nlive < FZ_MAXAN - 1) {
-            assertok(at_newanchor(C, len, g, &id) == AT_OK);
+            assertok(at_newanchor(C, len, 0, g, &id) == AT_OK);
             if (id >= FZ_MAXAN) abort();
             fz_ans[id].s = off, fz_ans[id].e = off + len;
             fz_ans[id].g = g, fz_add(id);

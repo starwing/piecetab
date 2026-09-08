@@ -69,16 +69,16 @@ TEST_STATIC int at_checkcursor(const at_Cursor *C, size_t expected_off) {
     check(at_offset(C) == expected_off,
           "[atc] OFFSET mismatch off=%lu expected=%lu\n", test_lu(at_offset(C)),
           test_lu(expected_off));
-    if (C->T->bytes == 0) {
-        check(C->off == 0 && C->paths[0] == C->T->root.children,
+    if (C->tree->bytes == 0) {
+        check(C->off == 0 && C->paths[0] == C->tree->root.children,
               "[atc] EMPTY off=%lu poff=%lu\n", test_lu(C->off),
               test_lu(C->poff));
         check(C->poff == expected_off, "[atc] EMPTY poff=%lu expected=%lu\n",
               test_lu(C->poff), test_lu(expected_off));
         return 1;
     }
-    for (l = 0; l <= C->T->levels; ++l) {
-        p = l ? (at_Node *)*(C->paths[l - 1]) : &C->T->root;
+    for (l = 0; l <= C->tree->levels; ++l) {
+        p = l ? (at_Node *)*(C->paths[l - 1]) : &C->tree->root;
         i = (int)(C->paths[l] - p->children);
         check(i >= 0 && i < atN_cc(p), "[atc] PATHS[%d] invalid idx=%d cc=%d\n",
               l, i, atN_cc(p));
@@ -88,31 +88,33 @@ TEST_STATIC int at_checkcursor(const at_Cursor *C, size_t expected_off) {
         for (i = 0; i < (int)(C->paths[l] - p->children); ++i)
             bsum += p->bytes[i];
     }
-    p = C->T->levels ? (at_Node *)*(C->paths[C->T->levels - 1]) : &C->T->root;
-    i = (int)(C->paths[C->T->levels] - p->children);
+    p = C->tree->levels ? (at_Node *)*(C->paths[C->tree->levels - 1])
+                        : &C->tree->root;
+    i = (int)(C->paths[C->tree->levels] - p->children);
     check(C->off == bsum, "[atc] OFF mismatch off=%lu sum=%lu\n",
           test_lu(C->off), test_lu(bsum));
-    if (expected_off >= C->T->bytes)
+    if (expected_off >= C->tree->bytes)
         check(C->poff >= p->bytes[i],
               "[atc] VIRTUAL/END poff=%lu len=%lu off=%lu bytes=%lu\n",
               test_lu(C->poff), test_lu(p->bytes[i]), test_lu(C->off),
-              test_lu(C->T->bytes));
+              test_lu(C->tree->bytes));
     else
         check(C->poff <= p->bytes[i],
               "[atc] RANGE poff=%lu len=%lu off=%lu bytes=%lu\n",
               test_lu(C->poff), test_lu(p->bytes[i]), test_lu(C->off),
-              test_lu(C->T->bytes));
+              test_lu(C->tree->bytes));
     return 1;
 }
 
 /* tree invariant checker: byte sums, parent/index links, no zero-length
- * leaf slots.  Test-only helper; not part of the anchortree API. */
+ * leaf slots, and minimum occupancy for every non-root node.  Test-only
+ * helper; not part of the anchortree API. */
 TEST_STATIC size_t atN_checknode(
-        const at_Tree *T, const at_Node *n, int level, int *ok) {
+        const at_Tree *T, const at_Node *n, int level, int root, int *ok) {
     size_t sum = 0;
     int    i;
     (void)T;
-    if (n->child_count > AT_FANOUT) {
+    if (n->child_count > AT_FANOUT || (!root && n->child_count < atN_min())) {
         *ok = 0;
         return 0;
     }
@@ -125,7 +127,7 @@ TEST_STATIC size_t atN_checknode(
     } else {
         for (i = 0; i < atN_cc(n); ++i) {
             at_Node *c = (at_Node *)n->children[i];
-            size_t   cs = atN_checknode(T, c, level - 1, ok);
+            size_t   cs = atN_checknode(T, c, level - 1, 0, ok);
             if (n->bytes[i] != cs || c->parent != n || c->idx != i) *ok = 0;
             sum += cs;
         }
@@ -138,7 +140,7 @@ TEST_STATIC int at_checktree(const at_Tree *T) {
     int    ok = 1;
     if (T == NULL) return 0;
     if (T->levels > AT_MAX_LEVEL) return 0;
-    sum = atN_checknode(T, &T->root, T->levels, &ok);
+    sum = atN_checknode(T, &T->root, T->levels, 1, &ok);
     if (T->bytes != sum) ok = 0;
     return ok;
 }

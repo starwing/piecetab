@@ -28,6 +28,8 @@ notes/reports/
 *.exp
 *.lib
 tests/pt_bench.c
+tests/anchortree_test_fanout4
+tests/anchortree_test_fanout8
 tests/linecache_test_fanout4
 tests/linecache_test_fanout8
 tests/piecetab_test_fanout4

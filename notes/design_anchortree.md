@@ -222,13 +222,14 @@ typedef struct at_Cursor {
 
 ## 六、对象操作
 
-### 6.1 `at_newanchor(C, len, gravity, *out)`
+### 6.1 `at_newanchor(C, len, ns, gravity, *out)`
 
 - `C` 已初始化，`start = at_offset(C)`。
 - `end = start + len`；允许 `end` 超过当前最后一个 edge（虚拟区），此时会创建新的最后 edge。
 - 确保 start edge：`start == 0` 用 origin，否则创建/取得 `edge@start`。
 - 确保 end edge：`end == 0` 用 origin，否则创建/取得 `edge@end`。
 - 从 freelist 分配 `at_Id`，初始化 `anchor->start/end`。
+- `ns` 是调用方给的 namespace 标签，写入两个端点项的 `at_Point.ns`；anchortree 不解释其含义。
 - 按 gravity 插入端点项：
 
 | gravity | start 端点 | end 端点 |
@@ -315,10 +316,7 @@ anchortree 不提供独立的 `insert` 与 `append` 编辑原语。`at_splice` �
 #define AT_ERRMEM   (-2)
 #define AT_NONE     (~(at_Id)0)
 
-#define AT_GROW   (0)
-#define AT_FIXED  (1)
-#define AT_SHIFT  (2)
-#define AT_LOCK   (3)
+typedef enum at_Gravity { AT_GROW, AT_FIXED, AT_SHIFT, AT_LOCK } at_Gravity;
 
 typedef void *at_Alloc(void *ud, void *ptr, size_t osize, size_t nsize);
 ```
@@ -339,7 +337,7 @@ AT_API at_Id at_next(at_Cursor *C, int ns, size_t *plen);
 ```
 
 ```c
-AT_API int at_newanchor(at_Cursor *C, size_t len, int gravity, at_Id *out);
+AT_API int at_newanchor(at_Cursor *C, size_t len, int ns, int g, at_Id *out);
 AT_API int at_del(at_Tree *T, at_Id id);
 
 AT_API int at_range(at_Tree *T, at_Id id, size_t *start, size_t *end);
