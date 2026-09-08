@@ -78,6 +78,8 @@ typedef struct at_Node {
     at_Node   *children[AT_FANOUT];
     size_t     bytes[AT_FANOUT];
     at_Index   child_count;
+    at_Node   *parent;    /* parent node; NULL for the root */
+    at_Index   idx;       /* child index in the parent */
 } at_Node;
 
 struct at_State {
@@ -116,19 +118,21 @@ typedef struct at_Point {
     unsigned is_end : 1;
 } at_Point;
 
+typedef struct at_PointList {
+    at_Point first, *tail;
+} at_PointList;
+
 typedef struct at_Edge {
-    at_Node   *parent;   /* 所在叶子容器；origin 为 NULL */
-    at_Index   idx;      /* 在 parent->children/bytes 中的下标；origin 不使用 */
-    at_Point   first_left;
-    at_Point   first_right;
-    at_Point  *left_tail;
-    at_Point  *right_tail;
+    at_Node     *parent; /* 所在叶子容器；origin 为 NULL */
+    at_Index     idx;    /* 在 parent->children/bytes 中的下标；origin 不使用 */
+    at_PointList left;   /* 左侧端点列表 */
+    at_PointList right;  /* 右侧端点列表 */
 } at_Edge;
 ```
 
-- `first_left.id == 0` 表示左侧为空；`first_right.id == 0` 表示右侧为空。
+- `left.first.id == 0` 表示左侧为空；`right.first.id == 0` 表示右侧为空。
+- 每侧首个端点内联在 `first`；超出部分存入 `tail` 小向量。
 - left/right 列表不排序；查找按 id 线性扫。
-- `left_tail` / `right_tail` 指向小向量 header 后的首元素。
 - 小向量私有 header 格式与项目其他 stb 库一致：
   ```c
   typedef struct atV_Header {
@@ -136,7 +140,7 @@ typedef struct at_Edge {
   } atV_Header;
   ```
   - `tail` 指向 `atV_Header` 后的首个元素，即 `atV_hdr(tail) == (atV_Header *)tail - 1`。
-  - 容量/长度用 `unsigned`，不使用 `size_t`。
+  - `tail == NULL` 表示没有溢出端点；容量/长度用 `unsigned`，不使用 `size_t`。
   - 配套操作以 `atV_` 前缀实现：`atV_hdr`、`atV_len`、`atV_cap`、`atV_push`、`atV_reserve`、`atV_free` 等。
 - 每个树内 edge 必须至少有一个端点项；失去全部端点项后从树中删除。
 - `origin` 可以没有端点项；它始终存在。
@@ -160,19 +164,28 @@ typedef struct at_Anchor {
 ### 2.5 Cursor
 
 ```c
+#define AT_ITER_ORIGIN 0u /* origin not scanned in this iteration round */
+#define AT_ITER_TREE   1u /* origin done, or iteration started after 0 */
+#define AT_ITER_DONE   2u /* iteration exhausted */
+
 typedef struct at_Cursor {
-    at_Tree   *T;
+    at_Tree   *tree;   /* 当前导航的 tree */
     size_t     off;       /* 当前 edge 的 gap 左端绝对位置 */
     size_t     poff;      /* 在 gap 内偏移；等于当前 edge->bytes 表示恰在该 edge */
     size_t     left_idx;  /* left 列表当前下标/已消费计数 */
     size_t     right_idx; /* right 列表当前下标/已消费计数 */
-    at_Id      cur;
+    unsigned   iter;      /* 迭代 phase：AT_ITER_ORIGIN/TREE/DONE */
     at_Node  **paths[AT_MAX_LEVEL]; /* 根到叶子槽的路径 */
 } at_Cursor;
 ```
 
-- `cur` 不是最终设计的一部分；当前实现临时复用作 `at_next` 迭代状态，后续会替换为正确的迭代表示，可能修改。
-- `at_seek` 初始化 Cursor；它没有“返回位置”的语义。
+- `iter` 是显式迭代 phase：
+  - `AT_ITER_ORIGIN`：本轮尚未扫描完 `origin`；只允许在迭代从坐标 0 开始时进入。
+  - `AT_ITER_TREE`：`origin` 已耗尽，或本轮从坐标 `> 0` 开始，正在树内迭代。
+  - `AT_ITER_DONE`：已耗尽。
+- `origin` 每轮最多处理一次；`origin` 仍有 START 时 phase 保持 `ORIGIN`，耗尽后才切到 `TREE`。
+- `at_seek` 初始化 Cursor；它没有“返回位置”的语义。`pos == 0` 时 phase 为 `ORIGIN`，否则为 `TREE`，并重置 `left_idx/right_idx`。
+- `at_advance(C, d)` 在 `d != 0` 时重置迭代状态，并按移动后的绝对位置选择 phase：结果为 0 用 `ORIGIN`，否则用 `TREE`；`d == 0` 保留现有迭代状态。
 - `off + poff` 是 Cursor 的绝对坐标。
 - 树内当前 edge 就是 `*C->paths[atK_levels(C)]` 所指向的叶子槽内容（按 `at_Edge *` 解释）。
 - 指向树内 edge@`p` 时，`off + poff == p`，且 `poff == edge->bytes`。
@@ -180,8 +193,8 @@ typedef struct at_Cursor {
 - 超过最后一个树内 edge 时，仍停留在最后一个树内 edge 槽，`poff` 超过其 `bytes`，超出部分为虚拟距离。
 - 空树/指向 origin 的状态由 Cursor 的路径与 `poff` 约定表达，不单独保存 `at_Edge *edge` 字段。
 - 端点迭代不保存 `at_Point *` 指针：tail 向量可能在操作中 resize，指针会失效。用 `left_idx/right_idx` 表达 left/right 两个逻辑列表中的当前位置：
-  - `0` 表示 first_left/first_right；
-  - `>= 1` 表示 `left_tail[left_idx-1]` / `right_tail[right_idx-1]`；
+  - `0` 表示 left/right 的 `first`；
+  - `>= 1` 表示 `left.tail[left_idx-1]` / `right.tail[right_idx-1]`；
   - 当前所在侧由“left 是否已遍历完”决定：先 left 后 right，left 耗尽后切到 right。
 
 ## 三、不变量
@@ -306,8 +319,10 @@ anchortree 不提供独立的 `insert` 与 `append` 编辑原语。`at_splice` �
 - 零长 object 的 START 产出一次，END 跳过。
 - 同一 edge 内多个对象不排序；稳定序由上层按 `(start, id)` 自行稳定。
 - `at_next` 返回下一个 object 的 START id；到达末尾或参数错误时返回 `AT_NONE`。
-- `at_next` 支持 ns 过滤：`ns == 0` 不过滤；`ns > 0` 只返回 `at_Point.ns == ns` 的 START。
-- `at_next` 的 `plen` 为可选输出：仅当非 NULL 时，查找该 object 的 range 末端并计算长度写入 `*plen`；若 `start > end`（交叉区间），写入 0。
+- `at_next` 支持 ns 过滤：`ns == 0` 不过滤；`ns > 0` 只返回 `at_Point.ns == (unsigned)ns` 的 START；`ns < 0` 参数错误，返回 `AT_NONE` 且不把迭代置为耗尽。
+- `at_next` 的 `plen` 为可选输出：仅当非 NULL 时写 `*plen`。找到 id 后用 `at_range` 计算该 object 的 range：`start <= end` 写 `end - start`；`start > end`（交叉区间）写 0；零长写 0。
+- 正常耗尽或参数错误（包括 `C == NULL`、`C->tree == NULL`、`ns < 0`）返回 `AT_NONE`，且 `plen != NULL` 时写 0；耗尽后重复调用幂等返回 `AT_NONE`。
+- END 项永远跳过；ns 不匹配的 START 跳过并推进列表下标。
 
 ## 九、API 草案
 
@@ -352,13 +367,13 @@ AT_API int at_splice(at_Cursor *C, size_t del, size_t ins);
 - `at_seek` 初始化 Cursor，不返回位置。
 - `at_advance` 在坐标线上前后移动；越过最后一个 edge 时进入虚拟 `poff`。
 - `at_gravity` 返回 `AT_GROW..AT_LOCK`，错误时返回负值。
-- `at_next` 返回下一个 object 的 START id；`ns` 为过滤条件，`plen` 为可选长度输出；到达末尾或参数错误时返回 `AT_NONE`。
+- `at_next` 返回下一个 object 的 START id；`ns == 0` 不过滤，`ns > 0` 按 `at_Point.ns` 过滤，`ns < 0` 为参数错误；`plen` 为可选长度输出，耗尽/参数错误写 0，交叉区间写 0；到达末尾或参数错误时返回 `AT_NONE`。
 
 ## 十、内存估算
 
 - `at_Anchor`：start/end 两个指针，约 16B。
-- `at_Edge`：parent/idx + first_left/right + tail 指针；实际以 `sizeof` 为准。
-- `at_Point` 存在 edge 的 first/tail 小向量中；单端点侧只占 first 字段。
+- `at_Edge`：parent/idx + 两个 `at_PointList`；实际以 `sizeof` 为准。
+- `at_Point` 存在 edge 的 `first` / `tail` 小向量中；单端点侧只占 `first` 字段。
 - 树内 edge 数量与“有端点的字节缝”数量同阶。
 - `at_Id` 稠密数组 + freelist，索引 O(1)。
 
@@ -369,10 +384,3 @@ AT_API int at_splice(at_Cursor *C, size_t del, size_t ins);
 - 端点 tail vector 的扩容必须在任何端点 mutation 前通过 `atO_reserve`/`atV_reserve` 完成；reserve 成功后的 push 不得失败，失败表示 reserve 计算错误，应 assert。
 - debug 构建可维护反查断言：`anchor->start/end` 指向的 edge 必须包含对应角色端点项。
 - 树内不引入 0 长叶子槽；`origin` 是唯一的“位置 0”表达，且不在 B+ 树中。
-
-## 十二、当前实现偏差（专题，待修正）
-
-以下条目是当前 `anchortree.h` 实现与本文设计的已知偏差。它们不是最终设计；后续会按专题调整实现，并在修正后从本节移除。
-
-- **`at_next` ns/plen**：当前实现仍为 `at_Id at_next(at_Cursor *C)`，不支持 ns 过滤与 `plen` 输出；本文已更新为 `at_next(C, ns, &plen)`，实现需随后对齐。
-- **`at_Cursor.cur`**：当前实现临时复用作迭代状态；该字段不是最终设计，后续应设计正确的迭代表示并移除。

@@ -128,36 +128,37 @@ static void fz_splice_model(size_t L, size_t del, size_t ins) {
     }
 }
 
+static int fz_seen(const char *seen, const at_Id *ids, int n, at_Id id) {
+    int i;
+    for (i = 0; i < n; ++i)
+        if (seen[i] && ids[i] == id) return 1;
+    return 0;
+}
+
 static int fz_iter_ok(at_Tree *T, size_t pos) {
     at_Cursor C;
     at_Id     ids[FZ_MAXAN];
-    size_t    x, y, prev;
+    size_t    x, y, prev, plen;
     int       n = 0, m = 0, i, have = 0;
     char      seen[FZ_MAXAN];
     assertok(at_seek(&C, T, pos) == AT_OK);
     memset(seen, 0, sizeof(seen));
     for (;;) {
-        at_Id id = at_next(&C);
-        int   j;
+        at_Id id = at_next(&C, 0, &plen);
         if (id == AT_NONE) break;
         if (id >= FZ_MAXAN || !fz_islive(id)) return 0;
         assertok(at_range(T, id, &x, &y) == AT_OK);
         if (x != fz_ans[id].s || y != fz_ans[id].e) return 0;
+        if (plen != (x <= y ? y - x : 0)) return 0;
         if (x < pos || (have && x < prev)) return 0;
         prev = x, have = 1, ids[n] = id, n += 1;
-        for (j = 0; j < m; ++j)
-            if (seen[j] && ids[j] == id) return 0;
         seen[n - 1] = 1;
     }
     for (i = 0; i < fz_nlive; ++i) {
         at_Id id = fz_live[i];
-        if (fz_ans[id].s >= pos) {
-            int j, ok = 0;
-            for (j = 0; j < n; ++j)
-                if (seen[j] && ids[j] == id) ok = 1;
-            if (!ok) return 0;
-            m += 1;
-        }
+        if (fz_ans[id].s < pos) continue;
+        if (!fz_seen(seen, ids, n, id)) return 0;
+        m += 1;
     }
     return n == m;
 }

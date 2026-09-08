@@ -46,6 +46,10 @@
 #define AT_ERRMEM   (-2)        /* Memory allocation failed */
 #define AT_NONE     (~(at_Id)0) /* End-of-iteration sentinel */
 
+#define AT_ITER_ORIGIN 0u /* origin not scanned in this iteration round */
+#define AT_ITER_TREE   1u /* origin done, or iteration started after 0 */
+#define AT_ITER_DONE   2u /* iteration exhausted */
+
 typedef enum at_Gravity {
     AT_GROW,  /* [L,R] extends when insert before or after */
     AT_FIXED, /* [R,L] does not extend when insert in both side */
@@ -77,7 +81,7 @@ AT_API void     at_reset(at_Tree *T);
 /* cursor */
 AT_API int   at_seek(at_Cursor *C, at_Tree *T, size_t pos);
 AT_API int   at_advance(at_Cursor *C, at_Delta d);
-AT_API at_Id at_next(at_Cursor *C);
+AT_API at_Id at_next(at_Cursor *C, int ns, size_t *plen);
 
 /* anchors */
 AT_API int at_newanchor(at_Cursor *C, size_t len, int ns, int g, at_Id *out);
@@ -100,7 +104,7 @@ struct at_Cursor {
     size_t   poff;      /* offset within the current gap */
     size_t   left_idx;  /* consumed count in the left side */
     size_t   right_idx; /* consumed count in the right side */
-    at_Id    cur;       /* temporary at_next state */
+    unsigned iter;      /* iteration phase: AT_ITER_ORIGIN/TREE/DONE */
 
     struct at_Node **paths[AT_MAX_LEVEL]; /* root-to-leaf child slot pointers */
 };
@@ -480,7 +484,7 @@ static int atO_reservenewanchor(at_Tree *T, size_t a, size_t b, int x, int y) {
     return r;
 }
 
-static int atO_nextstart(at_Edge *e, size_t *lp, size_t *rp, at_Id *out) {
+static int atO_nextstart(at_Edge *e, int ns, size_t *lp, size_t *rp, at_Id *o) {
     at_PointList *ls;
     at_Point      p;
     size_t       *idx, n;
@@ -490,9 +494,42 @@ static int atO_nextstart(at_Edge *e, size_t *lp, size_t *rp, at_Id *out) {
         n = (size_t)atO_listcount(ls);
         for (; *idx < n; ++*idx) {
             p = *idx == 0 ? ls->first : ls->tail[*idx - 1];
-            if (p.is_end == 0) return *out = p.id, ++*idx, 1;
+            if (p.is_end == 0 && (ns == 0 || p.ns == (unsigned)ns))
+                return *o = p.id, ++*idx, 1;
         }
     }
+    return 0;
+}
+
+static at_Id atO_none(size_t *plen) {
+    if (plen != NULL) *plen = 0;
+    return AT_NONE;
+}
+
+static at_Id atO_done(at_Cursor *C, size_t *plen) {
+    C->iter = AT_ITER_DONE;
+    return atO_none(plen);
+}
+
+static size_t atO_rangelen(at_Tree *T, at_Id id) {
+    size_t start, end;
+    int    r;
+    r = at_range(T, id, &start, &end), assert(r == AT_OK), (void)r;
+    return start <= end ? end - start : 0;
+}
+
+static at_Id atO_found(at_Tree *T, at_Id id, size_t *plen) {
+    if (plen != NULL) *plen = atO_rangelen(T, id);
+    return id;
+}
+
+static int atO_nextorigin(at_Cursor *C, int ns, at_Id *id) {
+    if (C->iter != AT_ITER_ORIGIN) return 0;
+    assert(at_offset(C) == 0);
+    if (atO_nextstart(&C->tree->origin, ns, &C->left_idx, &C->right_idx, id))
+        return 1;
+    C->iter = AT_ITER_TREE;
+    C->left_idx = C->right_idx = 0;
     return 0;
 }
 
@@ -734,6 +771,7 @@ static int atK_nextedge(at_Cursor *C) {
 AT_API int at_seek(at_Cursor *C, at_Tree *T, size_t pos) {
     if (C == NULL || T == NULL) return AT_ERRPARAM;
     memset(C, 0, sizeof(at_Cursor)), C->tree = T;
+    C->iter = pos == 0 ? AT_ITER_ORIGIN : AT_ITER_TREE;
     if (T->bytes == 0)
         return C->paths[0] = T->root.children, C->poff = pos, AT_OK;
     if (pos > T->bytes) {
@@ -746,7 +784,6 @@ AT_API int at_seek(at_Cursor *C, at_Tree *T, size_t pos) {
 AT_API int at_advance(at_Cursor *C, at_Delta d) {
     size_t pos;
     if (C == NULL || C->tree == NULL) return AT_ERRPARAM;
-    if (d != 0) C->cur = 0, C->left_idx = 0, C->right_idx = 0;
     pos = C->off + C->poff;
     if (d >= 0)
         pos += (size_t)d;
@@ -754,6 +791,10 @@ AT_API int at_advance(at_Cursor *C, at_Delta d) {
         size_t back = (size_t)(-d);
         if (back > pos) back = pos;
         pos -= back;
+    }
+    if (d != 0) {
+        C->left_idx = C->right_idx = 0;
+        C->iter = pos == 0 ? AT_ITER_ORIGIN : AT_ITER_TREE;
     }
     if (C->tree->bytes == 0) {
         C->off = 0, C->poff = pos, C->paths[0] = C->tree->root.children;
@@ -766,33 +807,30 @@ AT_API int at_advance(at_Cursor *C, at_Delta d) {
     return atK_find(C, pos), AT_OK;
 }
 
-AT_API at_Id at_next(at_Cursor *C) {
+AT_API at_Id at_next(at_Cursor *C, int ns, size_t *plen) {
     at_Tree *T;
     at_Edge *e;
     at_Node *p;
     at_Id    id;
     size_t   b;
     int      i, L;
-    if (C == NULL || C->tree == NULL) return AT_NONE;
+    if (C == NULL || C->tree == NULL) return atO_none(plen);
+    if (ns < 0) return atO_none(plen);
     T = C->tree;
-    if (C->cur == AT_NONE) return AT_NONE;
-    if (C->cur == 0 && at_offset(C) == 0) C->cur = 1;
-    if (C->cur == 1) {
-        if (atO_nextstart(&T->origin, &C->left_idx, &C->right_idx, &id))
-            return id;
-        C->cur = 2, C->left_idx = 0, C->right_idx = 0;
-    }
-    if (T->bytes == 0) return C->cur = AT_NONE, AT_NONE;
+    if (C->iter == AT_ITER_DONE) return atO_none(plen);
+    if (atO_nextorigin(C, ns, &id)) return atO_found(T, id, plen);
+    if (T->bytes == 0) return atO_done(C, plen);
     for (;;) {
         L = T->levels;
         p = L ? *C->paths[L - 1] : &T->root;
         i = (int)(C->paths[L] - p->children);
         b = p->bytes[i];
-        if (C->poff > b) return C->cur = AT_NONE, AT_NONE;
-        C->cur = 2, e = atN_edge(p, i);
-        if (atO_nextstart(e, &C->left_idx, &C->right_idx, &id)) return id;
-        if (!atK_nextedge(C)) return C->cur = AT_NONE, AT_NONE;
-        C->left_idx = 0, C->right_idx = 0;
+        if (C->poff > b) return atO_done(C, plen);
+        e = atN_edge(p, i);
+        if (atO_nextstart(e, ns, &C->left_idx, &C->right_idx, &id))
+            return atO_found(T, id, plen);
+        if (!atK_nextedge(C)) return atO_done(C, plen);
+        C->left_idx = C->right_idx = 0;
     }
 }
 
