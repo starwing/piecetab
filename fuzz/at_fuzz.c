@@ -211,7 +211,7 @@ static void runop(at_Cursor *C, fz_Op *o, FILE *lf) {
         break;
     case FZ_ADV: {
         long d = (long)(o->extra % 41) - 20;
-        assertok(at_advance(C, (ptrdiff_t)d) == AT_OK);
+        assertok(at_advance(C, (at_Delta)d) == AT_OK);
         exp = at_offset(C);
         break;
     }

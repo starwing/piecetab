@@ -1,48 +1,72 @@
 # anchortree coverage exemptions
 
-Status: `just at-cov` reports 100% lines / 100% functions / 95.1% branches
-for `anchortree.h` (679/714 branch points). The remaining uncovered branch
-records are listed below. None affect line coverage, and none are caused by
-`LCOV_EXCL` or weakened invariants.
+Status: `just at-cov` reports 100% lines / 100% functions / 93.3% branches
+for `anchortree.h` (726/778 branch points). Every line and function is covered;
+the 52 remaining uncovered branch points are listed below by source line.
+No `LCOV_EXCL` markers or weakened invariants are used. Counts in parentheses
+are uncovered branch points when a line has more than one.
 
-## Structural loop/boundary branches (cannot execute under valid invariants)
+## Structural search / loop bounds
 
-- `atN_insert_nonfull` / `atF_locate` / `atE_find` / `atK_find` search loops:
-  lines 547, 553, 565, 566, 580, 581, 599, 618, 895, 901.
-  The uncovered subconditions are the "run past the last slot" / no-valid-child
-  outcomes. Every search is guarded by `T->bytes` and node-sum arithmetic, and
-  the code asserts the chosen slot before use; a run-past-slot path would mean
-  tree corruption before the search began.
-- `atT_remove_empty_leaf` line 684: the loop terminates at `d == 0` with an
-  explicit `break`, so the normal `d < 0` fall-out condition is never reached.
-- `at_gravity` line 1378: for valid endpoints the earlier GROW/FIXED checks
-  leave `sl == 1 && el == 1` as the only valid way to reach SHIFT; the false
-  outcome is unreachable after `sl < 0 || el < 0` has been rejected.
+- L390, L391, L591, L597, L697, L703, L1236, L1240:
+  search loops in `atO_findedge` / `atN_locate` / `atK_find` / `atI_insertat` /
+  `atI_appendat`. The uncovered sides are the "run past the last slot" and
+  "no exact slot match" outcomes. Public calls bound positions by `T->bytes`,
+  node sums are maintained by invariants, and asserts guard the selected slot
+  before use; these sides require prior tree corruption.
+- L823, L826, L905, L1005 (2), L1006:
+  stitch traversal / loop-boundary sides in `atD_cutrange`, `atD_rebalance`, and
+  `atD_stitchnode`. The deterministic tests cover the normal fold and findroom
+  paths; the remaining sides need a synthetic cursor state outside public-API
+  reachability.
+- L932 (3), L935:
+  `atD_backwardnode` climb/descend loop sides. The direct test covers the
+  `d > i` move; the remaining sides are loop-boundary permutations not produced
+  by the public splice sequences exercised here.
 
-## Contract-guarded endpoint-vector branches
+## Endpoint vector representation
 
-- `atO_remove` lines 477-478: the tail search is called only when the point is
-  known to exist in that tail; the loop exits by `break` on the match. The
-  lcov-visible fall-through/not-found subconditions would violate the helper's
-  precondition and reach `atV_erase` with an out-of-range index.
-- `atO_discard_empty_tail` line 458: the missing subcondition is the null-tail
-  no-op outcome in the cleanup path; direct null-tail calls were added, and the
-  remaining subcondition is an alternative short-circuit ordering inside the
-  cleanup guard.
+- L315, L325, L340, L352 (2), L368, L369, L370, L371 (2), L372, L1142:
+  `atO_listcount`, `atO_push`, `atO_discardemptytail`, `atO_remove`, and
+  `atD_collectside` first-vs-tail representation and search sides. Tests cover
+  first entries and non-empty tails on both sides; the remaining sides are
+  null/empty-tail alternates and loop/search fall-throughs that are structural
+  (tail non-null iff first is full) or allocation-failure sides.
+- L855:
+  `atD_mergeleaf` cursor-at-tail correction. The remaining side is the
+  not-at-tail case for a zero-byte last slot, which is a temporary stitch state
+  not present in a settled public tree.
+- L1025:
+  `atD_stitch` zero-byte last-slot cleanup. The remaining side is the
+  no-zero-last-slot case; the zero slot appears only transiently during the
+  covered trim/stitch paths.
+- L1072:
+  `atD_rebalancepath` tail-slot selection. The remaining side is the
+  `idx[L] >= cc` fallback, reached only when a deleted-slot cursor sits one past
+  the container tail (defensive post-delete state).
 
-## Defensive OOM-ordering and overflow guards
+## OOM ordering, allocator abort, overflow guards
 
-- `atS_defallocf` line 821: `realloc` failure intentionally aborts the default
-  allocator; it is not an injectable error path in the coverage harness.
-- `atD_remove_range` lines 1177, 1185; `atD_delete` lines 1197, 1199, 1207,
-  1210, 1219; `atI_insert` lines 1236, 1253, 1264, 1271, 1278, 1286; and
-  `at_splice` lines 1304, 1311.
-  These are remaining short-circuit/cleanup subbranches of OOM and rollback
-  code. The primary error paths are covered (first/second boundary insertion
-  failure, split OOM, move/relocate OOM, reserve OOM); the residual subbranches
-  are alternate orderings that preserve the same already-tested rollback
-  behavior and cannot change invariants.
-- `atD_delete` line 1197/1199: the overflow true branch and the `R <= L`
-  return are `SIZE_MAX` arithmetic guards; the normal-path and saturated-path
-  behavior are structurally disjoint and no ordinary test can exercise
-  `del > SIZE_MAX - L` without an artificial overflow value.
+- L608:
+  default allocator `realloc` failure intentionally aborts; it is not
+  injectable in the coverage harness.
+- L1122 (2), L1164, L1243, L1265, L1382 (2), L1388, L1389 (2), L1422:
+  OOM cleanup / error-propagation sides in `atO_reservenewedge`,
+  `atD_collectnode`, `atI_insertat`, `atI_appendat`, `atD_prepwindow`, and
+  `at_splice`. Tests cover the primary boundary-reserve, split, delete, and
+  collect OOM paths; these residual sides are alternate orderings that preserve
+  the same transactional rollback behavior.
+- L1341, L1362:
+  rollback `atI_shift` guards. The uncovered sides are `pos >= T->bytes`, i.e.
+  no shift was performed, which cannot reach the rollback branch through the
+  public splice paths covered.
+- L1401:
+  `del > SIZE_MAX - L` saturated-overflow side. Ordinary test ranges cannot
+  form a deletion length large enough to overflow `size_t`.
+- L1404, L1405, L1424:
+  `at_seek` failure checks after `C` / `T` have already been validated; the
+  failure side is structurally unreachable at these call sites.
+- L1479:
+  `at_gravity` SHIFT short-circuit side. All four gravity values are covered by
+  `anchor_gravities`; the remaining side is the `sl == 1` false short-circuit,
+  not a missing gravity outcome.

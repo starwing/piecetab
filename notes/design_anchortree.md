@@ -44,6 +44,7 @@ typedef struct at_Anchor at_Anchor;
 typedef struct at_Point  at_Point;
 
 typedef unsigned       at_Id;
+typedef ptrdiff_t      at_Delta;
 typedef unsigned short at_Index;
 ```
 
@@ -332,7 +333,7 @@ AT_API void      at_reset(at_Tree *T);
 
 ```c
 AT_API int   at_seek(at_Cursor *C, at_Tree *T, size_t pos);
-AT_API int   at_advance(at_Cursor *C, ptrdiff_t d);
+AT_API int   at_advance(at_Cursor *C, at_Delta d);
 AT_API at_Id at_next(at_Cursor *C, int ns, size_t *plen);
 ```
 
@@ -373,8 +374,5 @@ AT_API int at_splice(at_Cursor *C, size_t del, size_t ins);
 
 以下条目是当前 `anchortree.h` 实现与本文设计的已知偏差。它们不是最终设计；后续会按专题调整实现，并在修正后从本节移除。
 
-- **删除/stitch/rebalance 偏差**：实现没有按 spantree.h 的 stitch 算法删除范围；`at_State.rt[]` 未使用，也没有非空节点的借位/合并 rebalance。任何情况下都应按 spantree.h 的删除与 rebalance 流程修正。
-- **edge 位置插入顺序**：当前实现在 edge 位置插入时先右移后续 edge、再创建 `p+ins`；应专题核对是否应先创建新 edge 再移动 RIGHT 端点。
-- **文本删除与对象 id**：当前实现删除整段 gap 时会直接移除对应 edge 槽位；需检查是否违反“edge 可以消失，但 object id/端点仍必须由 anchor 正确持有”的语义，大概率需要修正。
 - **`at_next` ns/plen**：当前实现仍为 `at_Id at_next(at_Cursor *C)`，不支持 ns 过滤与 `plen` 输出；本文已更新为 `at_next(C, ns, &plen)`，实现需随后对齐。
 - **`at_Cursor.cur`**：当前实现临时复用作迭代状态；该字段不是最终设计，后续应设计正确的迭代表示并移除。

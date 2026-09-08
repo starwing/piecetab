@@ -113,7 +113,7 @@ TEST(advance_positions) {
     assertok(at_positions_match(T, seqp, 3));
     for (i = 0; i < 55; ++i) {
         assertok(at_seek(&C, T, 0) == AT_OK);
-        assertok(at_advance(&C, (ptrdiff_t)i) == AT_OK);
+        assertok(at_advance(&C, (at_Delta)i) == AT_OK);
         assertok(at_checkcursor(&C, (size_t)i));
         assertok(at_advance(&C, -1) == AT_OK);
         assertok(at_checkcursor(&C, i ? (size_t)(i - 1) : 0));
