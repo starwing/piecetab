@@ -139,7 +139,7 @@ TEST_STATIC int at_checktree(const at_Tree *T) {
     size_t sum;
     int    ok = 1;
     if (T == NULL) return 0;
-    if (T->levels > AT_MAX_LEVEL) return 0;
+    if (T->levels >= AT_MAX_LEVEL) return 0;
     sum = atN_checknode(T, &T->root, T->levels, 1, &ok);
     if (T->bytes != sum) ok = 0;
     return ok;

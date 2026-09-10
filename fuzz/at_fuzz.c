@@ -10,7 +10,8 @@
  * the model tracks live anchor ranges and gravity after each splice.
  * o->op = rnd % 100 maps through the op table below (weights sum to
  * 100). Cursor checks use the shared tests/at_tests.h helper. */
-#define AT_FANOUT 4
+#define AT_FANOUT    4
+#define AT_MAX_LEVEL 64 /* AT_FANOUT=4: see docs/max_levels.md */
 #define AT_STATIC_API
 #include "anchortree.h"
 #include "at_tests.h"

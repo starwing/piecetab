@@ -1,4 +1,5 @@
 #define AT_FANOUT    8
+#define AT_MAX_LEVEL 32 /* AT_FANOUT=8: see docs/max_levels.md */
 #define AT_PAGE_SIZE 512
 #define AT_STATIC_API
 

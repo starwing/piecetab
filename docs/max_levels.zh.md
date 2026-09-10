@@ -1,6 +1,6 @@
 # MAX_LEVELS 安全值参考
 
-`PT_MAX_LEVEL`、`LC_MAX_LEVEL`、`SP_MAX_LEVEL` 控制游标路径数组
+`PT_MAX_LEVEL`、`LC_MAX_LEVEL`、`SP_MAX_LEVEL`、`AT_MAX_LEVEL` 控制游标路径数组
 `paths[]` 与暂存节点数组 `rt[]` 的大小。它们是编译期配置宏；应在包含实现
 头文件之前定义。
 
@@ -11,7 +11,7 @@
 
 ## 公式
 
-piecetab 与 spantree 的叶节点和内节点使用相同 fanout：
+piecetab、spantree 与 anchortree 的叶节点和内节点使用相同 fanout：
 
 ```
 MAX_LEVELS = ceil(log_b(SIZE_MAX))
@@ -36,6 +36,7 @@ spantree 的值一致。
 - `PT_FANOUT = 31` → `PT_MAX_LEVEL = 17`（64 位）/ `9`（32 位）
 - `LC_FANOUT = 16, LC_LEAF_FANOUT = 34` → `LC_MAX_LEVEL = 21`（64 位）/ `11`（32 位）
 - `SP_FANOUT = 34` → `SP_MAX_LEVEL = 16`
+- `AT_FANOUT = 34` → `AT_MAX_LEVEL = 16`
 
 64 位的 `PT_MAX_LEVEL = 17` 在 32 位与 64 位构建上都安全
 （32 位实际只需要 9，但 17 仍然很小）。
@@ -109,16 +110,20 @@ spantree 的值一致。
 - 64 位 `size_t`：piecetab 默认 `PT_FANOUT = 31` 需要
   `PT_MAX_LEVEL = 17`；linecache 默认 `LC_FANOUT = 16, LC_LEAF_FANOUT = 34` 需要
   `LC_MAX_LEVEL = 21`；spantree 默认 `SP_FANOUT = 34` 需要
-  `SP_MAX_LEVEL = 16`。
+  `SP_MAX_LEVEL = 16`；anchortree 默认 `AT_FANOUT = 34` 需要
+  `AT_MAX_LEVEL = 16`。
 - 32 位 `size_t`：默认值也安全（`PT_FANOUT = 31` 需要 9，
-  `LC_FANOUT = 16, LC_LEAF_FANOUT = 34` 需要 11，`SP_FANOUT = 34` 需要 8）；覆盖为更小 fanout 时请查表。
+  `LC_FANOUT = 16, LC_LEAF_FANOUT = 34` 需要 11，`SP_FANOUT = 34` 需要 8，
+  `AT_FANOUT = 34` 需要 8）；覆盖为更小 fanout 时请查表。
 
 ## 使用方法
 
 - 如果保持库默认值，无需定义 `MAX_LEVELS`；内置默认值安全。
-- 如果覆盖 `PT_FANOUT`、`LC_FANOUT`、`LC_LEAF_FANOUT` 或 `SP_FANOUT`
-  为更小的值，请将对应的 `MAX_LEVELS` 至少设为表中对应 `size_t` 位宽的值。
-- 示例：64 位构建使用 `PT_FANOUT = 4` 时必须传 `-DPT_MAX_LEVEL=64`。
+- 如果覆盖 `PT_FANOUT`、`LC_FANOUT`、`LC_LEAF_FANOUT`、`SP_FANOUT` 或
+  `AT_FANOUT` 为更小的值，请将对应的 `MAX_LEVELS` 至少设为表中对应
+  `size_t` 位宽的值。
+- 示例：64 位构建使用 `PT_FANOUT = 4` 时必须传 `-DPT_MAX_LEVEL=64`；
+  使用 `AT_FANOUT = 4` 时必须传 `-DAT_MAX_LEVEL=64`。
 
 树代码在每次增加层级的操作之后都加入了
 `assert(levels < MAX_LEVELS)`，因此 debug 构建会在路径数组被破坏前发现

@@ -95,8 +95,8 @@ AT_API int at_splice(at_Cursor *C, size_t del, size_t ins);
 /* structure */
 
 #ifndef AT_MAX_LEVEL
-# define AT_MAX_LEVEL 16
-#endif /* AT_MAX_LEVEL */
+# define AT_MAX_LEVEL 16 /* safe for AT_FANOUT=34; see docs/max_levels.md */
+#endif
 
 struct at_Cursor {
     at_Tree *tree;      /* tree under navigation */
@@ -788,7 +788,7 @@ AT_API int at_advance(at_Cursor *C, at_Delta d) {
     if (d >= 0)
         pos += (size_t)d;
     else {
-        size_t back = (size_t)(-d);
+        size_t back = (size_t)0 - (size_t)d;
         if (back > pos) back = pos;
         pos -= back;
     }
@@ -1264,7 +1264,8 @@ static int atI_splitroot(at_Tree *T) {
     }
     atN_set(&T->root, 0, left, atN_sumbytes(left, 0, atN_cc(left)));
     atN_set(&T->root, 1, right, atN_sumbytes(right, 0, atN_cc(right)));
-    return atN_setcc(&T->root, 2), T->levels = T->levels + 1, AT_OK;
+    atN_setcc(&T->root, 2), T->levels += 1, assert(T->levels < AT_MAX_LEVEL);
+    return AT_OK;
 }
 
 static int atI_insertat(at_Tree *T, at_Node *n, int l, size_t rem, at_Edge *e) {

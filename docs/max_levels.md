@@ -1,9 +1,9 @@
 # MAX_LEVELS safety reference
 
-`PT_MAX_LEVEL`, `LC_MAX_LEVEL`, and `SP_MAX_LEVEL` control the size of the
-cursor path array (`paths[]`) and the scratch-node arrays (`rt[]`). They are
-compile-time configuration macros; define them before including the header
-that implements the library.
+`PT_MAX_LEVEL`, `LC_MAX_LEVEL`, `SP_MAX_LEVEL`, and `AT_MAX_LEVEL` control the
+size of the cursor path array (`paths[]`) and the scratch-node arrays (`rt[]`).
+They are compile-time configuration macros; define them before including the
+header that implements the library.
 
 If `MAX_LEVELS` is too small, a deep tree can write past the end of `paths[]`
 when the root is split or a new chain is built. The table below gives the
@@ -13,7 +13,8 @@ every node is at the minimum allowed occupancy (`FANOUT/2`).
 
 ## Formula
 
-For piecetab and spantree the leaf and internal nodes share the same fanout:
+For piecetab, spantree and anchortree the leaf and internal nodes share the same
+fanout:
 
 ```
 MAX_LEVELS = ceil(log_b(SIZE_MAX))
@@ -38,6 +39,7 @@ The current library defaults are:
 - `PT_FANOUT = 31` → `PT_MAX_LEVEL = 17` (64-bit) / `9` (32-bit)
 - `LC_FANOUT = 16, LC_LEAF_FANOUT = 34` → `LC_MAX_LEVEL = 21` (64-bit) / `11` (32-bit)
 - `SP_FANOUT = 34` → `SP_MAX_LEVEL = 16`
+- `AT_FANOUT = 34` → `AT_MAX_LEVEL = 16`
 
 The 64-bit `PT_MAX_LEVEL = 17` is safe on both 32-bit and 64-bit builds
 (the 32-bit safe value is only 9, so 17 is still small).
@@ -111,20 +113,23 @@ Quick rules:
 - 64-bit `size_t`: the piecetab default `PT_FANOUT = 31` needs
   `PT_MAX_LEVEL = 17`; the linecache default `LC_FANOUT = 16, LC_LEAF_FANOUT = 34` needs
   `LC_MAX_LEVEL = 21`; the spantree default `SP_FANOUT = 34` needs
-  `SP_MAX_LEVEL = 16`.
+  `SP_MAX_LEVEL = 16`; the anchortree default `AT_FANOUT = 34` needs
+  `AT_MAX_LEVEL = 16`.
 - 32-bit `size_t`: the defaults are also safe (`PT_FANOUT = 31` needs 9,
-  `LC_FANOUT = 16, LC_LEAF_FANOUT = 34` needs 11, `SP_FANOUT = 34` needs 8); use the table when
+  `LC_FANOUT = 16, LC_LEAF_FANOUT = 34` needs 11, `SP_FANOUT = 34` needs 8,
+  `AT_FANOUT = 34` needs 8); use the table when
   overriding to smaller fanouts.
 
 ## How to use
 
 - If you keep the library defaults, you do not need to define any
   `MAX_LEVELS`; the built-in defaults are safe.
-- If you override `PT_FANOUT`, `LC_FANOUT`, `LC_LEAF_FANOUT`, or `SP_FANOUT`
-  to a lower value, define the corresponding `MAX_LEVELS` to at least the
-  table value for your `size_t` width.
+- If you override `PT_FANOUT`, `LC_FANOUT`, `LC_LEAF_FANOUT`, `SP_FANOUT`, or
+  `AT_FANOUT` to a lower value, define the corresponding `MAX_LEVELS` to at
+  least the table value for your `size_t` width.
 - Example: a 64-bit build with `PT_FANOUT = 4` must use
-  `-DPT_MAX_LEVEL=64`.
+  `-DPT_MAX_LEVEL=64`; a build with `AT_FANOUT = 4` must use
+  `-DAT_MAX_LEVEL=64`.
 
 The tree code also contains `assert(levels < MAX_LEVELS)` immediately after
 every level-increasing operation, so debug builds will catch an undersized

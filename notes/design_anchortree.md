@@ -64,7 +64,7 @@ typedef unsigned short at_Index;
 
 ```c
 #define AT_FANOUT    34
-#define AT_MAX_LEVEL 16
+#define AT_MAX_LEVEL 16 /* safe for AT_FANOUT=34; see docs/max_levels.md */
 #define AT_PAGE_SIZE 65536
 
 typedef struct at_Pool {
@@ -108,6 +108,7 @@ struct at_Tree {
 - 树内 `bytes` 总和不等于“文档长度”，而是最后一个树内 edge 的位置。
 - `at_State.rt[AT_MAX_LEVEL]` 是删除/stitch 的暂存根区；删除路径必须按 spantree.h 的 stitch 流程使用它。
 - `at_Pool` 在 `AT_POOL_STATS` 编译配置下额外含 `size_t live_obj`，用于测试泄漏统计；该模式与 spantree.h 的 `SP_POOL_STATS` 相同，细节参考 spantree.h 的 pool 实现。
+- `AT_MAX_LEVEL` 与 `AT_FANOUT` 必须成对选择：默认 `AT_FANOUT=34` / `AT_MAX_LEVEL=16` 安全；自定义更小 fanout 时按 `docs/max_levels.md` 的表加大（如 `AT_FANOUT=4` 需 `AT_MAX_LEVEL=64`）。树高增加处有 `assert(levels < AT_MAX_LEVEL)` 兜底。
 
 ### 2.3 edge 对象
 
@@ -209,6 +210,7 @@ typedef struct at_Cursor {
 6. `anchor->start/end` 指向的 edge 确实包含对应角色的端点项。
 7. edge 的 `parent/idx` 与它所在叶子槽一致。
 8. 树内不存在 0 长 edge，因此不存在“同一字节缝有两个 edge”的情况。
+9. `T->levels < AT_MAX_LEVEL`；每次增加树高的操作之后立即断言，配置契约见 `docs/max_levels.md`。
 
 ## 四、edge 删除与 gap 合并
 

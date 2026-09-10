@@ -1,4 +1,5 @@
 #define AT_FANOUT    4
+#define AT_MAX_LEVEL 64 /* AT_FANOUT=4: see docs/max_levels.md */
 #define AT_PAGE_SIZE 512
 #define AT_STATIC_API
 
@@ -1061,6 +1062,8 @@ TEST(checktree_bad_links) {
     leaf->idx = (at_Index)(leaf->idx == 0 ? 1 : 0);
     assertok(at_checktree(T) == 0);
     leaf->idx = oldidx;
+    T->levels = AT_MAX_LEVEL;
+    assertok(at_checktree(T) == 0);
     T->levels = AT_MAX_LEVEL + 1;
     assertok(at_checktree(T) == 0);
     T->levels = oldlevels;
