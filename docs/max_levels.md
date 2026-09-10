@@ -39,7 +39,7 @@ The current library defaults are:
 - `PT_FANOUT = 31` → `PT_MAX_LEVEL = 17` (64-bit) / `9` (32-bit)
 - `LC_FANOUT = 16, LC_LEAF_FANOUT = 34` → `LC_MAX_LEVEL = 21` (64-bit) / `11` (32-bit)
 - `SP_FANOUT = 34` → `SP_MAX_LEVEL = 16`
-- `AT_FANOUT = 34` → `AT_MAX_LEVEL = 16`
+- `AT_FANOUT = 32` → `AT_MAX_LEVEL = 16`
 
 The 64-bit `PT_MAX_LEVEL = 17` is safe on both 32-bit and 64-bit builds
 (the 32-bit safe value is only 9, so 17 is still small).
@@ -113,11 +113,11 @@ Quick rules:
 - 64-bit `size_t`: the piecetab default `PT_FANOUT = 31` needs
   `PT_MAX_LEVEL = 17`; the linecache default `LC_FANOUT = 16, LC_LEAF_FANOUT = 34` needs
   `LC_MAX_LEVEL = 21`; the spantree default `SP_FANOUT = 34` needs
-  `SP_MAX_LEVEL = 16`; the anchortree default `AT_FANOUT = 34` needs
+  `SP_MAX_LEVEL = 16`; the anchortree default `AT_FANOUT = 32` needs
   `AT_MAX_LEVEL = 16`.
 - 32-bit `size_t`: the defaults are also safe (`PT_FANOUT = 31` needs 9,
   `LC_FANOUT = 16, LC_LEAF_FANOUT = 34` needs 11, `SP_FANOUT = 34` needs 8,
-  `AT_FANOUT = 34` needs 8); use the table when
+  `AT_FANOUT = 32` needs 8); use the table when
   overriding to smaller fanouts.
 
 ## How to use

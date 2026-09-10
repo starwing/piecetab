@@ -129,7 +129,7 @@ AT_NS_END
 #define AT_SA_1(cond, prefix, line) typedef char prefix##line[(cond) ? 1 : -1]
 
 #ifndef AT_FANOUT
-# define AT_FANOUT 34
+# define AT_FANOUT 32
 #endif /* AT_FANOUT */
 
 AT_STATIC_ASSERT(AT_FANOUT >= 4);
