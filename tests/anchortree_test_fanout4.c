@@ -85,6 +85,8 @@ TEST(param_guards) {
     T = at_newtree(S);
     assertok(at_seek(NULL, T, 0) == AT_ERRPARAM);
     assertok(at_seek(&C, NULL, 0) == AT_ERRPARAM);
+    assertok(at_locate(NULL, 0) == AT_ERRPARAM);
+    assertok(at_locate(&BadC, 0) == AT_ERRPARAM);
     assertok(at_advance(NULL, 0) == AT_ERRPARAM);
     assertok(at_advance(&BadC, 0) == AT_ERRPARAM);
     BadC.tree = T;
@@ -105,41 +107,38 @@ TEST(param_guards) {
 
 /* internal guards for overflow, missing positions, and reserve OOMs */
 TEST(edge_internal_guards) {
-    OomCount   oc1 = {0, 2};
-    OomCount   oc2 = {0, 3};
-    at_State  *S;
-    at_Tree   *T;
-    at_Cursor  C;
-    at_Edge   *e;
-    at_Id      id;
-    size_t     x = 0, y = 0;
-    size_t     oldcap;
-    at_Anchor *a;
+    OomCount  oc1 = {0, 2};
+    OomCount  oc2 = {0, 3};
+    at_State *S;
+    at_Tree  *T;
+    at_Cursor C;
+    at_Edge  *e;
+    at_Id     id;
+    size_t    x = 0, y = 0;
+    size_t    oldcap;
     S = at_open(NULL, NULL);
     T = at_newtree(S);
     assertok(at_seek(&C, T, (size_t)-1) == AT_OK);
     assertok(at_newanchor(&C, 1, 0, AT_GROW, &id) == AT_ERRPARAM);
     assertok(atI_insert(T, 0, 0) == AT_OK);
     assertok(atI_insert(T, 0, 7) == AT_OK);
-    assertok(atD_collectendpoints(T, 10, 20, &T->origin) == AT_OK);
     assertok(atI_insertedge(T, 10, &e) == AT_OK);
     assertok(at_seek(&C, T, 0) == AT_OK);
     assertok(atD_remove(&C, 0) == AT_OK);
-    assertok(atO_findedge(T, 0, &e) == 0);
+    assertok(atO_findedge(T, 0, &e) == 1);
     assertok(atO_findedge(T, 11, &e) == 0);
     assertok(atD_deleteedge(T, 5) == AT_ERRPARAM);
     oldcap = T->idcap;
     T->idcap = (size_t)-1, T->idfree = 0;
     assertok(atO_growids(T) == AT_ERRMEM);
+    T->idcap = AT_ANCHOR_MAX, T->idfree = 0;
+    assertok(atO_growids(T) == AT_ERRMEM);
     T->idcap = oldcap;
     assertok(atO_idalloc(T, &id) == AT_OK);
-    assertok(at_del(T, 1000) == AT_ERRPARAM);
+    assertok(at_delanchor(T, 1000) == AT_ERRPARAM);
     assertok(at_range(T, 1000, &x, &y) == AT_ERRPARAM);
     assertok(at_gravity(T, 1000) == AT_ERRPARAM);
-    a = &T->ids[id], a->start = &T->origin, a->end = &T->origin;
-    assertok(at_gravity(T, id) == AT_ERRPARAM);
-    assertok(atO_push(T, &T->origin.left, id, 0, 0) == AT_OK);
-    assertok(at_gravity(T, id) == AT_ERRPARAM);
+    assertok(at_checkchains(T));
     at_deltree(T), at_close(S);
     S = at_open(&oomcount_alloc, &oc1);
     T = at_newtree(S);
@@ -158,7 +157,9 @@ TEST(empty_seek) {
     at_State *S = at_open(NULL, NULL);
     at_Tree  *T = at_newtree(S);
     at_Cursor C;
+    assertok(at_locate(NULL, 0) == AT_ERRPARAM);
     assertok(at_seek(&C, T, 0) == AT_OK);
+    assertok(at_locate(&C, 0) == AT_OK);
     assertok(at_checkcursor(&C, 0));
     assertok(at_seek(&C, T, 5) == AT_OK);
     assertok(at_checkcursor(&C, 5));
@@ -175,18 +176,20 @@ TEST(seek_positions) {
     at_Tree            *T = at_newtree(S);
     at_Edge            *e;
     at_Cursor           C;
-    static const size_t seqp[3] = {10, 30, 50};
+    static const size_t seqp[4] = {0, 10, 30, 50};
     static const size_t seeks[10] = {0, 5, 10, 15, 25, 30, 35, 50, 60, 70};
     int                 i;
     assertok(atI_insertedge(T, 10, &e) == AT_OK);
     assertok(atI_insertedge(T, 50, &e) == AT_OK);
     assertok(atI_insertedge(T, 30, &e) == AT_OK);
-    assertok(at_positions_match(T, seqp, 3));
+    assertok(at_positions_match(T, seqp, 4));
     for (i = 0; i < 10; ++i) {
         assertok(at_seek(&C, T, seeks[i]) == AT_OK);
         assertok(at_checkcursor(&C, seeks[i]));
         assertok(at_offset(&C) == seeks[i]);
     }
+    assertok(at_locate(&C, 35) == AT_OK);
+    assertok(at_checkcursor(&C, 35));
     at_deltree(T), at_close(S);
 }
 
@@ -196,12 +199,12 @@ TEST(advance_positions) {
     at_Tree            *T = at_newtree(S);
     at_Edge            *e;
     at_Cursor           C;
-    static const size_t seqp[3] = {10, 30, 50};
+    static const size_t seqp[4] = {0, 10, 30, 50};
     int                 i;
     assertok(atI_insertedge(T, 10, &e) == AT_OK);
     assertok(atI_insertedge(T, 50, &e) == AT_OK);
     assertok(atI_insertedge(T, 30, &e) == AT_OK);
-    assertok(at_positions_match(T, seqp, 3));
+    assertok(at_positions_match(T, seqp, 4));
     for (i = 0; i < 55; ++i) {
         assertok(at_seek(&C, T, 0) == AT_OK);
         assertok(at_advance(&C, (at_Delta)i) == AT_OK);
@@ -209,6 +212,33 @@ TEST(advance_positions) {
         assertok(at_advance(&C, -1) == AT_OK);
         assertok(at_checkcursor(&C, i ? (size_t)(i - 1) : 0));
     }
+    assertok(at_seek(&C, T, 1000) == AT_OK);
+    assertok(at_advance(&C, 0) == AT_OK);
+    assertok(at_checkcursor(&C, 1000));
+    at_deltree(T), at_close(S);
+}
+
+/* advance crosses leaf and subtree boundaries in both directions */
+TEST(advance_span) {
+    at_State *S = at_open(NULL, NULL);
+    at_Tree  *T = at_newtree(S);
+    at_Edge  *e;
+    at_Cursor C;
+    int       i;
+    for (i = 1; i <= 20; ++i)
+        assertok(atI_insertedge(T, (size_t)i * 10, &e) == AT_OK);
+    assertok(T->levels > 0);
+    assertok(at_seek(&C, T, 0) == AT_OK);
+    assertok(at_advance(&C, 95) == AT_OK);
+    assertok(at_checkcursor(&C, 95));
+    assertok(at_advance(&C, 60) == AT_OK);
+    assertok(at_checkcursor(&C, 155));
+    assertok(at_advance(&C, -40) == AT_OK);
+    assertok(at_checkcursor(&C, 115));
+    assertok(at_advance(&C, -115) == AT_OK);
+    assertok(at_checkcursor(&C, 0));
+    assertok(at_advance(&C, 200) == AT_OK);
+    assertok(at_checkcursor(&C, 200));
     at_deltree(T), at_close(S);
 }
 
@@ -216,13 +246,14 @@ TEST(advance_positions) {
 TEST(split_sequence) {
     at_State *S = at_open(NULL, NULL);
     at_Tree  *T = at_newtree(S);
-    size_t    p[50], i;
+    size_t    p[51], i;
     at_Edge  *e;
-    for (i = 0; i < 50; ++i) p[i] = (i + 1) * 13u;
-    assertok(at_insert_seq(T, p, 50));
-    assertok(at_positions_match(T, p, 50));
+    p[0] = 0;
+    for (i = 0; i < 50; ++i) p[i + 1] = (i + 1) * 13u;
+    assertok(at_insert_seq(T, p + 1, 50));
+    assertok(at_positions_match(T, p, 51));
     assertok(atI_insertedge(T, 650, &e) == AT_OK);
-    assertok(at_positions_match(T, p, 50));
+    assertok(at_positions_match(T, p, 51));
     at_deltree(T), at_close(S);
 }
 
@@ -231,14 +262,14 @@ TEST(delete_middle) {
     at_State *S = at_open(NULL, NULL);
     at_Tree  *T = at_newtree(S);
     size_t    before[5] = {10, 30, 50, 80, 100};
-    size_t    after[4] = {10, 50, 80, 100};
-    size_t    extended[5] = {10, 50, 80, 100, 650};
+    size_t    after[5] = {0, 10, 50, 80, 100};
+    size_t    extended[6] = {0, 10, 50, 80, 100, 650};
     at_Edge  *e;
     assertok(at_insert_seq(T, before, 5));
     assertok(atD_deleteedge(T, 30) == AT_OK);
-    assertok(at_positions_match(T, after, 4));
+    assertok(at_positions_match(T, after, 5));
     assertok(atI_insertedge(T, 650, &e) == AT_OK);
-    assertok(at_positions_match(T, extended, 5));
+    assertok(at_positions_match(T, extended, 6));
     at_deltree(T), at_close(S);
 }
 
@@ -247,14 +278,16 @@ TEST(delete_last) {
     at_State *S = at_open(NULL, NULL);
     at_Tree  *T = at_newtree(S);
     size_t    before[5] = {10, 30, 50, 80, 100};
-    size_t    after[4] = {10, 30, 50, 80};
+    size_t    after[5] = {0, 10, 30, 50, 80};
+    size_t    split[6] = {0, 10, 30, 50, 80, 90};
     at_Edge  *e;
     assertok(at_insert_seq(T, before, 5));
     assertok(atD_deleteedge(T, 100) == AT_OK);
-    assertok(T->bytes == 80);
-    assertok(at_positions_match(T, after, 4));
+    assertok(T->bytes == 100);
+    assertok(at_positions_match(T, after, 5));
     assertok(atI_insertedge(T, 90, &e) == AT_OK);
-    assertok(T->bytes == 90);
+    assertok(T->bytes == 100);
+    assertok(at_positions_match(T, split, 6));
     at_deltree(T), at_close(S);
 }
 
@@ -267,9 +300,9 @@ TEST(delete_all) {
     for (i = 0; i < 50; ++i) p[i] = (i + 1) * 7u;
     assertok(at_insert_seq(T, p, 50));
     for (i = 0; i < 50; ++i) assertok(atD_deleteedge(T, p[i]) == AT_OK);
-    assertok(T->bytes == 0);
+    assertok(T->bytes == 350);
     assertok(T->levels == 0);
-    assertok(atN_cc(&T->root) == 0);
+    assertok(atN_cc(&T->root) == 1);
     assertok(at_checktree(T));
     assertok(atI_insertedge(T, 123, &e) == AT_OK);
     assertok(at_checktree(T));
@@ -327,15 +360,15 @@ TEST(anchor_id_reuse) {
     at_make_anchor(T, 20, 5, AT_FIXED, &b);
     asserteq(a, 1);
     asserteq(b, 2);
-    assertok(at_del(T, a) == AT_OK);
+    assertok(at_delanchor(T, a) == AT_OK);
     at_make_anchor(T, 30, 5, AT_SHIFT, &c);
     asserteq(c, a);
     assertok(at_range(T, c, &x, &y) == AT_OK);
     asserteq(x, 30);
     asserteq(y, 35);
     assertok(at_gravity(T, c) == AT_SHIFT);
-    assertok(at_del(T, b) == AT_OK);
-    assertok(at_del(T, c) == AT_OK);
+    assertok(at_delanchor(T, b) == AT_OK);
+    assertok(at_delanchor(T, c) == AT_OK);
     at_deltree(T), at_close(S);
 }
 
@@ -349,8 +382,9 @@ TEST(anchor_gravities) {
     int                 i;
     for (i = 0; i < 4; ++i) at_make_anchor(T, ps[i], 10, gv[i], &id[i]);
     for (i = 0; i < 4; ++i) assertok(at_gravity(T, id[i]) == gv[i]);
-    for (i = 0; i < 4; ++i) assertok(at_del(T, id[i]) == AT_OK);
-    asserteq(T->bytes, 0);
+    for (i = 0; i < 4; ++i) assertok(at_delanchor(T, id[i]) == AT_OK);
+    asserteq(T->bytes, 130);
+    asserteq(atN_cc(&T->root), 1);
     at_deltree(T), at_close(S);
 }
 
@@ -369,9 +403,9 @@ TEST(anchor_zero_length) {
         asserteq(y, 100);
         assertok(at_gravity(T, id[i]) == gv[i]);
     }
-    for (i = 0; i < 4; ++i) assertok(at_del(T, id[i]) == AT_OK);
-    asserteq(T->bytes, 0);
-    asserteq(atN_cc(&T->root), 0);
+    for (i = 0; i < 4; ++i) assertok(at_delanchor(T, id[i]) == AT_OK);
+    asserteq(T->bytes, 100);
+    asserteq(atN_cc(&T->root), 1);
     at_deltree(T), at_close(S);
 }
 
@@ -386,15 +420,21 @@ TEST(anchor_ns_tag) {
     assertok(at_seek(&C, T, 10) == AT_OK);
     assertok(at_newanchor(&C, 0, 7, AT_SHIFT, &id) == AT_OK);
     assertok(atO_findedge(T, 10, &e));
-    assertok(e->right.first.id == id && e->right.first.ns == 7);
+    assertok(atO_sideof(T, e, id, 0) == 1);
+    assertok(atO_sideof(T, e, id, 1) == 1);
+    assertok(atO_listcount(T, &e->right) == 2);
+    asserteq(T->ids[id].ns, 7);
+    assertok(at_checkchains(T));
     assertok(at_seek(&C, T, 10) == AT_OK);
     assertok(at_splice(&C, 0, 3) == AT_OK);
     assertok(at_range(T, id, &x, &y) == AT_OK);
     assertok(x == 13 && y == 13);
     assertok(atO_findedge(T, 13, &e));
-    assertok(e->right.first.id == id && e->right.first.ns == 7);
-    assertok(e->right.tail != NULL && atV_len(e->right.tail) == 1);
-    assertok(e->right.tail[0].id == id && e->right.tail[0].ns == 7);
+    assertok(atO_sideof(T, e, id, 0) == 1);
+    assertok(atO_sideof(T, e, id, 1) == 1);
+    assertok(atO_listcount(T, &e->right) == 2);
+    asserteq(T->ids[id].ns, 7);
+    assertok(at_checkchains(T));
     at_deltree(T), at_close(S);
 }
 
@@ -406,7 +446,6 @@ TEST(anchor_ns_relocate) {
     at_Edge  *e;
     at_Id     a, b;
     size_t    x, y;
-    int       i, n9 = 0;
     assertok(at_seek(&C, T, 10) == AT_OK);
     assertok(at_newanchor(&C, 0, 7, AT_GROW, &a) == AT_OK);
     assertok(at_seek(&C, T, 20) == AT_OK);
@@ -418,11 +457,13 @@ TEST(anchor_ns_relocate) {
     assertok(at_range(T, b, &x, &y) == AT_OK);
     assertok(x == 5 && y == 5);
     assertok(atO_findedge(T, 5, &e));
-    assertok(e->left.first.id == a && e->left.first.ns == 7);
-    assertok(e->right.first.id == a && e->right.first.ns == 7);
-    for (i = 0; i < (int)atV_len(e->left.tail); ++i)
-        if (e->left.tail[i].ns == 9) n9 += 1;
-    assertok(n9 == 2);
+    assertok(atO_sideof(T, e, a, 0) == 0);
+    assertok(atO_sideof(T, e, a, 1) == 1);
+    assertok(atO_sideof(T, e, b, 0) == 0);
+    assertok(atO_sideof(T, e, b, 1) == 0);
+    asserteq(T->ids[a].ns, 7);
+    asserteq(T->ids[b].ns, 9);
+    assertok(at_checkchains(T));
     at_deltree(T), at_close(S);
 }
 
@@ -432,7 +473,7 @@ TEST(anchor_range_positions) {
     at_Tree            *T = at_newtree(S);
     at_Id               a, b, c;
     size_t              x, y;
-    static const size_t expect[5] = {5, 20, 23, 1000, 1010};
+    static const size_t expect[6] = {0, 5, 20, 23, 1000, 1010};
     at_make_anchor(T, 0, 5, AT_GROW, &a);
     at_make_anchor(T, 1000, 10, AT_FIXED, &b);
     at_make_anchor(T, 20, 3, AT_SHIFT, &c);
@@ -445,11 +486,11 @@ TEST(anchor_range_positions) {
     assertok(at_range(T, c, &x, &y) == AT_OK);
     asserteq(x, 20);
     asserteq(y, 23);
-    assertok(at_positions_match(T, expect, 5));
-    assertok(at_del(T, a) == AT_OK);
-    assertok(at_del(T, b) == AT_OK);
-    assertok(at_del(T, c) == AT_OK);
-    asserteq(T->bytes, 0);
+    assertok(at_positions_match(T, expect, 6));
+    assertok(at_delanchor(T, a) == AT_OK);
+    assertok(at_delanchor(T, b) == AT_OK);
+    assertok(at_delanchor(T, c) == AT_OK);
+    asserteq(T->bytes, 1010);
     at_deltree(T), at_close(S);
 }
 
@@ -459,19 +500,20 @@ TEST(anchor_delete_cleans) {
     at_Tree            *T = at_newtree(S);
     at_Id               a, b;
     size_t              x, y;
-    static const size_t two[2] = {20, 25};
-    static const size_t four[4] = {20, 25, 100, 110};
+    static const size_t two[3] = {0, 20, 25};
+    static const size_t four[5] = {0, 20, 25, 100, 110};
     at_make_anchor(T, 20, 5, AT_LOCK, &b);
     at_make_anchor(T, 100, 10, AT_GROW, &a);
     assertok(at_range(T, a, &x, &y) == AT_OK);
     asserteq(x, 100);
     asserteq(y, 110);
-    assertok(at_positions_match(T, four, 4));
-    assertok(at_del(T, a) == AT_OK);
-    asserteq(T->bytes, 25);
-    assertok(at_positions_match(T, two, 2));
-    assertok(at_del(T, b) == AT_OK);
-    asserteq(T->bytes, 0);
+    assertok(at_positions_match(T, four, 5));
+    assertok(at_delanchor(T, a) == AT_OK);
+    asserteq(T->bytes, 110);
+    assertok(at_positions_match(T, two, 3));
+    assertok(at_delanchor(T, b) == AT_OK);
+    asserteq(T->bytes, 110);
+    asserteq(atN_cc(&T->root), 1);
     at_deltree(T), at_close(S);
 }
 
@@ -505,9 +547,9 @@ TEST(anchor_invalid_params) {
     at_Id     id;
     size_t    x = 0, y = 0;
     assertok(at_newanchor(NULL, 0, 0, AT_GROW, &id) == AT_ERRPARAM);
-    assertok(at_del(NULL, 1) == AT_ERRPARAM);
-    assertok(at_del(T, 0) == AT_ERRPARAM);
-    assertok(at_del(T, 1) == AT_ERRPARAM);
+    assertok(at_delanchor(NULL, 1) == AT_ERRPARAM);
+    assertok(at_delanchor(T, 0) == AT_ERRPARAM);
+    assertok(at_delanchor(T, 1) == AT_ERRPARAM);
     assertok(at_range(NULL, 1, &x, &y) == AT_ERRPARAM);
     assertok(at_range(T, 1, &x, &y) == AT_ERRPARAM);
     assertok(at_range(T, 1, NULL, &y) == AT_ERRPARAM);
@@ -515,10 +557,11 @@ TEST(anchor_invalid_params) {
     assertok(at_gravity(T, 0) < 0);
     assertok(at_seek(&C, T, 0) == AT_OK);
     assertok(at_newanchor(&C, 0, 0, 99, &id) == AT_ERRPARAM);
+    assertok(at_newanchor(&C, 0, 0, -1, &id) == AT_ERRPARAM);
     assertok(at_newanchor(&C, 0, 0, AT_GROW, NULL) == AT_ERRPARAM);
     at_make_anchor(T, 50, 5, AT_GROW, &id);
-    assertok(at_del(T, id) == AT_OK);
-    assertok(at_del(T, id) == AT_ERRPARAM);
+    assertok(at_delanchor(T, id) == AT_OK);
+    assertok(at_delanchor(T, id) == AT_ERRPARAM);
     assertok(at_range(T, id, &x, &y) == AT_ERRPARAM);
     assertok(at_gravity(T, id) < 0);
     at_deltree(T), at_close(S);
@@ -530,7 +573,7 @@ static int at_no_empty_edges(at_Tree *T) {
     at_TestSeq s;
     int        i;
     at_seq(T, &s);
-    for (i = 0; i < s.n; ++i)
+    for (i = 1; i < s.n; ++i)
         if (atO_empty(s.edge[i])) return 0;
     return 1;
 }
@@ -585,10 +628,7 @@ TEST(splice_edge_gravity_insert) {
         assertok(at_range(T, id, &x, &y) == AT_OK);
         asserteq(x, ex[i][0]);
         asserteq(y, ex[i][1]);
-        if (gv[i] == AT_LOCK)
-            asserteq(T->bytes, 100);
-        else
-            asserteq(T->bytes, 107);
+        asserteq(T->bytes, 107);
         at_deltree(T), at_close(S);
     }
 }
@@ -686,6 +726,10 @@ TEST(splice_params) {
     assertok(at_seek(&C, T, 0) == AT_OK);
     assertok(at_splice(&C, 0, 0) == AT_OK);
     assertok(at_checkcursor(&C, 0));
+    assertok(atI_insert(T, 0, 7) == AT_OK);
+    assertok(atI_insert(T, 5, 7) == AT_OK);
+    assertok(at_checkchains(T));
+    assertok(T->bytes == 14);
     assertok(at_checktree(T));
     assertok(at_no_empty_edges(T));
     at_deltree(T), at_close(S);
@@ -709,7 +753,7 @@ TEST(anchor_oom_idalloc) {
     asserteq(oc.live, 0);
 }
 
-/* OOM while reserving an endpoint tail leaves state intact */
+/* OOM while allocating the moved-to edge leaves state intact */
 TEST(anchor_oom_start_push) {
     OomCount  oc = {0, 1 << 20};
     at_State *S = at_open(&oomcount_alloc, &oc);
@@ -719,11 +763,13 @@ TEST(anchor_oom_start_push) {
     size_t    x, y;
     at_make_anchor(T, 100, 0, AT_GROW, &keep);
     at_make_anchor(T, 200, 0, AT_GROW, &spare);
-    assertok(at_del(T, spare) == AT_OK);
+    assertok(at_delanchor(T, spare) == AT_OK);
+    (void)at_drainpool(&S->edges);
     oc.oom = 0;
-    assertok(at_seek(&C, T, 100) == AT_OK);
+    assertok(at_seek(&C, T, 150) == AT_OK);
     assertok(at_newanchor(&C, 0, 0, AT_GROW, &id) == AT_ERRMEM);
     assertok(at_checktree(T));
+    assertok(at_checkchains(T));
     assertok(at_no_empty_edges(T));
     assertok(at_range(T, keep, &x, &y) == AT_OK);
     assertok(x == 100 && y == 100);
@@ -732,7 +778,7 @@ TEST(anchor_oom_start_push) {
     asserteq(oc.live, 0);
 }
 
-/* OOM while reserving the END endpoint tail leaves state intact */
+/* OOM while allocating the END edge leaves state intact */
 TEST(anchor_oom_end_push) {
     OomCount  oc = {0, 1 << 20};
     at_State *S = at_open(&oomcount_alloc, &oc);
@@ -742,35 +788,41 @@ TEST(anchor_oom_end_push) {
     size_t    x, y;
     at_make_anchor(T, 100, 0, AT_FIXED, &keep);
     at_make_anchor(T, 200, 0, AT_GROW, &spare);
-    assertok(at_del(T, spare) == AT_OK);
+    assertok(at_delanchor(T, spare) == AT_OK);
+    (void)at_drainpool(&S->edges);
     oc.oom = 0;
-    assertok(at_seek(&C, T, 0) == AT_OK);
-    assertok(at_newanchor(&C, 100, 0, AT_GROW, &id) == AT_ERRMEM);
+    assertok(at_seek(&C, T, 150) == AT_OK);
+    assertok(at_newanchor(&C, 0, 0, AT_GROW, &id) == AT_ERRMEM);
     assertok(at_checktree(T));
+    assertok(at_checkchains(T));
     assertok(at_no_empty_edges(T));
     assertok(at_range(T, keep, &x, &y) == AT_OK);
     assertok(x == 100 && y == 100);
     assertok(at_gravity(T, keep) == AT_FIXED);
-    assertok(atO_listcount(&T->origin.left) == 0);
+    assertok(1); /* L1: origin bucket check removed */
     at_deltree(T), at_close(S);
     asserteq(oc.live, 0);
 }
 
-/* OOM while growing an endpoint tail vector leaves state intact */
+/* OOM while allocating a fresh edge leaves existing anchors intact */
 TEST(anchor_oom_grow_tail) {
     OomCount  oc = {0, 1 << 20};
     at_State *S = at_open(&oomcount_alloc, &oc);
     at_Tree  *T = at_newtree(S);
     at_Cursor C;
     at_Id     ids[5], id;
-    size_t    x, y;
+    size_t    x, y, bytes;
     int       i;
     for (i = 0; i < 5; ++i) at_make_anchor(T, 100, 0, AT_GROW, &ids[i]);
+    bytes = T->bytes;
+    (void)at_drainpool(&S->edges);
     oc.oom = 0;
-    assertok(at_seek(&C, T, 100) == AT_OK);
+    assertok(at_seek(&C, T, 150) == AT_OK);
     assertok(at_newanchor(&C, 0, 0, AT_GROW, &id) == AT_ERRMEM);
     assertok(at_checktree(T));
+    assertok(at_checkchains(T));
     assertok(at_no_empty_edges(T));
+    asserteq(T->bytes, bytes);
     for (i = 0; i < 5; ++i) {
         assertok(at_range(T, ids[i], &x, &y) == AT_OK);
         assertok(x == 100 && y == 100);
@@ -779,7 +831,7 @@ TEST(anchor_oom_grow_tail) {
     asserteq(oc.live, 0);
 }
 
-/* OOM while reserving a new same-side zero-length tail leaves state intact */
+/* OOM after the id reserve leaves an empty tree intact */
 TEST(anchor_oom_new_same_side) {
     OomCount  oc = {0, 1 << 20};
     at_State *S = at_open(&oomcount_alloc, &oc);
@@ -787,10 +839,11 @@ TEST(anchor_oom_new_same_side) {
     at_Cursor C;
     at_Id     id;
     assertok(T != NULL);
-    oc.oom = 2;
+    oc.oom = 1;
     assertok(at_seek(&C, T, 50) == AT_OK);
     assertok(at_newanchor(&C, 0, 0, AT_SHIFT, &id) == AT_ERRMEM);
     assertok(at_checktree(T));
+    assertok(at_checkchains(T));
     assertok(at_no_empty_edges(T));
     assertok(T->bytes == 0);
     at_deltree(T), at_close(S);
@@ -806,7 +859,7 @@ TEST(anchor_oom_edges_start) {
     at_Drain  d;
     at_Id     tmp, id;
     at_make_anchor(T, 100, 0, AT_GROW, &tmp);
-    assertok(at_del(T, tmp) == AT_OK);
+    assertok(at_delanchor(T, tmp) == AT_OK);
     d = at_drainpool(&S->edges);
     assertok(d.count > 0);
     *(void **)d.chain = NULL;
@@ -816,7 +869,7 @@ TEST(anchor_oom_edges_start) {
     assertok(at_newanchor(&C, 20, 0, AT_GROW, &id) == AT_ERRMEM);
     assertok(at_checktree(T));
     assertok(at_no_empty_edges(T));
-    assertok(T->bytes == 0);
+    assertok(T->bytes == 100);
     at_deltree(T), at_close(S);
     asserteq(oc.live, 0);
 }
@@ -831,7 +884,9 @@ TEST(splice_oom_insert_last) {
     size_t    x, y;
     at_make_anchor(T, 100, 0, AT_FIXED, &a);
     at_make_anchor(T, 100, 0, AT_FIXED, &b);
-    oc.oom = 4;
+    (void)at_drainpool(&S->nodes);
+    (void)at_drainpool(&S->edges);
+    oc.oom = 1;
     assertok(at_seek(&C, T, 100) == AT_OK);
     assertok(at_splice(&C, 0, 7) == AT_ERRMEM);
     assertok(at_checktree(T));
@@ -856,7 +911,9 @@ TEST(splice_oom_insert_shift) {
     at_make_anchor(T, 100, 0, AT_FIXED, &a);
     at_make_anchor(T, 100, 0, AT_FIXED, &b);
     at_make_anchor(T, 200, 0, AT_FIXED, &c);
-    oc.oom = 4;
+    (void)at_drainpool(&S->nodes);
+    (void)at_drainpool(&S->edges);
+    oc.oom = 1;
     assertok(at_seek(&C, T, 100) == AT_OK);
     assertok(at_splice(&C, 0, 7) == AT_ERRMEM);
     assertok(at_checktree(T));
@@ -880,7 +937,9 @@ TEST(splice_oom_delete) {
     size_t    x, y;
     at_make_anchor(T, 50, 0, AT_GROW, &a);
     at_make_anchor(T, 55, 0, AT_GROW, &b);
-    oc.oom = 6;
+    (void)at_drainpool(&S->nodes);
+    (void)at_drainpool(&S->edges);
+    oc.oom = 1;
     assertok(at_seek(&C, T, 30) == AT_OK);
     assertok(at_splice(&C, 40, 0) == AT_ERRMEM);
     assertok(at_checktree(T));
@@ -903,7 +962,9 @@ TEST(splice_oom_delete_boundaries) {
     at_Id     a;
     size_t    x, y;
     at_make_anchor(T, 80, 10, AT_GROW, &a);
-    oc.oom = 2;
+    (void)at_drainpool(&S->nodes);
+    (void)at_drainpool(&S->edges);
+    oc.oom = 1;
     assertok(at_seek(&C, T, 30) == AT_OK);
     assertok(at_splice(&C, 40, 0) == AT_ERRMEM);
     assertok(at_checktree(T));
@@ -923,10 +984,10 @@ TEST(del_oom_none) {
     at_Id     a;
     at_make_anchor(T, 30, 10, AT_GROW, &a);
     oc.oom = 0;
-    assertok(at_del(T, a) == AT_OK);
+    assertok(at_delanchor(T, a) == AT_OK);
     assertok(at_checktree(T));
     assertok(at_no_empty_edges(T));
-    assertok(T->bytes == 0);
+    assertok(T->bytes == 40);
     at_deltree(T), at_close(S);
     asserteq(oc.live, 0);
 }
@@ -940,52 +1001,39 @@ TEST(anchor_tail_delete) {
     at_make_anchor(T, 100, 0, AT_GROW, &a);
     at_make_anchor(T, 100, 0, AT_GROW, &b);
     at_make_anchor(T, 100, 0, AT_GROW, &c);
-    assertok(at_del(T, b) == AT_OK);
+    assertok(at_delanchor(T, b) == AT_OK);
     assertok(at_checktree(T));
     assertok(at_no_empty_edges(T));
     assertok(at_range(T, a, &x, &y) == AT_OK);
     assertok(x == 100 && y == 100);
     assertok(at_range(T, c, &x, &y) == AT_OK);
     assertok(x == 100 && y == 100);
-    assertok(at_del(T, a) == AT_OK);
-    assertok(at_del(T, c) == AT_OK);
-    assertok(T->bytes == 0);
+    assertok(at_delanchor(T, a) == AT_OK);
+    assertok(at_delanchor(T, c) == AT_OK);
+    assertok(T->bytes == 100);
     at_deltree(T), at_close(S);
 }
 
-/* direct tail-vector reserve, discard, and tail-endpoint removal paths */
+/* same-bucket SHIFT anchors keep two tagged slots and stay reachable */
 TEST(tail_vector_internals) {
     at_State *S = at_open(NULL, NULL);
     at_Tree  *T = at_newtree(S);
     at_Edge  *e;
-    at_Point *tp = NULL;
     at_Id     id;
-    int       r;
-    assertok(atV_reserve(T->S, tp, 0) == AT_OK);
-    assertok(tp == NULL);
-    assertok(atV_reserve(T->S, tp, 2) == AT_OK);
-    assertok(tp != NULL && atV_len(tp) == 0 && atV_cap(tp) >= 2);
-    assertok(atV_reserve(T->S, tp, 1) == AT_OK);
-    assertok(atV_reserve(T->S, tp, 3) == AT_OK);
-    atV_free(T->S, tp);
-    r = atO_reserve(T, &T->origin.left, 3);
-    assertok(r == AT_OK);
-    assertok(T->origin.left.tail != NULL);
-    assertok(atO_listcount(&T->origin.left) == 0);
-    atO_discardemptytail(T, &T->origin.left);
-    assertok(T->origin.left.tail == NULL);
-    atO_discardemptytail(T, &T->origin.right);
-    assertok(T->origin.right.tail == NULL);
+    assertok(atN_cc(&T->root) == 0); /* L1: empty tree has no edges */
     at_make_anchor(T, 100, 0, AT_SHIFT, &id);
     assertok(atO_findedge(T, 100, &e));
-    assertok(atO_listcount(&e->left) == 0);
-    assertok(atO_listcount(&e->right) == 2);
-    atO_remove(T, &e->right, id, 1);
-    assertok(atO_listcount(&e->right) == 1);
+    assertok(atO_listcount(T, &e->left) == 0);
+    assertok(atO_listcount(T, &e->right) == 2);
+    assertok(atO_sideof(T, e, id, 0) == 1);
+    assertok(atO_sideof(T, e, id, 1) == 1);
+    assertok(at_checkchains(T));
     atO_remove(T, &e->right, id, 0);
-    assertok(atO_listcount(&e->right) == 0);
-    atO_clean(T, &T->origin, 0, 999, 0);
-    assertok(at_checktree(T));
+    assertok(atO_listcount(T, &e->right) == 1);
+    assertok(at_counttag(T, &e->right, id, 0) == 0);
+    assertok(atO_push(T, &e->right, id, (int)T->ids[id].ns, 0) == AT_OK);
+    assertok(atO_listcount(T, &e->right) == 2);
+    assertok(at_checkchains(T));
     at_deltree(T), at_close(S);
 }
 
@@ -1083,10 +1131,13 @@ TEST(splice_oom_empty_insert) {
     at_Id     a;
     size_t    x, y;
     at_make_anchor(T, 0, 0, AT_SHIFT, &a);
-    oc.oom = 5;
+    (void)at_drainpool(&S->nodes);
+    (void)at_drainpool(&S->edges);
+    oc.oom = 0;
     assertok(at_seek(&C, T, 0) == AT_OK);
     assertok(at_splice(&C, 0, 7) == AT_ERRMEM);
     assertok(at_checktree(T));
+    assertok(at_checkchains(T));
     assertok(at_no_empty_edges(T));
     assertok(T->bytes == 0);
     assertok(at_range(T, a, &x, &y) == AT_OK);
@@ -1101,15 +1152,76 @@ TEST(insert_empty_oom) {
     at_State *S = at_open(&oomcount_alloc, &oc);
     at_Tree  *T = at_newtree(S);
     at_Id     a;
-    at_make_anchor(T, 0, 0, AT_SHIFT, &a);
-    assertok(atI_insert(T, 5, 7) == AT_OK);
+    size_t    x, y;
+    at_make_anchor(T, 0, 0, AT_FIXED, &a);
+    (void)at_drainpool(&S->edges);
     oc.oom = 0;
     assertok(atI_insert(T, 0, 7) == AT_ERRMEM);
     assertok(at_checktree(T));
+    assertok(at_checkchains(T));
     assertok(at_no_empty_edges(T));
     assertok(T->bytes == 0);
+    assertok(at_range(T, a, &x, &y) == AT_OK);
+    assertok(x == 0 && y == 0);
     at_deltree(T), at_close(S);
     asserteq(oc.live, 0);
+}
+
+/* insert at the last edge takes the no-shift seam path */
+TEST(insert_seam_last_edge) {
+    at_State *S = at_open(NULL, NULL);
+    at_Tree  *T = at_newtree(S);
+    at_Id     a;
+    size_t    x, y;
+    at_make_anchor(T, 100, 0, AT_GROW, &a);
+    assertok(atI_insert(T, 100, 7) == AT_OK);
+    assertok(at_checktree(T));
+    assertok(at_checkchains(T));
+    assertok(at_no_empty_edges(T));
+    asserteq(T->bytes, 107);
+    assertok(at_range(T, a, &x, &y) == AT_OK);
+    assertok(x == 100 && y == 107);
+    at_deltree(T), at_close(S);
+}
+
+/* insert at a middle edge shifts later edges and moves its RIGHT bucket */
+TEST(insert_seam_mid_edge) {
+    at_State *S = at_open(NULL, NULL);
+    at_Tree  *T = at_newtree(S);
+    at_Id     a, b;
+    size_t    x, y;
+    at_make_anchor(T, 100, 0, AT_GROW, &a);
+    at_make_anchor(T, 200, 0, AT_GROW, &b);
+    assertok(atI_insert(T, 100, 7) == AT_OK);
+    assertok(at_checktree(T));
+    assertok(at_checkchains(T));
+    assertok(at_no_empty_edges(T));
+    asserteq(T->bytes, 207);
+    assertok(at_range(T, a, &x, &y) == AT_OK);
+    assertok(x == 100 && y == 107);
+    assertok(at_range(T, b, &x, &y) == AT_OK);
+    assertok(x == 207 && y == 207);
+    at_deltree(T), at_close(S);
+}
+
+/* insert in a gap shifts later edges without creating a new edge */
+TEST(insert_gap_shift_mid) {
+    at_State *S = at_open(NULL, NULL);
+    at_Tree  *T = at_newtree(S);
+    at_Id     a, b;
+    size_t    x, y;
+    at_make_anchor(T, 100, 0, AT_GROW, &a);
+    at_make_anchor(T, 200, 0, AT_GROW, &b);
+    assertok(atI_insert(T, 150, 7) == AT_OK);
+    assertok(at_checktree(T));
+    assertok(at_checkchains(T));
+    assertok(at_no_empty_edges(T));
+    asserteq(T->bytes, 207);
+    assertok(at_range(T, a, &x, &y) == AT_OK);
+    assertok(x == 100 && y == 100);
+    assertok(at_range(T, b, &x, &y) == AT_OK);
+    assertok(x == 207 && y == 207);
+    at_deltree(T), at_close(S);
 }
 
 /* direct insert rolls back the edge shift when edge allocation fails */
@@ -1145,7 +1257,7 @@ TEST(edges_oom_end_cleanup) {
     at_Edge  *se, *ee;
     at_Id     tmp;
     at_make_anchor(T, 10, 0, AT_GROW, &tmp);
-    assertok(at_del(T, tmp) == AT_OK);
+    assertok(at_delanchor(T, tmp) == AT_OK);
     d = at_drainpool(&S->edges);
     assertok(d.count > 0);
     *(void **)d.chain = NULL;
@@ -1154,7 +1266,7 @@ TEST(edges_oom_end_cleanup) {
     assertok(atO_edges(T, 30, 50, &se, &ee) == AT_ERRMEM);
     assertok(at_checktree(T));
     assertok(at_no_empty_edges(T));
-    assertok(T->bytes == 0);
+    assertok(T->bytes == 10);
     at_deltree(T), at_close(S);
     asserteq(oc.live, 0);
 }
@@ -1171,7 +1283,7 @@ TEST(edges_oom_cleanup_variants) {
     S = at_open(&oomcount_alloc, &oc);
     T = at_newtree(S);
     at_make_anchor(T, 10, 0, AT_GROW, &tmp);
-    assertok(at_del(T, tmp) == AT_OK);
+    assertok(at_delanchor(T, tmp) == AT_OK);
     d = at_drainpool(&S->edges);
     assertok(d.count > 0);
     *(void **)d.chain = NULL;
@@ -1179,7 +1291,7 @@ TEST(edges_oom_cleanup_variants) {
     oc.oom = 0;
     assertok(atO_edges(T, 0, 50, &se, &ee) == AT_ERRMEM);
     assertok(at_checktree(T));
-    assertok(T->bytes == 0);
+    assertok(T->bytes == 10);
     at_deltree(T), at_close(S);
     oc.live = 0, oc.oom = 1 << 20;
     S = at_open(&oomcount_alloc, &oc);
@@ -1278,20 +1390,16 @@ TEST(insert_oom_split_root_cleanup) {
     at_Drain  d;
     at_Edge  *e;
     int       i;
-    for (i = 1; i <= 5; ++i)
+    for (i = 1; i <= 3; ++i)
         assertok(atI_insertedge(T, (size_t)(i * 10), &e) == AT_OK);
-    assertok(atD_deleteedge(T, 50) == AT_OK);
-    assertok(atD_deleteedge(T, 40) == AT_OK);
-    assertok(atD_deleteedge(T, 30) == AT_OK);
-    assertok(atI_insertedge(T, 30, &e) == AT_OK);
-    assertok(atI_insertedge(T, 40, &e) == AT_OK);
-    assertok(atN_cc(&T->root) == AT_FANOUT);
+    assertok(T->levels == 0 && atN_cc(&T->root) == AT_FANOUT);
+    assertok(atP_reserve(S, &S->nodes, 2) == AT_OK);
     d = at_drainpool(&S->nodes);
     assertok(d.count > 0);
     *(void **)d.chain = NULL;
     S->nodes.freed = d.chain, S->nodes.freed_obj = 1;
     oc.oom = 0;
-    assertok(atI_insertedge(T, 50, &e) == AT_ERRMEM);
+    assertok(atI_insertedge(T, 40, &e) == AT_ERRMEM);
     assertok(at_checktree(T));
     at_deltree(T), at_close(S);
     asserteq(oc.live, 0);
@@ -1305,20 +1413,16 @@ TEST(insert_oom_split_root_alloc) {
     at_Drain  d;
     at_Edge  *e;
     int       i;
-    for (i = 1; i <= 5; ++i)
+    for (i = 1; i <= 3; ++i)
         assertok(atI_insertedge(T, (size_t)(i * 10), &e) == AT_OK);
-    assertok(atD_deleteedge(T, 50) == AT_OK);
-    assertok(atD_deleteedge(T, 40) == AT_OK);
-    assertok(atD_deleteedge(T, 30) == AT_OK);
-    assertok(atI_insertedge(T, 30, &e) == AT_OK);
-    assertok(atI_insertedge(T, 40, &e) == AT_OK);
     assertok(T->levels == 0 && atN_cc(&T->root) == AT_FANOUT);
+    assertok(atP_reserve(S, &S->nodes, 2) == AT_OK);
     d = at_drainpool(&S->nodes);
     assertok(d.count > 0);
     *(void **)d.chain = NULL;
     S->nodes.freed = d.chain, S->nodes.freed_obj = 0;
     oc.oom = 0;
-    assertok(atI_insertedge(T, 50, &e) == AT_ERRMEM);
+    assertok(atI_insertedge(T, 40, &e) == AT_ERRMEM);
     assertok(at_checktree(T));
     assertok(T->levels == 0 && atN_cc(&T->root) == AT_FANOUT);
     at_deltree(T), at_close(S);
@@ -1332,11 +1436,11 @@ TEST(edge_side_missing) {
     at_Edge  *e;
     at_Id     a;
     size_t    x, y;
-    assertok(atO_sideof(&T->origin, 1000, 0) == -1);
+    assertok(1); /* L1: origin removed from the model */
     at_make_anchor(T, 100, 0, AT_SHIFT, &a);
     assertok(atO_findedge(T, 100, &e));
-    assertok(atO_sideof(e, 1000, 0) == -1);
-    assertok(atO_sideof(e, 1000, 1) == -1);
+    assertok(atO_sideof(T, e, 1000, 0) == -1);
+    assertok(atO_sideof(T, e, 1000, 1) == -1);
     assertok(at_checktree(T));
     assertok(at_range(T, a, &x, &y) == AT_OK);
     assertok(x == 100 && y == 100);
@@ -1356,13 +1460,13 @@ TEST(delete_root_collapse) {
     assertok(T->levels >= 1);
     prev = (size_t)T->levels;
     for (i = 0; i < 40; ++i) {
-        assertok(at_del(T, id[i]) == AT_OK);
+        assertok(at_delanchor(T, id[i]) == AT_OK);
         assertok(at_checktree(T));
         if ((size_t)T->levels < prev && T->bytes > 0) shrunk = 1;
         prev = (size_t)T->levels;
     }
     assertok(shrunk);
-    assertok(T->levels == 0 && atN_cc(&T->root) == 0 && T->bytes == 0);
+    assertok(T->levels == 0 && atN_cc(&T->root) == 1 && T->bytes == 283);
     at_deltree(T), at_close(S);
 }
 
@@ -1390,6 +1494,29 @@ TEST(insert_oom_split_root_interior_cleanup) {
     asserteq(oc.live, 0);
 }
 
+static at_Node *at_lastleaf(at_Tree *T) {
+    at_Node *n = &T->root;
+    int      l = T->levels;
+    while (l > 0) n = n->children[atN_cc(n) - 1], --l;
+    return n;
+}
+
+static void at_build_full_lastleaf(at_Tree *T) {
+    at_Id    id;
+    at_Node *last;
+    size_t   pos = 10;
+    int      guard;
+    for (guard = 0; guard < 512; ++guard) {
+        at_make_anchor(T, pos, 0, AT_GROW, &id);
+        last = at_lastleaf(T);
+        if (T->levels >= 2 && atN_cc(last) == AT_FANOUT
+            && atN_cc(last->parent) < AT_FANOUT && atN_cc(&T->root) < AT_FANOUT)
+            return;
+        pos += 10;
+    }
+    assert(0);
+}
+
 /* recursive child-split OOM after edge allocation frees the edge */
 TEST(insert_oom_recursive_split_rollback) {
     OomCount  oc = {0, 1 << 20};
@@ -1397,11 +1524,10 @@ TEST(insert_oom_recursive_split_rollback) {
     at_Tree  *T = at_newtree(S);
     at_Drain  dn, de;
     at_Edge  *e;
-    int       i;
-    for (i = 1; i <= 8; ++i)
-        assertok(atI_insertedge(T, (size_t)(i * 10), &e) == AT_OK);
-    assertok(T->levels == 1);
-    assertok(atN_cc(&T->root) == 3);
+    size_t    pos, bytes;
+    at_build_full_lastleaf(T);
+    pos = atO_edgepos(atN_edge(at_lastleaf(T), 0)) + 1;
+    bytes = T->bytes;
     dn = at_drainpool(&S->nodes);
     de = at_drainpool(&S->edges);
     assertok(dn.count > 0 && de.count > 0);
@@ -1409,9 +1535,9 @@ TEST(insert_oom_recursive_split_rollback) {
     S->nodes.freed = dn.chain, S->nodes.freed_obj = 0;
     S->edges.freed = de.chain, S->edges.freed_obj = 1;
     oc.oom = 0;
-    assertok(atI_insertedge(T, 90, &e) == AT_ERRMEM);
+    assertok(atI_insertedge(T, pos, &e) == AT_ERRMEM);
     assertok(at_checktree(T));
-    assertok(T->bytes == 80);
+    assertok(T->bytes == bytes);
     at_deltree(T), at_close(S);
     asserteq(oc.live, 0);
 }
@@ -1590,6 +1716,42 @@ static int at_splice_brute_ok(void) {
     return 1;
 }
 
+/* deleting across leaf boundaries exercises prep-window merge and balance */
+TEST(delete_cross_leaf_merge) {
+    at_State *S = at_open(NULL, NULL);
+    at_Tree  *T = at_newtree(S);
+    at_Cursor C;
+    at_Id     id[64];
+    int       i;
+    for (i = 0; i < 40; ++i)
+        at_make_anchor(T, (size_t)(10 + i * 7), 0, AT_GROW, &id[i]);
+    assertok(T->levels >= 1);
+    assertok(at_seek(&C, T, 12) == AT_OK);
+    assertok(at_splice(&C, 120, 0) == AT_OK);
+    assertok(at_checktree(T));
+    assertok(at_no_empty_edges(T));
+    assertok(at_checkchains(T));
+    assertok(at_checkcursor(&C, 12));
+    at_deltree(T), at_close(S);
+}
+
+/* deleting to the tail drops the emptied sentinel and shrinks the tree */
+TEST(delete_tail_sentinel) {
+    at_State *S = at_open(NULL, NULL);
+    at_Tree  *T = at_newtree(S);
+    at_Cursor C;
+    at_Id     id[20];
+    int       i;
+    for (i = 0; i < 20; ++i)
+        at_make_anchor(T, (size_t)(10 + i * 9), 3, AT_GROW, &id[i]);
+    assertok(at_seek(&C, T, 10) == AT_OK);
+    assertok(at_splice(&C, (size_t)-1, 0) == AT_OK);
+    assertok(at_checktree(T));
+    assertok(at_no_empty_edges(T));
+    assertok(at_checkchains(T));
+    at_deltree(T), at_close(S);
+}
+
 TEST(splice_brute) { assertok(at_splice_brute_ok()); }
 
 /* deleting through a shared edge pushes both tail vectors */
@@ -1620,7 +1782,7 @@ TEST(splice_delete_makechain) {
     at_Cursor           C;
     at_Id               id[10];
     size_t              x, y;
-    static const size_t ep[5] = {10, 15, 25, 35, 45};
+    static const size_t ep[6] = {0, 10, 15, 25, 35, 45};
     static const size_t ex[10] = {10, 15, 15, 15, 15, 15, 15, 25, 35, 45};
     int                 i;
     for (i = 0; i < 10; ++i)
@@ -1631,7 +1793,7 @@ TEST(splice_delete_makechain) {
     assertok(at_no_empty_edges(T));
     assertok(at_checkcursor(&C, 15));
     asserteq(T->bytes, 45);
-    assertok(at_positions_match(T, ep, 5));
+    assertok(at_positions_match(T, ep, 6));
     for (i = 0; i < 10; ++i) {
         assertok(at_range(T, id[i], &x, &y) == AT_OK);
         asserteq(x, ex[i]);
@@ -1657,107 +1819,24 @@ TEST(splice_delete_tail) {
     at_deltree(T), at_close(S);
 }
 
-/* direct internal stitch-chain helper coverage */
-
-TEST(splice_internal_makechain) {
-    at_State *S = at_open(NULL, NULL);
-    at_Tree  *T = at_newtree(S);
-    at_Cursor C;
-    at_Id     id;
-    at_make_anchor(T, 100, 0, AT_GROW, &id);
-    assertok(at_seek(&C, T, 50) == AT_OK);
-    assertok(atP_reserve(S, &S->nodes, 8) == AT_OK);
-    assertok(atD_makechain(&C, -1, atK_levels(&C)) == 1);
-    assertok(T->levels == 1);
-    at_deltree(T), at_close(S);
-}
-
-TEST(splice_internal_findroom) {
-    at_State *S = at_open(NULL, NULL);
-    at_Tree  *T = at_newtree(S);
-    at_Cursor C;
-    at_Id     id[5];
-    at_Node  *copied;
-    int       i;
-    for (i = 0; i < 5; ++i)
-        at_make_anchor(T, (size_t)(10 + i * 10), 0, AT_GROW, &id[i]);
-    assertok(at_seek(&C, T, 10) == AT_OK);
-    assertok(atK_idx(&C, &T->root, 0) == 0);
-    assertok(atN_cc(&T->root) > 1);
-    atN_setcc(&T->S->rt[1], 0);
-    assertok(atP_reserve(S, &S->nodes, 8) == AT_OK);
-    assertok(atD_findroom(&C, T->S->rt, 1) == 0);
-    copied = (at_Node *)T->S->rt[1].children[0];
-    atN_purge(T, copied, 0, 0, atN_cc(copied));
-    atP_free(&S->nodes, copied);
-    atN_setcc(&T->S->rt[1], 0);
-    at_deltree(T), at_close(S);
-}
-
-TEST(splice_internal_backward) {
-    at_State *S = at_open(NULL, NULL);
-    at_Tree  *T = at_newtree(S);
-    at_Cursor C;
-    at_Id     id[20];
-    size_t    p;
-    int       i;
-    for (i = 0; i < 20; ++i)
-        at_make_anchor(T, (size_t)(10 + i * 10), 0, AT_GROW, &id[i]);
-    for (p = 0; p <= T->bytes; ++p) {
-        assertok(at_seek(&C, T, p) == AT_OK);
-        if (atK_levels(&C) >= 2 && atK_idx(&C, &T->root, 0) > 0
-            && atK_idx(&C, atK_parent(&C, 1), 1) < 2)
-            break;
-    }
-    assertok(p <= T->bytes);
-    atD_backwardnode(&C, 2, 1);
-    at_deltree(T), at_close(S);
-}
-
-TEST(splice_internal_stitchtail) {
-    at_State *S = at_open(NULL, NULL);
-    at_Tree  *T = at_newtree(S);
-    at_Cursor C;
-    at_Id     id;
-    int       cc;
-    at_make_anchor(T, 100, 0, AT_GROW, &id);
-    assertok(at_seek(&C, T, 100) == AT_OK);
-    cc = atN_cc(&T->root);
-    C.off = T->root.bytes[cc - 1], C.poff = 0;
-    C.paths[0] = &T->root.children[cc];
-    atD_stitchtail(&C);
-    assertok(C.paths[0] == &T->root.children[cc - 1]);
-    asserteq(C.poff, T->root.bytes[cc - 1]);
-    asserteq(C.off, 0);
-    at_deltree(T), at_close(S);
-}
-
-TEST(splice_internal_findroom_newroot) {
-    at_State *S = at_open(NULL, NULL);
-    at_Tree  *T = at_newtree(S);
-    at_Cursor C;
-    at_Id     id[9];
-    int       i;
-    for (i = 0; i < 9; ++i)
-        at_make_anchor(T, (size_t)(10 + i * 10), 0, AT_GROW, &id[i]);
-    assertok(at_seek(&C, T, 90) == AT_OK);
-    assertok(T->levels == 1);
-    assertok(atN_cc(&T->root) == AT_FANOUT);
-    assertok(atK_idx(&C, &T->root, 0) == AT_FANOUT - 1);
-    assertok(atP_reserve(S, &S->nodes, 32) == AT_OK);
-    assertok(atD_findroom(&C, T->S->rt, 1) == 1);
-    assertok(T->levels == 2);
-    at_deltree(T), at_close(S);
-}
-
 TEST(splice_collect_right_oom) {
     OomCount  oc = {0, 1 << 20};
     at_State *S = at_open(&oomcount_alloc, &oc);
     at_Tree  *T = at_newtree(S);
-    at_Id     id;
-    at_make_anchor(T, 100, 0, AT_GROW, &id);
-    oc.oom = 1;
-    assertok(atD_collectendpoints(T, 0, 100, &T->origin) == AT_ERRMEM);
+    at_Cursor C;
+    at_Id     id, keep;
+    size_t    x, y, bytes;
+    at_make_anchor(T, 100, 0, AT_GROW, &keep);
+    bytes = T->bytes;
+    (void)at_drainpool(&S->edges);
+    assertok(at_seek(&C, T, 300) == AT_OK);
+    oc.oom = 0;
+    assertok(at_newanchor(&C, 0, 0, AT_GROW, &id) == AT_ERRMEM);
+    assertok(at_checktree(T));
+    assertok(at_checkchains(T));
+    asserteq(T->bytes, bytes);
+    assertok(at_range(T, keep, &x, &y) == AT_OK);
+    assertok(x == 100 && y == 100);
     oc.oom = 1 << 20;
     at_deltree(T), at_close(S);
     asserteq(oc.live, 0);
@@ -1838,6 +1917,20 @@ static int at_collect_ns(at_Tree *T, size_t p, int ns, at_Id *out, int cap) {
 
 static int at_collect(at_Tree *T, size_t pos, at_Id *out, int cap) {
     return at_collect_ns(T, pos, 0, out, cap);
+}
+
+static int at_idset(const at_Id *got, int n, const at_Id *want, int m) {
+    int i, j, hit;
+    if (n != m) return 0;
+    for (i = 0; i < n; ++i) {
+        hit = 0;
+        for (j = 0; j < m; ++j)
+            if (got[i] == want[j]) hit = 1;
+        if (!hit) return 0;
+        for (j = i + 1; j < n; ++j)
+            if (got[i] == got[j]) return 0;
+    }
+    return 1;
 }
 
 /* iteration covers multiple edges, all gravities, and skips END items */
@@ -1965,7 +2058,7 @@ TEST(iter_empty_end_idempotent) {
 TEST(iter_ns_filter) {
     at_State *S = at_open(NULL, NULL);
     at_Tree  *T = at_newtree(S);
-    at_Id     a1, a2, a3, a4, b1, b2, b3, b4, got[8];
+    at_Id     a1, a2, a3, a4, b1, b2, b3, b4, got[8], want[8];
     int       n;
     at_make_ns(T, 0, 0, 1, &a1);
     at_make_ns(T, 0, 0, 2, &a2);
@@ -1977,14 +2070,21 @@ TEST(iter_ns_filter) {
     at_make_ns(T, 10, 0, 3, &b4);
     n = at_collect_ns(T, 0, 0, got, 8);
     assertok(n == 8);
-    assertok(got[0] == a1 && got[1] == a2 && got[2] == a3 && got[3] == a4);
-    assertok(got[4] == b1 && got[5] == b2 && got[6] == b3 && got[7] == b4);
+    want[0] = a1, want[1] = a2, want[2] = a3, want[3] = a4;
+    want[4] = b1, want[5] = b2, want[6] = b3, want[7] = b4;
+    assertok(at_idset(got, n, want, 8));
     n = at_collect_ns(T, 0, 1, got, 8);
-    assertok(n == 3 && got[0] == a1 && got[1] == a3 && got[2] == b2);
+    assertok(n == 3);
+    want[0] = a1, want[1] = a3, want[2] = b2;
+    assertok(at_idset(got, n, want, 3));
     n = at_collect_ns(T, 0, 2, got, 8);
-    assertok(n == 3 && got[0] == a2 && got[1] == b1 && got[2] == b3);
+    assertok(n == 3);
+    want[0] = a2, want[1] = b1, want[2] = b3;
+    assertok(at_idset(got, n, want, 3));
     n = at_collect_ns(T, 0, 3, got, 8);
-    assertok(n == 2 && got[0] == a4 && got[1] == b4);
+    assertok(n == 2);
+    want[0] = a4, want[1] = b4;
+    assertok(at_idset(got, n, want, 2));
     assertok(at_collect_ns(T, 0, 99, got, 8) == 0);
     at_deltree(T), at_close(S);
 }
@@ -2071,6 +2171,35 @@ TEST(iter_exhaust_restart) {
     at_deltree(T), at_close(S);
 }
 
+/* empty tree: advance(0) preserves origin iteration; moving to 0 restarts */
+TEST(iter_empty_origin) {
+    at_State *S = at_open(NULL, NULL);
+    at_Tree  *T = at_newtree(S);
+    at_Cursor C;
+    at_Id     a, b;
+    size_t    len = 99;
+    at_make_anchor(T, 0, 0, AT_GROW, &a);
+    at_make_anchor(T, 0, 0, AT_GROW, &b);
+    asserteq(a, 1);
+    assertok(at_seek(&C, T, 0) == AT_OK);
+    assertok(at_next(&C, 0, NULL) == b);
+    assertok(at_advance(&C, 0) == AT_OK);
+    assertok(at_next(&C, 0, NULL) == a);
+    assertok(at_next(&C, 0, &len) == AT_NONE);
+    asserteq(len, 0);
+    assertok(at_next(&C, 0, &len) == AT_NONE);
+    asserteq(len, 0);
+    assertok(at_advance(&C, -1) == AT_OK);
+    assertok(at_next(&C, 0, NULL) == b);
+    assertok(at_next(&C, 0, NULL) == a);
+    assertok(at_advance(&C, 1) == AT_OK);
+    assertok(at_next(&C, 0, &len) == AT_NONE);
+    asserteq(len, 0);
+    assertok(at_advance(&C, -1) == AT_OK);
+    assertok(at_next(&C, 0, NULL) == b);
+    at_deltree(T), at_close(S);
+}
+
 /* after insertion, iteration reflects shifted endpoint positions */
 TEST(iter_after_splice_insert) {
     at_State *S = at_open(NULL, NULL);
@@ -2117,29 +2246,6 @@ TEST(iter_after_splice_delete) {
 /* targeted branch coverage: overflow, OOM orderings, helper misses   */
 /* ------------------------------------------------------------------ */
 
-static at_Node *at_lastleaf(at_Tree *T) {
-    at_Node *n = &T->root;
-    int      l = T->levels;
-    while (l > 0) n = n->children[atN_cc(n) - 1], --l;
-    return n;
-}
-
-static void at_build_full_lastleaf(at_Tree *T) {
-    at_Id    id;
-    at_Node *last;
-    size_t   pos = 10;
-    int      guard;
-    for (guard = 0; guard < 512; ++guard) {
-        at_make_anchor(T, pos, 0, AT_GROW, &id);
-        last = at_lastleaf(T);
-        if (T->levels >= 2 && atN_cc(last) == AT_FANOUT
-            && atN_cc(last->parent) < AT_FANOUT && atN_cc(&T->root) < AT_FANOUT)
-            return;
-        pos += 10;
-    }
-    assert(0);
-}
-
 /* saturated deletion length takes the overflow branch and clamps at EOF */
 TEST(splice_overflow_del) {
     at_State *S = at_open(NULL, NULL);
@@ -2181,72 +2287,98 @@ TEST(splice_delete_large_span) {
     at_deltree(T), at_close(S);
 }
 
-/* OOM after the left reserve allocates an empty tail frees it cleanly */
+/* id-array growth failure leaves the empty tree untouched */
 TEST(collect_discard_empty_tail) {
     OomCount  oc = {0, 1 << 20};
     at_State *S = at_open(&oomcount_alloc, &oc);
     at_Tree  *T = at_newtree(S);
-    at_Id     a, b;
+    at_Cursor C;
+    at_Id     a, id;
+    size_t    x, y, bytes;
     at_make_anchor(T, 100, 0, AT_GROW, &a);
-    at_make_anchor(T, 100, 0, AT_GROW, &b);
-    oc.oom = 3;
-    assertok(atD_collectendpoints(T, 50, 105, &T->origin) == AT_ERRMEM);
-    assertok(T->origin.left.tail == NULL);
-    assertok(T->origin.right.tail == NULL);
+    bytes = T->bytes;
+    (void)at_drainpool(&S->edges);
+    assertok(at_seek(&C, T, 300) == AT_OK);
+    oc.oom = 0;
+    assertok(at_newanchor(&C, 5, 0, AT_GROW, &id) == AT_ERRMEM);
     assertok(at_checktree(T));
+    assertok(at_checkchains(T));
+    asserteq(T->bytes, bytes);
+    assertok(at_range(T, a, &x, &y) == AT_OK);
+    asserteq(x, 100);
+    asserteq(y, 100);
     at_deltree(T), at_close(S);
     asserteq(oc.live, 0);
 }
 
-/* a reserve failure must keep an existing non-empty tail intact */
+/* edge-array failure keeps an existing non-empty bucket intact */
 TEST(collect_discard_nonempty_tail) {
     OomCount  oc = {0, 1 << 20};
     at_State *S = at_open(&oomcount_alloc, &oc);
     at_Tree  *T = at_newtree(S);
+    at_Cursor C;
     at_Edge  *le;
-    at_Id     a, b;
+    at_Id     a, b, id;
+    size_t    x, y;
     at_make_anchor(T, 100, 10, AT_GROW, &a);
     at_make_anchor(T, 100, 10, AT_GROW, &b);
     assertok(atO_findedge(T, 100, &le));
-    assertok(le->left.tail != NULL);
-    oc.oom = 1;
-    assertok(atD_collectendpoints(T, 100, 115, le) == AT_ERRMEM);
-    assertok(le->left.tail != NULL);
-    asserteq(atO_listcount(&le->left), 2);
-    assertok(le->right.tail == NULL);
-    assertok(at_checktree(T));
+    asserteq(atO_listcount(T, &le->left), 2);
+    (void)at_drainpool(&S->edges);
+    assertok(at_seek(&C, T, 300) == AT_OK);
+    oc.oom = 0;
+    assertok(at_newanchor(&C, 5, 0, AT_GROW, &id) == AT_ERRMEM);
+    assertok(at_checkchains(T));
+    asserteq(atO_listcount(T, &le->left), 2);
+    assertok(at_range(T, a, &x, &y) == AT_OK);
+    assertok(x == 100 && y == 110);
+    assertok(at_range(T, b, &x, &y) == AT_OK);
+    assertok(x == 100 && y == 110);
     at_deltree(T), at_close(S);
     asserteq(oc.live, 0);
 }
 
-/* OOM on a tail-vector push during endpoint collection propagates */
+/* a failed edge allocation releases the reserved anchor id */
 TEST(collect_tail_push_oom) {
     OomCount  oc = {0, 1 << 20};
     at_State *S = at_open(&oomcount_alloc, &oc);
     at_Tree  *T = at_newtree(S);
-    at_Id     id[6];
+    at_Cursor C;
+    at_Id     id[6], spare;
+    size_t    bytes;
     int       i;
     for (i = 0; i < 6; ++i) at_make_anchor(T, 100, 10, AT_GROW, &id[i]);
-    oc.oom = 1;
-    assertok(atD_collectendpoints(T, 50, 105, &T->origin) == AT_ERRMEM);
-    assertok(at_checktree(T));
+    bytes = T->bytes;
+    (void)at_drainpool(&S->edges);
+    assertok(at_seek(&C, T, 300) == AT_OK);
+    oc.oom = 0;
+    assertok(at_newanchor(&C, 0, 0, AT_GROW, &spare) == AT_ERRMEM);
+    assertok(at_checkchains(T));
+    asserteq(T->bytes, bytes);
+    assertok(T->idfree != 0);
     at_deltree(T), at_close(S);
     asserteq(oc.live, 0);
 }
 
-/* OOM inside a child collection propagates through the recursive level */
+/* a failed edge allocation deep in the tree leaves it unchanged */
 TEST(collect_recurse_oom) {
     OomCount  oc = {0, 1 << 20};
     at_State *S = at_open(&oomcount_alloc, &oc);
     at_Tree  *T = at_newtree(S);
-    at_Id     id[10];
+    at_Cursor C;
+    at_Id     id[10], spare;
+    size_t    bytes;
     int       i;
     for (i = 0; i < 10; ++i)
         at_make_anchor(T, (size_t)(10 + i * 10), 0, AT_GROW, &id[i]);
     assertok(T->levels >= 1);
+    bytes = T->bytes;
+    (void)at_drainpool(&S->edges);
+    assertok(at_seek(&C, T, 1000) == AT_OK);
     oc.oom = 0;
-    assertok(atD_collectendpoints(T, 0, 1000, &T->origin) == AT_ERRMEM);
-    assertok(at_checktree(T));
+    assertok(at_newanchor(&C, 0, 0, AT_GROW, &spare) == AT_ERRMEM);
+    assertok(at_checkchains(T));
+    asserteq(T->bytes, bytes);
     at_deltree(T), at_close(S);
     asserteq(oc.live, 0);
 }
@@ -2262,41 +2394,14 @@ TEST(remove_search_miss) {
     at_make_anchor(T, 300, 10, AT_GROW, &c);
     assertok(atO_findedge(T, 100, &e1));
     assertok(atO_findedge(T, 300, &e2));
-    asserteq(atO_listcount(&e1->left), 2);
-    asserteq(atO_listcount(&e2->left), 1);
+    asserteq(atO_listcount(T, &e1->left), 2);
+    asserteq(atO_listcount(T, &e2->left), 1);
     atO_remove(T, &e2->left, 999, 0);
-    asserteq(atO_listcount(&e2->left), 1);
+    asserteq(atO_listcount(T, &e2->left), 1);
     atO_remove(T, &e1->left, 999, 0);
-    asserteq(atO_listcount(&e1->left), 2);
+    asserteq(atO_listcount(T, &e1->left), 2);
     atO_remove(T, &e1->left, b, 1);
-    asserteq(atO_listcount(&e1->left), 2);
-    assertok(at_checktree(T));
-    at_deltree(T), at_close(S);
-}
-
-/* backward node move climbs through zero-index ancestors */
-TEST(backward_climb_parent) {
-    at_State *S = at_open(NULL, NULL);
-    at_Tree  *T = at_newtree(S);
-    at_Cursor C;
-    at_Id     id[100];
-    size_t    p;
-    int       i, l;
-    for (i = 0; i < 100; ++i)
-        at_make_anchor(T, (size_t)(10 + i * 10), 0, AT_GROW, &id[i]);
-    for (p = 0; p <= T->bytes; ++p) {
-        assertok(at_seek(&C, T, p) == AT_OK);
-        l = atK_levels(&C);
-        if (l < 2) continue;
-        if (atK_idx(&C, atK_parent(&C, l), l) != 0) continue;
-        if (atK_idx(&C, atK_parent(&C, l - 1), l - 1) != 0) continue;
-        if (atK_idx(&C, atK_parent(&C, l - 2), l - 2) == 0) continue;
-        break;
-    }
-    assertok(p <= T->bytes);
-    atD_backwardnode(&C, 1, l);
-    assertok(
-            atK_idx(&C, atK_parent(&C, l), l) == atN_cc(atK_parent(&C, l)) - 1);
+    asserteq(atO_listcount(T, &e1->left), 2);
     assertok(at_checktree(T));
     at_deltree(T), at_close(S);
 }
@@ -2346,21 +2451,80 @@ TEST(delete_collect_oom_boundaries) {
     at_State *S = at_open(&oomcount_alloc, &oc);
     at_Tree  *T = at_newtree(S);
     at_Cursor C;
-    at_Drain  d;
     at_Id     a, b, c;
+    size_t    x, y, bytes;
     at_make_anchor(T, 0, 10, AT_GROW, &a);
     at_make_anchor(T, 60, 5, AT_GROW, &b);
     at_make_anchor(T, 200, 10, AT_GROW, &c);
+    bytes = T->bytes;
+    (void)at_drainpool(&S->edges);
+    oc.oom = 0;
+    assertok(at_seek(&C, T, 0) == AT_OK);
+    assertok(atD_remove(&C, 70) == AT_ERRMEM);
+    assertok(at_checktree(T));
+    assertok(at_checkchains(T));
+    assertok(at_no_empty_edges(T));
+    asserteq(T->bytes, bytes);
+    assertok(at_range(T, a, &x, &y) == AT_OK);
+    assertok(x == 0 && y == 10);
+    assertok(at_range(T, b, &x, &y) == AT_OK);
+    assertok(x == 60 && y == 65);
+    assertok(at_range(T, c, &x, &y) == AT_OK);
+    assertok(x == 200 && y == 210);
+    at_deltree(T), at_close(S);
+    asserteq(oc.live, 0);
+}
+
+/* a failed right boundary insertion removes the new left boundary edge */
+TEST(delete_prepwindow_left_cleanup) {
+    OomCount  oc = {0, 1 << 20};
+    at_State *S = at_open(&oomcount_alloc, &oc);
+    at_Tree  *T = at_newtree(S);
+    at_Drain  d;
+    at_Edge  *le;
+    at_Id     a;
+    size_t    x, y, bytes;
+    at_make_anchor(T, 100, 10, AT_GROW, &a);
+    bytes = T->bytes;
     assertok(atP_reserve(S, &S->edges, 1) == AT_OK);
     d = at_drainpool(&S->edges);
     assertok(d.count > 0);
     *(void **)d.chain = NULL;
     S->edges.freed = d.chain, S->edges.freed_obj = 1;
     oc.oom = 0;
-    assertok(at_seek(&C, T, 0) == AT_OK);
-    assertok(atD_remove(&C, 70) == AT_ERRMEM);
+    assertok(atD_prepwindow(T, 10, 30, &le) == AT_ERRMEM);
     assertok(at_checktree(T));
+    assertok(at_checkchains(T));
     assertok(at_no_empty_edges(T));
+    asserteq(T->bytes, bytes);
+    assertok(at_range(T, a, &x, &y) == AT_OK);
+    assertok(x == 100 && y == 110);
+    at_deltree(T), at_close(S);
+    asserteq(oc.live, 0);
+}
+
+/* a pre-existing left boundary survives a failed right boundary insertion */
+TEST(delete_prepwindow_existing_left) {
+    OomCount  oc = {0, 1 << 20};
+    at_State *S = at_open(&oomcount_alloc, &oc);
+    at_Tree  *T = at_newtree(S);
+    at_Edge  *le;
+    at_Id     a, b;
+    size_t    x, y, bytes;
+    at_make_anchor(T, 10, 0, AT_GROW, &a);
+    at_make_anchor(T, 50, 0, AT_GROW, &b);
+    bytes = T->bytes;
+    (void)at_drainpool(&S->edges);
+    oc.oom = 0;
+    assertok(atD_prepwindow(T, 10, 20, &le) == AT_ERRMEM);
+    assertok(at_checktree(T));
+    assertok(at_checkchains(T));
+    assertok(at_no_empty_edges(T));
+    asserteq(T->bytes, bytes);
+    assertok(at_range(T, a, &x, &y) == AT_OK);
+    assertok(x == 10 && y == 10);
+    assertok(at_range(T, b, &x, &y) == AT_OK);
+    assertok(x == 50 && y == 50);
     at_deltree(T), at_close(S);
     asserteq(oc.live, 0);
 }
@@ -2393,7 +2557,7 @@ TEST(insert_split_oom_rollback) {
     size_t    pos;
     at_build_full_lastleaf(T);
     last = at_lastleaf(T);
-    pos = atO_edgepos(T, atN_edge(last, 0)) + 1;
+    pos = atO_edgepos(atN_edge(last, 0)) + 1;
     assertok(atP_reserve(S, &S->edges, 1) == AT_OK);
     de = at_drainpool(&S->edges);
     *(void **)de.chain = NULL;
@@ -2426,6 +2590,134 @@ TEST(append_split_oom_rollback) {
     assertok(at_checktree(T));
     at_deltree(T), at_close(S);
     asserteq(oc.live, 0);
+}
+
+/* deleting the last anchor of a sentinel-only tree frees the sentinel */
+TEST(anchor_at_zero_delete) {
+    at_State *S = at_open(NULL, NULL);
+    at_Tree  *T = at_newtree(S);
+    at_Id     a;
+    at_make_anchor(T, 0, 0, AT_GROW, &a);
+    asserteq(T->bytes, 0);
+    asserteq(atN_cc(&T->root), 1);
+    assertok(at_delanchor(T, a) == AT_OK);
+    assertok(at_checktree(T));
+    asserteq(T->bytes, 0);
+    asserteq(atN_cc(&T->root), 0);
+    at_deltree(T), at_close(S);
+}
+
+/* inserting at an empty inner boundary merges the emptied edge away */
+TEST(insert_empty_boundary) {
+    at_State           *S = at_open(NULL, NULL);
+    at_Tree            *T = at_newtree(S);
+    at_Edge            *e;
+    static const size_t p[1] = {0};
+    assertok(atI_insertedge(T, 10, &e) == AT_OK);
+    assertok(atI_insert(T, 10, 7) == AT_OK);
+    assertok(at_checktree(T));
+    assertok(at_no_empty_edges(T));
+    assertok(at_positions_match(T, p, 1));
+    asserteq(T->bytes, 17);
+    at_deltree(T), at_close(S);
+}
+
+/* empty-tree first-edge lead allocation failure leaves the tree empty */
+TEST(insert_oom_first_edge) {
+    OomCount  oc = {0, 1 << 20};
+    at_State *S = at_open(&oomcount_alloc, &oc);
+    at_Tree  *T = at_newtree(S);
+    at_Drain  d;
+    at_Edge  *e;
+    assertok(atP_reserve(S, &S->edges, 2) == AT_OK);
+    d = at_drainpool(&S->edges);
+    assertok(d.count >= 2);
+    *(void **)d.chain = NULL;
+    S->edges.freed = d.chain, S->edges.freed_obj = 1;
+    oc.oom = 0;
+    assertok(atI_insertedge(T, 10, &e) == AT_ERRMEM);
+    assertok(at_checktree(T));
+    asserteq(T->bytes, 0);
+    asserteq(atN_cc(&T->root), 0);
+    at_deltree(T), at_close(S);
+    asserteq(oc.live, 0);
+}
+
+/* seam insert child-split OOM frees the reserved edge, tree unchanged */
+TEST(insert_oom_seam_split) {
+    OomCount  oc = {0, 1 << 20};
+    at_State *S = at_open(&oomcount_alloc, &oc);
+    at_Tree  *T = at_newtree(S);
+    at_Node  *last;
+    at_Drain  de;
+    at_Id     id;
+    size_t    pos;
+    at_build_full_lastleaf(T);
+    last = at_lastleaf(T);
+    pos = atO_edgepos(atN_edge(last, 0));
+    at_make_anchor(T, pos, 0, AT_GROW, &id);
+    last = at_lastleaf(T);
+    assertok(atN_cc(last) == AT_FANOUT);
+    assertok(atP_reserve(S, &S->edges, 1) == AT_OK);
+    de = at_drainpool(&S->edges);
+    *(void **)de.chain = NULL;
+    S->edges.freed = de.chain, S->edges.freed_obj = 1;
+    at_drainpool(&S->nodes);
+    oc.oom = 0;
+    assertok(atI_insert(T, pos, 7) == AT_ERRMEM);
+    assertok(at_checktree(T));
+    at_deltree(T), at_close(S);
+    asserteq(oc.live, 0);
+}
+
+/* empty-tree edge allocation failures leave the tree empty */
+TEST(insert_empty_oom_edges) {
+    OomCount  oc = {0, 1 << 20};
+    at_State *S = at_open(&oomcount_alloc, &oc);
+    at_Tree  *T = at_newtree(S);
+    at_Drain  d;
+    at_Edge  *e;
+    assertok(T != NULL);
+    S->edges.freed = NULL, S->edges.freed_obj = 0;
+    oc.oom = 0;
+    assertok(atI_insertedge(T, 0, &e) == AT_ERRMEM);
+    assertok(atI_insert(T, 0, 7) == AT_ERRMEM);
+    assertok(T->bytes == 0 && atN_cc(&T->root) == 0);
+    oc.oom = 1 << 20;
+    assertok(atP_reserve(S, &S->edges, 1) == AT_OK);
+    d = at_drainpool(&S->edges);
+    assertok(d.count > 0);
+    *(void **)d.chain = NULL;
+    S->edges.freed = d.chain, S->edges.freed_obj = 1;
+    oc.oom = 0;
+    assertok(atI_insertedge(T, 5, &e) == AT_ERRMEM);
+    assertok(T->bytes == 0 && atN_cc(&T->root) == 0);
+    at_deltree(T), at_close(S);
+    asserteq(oc.live, 0);
+}
+
+/* edge deletion rejects out-of-range and missing positions */
+TEST(deleteedge_pos_guard) {
+    at_State *S = at_open(NULL, NULL);
+    at_Tree  *T = at_newtree(S);
+    at_Edge  *e;
+    assertok(atI_insertedge(T, 10, &e) == AT_OK);
+    assertok(atD_deleteedge(T, 20) == AT_ERRPARAM);
+    assertok(atD_deleteedge(T, 5) == AT_ERRPARAM);
+    at_deltree(T), at_close(S);
+}
+
+/* oversized insert length is rejected without changing the tree */
+TEST(splice_ins_overflow) {
+    at_State *S = at_open(NULL, NULL);
+    at_Tree  *T = at_newtree(S);
+    at_Cursor C;
+    at_Edge  *e;
+    assertok(atI_insertedge(T, 10, &e) == AT_OK);
+    assertok(at_seek(&C, T, 0) == AT_OK);
+    assertok(at_splice(&C, 0, (size_t)-1) == AT_ERRPARAM);
+    assertok(T->bytes == 10 && at_checktree(T));
+    at_deltree(T), at_close(S);
 }
 
 #include "anchortree_test_fanout4.gen.inc"

@@ -46,9 +46,8 @@
 #define AT_ERRMEM   (-2)        /* Memory allocation failed */
 #define AT_NONE     (~(at_Id)0) /* End-of-iteration sentinel */
 
-#define AT_ITER_ORIGIN 0u /* origin not scanned in this iteration round */
-#define AT_ITER_TREE   1u /* origin done, or iteration started after 0 */
-#define AT_ITER_DONE   2u /* iteration exhausted */
+#define AT_ITER_TREE 0u /* normal tree iteration */
+#define AT_ITER_DONE 1u /* iteration exhausted */
 
 typedef enum at_Gravity {
     AT_GROW,  /* [L,R] extends when insert before or after */
@@ -80,12 +79,13 @@ AT_API void     at_reset(at_Tree *T);
 
 /* cursor */
 AT_API int   at_seek(at_Cursor *C, at_Tree *T, size_t pos);
+AT_API int   at_locate(at_Cursor *C, size_t pos);
 AT_API int   at_advance(at_Cursor *C, at_Delta d);
 AT_API at_Id at_next(at_Cursor *C, int ns, size_t *plen);
 
 /* anchors */
 AT_API int at_newanchor(at_Cursor *C, size_t len, int ns, int g, at_Id *out);
-AT_API int at_del(at_Tree *T, at_Id id);
+AT_API int at_delanchor(at_Tree *T, at_Id id);
 AT_API int at_range(at_Tree *T, at_Id id, size_t *start, size_t *end);
 AT_API int at_gravity(at_Tree *T, at_Id id);
 
@@ -95,16 +95,17 @@ AT_API int at_splice(at_Cursor *C, size_t del, size_t ins);
 /* structure */
 
 #ifndef AT_MAX_LEVEL
-# define AT_MAX_LEVEL 16 /* safe for AT_FANOUT=34; see docs/max_levels.md */
+# define AT_MAX_LEVEL 16 /* safe for AT_FANOUT=32; see docs/max_levels.md */
 #endif
 
 struct at_Cursor {
-    at_Tree *tree;      /* tree under navigation */
-    size_t   off;       /* bytes before the current edge gap */
-    size_t   poff;      /* offset within the current gap */
-    size_t   left_idx;  /* consumed count in the left side */
-    size_t   right_idx; /* consumed count in the right side */
-    unsigned iter;      /* iteration phase: AT_ITER_ORIGIN/TREE/DONE */
+    at_Tree *tree;     /* tree under navigation */
+    size_t   off;      /* start position of the current span */
+    size_t   poff;     /* offset within the current span */
+    unsigned side;     /* endpoint bucket: 0=left, 1=right, 2=restart */
+    unsigned next_id;  /* next slot anchor id; 0 = bucket exhausted */
+    unsigned next_end; /* next slot is_end tag */
+    unsigned iter;     /* iteration phase: AT_ITER_TREE/DONE */
 
     struct at_Node **paths[AT_MAX_LEVEL]; /* root-to-leaf child slot pointers */
 };
@@ -133,6 +134,8 @@ AT_NS_END
 #endif /* AT_FANOUT */
 
 AT_STATIC_ASSERT(AT_FANOUT >= 4);
+
+#define AT_ANCHOR_MAX ((size_t)1u << 31) /* at_Point.id is 31 bits */
 
 #ifndef AT_PAGE_SIZE
 # define AT_PAGE_SIZE 65536
@@ -166,42 +169,47 @@ typedef struct at_Node {
     at_Index        idx;       /* child index in the parent */
 } at_Node;
 
+/* clang-format off */
 typedef struct at_Point {
-    at_Id    id;         /* owning anchor id */
-    unsigned ns : 31;    /* namespace filter value */
-    unsigned is_end : 1; /* 1 = END endpoint, 0 = START endpoint */
+    unsigned id : 31;    /* anchor id; 0 = empty slot */
+    unsigned is_end : 1; /* 1 = END occurrence, 0 = START occurrence */
 } at_Point;
 
-/* clang-format off */
-typedef struct at_PointList { at_Point first, *tail; } at_PointList;
-typedef struct at_Anchor { struct at_Edge *start, *end; } at_Anchor;
+typedef struct at_Anchor {
+    struct at_Edge *start; /* start edge; NULL when dead */
+    struct at_Edge *end;   /* end edge; NULL when dead */
+    at_Point snext;        /* next START occurrence in its bucket */
+    at_Point enext;        /* next END occurrence in its bucket */
+    unsigned ns : 29;      /* namespace filter value */
+    unsigned gravity : 2;  /* at_Gravity */
+} at_Anchor;
 /* clang-format on */
 
 typedef struct at_Edge {
-    at_Node     *parent; /* leaf node holding this edge; NULL for origin */
-    at_Index     idx;    /* slot index in parent */
-    at_PointList left;   /* endpoints on the LEFT side */
-    at_PointList right;  /* endpoints on the RIGHT side */
+    at_Node *parent; /* leaf node holding this edge */
+    at_Index idx;    /* slot index in parent */
+    at_Point left;   /* anchor occurrences on the LEFT side */
+    at_Point right;  /* anchor occurrences on the RIGHT side */
 } at_Edge;
 
 struct at_State {
-    void     *alloc_ud;         /* allocator user data */
-    at_Alloc *allocf;           /* memory allocator */
-    at_Pool   nodes;            /* pool for at_Node objects */
-    at_Pool   edges;            /* pool for at_Edge objects */
-    at_Node   rt[AT_MAX_LEVEL]; /* scratch nodes for range stitch */
+    void     *alloc_ud; /* allocator user data */
+    at_Alloc *allocf;   /* memory allocator */
+    at_Pool   nodes;    /* pool for at_Node objects */
+    at_Pool   edges;    /* pool for at_Edge objects */
 };
 
 struct at_Tree {
     at_Node    root;   /* embedded root node */
     at_State  *S;      /* owning state */
-    size_t     bytes;  /* position of the last tree edge; 0 if none */
+    size_t     bytes;  /* position of the tail edge or last span end */
     int        levels; /* tree height, 0 = leaf-only root */
-    at_Edge    origin; /* position-0 edge, never stored in the tree */
-    at_Anchor *ids;    /* dense anchor pool; id 0 is reserved */
+    at_Anchor *ids;    /* dense anchor array; id 0 is reserved */
     size_t     idcap;  /* allocated capacity of ids */
     at_Id      idfree; /* freelist head for anchor ids */
 };
+
+AT_STATIC_ASSERT(sizeof(at_Point) == 4);
 
 #define atN_cc(n)            ((int)(n)->child_count)
 #define atN_setcc(n, v)      ((n)->child_count = (at_Index)(v))
@@ -243,8 +251,8 @@ static void atP_free(at_Pool *p, void *obj) {
 }
 
 static void *atP_alloc(at_State *S, at_Pool *p) {
-    size_t sz = p->obj_size;
     char  *page, *end;
+    size_t sz = p->obj_size;
     if (p->freed_obj) return atP_ralloc(p);
     page = (char *)S->allocf(S->alloc_ud, NULL, 0, AT_PAGE_SIZE);
     if (page == NULL) return NULL;
@@ -265,136 +273,60 @@ static int atP_reserve(at_State *S, at_Pool *p, size_t n) {
     return (p->freed_obj = avail) >= n ? AT_OK : AT_ERRMEM;
 }
 
-/* vector/tail storage */
-
-/* clang-format off */
-typedef struct atV_Header { unsigned len, cap; } atV_Header;
-/* clang-format on */
-
-#define atV_hdr(A) ((atV_Header *)(A) - 1)
-#define atV_len(A) ((A) ? atV_hdr(A)->len : 0u)
-#define atV_cap(A) ((A) ? atV_hdr(A)->cap : 0u)
-
-#define atV_free(S, A) atV_resize_(S, (void **)&(A), 0u, sizeof(*(A)))
-
-#define atV_push(S, A, V)                      \
-    (atV_reserve(S, A, 1) != AT_OK ? AT_ERRMEM \
-                                   : ((A)[atV_hdr(A)->len++] = (V), AT_OK))
-#define atV_reserve(S, A, N) \
-    atV_grow_(S, (void **)&(A), (unsigned)(N), sizeof(*(A)))
-
-#define atV_sz(cap, sz) (sizeof(atV_Header) + (size_t)(cap) * (sz))
-
-static int atV_resize_(at_State *S, void **pA, unsigned cap, size_t objsz) {
-    atV_Header *hdr, *old = (*pA ? atV_hdr(*pA) : NULL);
-    size_t      osz, nsz;
-    if (old == NULL && cap == 0) return AT_OK;
-    if (cap == 0) {
-        S->allocf(S->alloc_ud, old, atV_sz(old->cap, objsz), 0);
-        return *pA = NULL, AT_OK;
-    }
-    osz = old ? atV_sz(old->cap, objsz) : 0, nsz = atV_sz(cap, objsz);
-    hdr = (atV_Header *)S->allocf(S->alloc_ud, old, osz, nsz);
-    if (hdr == NULL) return AT_ERRMEM;
-    if (old == NULL) hdr->len = 0;
-    return hdr->cap = cap, *pA = (void *)(hdr + 1), AT_OK;
-}
-
-static int atV_grow_(at_State *S, void **pA, unsigned need, size_t objsz) {
-    atV_Header *hdr;
-    unsigned    c = 0, e = need, nc = 4;
-    hdr = (*pA ? atV_hdr(*pA) : NULL);
-    if (hdr) c = hdr->cap, e += hdr->len;
-    if (c < e) {
-        while (nc < e) nc += nc >> 1;
-        return atV_resize_(S, pA, nc, objsz);
-    }
-    return AT_OK;
-}
-
 /* object/edge helpers */
 
 /* clang-format off */
-static int atO_listcount(at_PointList *ls)
-{ return (ls->first.id != 0) + (ls->tail ? (int)atV_len(ls->tail) : 0); }
-
 static int atO_empty(at_Edge *e)
-{ return atO_listcount(&e->left) == 0 && atO_listcount(&e->right) == 0; }
+{ return e->left.id == 0 && e->right.id == 0; }
+
+static at_Edge *atO_newedge(at_Tree *T)
+{
+    at_Edge *e = (at_Edge *)atP_alloc(T->S, &T->S->edges);
+    if (e == NULL) return NULL;
+    return memset(e, 0, sizeof(*e)), e;
+}
 /* clang-format on */
 
-static int atO_listfind(at_PointList *ls, at_Id id, int end) {
-    unsigned i;
-    if (ls->first.id == id && ls->first.is_end == end) return 1;
-    if (ls->tail != NULL)
-        for (i = 0; i < atV_len(ls->tail); ++i)
-            if (ls->tail[i].id == id && ls->tail[i].is_end == end) return 1;
-    return 0;
+static int atO_side(int g, int end) {
+    if (end) return g == AT_GROW || g == AT_SHIFT;
+    return g == AT_FIXED || g == AT_SHIFT;
 }
 
-static int atO_sideof(at_Edge *e, at_Id id, int end) {
-    if (atO_listfind(&e->left, id, end)) return 0;
-    if (atO_listfind(&e->right, id, end)) return 1;
-    return -1;
+static void atO_link(at_Edge *e, int side, at_Point slot, at_Anchor *a) {
+    at_Point *head = side ? &e->right : &e->left;
+    at_Point *next = slot.is_end ? &a->enext : &a->snext;
+    *next = *head, *head = slot;
 }
 
-static int atO_push(at_Tree *T, at_PointList *ls, at_Id id, int ns, int end) {
-    at_Point p;
-    p.id = id, p.ns = ns, p.is_end = end;
-    if (ls->first.id == 0) return ls->first = p, AT_OK;
-    return atV_push(T->S, ls->tail, p);
-}
-
-static int atO_reserve(at_Tree *T, at_PointList *ls, unsigned add) {
-    if (add == 0) return AT_OK;
-    if (ls->first.id != 0) return atV_reserve(T->S, ls->tail, add);
-    if (add > 1u) return atV_reserve(T->S, ls->tail, add - 1u);
-    return AT_OK;
-}
-
-/* clang-format off */
-static void atO_discardemptytail(at_Tree *T, at_PointList *ls)
-{ if (ls->tail != NULL && atV_len(ls->tail) == 0) atV_free(T->S, ls->tail); }
-/* clang-format on */
-
-static void atO_remove(at_Tree *T, at_PointList *ls, at_Id id, int end) {
-    unsigned i, n;
-    if (ls->first.id == id && ls->first.is_end == end) {
-        n = atV_len(ls->tail);
-        if (n == 0) {
-            ls->first.id = 0, ls->first.is_end = 0;
-            return;
-        }
-        ls->first = ls->tail[n - 1];
-        atV_hdr(ls->tail)->len -= 1;
-        if (n - 1 == 0) atV_free(T->S, ls->tail);
+static void atO_unlink(at_Tree *T, at_Edge *e, int side, at_Point slot) {
+    at_Point  *head = side ? &e->right : &e->left, p = *head, prev, next;
+    at_Anchor *a, *pa;
+    prev.id = 0, prev.is_end = 0;
+    while (p.id != 0 && (p.id != slot.id || p.is_end != slot.is_end)) {
+        a = &T->ids[p.id];
+        prev = p;
+        p = p.is_end ? a->enext : a->snext;
+    }
+    assert(p.id == slot.id && p.is_end == slot.is_end), a = &T->ids[p.id];
+    next = p.is_end ? a->enext : a->snext;
+    if (prev.id == 0) {
+        *head = next;
         return;
     }
-    if (ls->tail == NULL) return;
-    n = atV_len(ls->tail);
-    for (i = 0; i < n; ++i)
-        if (ls->tail[i].id == id && ls->tail[i].is_end == end) break;
-    if (i == n) return;
-    if (i != n - 1) ls->tail[i] = ls->tail[n - 1];
-    atV_hdr(ls->tail)->len -= 1;
-    if (n - 1 == 0) atV_free(T->S, ls->tail);
+    pa = &T->ids[prev.id];
+    *(prev.is_end ? &pa->enext : &pa->snext) = next;
 }
 
-static void atO_destroyedge(at_Tree *T, at_Edge *e) {
-    atV_free(T->S, e->left.tail), atV_free(T->S, e->right.tail);
-    e->left.first.id = e->right.first.id = 0;
-}
-
-static int atO_findedge(at_Tree *T, size_t pos, at_Edge **out) {
-    at_Node *n = &T->root;
-    size_t   rem = pos;
-    int      i, cc, level = T->levels;
-    if (T->bytes == 0 || pos > T->bytes || pos == 0) return 0;
-    for (;;) {
-        cc = atN_cc(n);
-        for (i = 0; i < cc && rem > n->bytes[i]; ++i) rem -= n->bytes[i];
-        if (i >= cc || (level == 0 && rem != n->bytes[i])) return 0;
-        if (level == 0) return *out = atN_edge(n, i), 1;
-        n = n->children[i], level -= 1;
+static void atO_moveside(at_Tree *T, at_Edge *dst, at_Edge *src, int side) {
+    at_Point  *head = side ? &src->right : &src->left, p = *head, next;
+    at_Anchor *a;
+    head->id = 0, head->is_end = 0;
+    while (p.id != 0) {
+        a = &T->ids[p.id];
+        next = p.is_end ? a->enext : a->snext;
+        *(p.is_end ? &a->end : &a->start) = dst;
+        atO_link(dst, side, p, a);
+        p = next;
     }
 }
 
@@ -405,23 +337,25 @@ static void atO_clear(at_Tree *T) {
 }
 
 static int atO_growids(at_Tree *T) {
-    at_Anchor *ids;
+    at_Anchor *anchors;
     size_t     oldcap = T->idcap, newcap = oldcap ? oldcap * 2 : 8;
     size_t     sz, i, from = oldcap ? oldcap : 1;
-    if (newcap <= oldcap) return AT_ERRMEM;
+    if (newcap <= oldcap || newcap > AT_ANCHOR_MAX) return AT_ERRMEM;
+    if (newcap > (size_t)-1 / sizeof(at_Anchor)) return AT_ERRMEM;
     sz = newcap * sizeof(at_Anchor);
-    ids = (at_Anchor *)T->S->allocf(T->S->alloc_ud, NULL, 0, sz);
-    if (ids == NULL) return AT_ERRMEM;
-    memset(ids, 0, newcap * sizeof(at_Anchor));
-    if (oldcap != 0) memcpy(ids, T->ids, oldcap * sizeof(at_Anchor));
+    anchors = (at_Anchor *)T->S->allocf(T->S->alloc_ud, NULL, 0, sz);
+    if (anchors == NULL) return AT_ERRMEM;
+    memset(anchors, 0, sz);
+    if (oldcap != 0) memcpy(anchors, T->ids, oldcap * sizeof(at_Anchor));
     for (i = newcap; i > from; --i) {
-        at_Anchor *a = &ids[i - 1];
-        a->start = (at_Edge *)(size_t)T->idfree;
+        at_Anchor *a = &anchors[i - 1];
+        a->snext.id = (unsigned)T->idfree;
+        a->snext.is_end = 0;
         T->idfree = (at_Id)(i - 1);
     }
     if (oldcap != 0)
         T->S->allocf(T->S->alloc_ud, T->ids, oldcap * sizeof(at_Anchor), 0);
-    return T->ids = ids, T->idcap = newcap, AT_OK;
+    return T->ids = anchors, T->idcap = newcap, AT_OK;
 }
 
 static int atO_idalloc(at_Tree *T, at_Id *out) {
@@ -430,13 +364,13 @@ static int atO_idalloc(at_Tree *T, at_Id *out) {
     if (T->idfree == 0 && (r = atO_growids(T)) != AT_OK) return r;
     a = &T->ids[T->idfree];
     *out = T->idfree;
-    T->idfree = (at_Id)(size_t)a->start;
+    T->idfree = a->snext.id;
     return a->start = NULL, a->end = NULL, AT_OK;
 }
 
 static void atO_idfree(at_Tree *T, at_Id id) {
     at_Anchor *a = &T->ids[id];
-    a->start = (at_Edge *)(size_t)T->idfree;
+    a->snext.id = T->idfree, a->snext.is_end = 0;
     a->end = NULL;
     T->idfree = id;
 }
@@ -447,13 +381,11 @@ static at_Anchor *atO_anchor(at_Tree *T, at_Id id) {
     return a = &T->ids[id], a->end == NULL ? NULL : a;
 }
 
-static size_t atO_edgepos(const at_Tree *T, const at_Edge *e) {
-    const at_Node *n;
+static size_t atO_edgepos(const at_Edge *e) {
+    const at_Node *n = e->parent;
     size_t         pos = 0;
     int            i;
-    if (e == &T->origin) return 0;
-    n = e->parent;
-    for (i = 0; i <= (int)e->idx; ++i) pos += n->bytes[i];
+    for (i = 0; i < (int)e->idx; ++i) pos += n->bytes[i];
     while (n->parent != NULL) {
         const at_Node *p = n->parent;
         for (i = 0; i < (int)n->idx; ++i) pos += p->bytes[i];
@@ -462,41 +394,25 @@ static size_t atO_edgepos(const at_Tree *T, const at_Edge *e) {
     return pos;
 }
 
-static int atO_gravsides(int g, int *sl, int *el) {
-    if (g == AT_GROW) return *sl = 0, *el = 1, AT_OK;
-    if (g == AT_FIXED) return *sl = 1, *el = 0, AT_OK;
-    if (g == AT_SHIFT) return *sl = 1, *el = 1, AT_OK;
-    if (g == AT_LOCK) return *sl = 0, *el = 0, AT_OK;
-    return AT_ERRPARAM;
-}
-
-static int atO_reservenewanchor(at_Tree *T, size_t a, size_t b, int x, int y) {
-    at_Edge *e = &T->origin;
-    unsigned add = a == b && x == y ? 2u : 1u;
-    int      r = AT_OK;
-    if (a == 0 || atO_findedge(T, a, &e))
-        r = atO_reserve(T, x ? &e->right : &e->left, add);
-    if (r == AT_OK && (a != b || x != y)) {
-        e = &T->origin;
-        if (b == 0 || atO_findedge(T, b, &e))
-            r = atO_reserve(T, y ? &e->right : &e->left, 1);
-    }
-    return r;
-}
-
-static int atO_nextstart(at_Edge *e, int ns, size_t *lp, size_t *rp, at_Id *o) {
-    at_PointList *ls;
-    at_Point      p;
-    size_t       *idx, n;
-    int           side;
-    for (side = 0; side < 2; ++side) {
-        ls = side ? &e->right : &e->left, idx = side ? rp : lp;
-        n = (size_t)atO_listcount(ls);
-        for (; *idx < n; ++*idx) {
-            p = *idx == 0 ? ls->first : ls->tail[*idx - 1];
-            if (p.is_end == 0 && (ns == 0 || p.ns == (unsigned)ns))
-                return *o = p.id, ++*idx, 1;
+static int atO_scan(at_Cursor *C, at_Edge *e, int ns, at_Id *out) {
+    at_Tree   *T = C->tree;
+    at_Point   p, next;
+    at_Anchor *a;
+    while (C->side < 2) {
+        if (C->next_id == 0) {
+            C->side += 1;
+            if (C->side == 1) {
+                C->next_id = e->right.id;
+                C->next_end = e->right.is_end;
+            }
+            continue;
         }
+        p.id = C->next_id, p.is_end = C->next_end;
+        a = &T->ids[p.id];
+        next = p.is_end ? a->enext : a->snext;
+        C->next_id = next.id, C->next_end = next.is_end;
+        if (!p.is_end && (ns == 0 || a->ns == (unsigned)ns))
+            return *out = p.id, 1;
     }
     return 0;
 }
@@ -511,26 +427,17 @@ static at_Id atO_done(at_Cursor *C, size_t *plen) {
     return atO_none(plen);
 }
 
-static size_t atO_rangelen(at_Tree *T, at_Id id) {
+static at_Id atO_found(at_Tree *T, at_Id id, size_t *plen) {
     size_t start, end;
     int    r;
+    if (plen == NULL) return id;
+    start = end = 0;
     r = at_range(T, id, &start, &end), assert(r == AT_OK), (void)r;
-    return start <= end ? end - start : 0;
+    return *plen = start <= end ? end - start : 0, id;
 }
 
-static at_Id atO_found(at_Tree *T, at_Id id, size_t *plen) {
-    if (plen != NULL) *plen = atO_rangelen(T, id);
-    return id;
-}
-
-static int atO_nextorigin(at_Cursor *C, int ns, at_Id *id) {
-    if (C->iter != AT_ITER_ORIGIN) return 0;
-    assert(at_offset(C) == 0);
-    if (atO_nextstart(&C->tree->origin, ns, &C->left_idx, &C->right_idx, id))
-        return 1;
-    C->iter = AT_ITER_TREE;
-    C->left_idx = C->right_idx = 0;
-    return 0;
+static void atO_cursorstart(at_Cursor *C, at_Edge *e) {
+    C->side = 0, C->next_id = e->left.id, C->next_end = e->left.is_end;
 }
 
 /* node operations */
@@ -576,6 +483,10 @@ static void atN_makespace(at_Node *n, int i, int k, int leaf) {
     atN_fixlinks(n, i + k, atN_cc(n) - (i + k), leaf);
 }
 
+static void atN_addpath(at_Node *n, at_Delta db) {
+    for (; n->parent != NULL; n = n->parent) n->parent->bytes[n->idx] += db;
+}
+
 AT_STATIC void atN_removeslot(at_Node *n, int i, int k, int leaf) {
     int cc = atN_cc(n);
     assert(i >= 0 && i + k <= cc);
@@ -598,7 +509,6 @@ static void atN_purge(at_Tree *T, at_Node *p, int k, int s, int e) {
     if (k == 0) {
         for (i = s; i < e; ++i) {
             at_Edge *edge = atN_edge(p, i);
-            atO_destroyedge(T, edge);
             atP_free(&T->S->edges, edge);
         }
         return;
@@ -617,23 +527,6 @@ static void atN_remove(at_Tree *T, at_Node *p, int k, int s, int e) {
     atN_move(p, s, e, atN_cc(p) - e);
     atN_setcc(p, atN_cc(p) - (e - s));
     atN_fixlinks(p, s, atN_cc(p) - s, leaf);
-}
-
-static size_t atN_locate(at_Tree *T, size_t pos, at_Node **anc, int *idx) {
-    size_t rem = pos;
-    int    d, i, cc;
-    anc[0] = &T->root;
-    for (d = 0; d < T->levels; ++d) {
-        cc = atN_cc(anc[d]);
-        for (i = 0; i < cc && rem > anc[d]->bytes[i]; ++i)
-            rem -= anc[d]->bytes[i];
-        assert(i < cc), idx[d] = i;
-        anc[d + 1] = anc[d]->children[i];
-    }
-    cc = atN_cc(anc[T->levels]);
-    for (i = 0; i < cc && rem > anc[T->levels]->bytes[i]; ++i)
-        rem -= anc[T->levels]->bytes[i];
-    return assert(i < cc), idx[T->levels] = i, rem;
 }
 
 /* lifecycle */
@@ -671,7 +564,6 @@ AT_API at_Tree *at_newtree(at_State *S) {
 AT_API void at_deltree(at_Tree *T) {
     if (T == NULL) return;
     atN_purge(T, &T->root, T->levels, 0, atN_cc(&T->root));
-    atO_destroyedge(T, &T->origin);
     atO_clear(T);
     T->S->allocf(T->S->alloc_ud, T, sizeof(at_Tree), 0);
 }
@@ -679,28 +571,17 @@ AT_API void at_deltree(at_Tree *T) {
 AT_API void at_reset(at_Tree *T) {
     if (T == NULL) return;
     atN_purge(T, &T->root, T->levels, 0, atN_cc(&T->root));
-    atO_destroyedge(T, &T->origin);
     atO_clear(T);
     memset(&T->root, 0, sizeof(at_Node));
-    memset(&T->origin, 0, sizeof(at_Edge));
     T->bytes = 0, T->levels = 0;
 }
 
 /* metric/path helpers */
 
-static void atM_addpath(at_Node **a, int *ix, int dep, int stop, at_Delta d) {
-    int k;
-    for (k = dep; k > stop && k >= 1; --k) {
-        size_t *b = &a[k - 1]->bytes[ix[k - 1]];
-        *b += d;
-    }
-}
-
 static void atM_up(at_Cursor *C, int l, at_Delta db) {
-    int i;
     for (; l >= 0; --l) {
-        at_Node *p = atK_parent(C, l);
-        i = atK_idx(C, p, l);
+        at_Node *p;
+        int      i = atK_idx(C, p = atK_parent(C, l), l);
         p->bytes[i] += db;
     }
     C->tree->bytes += db;
@@ -724,87 +605,140 @@ static void atK_locend(at_Cursor *C) {
     C->poff = n->bytes[i];
 }
 
-static void atK_find(at_Cursor *C, size_t pos) {
-    at_Node *n = &C->tree->root;
-    size_t   rem = pos;
-    int      d, i, cc;
-    C->off = C->poff = 0;
-    for (d = 0; d < C->tree->levels; ++d) {
-        cc = atN_cc(n);
-        for (i = 0; i < cc && rem > n->bytes[i]; ++i)
-            rem -= n->bytes[i], C->off += n->bytes[i];
-        assert(i < cc), C->paths[d] = &n->children[i];
-        n = n->children[i];
+static void atK_findleaf(at_Cursor *C, int l, size_t *poff) {
+    for (; l <= atK_levels(C); ++l) {
+        at_Node *p = atK_parent(C, l);
+        int      i;
+        for (i = 0; i < atN_cc(p) && *poff >= p->bytes[i]; ++i)
+            *poff -= p->bytes[i], C->off += p->bytes[i];
+        assert(i < atN_cc(p)), C->paths[l] = &p->children[i];
     }
-    cc = atN_cc(n);
-    for (i = 0; i < cc && rem > n->bytes[i]; ++i)
-        rem -= n->bytes[i], C->off += n->bytes[i];
-    assert(i < cc), C->paths[C->tree->levels] = &n->children[i];
-    C->poff = rem;
+}
+
+static int atK_forwardoff(at_Cursor *C, size_t d) {
+    at_Node *p;
+    int      l, i = atK_idx(C, p = atK_parent(C, atK_levels(C)), atK_levels(C));
+    size_t   in = p->bytes[i] - C->poff;
+    if (d < in) return C->poff += d, 0;
+    d -= in, C->off += p->bytes[i], C->poff = 0;
+    for (l = atK_levels(C); l >= 0; --l) {
+        i = atK_idx(C, p = atK_parent(C, l), l) + 1;
+        for (; i < atN_cc(p) && d >= p->bytes[i]; ++i)
+            d -= p->bytes[i], C->off += p->bytes[i];
+        if (i < atN_cc(p)) break;
+    }
+    assert(l >= 0 && i < atN_cc(p)), C->paths[l] = &p->children[i];
+    return atK_findleaf(C, l + 1, &d), C->poff = d, 1;
+}
+
+static int atK_backwardoff(at_Cursor *C, size_t d) {
+    at_Node *p = NULL;
+    int      l, i = 0;
+    if (d <= C->poff) return C->poff -= d, 0;
+    d -= C->poff, C->poff = 0;
+    for (l = atK_levels(C); l >= 0; --l) {
+        i = atK_idx(C, p = atK_parent(C, l), l) - 1;
+        for (; i >= 0 && d > p->bytes[i]; --i)
+            d -= p->bytes[i], C->off -= p->bytes[i];
+        if (i >= 0) break;
+    }
+    assert(l >= 0 && i >= 0), d = p->bytes[i] - d, C->off -= p->bytes[i];
+    C->paths[l] = &p->children[i];
+    return atK_findleaf(C, l + 1, &d), C->poff = d, 1;
+}
+
+static int atO_findedge(at_Tree *T, size_t pos, at_Edge **out) {
+    at_Cursor C;
+    at_Node  *p;
+    int       i, r;
+    if (pos > T->bytes || (T->bytes == 0 && atN_cc(&T->root) == 0)) return 0;
+    C.tree = T, r = at_locate(&C, pos), assert(r == AT_OK), (void)r;
+    if (C.poff != 0) return 0;
+    i = atK_idx(&C, p = atK_parent(&C, atK_levels(&C)), atK_levels(&C));
+    return *out = atN_edge(p, i), 1;
 }
 
 static int atK_nextedge(at_Cursor *C) {
     at_Node *p, *q;
-    int      l, i, cc, L = C->tree->levels;
+    int      l, i, cc, L = atK_levels(C);
     p = L ? *C->paths[L - 1] : &C->tree->root;
-    i = (int)(C->paths[L] - p->children);
+    i = atK_idx(C, p, L);
     cc = atN_cc(p);
     C->off += p->bytes[i];
-    if (i + 1 < cc)
-        return C->paths[L] = &p->children[i + 1], C->poff = p->bytes[i + 1], 1;
+    if (i + 1 < cc) return C->paths[L] = &p->children[i + 1], C->poff = 0, 1;
     for (l = L - 1; l >= 0; --l) {
         q = l ? *C->paths[l - 1] : &C->tree->root;
-        i = (int)(C->paths[l] - q->children);
-        if (i + 1 < atN_cc(q)) {
+        i = atK_idx(C, q, l);
+        cc = atN_cc(q);
+        if (i + 1 < cc) {
             C->paths[l] = &q->children[i + 1];
             while (l < L) {
                 p = *C->paths[l];
                 ++l;
                 C->paths[l] = &p->children[0];
             }
-            return C->poff = p->bytes[0], 1;
+            return C->poff = 0, 1;
         }
     }
     return 0;
 }
 
+static void atO_startcurrent(at_Cursor *C) {
+    at_Node *p;
+    int      L, i;
+    assert(atN_cc(&C->tree->root) != 0);
+    L = C->tree->levels, p = L ? *C->paths[L - 1] : &C->tree->root;
+    i = (int)(C->paths[L] - p->children);
+    atO_cursorstart(C, atN_edge(p, i));
+}
+
+AT_API int at_locate(at_Cursor *C, size_t pos) {
+    at_Tree *T;
+    size_t   off = pos;
+    if (C == NULL || C->tree == NULL) return AT_ERRPARAM;
+    T = C->tree, C->iter = AT_ITER_TREE;
+    if (T->bytes == 0) {
+        C->off = 0, C->poff = pos, C->paths[0] = T->root.children;
+        if (atN_cc(&T->root) != 0) atO_startcurrent(C);
+        return AT_OK;
+    }
+    if (pos >= T->bytes) {
+        size_t vir = pos - T->bytes;
+        atK_locend(C), C->poff += vir, atO_startcurrent(C);
+        return AT_OK;
+    }
+    C->off = 0, atK_findleaf(C, 0, &off), C->poff = off;
+    return atO_startcurrent(C), AT_OK;
+}
+
 AT_API int at_seek(at_Cursor *C, at_Tree *T, size_t pos) {
     if (C == NULL || T == NULL) return AT_ERRPARAM;
     memset(C, 0, sizeof(at_Cursor)), C->tree = T;
-    C->iter = pos == 0 ? AT_ITER_ORIGIN : AT_ITER_TREE;
-    if (T->bytes == 0)
-        return C->paths[0] = T->root.children, C->poff = pos, AT_OK;
-    if (pos > T->bytes) {
-        size_t vir = pos - T->bytes;
-        return atK_locend(C), C->poff += vir, AT_OK;
-    }
-    return atK_find(C, pos), AT_OK;
+    return at_locate(C, pos);
 }
 
 AT_API int at_advance(at_Cursor *C, at_Delta d) {
-    size_t pos;
+    at_Tree *T;
+    size_t   off, step;
     if (C == NULL || C->tree == NULL) return AT_ERRPARAM;
-    pos = C->off + C->poff;
-    if (d >= 0)
-        pos += (size_t)d;
-    else {
-        size_t back = (size_t)0 - (size_t)d;
-        if (back > pos) back = pos;
-        pos -= back;
+    if (d == 0) return AT_OK;
+    T = C->tree, off = at_offset(C), C->iter = AT_ITER_TREE;
+    step = d < 0 ? (size_t)0 - (size_t)d : (size_t)d;
+    if (T->bytes == 0) {
+        C->off = 0;
+        C->poff = d < 0 ? (step < off ? off - step : 0) : off + step;
+        C->paths[0] = T->root.children;
+    } else if (d < 0 && step > off) {
+        atK_backwardoff(C, off);
+    } else if (d < 0) {
+        atK_backwardoff(C, step);
+    } else if (off + step >= T->bytes) {
+        atK_locend(C), C->poff += off + step - T->bytes;
+    } else {
+        atK_forwardoff(C, step);
     }
-    if (d != 0) {
-        C->left_idx = C->right_idx = 0;
-        C->iter = pos == 0 ? AT_ITER_ORIGIN : AT_ITER_TREE;
-    }
-    if (C->tree->bytes == 0) {
-        C->off = 0, C->poff = pos, C->paths[0] = C->tree->root.children;
-        return AT_OK;
-    }
-    if (pos > C->tree->bytes) {
-        size_t vir = pos - C->tree->bytes;
-        return atK_locend(C), C->poff += vir, AT_OK;
-    }
-    return atK_find(C, pos), AT_OK;
+    if (atN_cc(&T->root) != 0) atO_startcurrent(C);
+    return AT_OK;
 }
 
 AT_API at_Id at_next(at_Cursor *C, int ns, size_t *plen) {
@@ -818,81 +752,27 @@ AT_API at_Id at_next(at_Cursor *C, int ns, size_t *plen) {
     if (ns < 0) return atO_none(plen);
     T = C->tree;
     if (C->iter == AT_ITER_DONE) return atO_none(plen);
-    if (atO_nextorigin(C, ns, &id)) return atO_found(T, id, plen);
-    if (T->bytes == 0) return atO_done(C, plen);
+    if (T->bytes == 0 && atN_cc(&T->root) == 0) return atO_done(C, plen);
+    if (C->side >= 2) atO_startcurrent(C);
     for (;;) {
-        L = T->levels;
+        L = atK_levels(C);
         p = L ? *C->paths[L - 1] : &T->root;
-        i = (int)(C->paths[L] - p->children);
+        i = atK_idx(C, p, L);
         b = p->bytes[i];
         if (C->poff > b) return atO_done(C, plen);
+        if (C->poff > 0) {
+            if (!atK_nextedge(C)) return atO_done(C, plen);
+            atO_startcurrent(C);
+            continue;
+        }
         e = atN_edge(p, i);
-        if (atO_nextstart(e, ns, &C->left_idx, &C->right_idx, &id))
-            return atO_found(T, id, plen);
+        if (atO_scan(C, e, ns, &id)) return atO_found(T, id, plen);
         if (!atK_nextedge(C)) return atO_done(C, plen);
-        C->left_idx = C->right_idx = 0;
+        atO_startcurrent(C);
     }
 }
 
 /* remove/stitch */
-
-static void atD_trimright(at_Cursor *L) {
-    at_Node *p;
-    int      l = atK_levels(L), i = atK_idx(L, p = atK_parent(L, l), l);
-    size_t   cut = p->bytes[i] - L->poff;
-    p->bytes[i] = L->poff;
-    atM_up(L, l - 1, -(at_Delta)cut);
-}
-
-static void atD_trimleft(at_Cursor *R) {
-    at_Node *p;
-    int      l = atK_levels(R), i = atK_idx(R, p = atK_parent(R, l), l);
-    size_t   cut = R->poff;
-    p->bytes[i] -= cut;
-    R->poff = 0;
-    atM_up(R, l - 1, -(at_Delta)cut);
-}
-
-static void atD_cutrange(at_Cursor *L, at_Cursor *R, at_Node *rt, int fl) {
-    int      kl, k, i, cc, l = atK_levels(L);
-    at_Delta db = 0;
-    at_Node *p;
-    for (kl = l; kl > fl; --kl) {
-        p = atK_parent(L, kl), i = atK_idx(L, p, kl), cc = atN_cc(p);
-        p->bytes[i] -= db, db += (at_Delta)atN_sumbytes(p, i + 1, cc);
-        k = l - kl, atN_remove(L->tree, p, k, i + 1, cc);
-        i = atK_idx(R, p = atK_parent(R, kl), kl), cc = atN_cc(p);
-        i += (k || p->bytes[i] == 0);
-        atN_copy(&rt[k], 0, p, i, atN_setcc(&rt[k], cc - i));
-        atN_purge(L->tree, p, k, 0, i), atN_setcc(p, 0);
-    }
-    p = atK_parent(R, fl), i = atK_idx(R, p, fl), cc = atN_cc(p);
-    k = l - fl, i += (k || p->bytes[i] == 0);
-    atN_copy(&rt[k], 0, p, i, atN_setcc(&rt[k], cc - i));
-    atN_setcc(p, i), i = atK_idx(L, p, fl);
-    p->bytes[i] -= db, db += (at_Delta)atN_sumbytes(p, i + 1, cc);
-    atM_up(L, fl - 1, -db), atN_remove(L->tree, p, k, i + 1, atN_cc(p));
-}
-
-static void atD_mergeleaf(at_Cursor *C, at_Node *rt) {
-    at_Node *p = atK_parent(C, atK_levels(C));
-    at_Edge *edge;
-    int      cc = atN_cc(p), l = atK_levels(C);
-    size_t   bc = (assert(cc > 0), p->bytes[cc - 1]);
-    edge = atN_edge(p, cc - 1);
-    if (!atO_empty(edge)) {
-        C->off += C->poff, C->poff = 0;
-        C->paths[l] = &p->children[cc];
-        return;
-    }
-    rt->bytes[0] += bc;
-    atO_destroyedge(C->tree, edge);
-    atP_free(&C->tree->S->edges, edge);
-    atN_setcc(p, cc - 1);
-    atM_up(C, l - 1, -(at_Delta)bc);
-    if (atK_idx(C, p, l) == cc) C->off -= bc, C->poff = bc;
-    C->paths[l] = &p->children[cc - 1];
-}
 
 static int atD_balancenode(at_Node **ns, int left, at_Delta *ds, int leaf) {
     int d, l = atN_cc(ns[0]), r = atN_cc(ns[1]);
@@ -913,9 +793,9 @@ static int atD_balancenode(at_Node **ns, int left, at_Delta *ds, int leaf) {
 }
 
 static int atD_foldnode(at_Cursor *C, int lfirst, int l) {
-    at_Node  *p = atK_parent(C, l), ***cp = &C->paths[l];
+    at_Node  *p, ***cp = &C->paths[l];
     int       leaf = l == atK_levels(C) - 1;
-    int       cL, cR, dn, r = 0, i = atK_idx(C, p, l);
+    int       cL, cR, dn, r = 0, i = atK_idx(C, p = atK_parent(C, l), l);
     at_Node **ns = &p->children[i];
     at_Delta  ds;
     if (assert(atN_cc(p) > 1), atN_cc(ns[0]) > atN_min()) return 0;
@@ -962,280 +842,61 @@ static void atD_rebalance(at_Cursor *C, int l) {
     }
 }
 
-static void atD_backwardnode(at_Cursor *C, int d, int l) {
-    at_Node *p;
-    int      dl, i = atK_idx(C, p = atK_parent(C, l), l);
-    if (d > i) {
-        d -= i + 1, dl = l;
-        while (--dl >= 0 && atK_idx(C, atK_parent(C, dl), dl) == 0) continue;
-        assert(dl >= 0), C->paths[dl] -= 1;
-        while (++dl <= l)
-            p = atK_parent(C, dl), C->paths[dl] = &p->children[atN_cc(p) - 1];
-    }
-    C->paths[l] -= d;
-}
-
-static int atD_makechain(at_Cursor *C, int from, int to) {
-    at_Node *p, *nn = NULL, ***cp = C->paths + to;
-    int      l, r = 0;
-    if (assert(from < to), from < 0) {
-        nn = (at_Node *)atP_ralloc(&C->tree->S->nodes);
-        p = &C->tree->root, *nn = *p;
-        p->bytes[0] = atK_bytes(C);
-        p->children[0] = nn, atN_setcc(p, 1);
-        nn->parent = p, nn->idx = 0;
-        atN_fixlinks(nn, 0, atN_cc(nn), C->tree->levels == 0);
-        memmove(cp + 2, cp + 1, (atK_levels(C) - to) * sizeof(at_Node **));
-        C->tree->levels += 1, assert(C->tree->levels < AT_MAX_LEVEL);
-        from = 0, to += 1, cp += 1, r = 1;
-    }
-    for (l = from; l < to; ++l) {
-        nn = (at_Node *)atP_ralloc(&C->tree->S->nodes);
-        memset(nn, 0, sizeof(at_Node));
-        p = atK_parent(C, l), nn->parent = p, nn->idx = (at_Index)atN_cc(p);
-        p->bytes[atN_cc(p)] = 0;
-        C->paths[l] = &p->children[atN_cc(p)];
-        p->children[atN_cc(p)] = nn, p->child_count += 1;
-    }
-    return (*cp = &nn->children[0]), r;
-}
-
-static int atD_findroom(at_Cursor *C, at_Node *rt, int l) {
-    int      fl, c, i = 0;
-    at_Node *p = NULL;
-    for (fl = l - 1; fl >= 0; --fl) {
-        i = atK_idx(C, p = atK_parent(C, fl), fl);
-        if (i < AT_FANOUT - 1) break;
-    }
-    if (fl >= 0 && (c = atN_cc(p) - i - 1) > 0) {
-        int      k = atK_levels(C) - fl;
-        at_Delta db = (at_Delta)atN_sumbytes(p, i + 1, atN_cc(p));
-        assert(atN_cc(&rt[k]) == 0);
-        atM_up(C, fl - 1, -db);
-        atN_copy(&rt[k], 0, p, i + 1, c);
-        atN_setcc(&rt[k], c), atN_setcc(p, i + 1);
-    }
-    return atD_makechain(C, fl, l);
-}
-
-static void atD_stitchnode(at_Cursor *L, at_Node *rt) {
-    int      k, i, d = 0, l = atK_levels(L);
-    at_Delta db = 0;
-    at_Node *p, *r;
-    for (k = 0; k <= atK_levels(L); ++k) {
-        int m, fl, cc, kl = atK_levels(L) - k, rtcc = atN_cc(r = &rt[k]);
-        atN_setcc(r, 0), i = atK_idx(L, p = atK_parent(L, kl), kl);
-        if (i < atN_cc(p)) p->bytes[i] += db;
-        m = rtcc < AT_FANOUT - atN_cc(p) ? rtcc : AT_FANOUT - atN_cc(p);
-        if (m > 0) {
-            cc = atN_cc(p);
-            atN_copy(p, cc, r, 0, m), atN_setcc(p, cc + m);
-            atN_fixlinks(p, cc, m, k == 0);
-            db += (at_Delta)atN_sumbytes(r, 0, m);
-        }
-        if (!(m < rtcc || kl == 0)) continue;
-        atM_up(L, kl - 1, db), db = 0;
-        if (kl == 0 && atN_cc(&L->tree->root) == 1)
-            atD_rebalance(L, 0), l -= (k - atK_levels(L));
-        for (fl = kl; fl < l; ++fl) atD_foldnode(L, (fl == kl), fl);
-        if (k) atD_backwardnode(L, d, l);
-        if (!(m < rtcc)) continue;
-        p = atK_parent(L, l = kl), d = k ? atN_cc(p) - atK_idx(L, p, l) : m;
-        l += atD_findroom(L, rt, l), p = atK_parent(L, l);
-        atN_copy(p, 0, r, m, atN_setcc(p, rtcc - m));
-        atN_fixlinks(p, 0, rtcc - m, k == 0);
-        db += (at_Delta)atN_sumbytes(r, m, rtcc);
-    }
-}
-
-static void atD_stitchtail(at_Cursor *L) {
-    int      cc, i, l = atK_levels(L);
-    at_Node *p = atK_parent(L, l);
-    i = atK_idx(L, p, l), cc = atN_cc(p);
-    if (cc && i == cc)
-        --L->paths[l], L->poff += p->bytes[cc - 1], L->off -= p->bytes[cc - 1];
-}
-
-static void atD_stitch(at_Cursor *L, at_Node *rt) {
-    int      cc;
-    at_Node *p = atK_parent(L, atK_levels(L));
-    assert(L->tree->S->nodes.freed_obj >= (size_t)(atK_levels(L) + 2));
-    if ((cc = atN_cc(p)) && p->bytes[cc - 1] == 0)
-        atN_remove(L->tree, p, 0, cc - 1, cc), cc -= 1;
-    if (cc && atN_cc(&rt[0])) atD_mergeleaf(L, rt);
-    atD_stitchnode(L, rt), atD_rebalance(L, 0), atD_stitchtail(L);
-}
-
-static void atD_rmrange(at_Cursor *L, at_Cursor *R, int fl) {
-    at_Node *rt = L->tree->S->rt;
-    int      k;
-    for (k = 0; k < AT_MAX_LEVEL; ++k) atN_setcc(&rt[k], 0);
-    atD_trimright(L), atD_trimleft(R);
-    atD_cutrange(L, R, rt, fl), atD_stitch(L, rt);
-}
-
-static void atD_rmleaf(at_Cursor *C) {
+/* clang-format off */
+static at_Edge *atK_edge(at_Cursor *C)
+{
     at_Node *p = atK_parent(C, atK_levels(C));
-    int      cc, i = atK_idx(C, p, atK_levels(C));
-    size_t   bytes = p->bytes[i];
-    atN_remove(C->tree, p, 0, i, i + 1);
-    atM_up(C, atK_levels(C) - 1, -(at_Delta)bytes);
-    cc = atN_cc(p);
-    if (atK_levels(C) > 0 && cc < atN_min())
-        atD_rebalance(C, atK_levels(C) - 1);
+    return atN_edge(p, atK_idx(C, p, atK_levels(C)));
 }
+/* clang-format on */
 
-static int atD_diverlevel(at_Cursor *L, at_Cursor *R) {
-    int l;
-    for (l = 0; l < atK_levels(L) && L->paths[l] == R->paths[l]; ++l) continue;
-    return l + (l == atK_levels(L) && L->paths[l] == R->paths[l]);
-}
-
-/* anchor-specific leaf/edge helpers */
-
-static void atD_mergesuccessor(at_Node **a, int *ix, int L, int b, size_t d) {
-    at_Node *n = a[b]->children[ix[b] + 1];
-    int      k;
-    a[b]->bytes[ix[b] + 1] += d;
-    for (k = b + 1; k < L; ++k, n = n->children[0]) n->bytes[0] += d;
-    n->bytes[0] += d;
-    atM_addpath(a, ix, L, b, -(at_Delta)d);
-}
-
-static void atD_rebalancepath(at_Tree *T, at_Node **anc, int *idx, int L) {
-    at_Cursor C;
-    int       d;
-    memset(&C, 0, sizeof(at_Cursor)), C.tree = T;
-    for (d = 0; d <= L; ++d) {
-        if (d == L && atN_cc(anc[L]) > 0 && idx[L] >= atN_cc(anc[L]))
-            C.paths[d] = &anc[L]->children[atN_cc(anc[L]) - 1];
-        else
-            C.paths[d] = &anc[d]->children[idx[d]];
-    }
-    atD_rebalance(&C, L - 1);
+static void atD_delsuccessor(at_Tree *T, at_Edge *prev, at_Cursor *S) {
+    at_Node *leaf, *lp;
+    at_Edge *e;
+    int      i, l = atK_levels(S);
+    size_t   delta;
+    i = atK_idx(S, leaf = atK_parent(S, l), l);
+    e = atN_edge(leaf, i), delta = leaf->bytes[i];
+    assert(atO_empty(e));
+    lp = prev->parent, lp->bytes[prev->idx] += delta;
+    atN_addpath(lp, (at_Delta)delta);
+    atN_addpath(leaf, -(at_Delta)delta);
+    atN_removeslot(leaf, i, 1, 1), atP_free(&T->S->edges, e);
+    assert(l == 0 || atN_cc(leaf) > 0);
+    if (l && i >= atN_cc(leaf)) S->paths[l] = &leaf->children[atN_cc(leaf) - 1];
+    if (l > 0 && atN_cc(leaf) < atN_min()) atD_rebalance(S, l - 1);
 }
 
 AT_STATIC int atD_deleteedge(at_Tree *T, size_t pos) {
-    at_Node *anc[AT_MAX_LEVEL + 1], *leaf;
-    int      idx[AT_MAX_LEVEL + 1], i, L, d, a = -1;
-    size_t   delta, rem = pos;
-    at_Edge *e;
-    if (T == NULL || pos == 0 || pos > T->bytes) return AT_ERRPARAM;
-    rem = atN_locate(T, pos, anc, idx);
-    L = T->levels, leaf = anc[L], i = idx[L];
-    if (rem != leaf->bytes[i]) return AT_ERRPARAM;
-    e = atN_edge(leaf, i), delta = leaf->bytes[i];
-    if (i + 1 < atN_cc(leaf)) {
-        leaf->bytes[i + 1] += delta;
-    } else {
-        for (a = -1, d = L - 1; d >= 0 && a < 0; --d)
-            if (idx[d] < atN_cc(anc[d]) - 1) a = d;
-        if (a >= 0)
-            atD_mergesuccessor(anc, idx, L, a, delta);
-        else {
-            atM_addpath(anc, idx, L, -1, -(at_Delta)delta);
-            T->bytes -= delta;
-        }
+    at_Cursor C, P, S;
+    at_Edge  *e, *prev;
+    at_Node  *leaf;
+    int       i, l, r;
+    if (T == NULL || atN_cc(&T->root) == 0 || pos > T->bytes)
+        return AT_ERRPARAM;
+    C.tree = T, r = at_locate(&C, pos), assert(r == AT_OK), (void)r;
+    if (C.poff != 0) return AT_ERRPARAM;
+    l = atK_levels(&C), leaf = atK_parent(&C, l);
+    i = atK_idx(&C, leaf, l), e = atN_edge(leaf, i);
+    assert(atO_empty(e));
+    if (pos == 0) {
+        assert(T->bytes == 0 && l == 0);
+        return atN_removeslot(leaf, i, 1, 1), atP_free(&T->S->edges, e), AT_OK;
     }
-    atN_removeslot(leaf, i, 1, 1);
-    atO_destroyedge(T, e);
-    atP_free(&T->S->edges, e);
-    assert(L == 0 || atN_cc(leaf) > 0);
-    if (L > 0 && atN_cc(leaf) < atN_min()) atD_rebalancepath(T, anc, idx, L);
-    return AT_OK;
+    atK_backwardoff(&C, 1), prev = atK_edge(&C), pos = C.off;
+    P.tree = T, r = at_locate(&P, pos), assert(r == AT_OK), (void)r;
+    assert(P.poff == 0), S = P;
+    r = atK_nextedge(&S), assert(r && atK_edge(&S) == e), (void)r;
+    return atD_delsuccessor(T, prev, &S), AT_OK;
 }
 
-static void atO_clean(at_Tree *T, at_Edge *e, size_t pos, at_Id id, int end) {
-    int side = atO_sideof(e, id, end);
-    int r;
-    if (side >= 0) atO_remove(T, side ? &e->right : &e->left, id, end);
-    if (e != &T->origin && atO_empty(e))
-        r = atD_deleteedge(T, pos), assert(r == AT_OK), (void)r;
-}
-
-static int atO_reservenewedge(at_Tree *T, at_Edge *se, int side, at_Id id) {
-    int r = AT_OK;
-    if (side >= 0) r = atO_reserve(T, side ? &se->right : &se->left, 2);
-    if (r != AT_OK) {
-        if (se != &T->origin && atO_empty(se))
-            atD_deleteedge(T, atO_edgepos(T, se));
-        atO_idfree(T, id);
-    }
-    return r;
-}
-
-typedef struct at_Collect {
-    at_State *S;     /* state supplying temporary vector allocations */
-    size_t    lo;    /* lower bound of the collected edge range */
-    size_t    hi;    /* upper bound of the collected edge range */
-    at_Point *left;  /* collected LEFT endpoints */
-    at_Point *right; /* collected RIGHT endpoints */
-} at_Collect;
-
-static int atD_collectside(at_State *S, at_Point **pbuf, at_PointList *ls) {
-    unsigned i;
-    int      res = AT_OK;
-    if (ls->first.id != 0) res = atV_push(S, *pbuf, ls->first);
-    for (i = 0; res == AT_OK && i < atV_len(ls->tail); ++i)
-        res = atV_push(S, *pbuf, ls->tail[i]);
-    return res;
-}
-
-static int atD_collectnode(at_Node *n, int lvl, size_t b, at_Collect *c) {
-    int i, res;
-    if (lvl == 0) {
-        for (i = 0; i < atN_cc(n); ++i) {
-            at_Edge *e;
-            b += n->bytes[i];
-            if (b <= c->lo || b > c->hi) continue;
-            e = atN_edge(n, i);
-            if ((res = atD_collectside(c->S, &c->left, &e->left)) != AT_OK)
-                return res;
-            if ((res = atD_collectside(c->S, &c->right, &e->right)) != AT_OK)
-                return res;
-        }
-        return AT_OK;
-    }
-    for (i = 0; i < atN_cc(n); ++i) {
-        if (b < c->hi && b + n->bytes[i] > c->lo) {
-            res = atD_collectnode(n->children[i], lvl - 1, b, c);
-            if (res != AT_OK) return res;
-        }
-        b += n->bytes[i];
-    }
-    return AT_OK;
-}
-
-static void atD_commitside(at_Tree *T, at_Edge *dst, int side, at_Point *buf) {
-    at_PointList *ls = side ? &dst->right : &dst->left;
-    unsigned      i, n = atV_len(buf);
-    for (i = 0; i < n; ++i) {
-        at_Point p = buf[i];
-        int      r = atO_push(T, ls, p.id, p.ns, p.is_end);
-        assert(r == AT_OK), (void)r;
-        if (p.is_end)
-            T->ids[p.id].end = dst;
-        else
-            T->ids[p.id].start = dst;
-    }
-}
-
-static int atD_collectendpoints(at_Tree *T, size_t L, size_t R, at_Edge *le) {
-    at_Collect c;
-    int        r;
-    c.S = T->S, c.lo = L, c.hi = R, c.left = NULL, c.right = NULL;
-    if ((r = atD_collectnode(&T->root, T->levels, 0, &c)) != AT_OK)
-        return atV_free(T->S, c.left), atV_free(T->S, c.right), r;
-    if ((r = atO_reserve(T, &le->left, atV_len(c.left))) == AT_OK)
-        r = atO_reserve(T, &le->right, atV_len(c.right));
-    if (r != AT_OK) {
-        atO_discardemptytail(T, &le->left);
-        atO_discardemptytail(T, &le->right);
-        return atV_free(T->S, c.left), atV_free(T->S, c.right), r;
-    }
-    atD_commitside(T, le, 0, c.left);
-    atD_commitside(T, le, 1, c.right);
-    return atV_free(T->S, c.left), atV_free(T->S, c.right), AT_OK;
+static void atD_dropempty(at_Tree *T, at_Edge *e) {
+    size_t pos;
+    int    r;
+    if (!atO_empty(e)) return;
+    pos = atO_edgepos(e);
+    if (pos == 0 && T->bytes != 0) return;
+    r = atD_deleteedge(T, pos), assert(r == AT_OK), (void)r;
 }
 
 /* insertion/splice */
@@ -1251,200 +912,224 @@ static int atI_splitnode(at_State *S, at_Node *n, int level, at_Node **pr) {
     return *pr = r, AT_OK;
 }
 
-static int atI_splitroot(at_Tree *T) {
-    at_Node *left, *right;
-    int      cc = atN_cc(&T->root), level = T->levels;
-    if (!(left = (at_Node *)atP_alloc(T->S, &T->S->nodes))) return AT_ERRMEM;
-    atN_setcc(left, cc), left->parent = &T->root, left->idx = 0;
-    atN_copy(left, 0, &T->root, 0, cc);
-    atN_fixlinks(left, 0, cc, level == 0);
-    if (atI_splitnode(T->S, left, level, &right) != AT_OK) {
-        atN_fixlinks(&T->root, 0, cc, level == 0);
-        return atP_free(&T->S->nodes, left), AT_ERRMEM;
-    }
-    atN_set(&T->root, 0, left, atN_sumbytes(left, 0, atN_cc(left)));
-    atN_set(&T->root, 1, right, atN_sumbytes(right, 0, atN_cc(right)));
-    atN_setcc(&T->root, 2), T->levels += 1, assert(T->levels < AT_MAX_LEVEL);
+static int atI_splitroot(at_Cursor *C) {
+    at_Tree *T = C->tree;
+    at_Node *r = &T->root, save = *r, *pp, *nw;
+    int      i = atK_idx(C, r, 0), mid = atN_cc(&save) / 2;
+    int      nc = atN_cc(&save) - mid, leaf = T->levels == 0;
+    if (!(pp = (at_Node *)atP_alloc(T->S, &T->S->nodes))) return AT_ERRMEM;
+    if (!(nw = (at_Node *)atP_alloc(T->S, &T->S->nodes)))
+        return atP_free(&T->S->nodes, pp), AT_ERRMEM;
+    *pp = save, atN_setcc(pp, mid);
+    atN_copy(nw, 0, &save, mid, atN_setcc(nw, nc));
+    atN_fixlinks(pp, 0, mid, leaf), atN_fixlinks(nw, 0, nc, leaf);
+    atN_set(r, 0, pp, atN_sumbytes(pp, 0, mid));
+    atN_set(r, 1, nw, atN_sumbytes(nw, 0, nc));
+    atN_setcc(r, 2), T->levels += 1, assert(T->levels < AT_MAX_LEVEL);
+    memmove(C->paths + 1, C->paths, (size_t)T->levels * sizeof(at_Node **));
+    C->paths[0] = &r->children[i >= mid];
+    C->paths[1] = &(*C->paths[0])->children[i < mid ? i : i - mid];
     return AT_OK;
 }
 
-static int atI_insertat(at_Tree *T, at_Node *n, int l, size_t rem, at_Edge *e) {
-    at_Node *child, *right;
-    int      i, r, cc = atN_cc(n);
+static int atI_splitchild(at_Cursor *C, int l) {
+    at_Tree *T = C->tree;
+    at_Node *p = atK_parent(C, l), *nd = (at_Node *)*(C->paths[l]), *nw;
+    int      i = atK_idx(C, p, l), cs, mid, r;
+    mid = atN_cc(nd) / 2;
+    if ((r = atI_splitnode(T->S, nd, T->levels - l - 1, &nw)) != AT_OK)
+        return r;
+    atN_makespace(p, i + 1, 1, 0);
+    atN_set(p, i + 1, nw, atN_sumbytes(nw, 0, atN_cc(nw)));
+    p->bytes[i] = atN_sumbytes(nd, 0, atN_cc(nd));
+    if ((cs = atK_idx(C, nd, l + 1)) >= mid) {
+        C->paths[l] = &p->children[i + 1];
+        C->paths[l + 1] = &nw->children[cs - mid];
+    }
+    return AT_OK;
+}
+
+static int atI_makeroom(at_Cursor *C) {
+    int l, r;
+    for (l = atK_levels(C); l >= 0; --l)
+        if (atN_cc(atK_parent(C, l)) < AT_FANOUT) break;
+    if (l < 0) {
+        if ((r = atI_splitroot(C)) != AT_OK) return r;
+        l = 1;
+    }
+    for (; l < atK_levels(C); ++l) {
+        if (atN_cc((at_Node *)*(C->paths[l])) < AT_FANOUT) continue;
+        if ((r = atI_splitchild(C, l)) != AT_OK) return r;
+    }
+    return AT_OK;
+}
+
+static at_Edge *atI_insertat(at_Node *n, int l, size_t rem, at_Edge *e) {
+    size_t rb;
+    int    i, cc = atN_cc(n);
     if (l == 0) {
-        for (i = 0; i < cc && rem > n->bytes[i]; ++i) rem -= n->bytes[i];
-        assert(i < cc && rem < n->bytes[i]), n->bytes[i] -= rem;
-        return atN_makespace(n, i, 1, 1), atN_setleaf(n, i, e, rem), AT_OK;
+        for (i = 0; i < cc && rem >= n->bytes[i]; ++i) rem -= n->bytes[i];
+        assert(i < cc && rem > 0 && rem < n->bytes[i]);
+        rb = n->bytes[i] - rem, n->bytes[i] = rem;
+        return atN_makespace(n, i + 1, 1, 1), atN_setleaf(n, i + 1, e, rb), e;
     }
-    for (i = 0; i < cc && rem > n->bytes[i]; ++i) rem -= n->bytes[i];
-    assert(i < cc), child = n->children[i];
-    if (atN_cc(child) == AT_FANOUT) {
-        if ((r = atI_splitnode(T->S, child, l - 1, &right)) != AT_OK) return r;
-        atN_makespace(n, i + 1, 1, 0);
-        atN_set(n, i + 1, right, atN_sumbytes(right, 0, atN_cc(right)));
-        n->bytes[i] = atN_sumbytes(child, 0, atN_cc(child));
-        if (rem > n->bytes[i]) rem -= n->bytes[i], i += 1;
-    }
-    return atI_insertat(T, n->children[i], l - 1, rem, e);
+    for (i = 0; i < cc && rem >= n->bytes[i]; ++i) rem -= n->bytes[i];
+    assert(i < cc);
+    return atI_insertat((at_Node *)n->children[i], l - 1, rem, e);
 }
 
-static int atI_appendat(at_Tree *T, at_Node *n, int l, size_t d, at_Edge *e) {
-    at_Node *child, *right;
-    int      i, r, cc = atN_cc(n);
-    if (l == 0)
-        return atN_makespace(n, cc, 1, 1), atN_setleaf(n, cc, e, d), AT_OK;
-    i = cc - 1, child = n->children[i];
-    if (atN_cc(child) == AT_FANOUT) {
-        if ((r = atI_splitnode(T->S, child, l - 1, &right)) != AT_OK) return r;
-        atN_makespace(n, i + 1, 1, 0);
-        atN_set(n, i + 1, right, atN_sumbytes(right, 0, atN_cc(right)));
-        n->bytes[i] = atN_sumbytes(child, 0, atN_cc(child));
-        child = right, i += 1;
-    }
-    if ((r = atI_appendat(T, child, l - 1, d, e)) == AT_OK) n->bytes[i] += d;
-    return r;
-}
-
-AT_STATIC int atI_insertedge(at_Tree *T, size_t pos, at_Edge **out) {
-    at_Edge *e, *found;
-    int      r;
-    if (T == NULL || out == NULL) return AT_ERRPARAM;
-    if (pos == 0) return *out = &T->origin, AT_OK;
-    if (atO_findedge(T, pos, &found)) return *out = found, AT_OK;
-    if (atN_full(&T->root) && (r = atI_splitroot(T)) != AT_OK) return r;
-    if (!(e = (at_Edge *)atP_alloc(T->S, &T->S->edges))) return AT_ERRMEM;
-    memset(e, 0, sizeof(at_Edge));
-    if (pos <= T->bytes)
-        r = atI_insertat(T, &T->root, T->levels, pos, e);
-    else
-        r = atI_appendat(T, &T->root, T->levels, pos - T->bytes, e);
-    if (r != AT_OK) return atP_free(&T->S->edges, e), r;
-    if (pos > T->bytes) T->bytes = pos;
-    return *out = e, AT_OK;
-}
-
-static int atO_edges(at_Tree *T, size_t s, size_t t, at_Edge **a, at_Edge **b) {
-    int r;
-    if ((r = atI_insertedge(T, s, a)) != AT_OK) return r;
-    if (t == s) return *b = *a, AT_OK;
-    if ((r = atI_insertedge(T, t, b)) == AT_OK) return AT_OK;
-    if (*a != &T->origin && atO_empty(*a)) atD_deleteedge(T, s);
-    return r;
+static void atI_appendslot(at_Node *n, int l, at_Edge *e) {
+    int cc;
+    for (; l > 0; --l) n = (at_Node *)n->children[atN_cc(n) - 1];
+    cc = atN_cc(n);
+    atN_makespace(n, cc, 1, 1), atN_setleaf(n, cc, e, 0);
 }
 
 static void atI_shift(at_Tree *T, size_t pos, at_Delta d) {
-    at_Node *anc[AT_MAX_LEVEL + 1], *leaf;
-    int      idx[AT_MAX_LEVEL + 1], L, i;
-    size_t   rem = pos + 1;
-    assert(pos < T->bytes && d != 0);
-    rem = atN_locate(T, rem, anc, idx);
-    L = T->levels, leaf = anc[L], i = idx[L];
-    leaf->bytes[i] += d, T->bytes += d;
-    atM_addpath(anc, idx, L, 0, d);
+    at_Cursor C;
+    at_Node  *leaf;
+    int       i, l, r;
+    assert(pos <= T->bytes && (T->bytes > 0 || atN_cc(&T->root) != 0));
+    C.tree = T, r = at_locate(&C, pos), assert(r == AT_OK), (void)r;
+    l = atK_levels(&C), i = atK_idx(&C, leaf = atK_parent(&C, l), l);
+    leaf->bytes[i] += d, atM_up(&C, l - 1, d);
 }
 
-static void atI_moverights(at_Tree *T, at_Edge *src, at_Edge *dst) {
+static int atI_emptyedge(at_Tree *T, size_t pos, at_Edge **out) {
+    at_Edge *e = atO_newedge(T), *e0;
+    if (e == NULL) return AT_ERRMEM;
+    if (pos == 0)
+        return atN_setleaf(&T->root, 0, e, 0), atN_setcc(&T->root, 1), *out = e,
+                                                                       AT_OK;
+    if ((e0 = e, e = atO_newedge(T)) == NULL)
+        return atP_free(&T->S->edges, e0), AT_ERRMEM;
+    atN_setleaf(&T->root, 0, e0, pos), atN_setleaf(&T->root, 1, e, 0);
+    return atN_setcc(&T->root, 2), T->bytes = pos, *out = e, AT_OK;
+}
+
+AT_STATIC int atI_insertedge(at_Tree *T, size_t pos, at_Edge **out) {
+    at_Cursor C;
+    at_Edge  *e, *prev;
+    int       r;
+    if (T == NULL || out == NULL) return AT_ERRPARAM;
+    if (atO_findedge(T, pos, &e)) return *out = e, AT_OK;
+    if (atN_cc(&T->root) == 0) return atI_emptyedge(T, pos, out);
+    if ((e = atO_newedge(T)) == NULL) return AT_ERRMEM;
+    if (pos >= T->bytes) {
+        C.tree = T, atK_locend(&C);
+        if ((r = atI_makeroom(&C)) != AT_OK)
+            return atP_free(&T->S->edges, e), r;
+        prev = atK_edge(&C), atI_appendslot(&T->root, T->levels, e);
+        if (pos > T->bytes) {
+            size_t d = pos - T->bytes;
+            prev->parent->bytes[prev->idx] += d;
+            atN_addpath(prev->parent, (at_Delta)d), T->bytes += d;
+        }
+        return *out = e, AT_OK;
+    }
+    C.tree = T, r = at_locate(&C, pos), assert(r == AT_OK), (void)r;
+    assert(C.poff > 0);
+    if ((r = atI_makeroom(&C)) != AT_OK) return atP_free(&T->S->edges, e), r;
+    return *out = atI_insertat(&T->root, T->levels, pos, e), AT_OK;
+}
+static int atO_edges(at_Tree *T, size_t s, size_t t, at_Edge **a, at_Edge **b) {
     int r;
-    while (src->right.first.id != 0) {
-        at_Point p = src->right.first;
-        r = atO_push(T, &dst->right, p.id, p.ns, p.is_end);
-        assert(r == AT_OK), (void)r;
-        atO_remove(T, &src->right, p.id, p.is_end);
-        if (p.is_end)
-            T->ids[p.id].end = dst;
-        else
-            T->ids[p.id].start = dst;
-    }
-}
-
-static int atI_insertempty(at_Tree *T, size_t pos, size_t ins) {
-    at_Edge *ne;
-    int      count, r;
-    if (pos != 0 || T->origin.right.first.id == 0) return AT_OK;
-    if ((r = atI_insertedge(T, ins, &ne)) != AT_OK) return r;
-    count = atO_listcount(&T->origin.right);
-    if ((r = atO_reserve(T, &ne->right, count)) != AT_OK) {
-        r = atD_deleteedge(T, ins), assert(r == AT_OK), (void)r;
-        return AT_ERRMEM;
-    }
-    return atI_moverights(T, &T->origin, ne), AT_OK;
-}
-
-static int atI_insertseam(at_Tree *T, at_Edge *e, size_t pos, size_t ins) {
-    at_Edge *ne;
-    int      count, r;
-    /* Edge model: grow the seam gap first, then migrate RIGHT endpoints. */
-    if (pos < T->bytes) atI_shift(T, pos, (at_Delta)ins);
-    if (e->right.first.id == 0) return AT_OK;
-    if ((r = atI_insertedge(T, pos + ins, &ne)) != AT_OK) {
-        if (pos < T->bytes) atI_shift(T, pos, -(at_Delta)ins);
-        return r;
-    }
-    count = atO_listcount(&e->right);
-    if ((r = atO_reserve(T, &ne->right, count)) != AT_OK) {
-        r = atD_deleteedge(T, pos + ins), assert(r == AT_OK), (void)r;
-        if (pos < T->bytes) atI_shift(T, pos, -(at_Delta)ins);
-        return AT_ERRMEM;
-    }
-    atI_moverights(T, e, ne);
-    if (e != &T->origin && atO_empty(e))
-        return r = atD_deleteedge(T, pos), assert(r == AT_OK), (void)r, AT_OK;
+    r = atP_reserve(T->S, &T->S->nodes, 4 * (T->levels + 2u) + 8u);
+    if (r != AT_OK) return r;
+    r = atP_reserve(T->S, &T->S->edges, t == s ? 2u : 4u);
+    if (r != AT_OK) return r;
+    if ((r = atI_insertedge(T, s, a)) != AT_OK) return r;
+    if (t == s) return *b = *a, AT_OK;
+    if ((r = atI_insertedge(T, t, b)) != AT_OK) return atD_dropempty(T, *a), r;
     return AT_OK;
 }
 
+static int atI_insertempty(at_Tree *T, size_t pos, size_t ins) {
+    at_Edge *e = atO_newedge(T);
+    if (e == NULL) return AT_ERRMEM;
+    atN_setleaf(&T->root, 0, e, pos + ins), atN_setcc(&T->root, 1);
+    return T->bytes = pos + ins, AT_OK;
+}
+
 static int atI_insert(at_Tree *T, size_t pos, size_t ins) {
-    at_Edge *e;
+    at_Edge *e, *ne;
+    int      r;
     if (ins == 0) return AT_OK;
-    if (T->bytes == 0) return atI_insertempty(T, pos, ins);
-    if (pos > T->bytes) return AT_OK;
-    if (pos != 0 && !atO_findedge(T, pos, &e)) {
-        if (pos < T->bytes) atI_shift(T, pos, (at_Delta)ins);
+    if (atN_cc(&T->root) == 0) return atI_insertempty(T, pos, ins);
+    if (pos > T->bytes) {
+        atI_shift(T, T->bytes, (at_Delta)(pos - T->bytes + ins));
         return AT_OK;
     }
-    if (pos == 0) e = &T->origin;
-    return atI_insertseam(T, e, pos, ins);
+    if (!atO_findedge(T, pos, &e))
+        return atI_shift(T, pos, (at_Delta)ins), AT_OK;
+    atI_shift(T, pos, (at_Delta)ins);
+    if (e->right.id == 0) {
+        if (pos != 0 && atO_empty(e)) {
+            r = atD_deleteedge(T, pos), assert(r == AT_OK), (void)r;
+        }
+        return AT_OK;
+    }
+    if ((r = atI_insertedge(T, pos + ins, &ne)) != AT_OK)
+        return atI_shift(T, pos, -(at_Delta)ins), r;
+    atO_moveside(T, ne, e, 1), atD_dropempty(T, e);
+    return AT_OK;
 }
 
 /* remove */
 
-static int atD_prepwindow(at_Tree *T, size_t L, size_t R) {
-    at_Edge *le = &T->origin;
-    int      r, lnew = 0, rnew = 0;
-    if (L != 0) {
-        if ((r = atI_insertedge(T, L, &le)) != AT_OK) return r;
-        lnew = atO_empty(le);
-    }
-    if (R < T->bytes) {
-        at_Edge *re;
-        int      found = atO_findedge(T, R, &re);
-        if (!found && (r = atI_insertedge(T, R, &re)) != AT_OK) {
-            if (lnew && atO_empty(le)) atD_deleteedge(T, L);
-            return r;
+static void atD_collapse(at_Tree *T, size_t L, size_t bR) {
+    at_Cursor C;
+    at_Node  *leaf;
+    size_t    old;
+    int       i, l, r;
+    C.tree = T, r = at_locate(&C, L), assert(r == AT_OK), (void)r;
+    l = atK_levels(&C), leaf = atK_parent(&C, l), i = atK_idx(&C, leaf, l);
+    old = leaf->bytes[i], leaf->bytes[i] = bR;
+    atM_up(&C, l - 1, (at_Delta)bR - (at_Delta)old);
+}
+
+static int atD_prep(at_Tree *T, size_t L, size_t R, at_Edge **le, size_t *bR) {
+    at_Edge *re;
+    int      r, d;
+    *bR = 0;
+    if ((r = atI_insertedge(T, L, le)) != AT_OK) return r;
+    if (R == T->bytes) return AT_OK;
+    if ((r = atI_insertedge(T, R, &re)) != AT_OK) {
+        if (L != 0 && atO_empty(*le)) {
+            d = atD_deleteedge(T, L), assert(d == AT_OK), (void)d;
         }
-        rnew = !found;
-    }
-    if ((r = atD_collectendpoints(T, L, R, le)) != AT_OK) {
-        if (rnew) atD_deleteedge(T, R);
-        if (lnew && atO_empty(le)) atD_deleteedge(T, L);
         return r;
     }
-    return AT_OK;
+    return *bR = re->parent->bytes[re->idx], AT_OK;
+}
+
+AT_STATIC int atD_prepwindow(at_Tree *T, size_t L, size_t R, at_Edge **le) {
+    size_t bR;
+    return atD_prep(T, L, R, le, &bR);
 }
 
 static int atD_remove(at_Cursor *C, size_t del) {
     at_Tree  *T = C->tree;
-    at_Cursor LC, RC;
-    size_t    R, L = at_offset(C);
-    int       r, fl;
-    if (L >= T->bytes || del == 0) return AT_OK;
+    at_Cursor S;
+    at_Edge  *le;
+    size_t    L = at_offset(C), R, bR;
+    int       r;
+    if (del == 0 || L >= T->bytes) return AT_OK;
     R = del > (size_t)-1 - L ? (size_t)-1 : L + del;
     if (R > T->bytes) R = T->bytes;
-    if ((r = atD_prepwindow(T, L, R)) != AT_OK) return r;
-    if ((r = at_seek(&LC, T, L)) != AT_OK) return r;
-    if ((r = at_seek(&RC, T, R)) != AT_OK) return r;
-    fl = atD_diverlevel(&LC, &RC);
-    if (fl > atK_levels(&LC)) return atD_rmleaf(&LC), AT_OK;
-    return atD_rmrange(&LC, &RC, fl), AT_OK;
+    del = R - L;
+    if ((r = atD_prep(T, L, R, &le, &bR)) != AT_OK) return r;
+    S.tree = T, r = at_locate(&S, L), assert(r == AT_OK), (void)r;
+    while (atK_nextedge(&S) && S.off <= R) {
+        at_Edge *e = atK_edge(&S);
+        atO_moveside(T, le, e, 0), atO_moveside(T, le, e, 1);
+    }
+    for (;;) {
+        S.tree = T, r = at_locate(&S, L), assert(r == AT_OK), (void)r;
+        if (!atK_nextedge(&S) || S.off > R) break;
+        atD_delsuccessor(T, le, &S);
+    }
+    return atD_collapse(T, L, bR), atD_dropempty(T, le), AT_OK;
 }
 
 /* APIs */
@@ -1456,6 +1141,7 @@ AT_API int at_splice(at_Cursor *C, size_t del, size_t ins) {
     if (C == NULL || C->tree == NULL) return AT_ERRPARAM;
     T = C->tree, L = at_offset(C);
     if (del == 0 && ins == 0) return AT_OK;
+    if (ins > (size_t)-1 - (L > T->bytes ? L : T->bytes)) return AT_ERRPARAM;
     r = atP_reserve(T->S, &T->S->nodes, 4 * (T->levels + 2u) + 8u);
     if (r != AT_OK) return r;
     if ((r = atP_reserve(T->S, &T->S->edges, 3)) != AT_OK) return r;
@@ -1469,33 +1155,40 @@ AT_API int at_newanchor(at_Cursor *C, size_t len, int ns, int g, at_Id *out) {
     at_Edge   *se, *ee;
     at_Tree   *T;
     at_Anchor *a;
+    at_Point   slot;
     at_Id      id;
     size_t     start, end;
-    int        sl, el, side, r;
+    int        sl, el, r;
     if (C == NULL || C->tree == NULL || out == NULL) return AT_ERRPARAM;
+    if (g < AT_GROW || g > AT_LOCK) return AT_ERRPARAM;
     T = C->tree, start = at_offset(C);
     if (len > (size_t)-1 - start) return AT_ERRPARAM;
     end = start + len;
-    if ((r = atO_gravsides(g, &sl, &el)) != AT_OK) return r;
-    if ((r = atO_reservenewanchor(T, start, end, sl, el)) != AT_OK) return r;
+    sl = atO_side(g, 0), el = atO_side(g, 1);
     if ((r = atO_idalloc(T, &id)) != AT_OK) return r;
     if ((r = atO_edges(T, start, end, &se, &ee)) != AT_OK)
         return atO_idfree(T, id), r;
-    side = se == ee && sl == el ? sl : -1;
-    if ((r = atO_reservenewedge(T, se, side, id)) != AT_OK) return r;
-    r = atO_push(T, sl ? &se->right : &se->left, id, ns, 0);
-    assert(r == AT_OK), (void)r;
-    r = atO_push(T, el ? &ee->right : &ee->left, id, ns, 1);
-    assert(r == AT_OK), (void)r;
-    return a = &T->ids[id], a->start = se, a->end = ee, *out = id, AT_OK;
+    a = &T->ids[id], a->start = se, a->end = ee;
+    a->ns = (unsigned)ns & 0x1fffffffu, a->gravity = (unsigned)g;
+    slot.id = id, slot.is_end = 0;
+    atO_link(se, sl, slot, a);
+    slot.is_end = 1;
+    atO_link(ee, el, slot, a);
+    return *out = id, AT_OK;
 }
 
-AT_API int at_del(at_Tree *T, at_Id id) {
+AT_API int at_delanchor(at_Tree *T, at_Id id) {
     at_Anchor *a;
-    size_t     start, end;
+    at_Edge   *se, *ee;
+    at_Point   slot;
     if ((a = atO_anchor(T, id)) == NULL) return AT_ERRPARAM;
-    start = atO_edgepos(T, a->start), end = atO_edgepos(T, a->end);
-    atO_clean(T, a->start, start, id, 0), atO_clean(T, a->end, end, id, 1);
+    se = a->start, ee = a->end;
+    slot.id = id, slot.is_end = 0;
+    atO_unlink(T, se, atO_side(a->gravity, 0), slot);
+    slot.is_end = 1;
+    atO_unlink(T, ee, atO_side(a->gravity, 1), slot);
+    atD_dropempty(T, se);
+    if (ee != se) atD_dropempty(T, ee);
     return atO_idfree(T, id), AT_OK;
 }
 
@@ -1503,20 +1196,14 @@ AT_API int at_range(at_Tree *T, at_Id id, size_t *start, size_t *end) {
     at_Anchor *a;
     if (start == NULL || end == NULL) return AT_ERRPARAM;
     if ((a = atO_anchor(T, id)) == NULL) return AT_ERRPARAM;
-    *start = atO_edgepos(T, a->start), *end = atO_edgepos(T, a->end);
+    *start = atO_edgepos(a->start), *end = atO_edgepos(a->end);
     return AT_OK;
 }
 
 AT_API int at_gravity(at_Tree *T, at_Id id) {
     at_Anchor *a;
-    int        sl, el;
     if ((a = atO_anchor(T, id)) == NULL) return AT_ERRPARAM;
-    sl = atO_sideof(a->start, id, 0), el = atO_sideof(a->end, id, 1);
-    if (sl < 0 || el < 0) return AT_ERRPARAM;
-    if (sl == 0 && el == 1) return AT_GROW;
-    if (sl == 1 && el == 0) return AT_FIXED;
-    if (sl == 1 && el == 1) return AT_SHIFT;
-    return AT_LOCK;
+    return (int)a->gravity;
 }
 
 AT_NS_END

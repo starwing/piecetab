@@ -82,7 +82,7 @@ static int fz_no_empty(at_Tree *T) {
     at_TestSeq s;
     int        i;
     at_seq(T, &s);
-    for (i = 0; i < s.n; ++i)
+    for (i = 1; i < s.n; ++i)
         if (atO_empty(s.edge[i])) return 0;
     return 1;
 }
@@ -197,7 +197,7 @@ static void runop(at_Cursor *C, fz_Op *o, FILE *lf) {
         at_Id id;
         if (fz_nlive > 0) {
             id = fz_live[o->extra % (unsigned)fz_nlive];
-            assertok(at_del(T, id) == AT_OK);
+            assertok(at_delanchor(T, id) == AT_OK);
             fz_drop(id);
         }
         break;

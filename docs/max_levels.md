@@ -134,3 +134,20 @@ Quick rules:
 The tree code also contains `assert(levels < MAX_LEVELS)` immediately after
 every level-increasing operation, so debug builds will catch an undersized
 `MAX_LEVELS` before the path array is corrupted.
+
+## anchortree current contract
+
+`anchortree.h` currently enforces `AT_MAX_LEVEL` only with
+`assert(T->levels < AT_MAX_LEVEL)` after each level-increasing operation.
+There is no runtime guard in release builds; with `NDEBUG`, an undersized
+`AT_MAX_LEVEL` is undefined behavior and can overwrite `paths[]`. Callers that
+override `AT_FANOUT` must therefore define the table value themselves:
+
+- 64-bit build with `AT_FANOUT = 4`: define `AT_MAX_LEVEL` at least `64`.
+- 32-bit build with `AT_FANOUT = 4`: define `AT_MAX_LEVEL` at least `32`.
+
+Do not rely on the library to detect an undersized configuration. A stricter
+contract is under consideration: level-increasing interfaces would reject a
+tree at `levels == AT_MAX_LEVEL - 1` with `AT_ERRPARAM`, so callers can define
+`MAX_LEVELS` one larger than the table value and waste one slot. That guard is
+not implemented yet; until then the table value is the hard requirement.
