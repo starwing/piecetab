@@ -11,6 +11,23 @@ pt seed='1': root (fuzz-run "pt" INCS seed)
 lc seed='1': root (fuzz-run "lc" INCS seed)
 # fuzz: seeded random-op stress with per-op invariant checks
 at seed='1': root (fuzz-run "at" INCS seed)
+# odd-fanout fuzz builds keep per-fanout binaries and crash logs so parallel
+# or sequential fanout runs cannot clobber each other or /tmp/at_oplog.txt
+[private]
+at-odd-build fanout flags out:
+    cd "$ROOT" && {{ CC }} {{ CFLAGS }} -Ifuzz -I. -Itests -DAT_FANOUT={{ fanout }} '-DFZ_OPLOG="/tmp/at_odd_{{ fanout }}_oplog.txt"' {{ flags }} -o fuzz/{{ out }} fuzz/at_fuzz.c
+# odd-fanout fuzz: compile-time AT_FANOUT override, AT_MAX_LEVEL stays 64
+at-odd fanout seed='1': (at-odd-build fanout "-g -O2" "at_odd_fuzz_" + fanout)
+    @echo "[anchortree fuzz odd fanout {{ fanout }}]"
+    cd "$ROOT/fuzz" && ./at_odd_fuzz_{{ fanout }} {{ seed }}
+# debug odd-fanout fuzz: ASan/UBSan build, precise fault isolation
+at-odd-dbg fanout seed='1': (at-odd-build fanout "-g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined" "at_odd_fuzz_" + fanout + "_dbg")
+    @echo "[anchortree fuzz odd fanout {{ fanout }} dbg]"
+    cd "$ROOT/fuzz" && ./at_odd_fuzz_{{ fanout }}_dbg {{ seed }}
+# replay an odd-fanout crash log with the matching AT_FANOUT build
+at-odd-replay fanout path='': (at-odd-build fanout "-g -O2" "at_odd_fuzz_" + fanout)
+    @echo "[anchortree fuzz odd fanout {{ fanout }} replay]"
+    cd "$ROOT/fuzz" && ./at_odd_fuzz_{{ fanout }} replay "{{ if path == '' { '/tmp/at_odd_' + fanout + '_oplog.txt' } else { path } }}"
 # replay a recorded op log
 replay lib path: root (fuzz-run lib INCS "replay" path)
 # debug fuzz: ASan/UBSan build, precise fault isolation
@@ -23,4 +40,4 @@ lc-dbg seed='1': root (dfz-run "lc" INCS seed)
 at-dbg seed='1': root (dfz-run "at" INCS seed)
 # remove fuzz binaries
 clean:
-    -rm -f *_fuzz *_fuzz_dbg *_replay
+    -rm -f *_fuzz *_fuzz_* *_replay

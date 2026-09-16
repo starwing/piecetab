@@ -7,7 +7,7 @@ INCS := "-I."
 
 # run all C test runners
 [default]
-all: root at4 at8 lc4 lc8 pt sp4 sp8 ut cg tf tm comp
+all: root at4 at5 at7 at8 at9 at32 lc4 lc8 pt sp4 sp8 ut cg tf tm comp
 
 # linecache fanout-4 tests (ASan/UBSan)
 lc4 *args='': root (c-dbg-run "linecache_test_fanout4" INCS args)
@@ -38,10 +38,27 @@ sp *args='': root (c-dbg-run "spantree_test_fanout4" INCS "?" + args) (c-dbg-run
 
 # anchortree fanout-4 tests (ASan/UBSan)
 at4 *args='': root (c-dbg-run "anchortree_test_fanout4" INCS args)
+# anchortree fanout-5 tests (ASan/UBSan)
+at5 *args='': root (c-dbg-run "anchortree_test_fanout5" INCS args)
 # anchortree fanout-8 tests (ASan/UBSan)
 at8 *args='': root (c-dbg-run "anchortree_test_fanout8" INCS args)
-# anchortree tests on both fanout variants
-at *args='': root (c-dbg-run "anchortree_test_fanout4" INCS "?" + args) (c-dbg-run "anchortree_test_fanout8" INCS "?" + args)
+# anchortree default-config (fanout 32) tests (ASan/UBSan)
+at32 *args='': root (c-dbg-run "anchortree_test_fanout32" INCS args)
+# anchortree fanout-7 spot checks (ASan/UBSan)
+at7 *args='': root (at-odd "7" "41" "anchortree_test_fanout7" args)
+# anchortree fanout-9 spot checks (ASan/UBSan)
+at9 *args='': root (at-odd "9" "32" "anchortree_test_fanout9" args)
+# anchortree tests on fanout 4/5/7/8/9 and the default fanout 32;
+# `just at7 at9` passes at9 as at7's test filter — run them separately
+at *args='': root (c-dbg-run "anchortree_test_fanout4" INCS "?" + args) (c-dbg-run "anchortree_test_fanout5" INCS "?" + args) (at-odd "7" "41" "anchortree_test_fanout7" "?" + args) (c-dbg-run "anchortree_test_fanout8" INCS "?" + args) (at-odd "9" "32" "anchortree_test_fanout9" "?" + args) (c-dbg-run "anchortree_test_fanout32" INCS "?" + args)
+
+# odd-fanout anchortree tests recompiled from the shared odd runner source;
+# each fanout gets its own binary so parallel runs cannot race on the output
+[private]
+at-odd fanout maxlevel out *args='': (gen-inc "anchortree_test_fanout5")
+    @echo "[anchortree odd fanout {{ fanout }}]"
+    cd "$ROOT" && {{ CC }} {{ CFLAGS }} -I. -Itests -DAT_FANOUT={{ fanout }} -DAT_MAX_LEVEL={{ maxlevel }} -g -O0 -fsanitize=address,undefined -fno-sanitize-recover=undefined -o tests/{{ out }} tests/anchortree_test_fanout5.c
+    cd "$ROOT/tests" && ./{{ out }} {{ args }}
 
 # compositor tests (ASan/UBSan)
 comp *args='': root (c-dbg-run "compositor_test" INCS args)
@@ -69,8 +86,14 @@ tf-cov: root clean-gcda (c-cov-run "termfeed_test" INCS) (cov-show ".." "termfee
 tm-cov: root clean-gcda (c-cov-run "textmatch_test" INCS) (cov-show ".." "textmatch.h")
 # spantree coverage
 sp-cov: root clean-gcda (c-cov-run "spantree_test_fanout4" INCS) (c-cov-run "spantree_test_fanout8" INCS) (cov-show ".." "spantree.h")
-# anchortree coverage
-at-cov: root clean-gcda (c-cov-run "anchortree_test_fanout4" INCS) (c-cov-run "anchortree_test_fanout8" INCS) (cov-show ".." "anchortree.h")
+# anchortree coverage: reduced fanouts plus the default fanout 32
+at-cov: root clean-gcda (c-cov-run "anchortree_test_fanout4" INCS) (c-cov-run "anchortree_test_fanout5" INCS) (c-cov-run "anchortree_test_fanout8" INCS) (c-cov-run "anchortree_test_fanout32" INCS) (at-cov-odd "7" "41" "anchortree_test_fanout7") (at-cov-odd "9" "32" "anchortree_test_fanout9") (cov-show ".." "anchortree.h")
+
+# odd-fanout anchortree coverage runs (fanout-specific binaries)
+[private]
+at-cov-odd fanout maxlevel out: (gen-inc "anchortree_test_fanout5")
+    cd "$ROOT" && {{ CC }} {{ CFLAGS }} -I. -Itests -DAT_FANOUT={{ fanout }} -DAT_MAX_LEVEL={{ maxlevel }} -DNDEBUG --coverage -Wno-unused-function -O0 -o tests/{{ out }} tests/anchortree_test_fanout5.c
+    cd "$ROOT/tests" && ./{{ out }}
 
 # linecache uncovered lines
 lc-lines: (cov-lines "../linecache.h" "../lcov.info")
@@ -113,5 +136,5 @@ clean-gcda:
 # remove generated C test binaries and coverage artifacts
 clean: clean-gcda
     -rm -fr *.dSYM
-    -rm -f *_test_fanout4 *_test_fanout8 *_test
+    -rm -f *_test_fanout4 *_test_fanout5 *_test_fanout7 *_test_fanout8 *_test_fanout9 *_test_fanout32 *_test_fanout_odd *_test
     -rm -f *.exe *.exp *.lib *.pdb *.gen.inc

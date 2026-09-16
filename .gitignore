@@ -29,7 +29,12 @@ notes/reports/
 *.lib
 tests/pt_bench.c
 tests/anchortree_test_fanout4
+tests/anchortree_test_fanout5
+tests/anchortree_test_fanout7
 tests/anchortree_test_fanout8
+tests/anchortree_test_fanout9
+tests/anchortree_test_fanout32
+tests/anchortree_test_fanout_odd
 tests/linecache_test_fanout4
 tests/linecache_test_fanout8
 tests/piecetab_test_fanout4
@@ -38,6 +43,7 @@ tests/spantree_test_fanout8
 tests/*.gen.inc
 fuzz/*_fuzz
 fuzz/*_fuzz_dbg
+fuzz/*_fuzz_*
 fuzz/pt_fuzz_fast
 fuzz/pt_replay
 
@@ -53,5 +59,3 @@ __pycache__/
 
 # DSH project skills (local, mirrors .opencode/agents)
 .dsh/
-tests/anchortree_test_fanout4
-tests/anchortree_test_fanout8
