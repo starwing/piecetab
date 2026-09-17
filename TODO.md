@@ -66,6 +66,16 @@
 
 ## 下一步候选（未完成）
 
+- **多返回值内部 helper 跨库统一**：`atD_balancenode` / `spD_balancenode`
+  当前均为 `int d + <Delta> *ds`；计划改为调用方计算 `d`、helper 单返回 `ds`，
+  需 anchortree / spantree / piecetab / linecache 等所有树库同步修改。
+- **Cursor epoch/stale 契约推广**：把 anchortree 的 `epoch` + `AT_ESTALE`
+  机制推广到 spantree / piecetab / linecache 等单头库，统一旧 Cursor 在解引用
+  `paths` 前被挡住、`at_locate` 为恢复入口的契约。
+- **sp_splice 事务化**：当前 `sp_splice` 先 `spD_remove`、后 `sp_append`；若
+  `sp_append` 的 reserve 失败，删除已经提交，树处于半完成状态，这是正确性缺陷。
+  应在任何 mutation 前统一 reserve 删除+插入所需的 nodes，保证失败时树不变；
+  参考 anchortree `at_splice` 的“先统一 reserve，再 D/I”结构。
 - **spantree.h：touch 写回 + expansion split（供 compositor object 语义）**
   - 设计结论（2026-09，探索中）：`spA_touch` 扩展为允许返回新 id；
     - 扩展（`db > 0`）返回原 id：run 整体变长；

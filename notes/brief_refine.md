@@ -221,3 +221,5 @@ if (!hL && !hR && ...)
 **[38] null 哨兵 = registry 固定表**——JSON null → **registry 里的固定空表**（luaopen 建一次，模块属性暴露），decode 推同表、encode 用 `lua_rawequal` 身份比较识别。对比 lightuserdata：表身份比较**两路都可测**（哨兵表 vs 普通表），无"宿主语言无法制造 lightuserdata"的结构分支。**表是宿主语言原生可造的唯一对象 → 哨兵优先选表**。
 
 **[39] 同类赋值按类型分类抽 builder**——把零散的 `key->type = ...` 按类型分类，每个静态类型一个 builder：`tfK_unicode(key, cp)` / `tfK_keysym(key, sym)` / `tfK_function(key, n)`。**公共字段不入 builder**（来源多变，统一入参反而臃肿）——踩坑：builder 强制默认值会覆盖先行的合法赋值（测试当场抓住），正解是 builder 只设类型专属字段，公共字段在入口统一兜底。动态类型路径（表命中、特殊报告）不用 builder，保持原样。太通用的名字是坏味道：一行 helper 若名字比函数体还重，直接内联。
+
+**[40] 给 helper 加功能的前提是功能能完全融入原流程**——只有当新功能能自然并入 helper 原有的数据流/分支/循环（不需要额外特例、不需要 `if (...) return another_helper();`）时才加；否则拆分职责或保持原 helper 边界，不要为了“看起来统一”而硬加功能。加功能后如果还需要调用方补分支/补 helper 才能正确，说明该功能一开始就不属于这个 helper。

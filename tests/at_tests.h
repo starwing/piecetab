@@ -193,11 +193,6 @@ TEST_STATIC int att_empty(const at_Edge *e) {
     return e->left.id == 0 && e->right.id == 0;
 }
 
-TEST_STATIC int att_side(int g, int end) {
-    if (end) return g == AT_GROW || g == AT_SHIFT;
-    return g == AT_FIXED || g == AT_SHIFT;
-}
-
 TEST_STATIC at_Node *att_lastleaf(const at_Tree *T) {
     at_Node *n = (at_Node *)&T->root;
     int      l;
@@ -249,15 +244,22 @@ TEST_STATIC int att_setup_edge(at_Tree *T, size_t pos, at_Edge **out) {
 }
 
 TEST_STATIC int att_setup_dropedge(at_Tree *T, size_t pos) {
-    at_Edge *e;
-    at_Id    id;
+    at_Edge   *e;
+    at_Anchor *a;
+    at_Point   p;
+    int        side;
     if (T == NULL || atN_cc(&T->root) == 0 || pos > at_bytes(T))
         return AT_ERRPARAM;
     if (!att_setup_findedge(T, pos, &e)) return AT_ERRPARAM;
-    for (id = 1; id < T->idcap; ++id) {
-        at_Anchor *a = &T->ids[id];
-        if (a->end != NULL && a->start == e && a->end == e)
-            return at_delanchor(T, id);
+    for (side = 0; side < 2; ++side) {
+        p = side ? e->right : e->left;
+        while (p.id != 0) {
+            if (T->anchors == NULL || p.id > T->idmax) return AT_ERRPARAM;
+            a = atA_slot(T, p.id);
+            if (a->end == NULL) return AT_ERRPARAM;
+            if (a->start == e && a->end == e) return at_delanchor(T, p.id);
+            p = p.is_end ? a->enext : a->snext;
+        }
     }
     return AT_ERRPARAM;
 }
@@ -286,7 +288,7 @@ TEST_STATIC size_t att_setup_edgepos(const at_Edge *e) {
 TEST_STATIC size_t att_checknode(const at_Node *n, int lv, int root, int *ok) {
     size_t sum = 0;
     int    i;
-    if (atN_cc(n) > AT_FANOUT || (!root && atN_cc(n) < atN_min())) {
+    if (atN_cc(n) > AT_FANOUT || (!root && atN_cc(n) < AT_FANOUT / 2)) {
         *ok = 0;
         return 0;
     }
@@ -341,13 +343,13 @@ TEST_STATIC int att_checktree(const at_Tree *T) {
 TEST_STATIC int att_sideof(const at_Tree *T, at_Edge *e, at_Id id, int end) {
     at_Point p = e->left;
     while (p.id != 0) {
-        const at_Anchor *a = &T->ids[p.id];
+        const at_Anchor *a = atA_slot(T, p.id);
         if (p.id == id && p.is_end == (unsigned)end) return 0;
         p = p.is_end ? a->enext : a->snext;
     }
     p = e->right;
     while (p.id != 0) {
-        const at_Anchor *a = &T->ids[p.id];
+        const at_Anchor *a = atA_slot(T, p.id);
         if (p.id == id && p.is_end == (unsigned)end) return 1;
         p = p.is_end ? a->enext : a->snext;
     }
@@ -357,46 +359,49 @@ TEST_STATIC int att_sideof(const at_Tree *T, at_Edge *e, at_Id id, int end) {
 TEST_STATIC int att_counttag(const at_Tree *T, at_Point *h, at_Id id, int end) {
     at_Point p = *h;
     int      n = 0;
-    while (p.id != 0 && n <= (int)(T->idcap * 2u + 4u)) {
-        const at_Anchor *a = &T->ids[p.id];
+    while (p.id != 0 && n <= (int)(T->idmax * 2u + 4u)) {
+        const at_Anchor *a = atA_slot(T, p.id);
         if (p.id == id && p.is_end == (unsigned)end) n += 1;
         p = p.is_end ? a->enext : a->snext;
     }
     return n;
 }
 
+TEST_STATIC int att_checkanchor(const at_Tree *T, at_Id id);
+
 TEST_STATIC int att_checkbucket(const at_Tree *T, const at_Edge *e, int side) {
     at_Point p = side ? e->right : e->left;
     int      n = 0;
     while (p.id != 0) {
         const at_Anchor *a;
-        if (T->ids == NULL || p.id >= T->idcap) return 0;
-        a = &T->ids[p.id];
+        if (T->anchors == NULL || p.id > T->idmax) return 0;
+        a = atA_slot(T, p.id);
         if (a->end == NULL) return 0;
-        if (side != att_side(a->gravity, p.is_end)) return 0;
+        if (side != (p.is_end ? (int)a->end_right : (int)a->start_right))
+            return 0;
         if ((p.is_end ? a->end : a->start) != e) return 0;
+        if (!att_checkanchor(T, p.id)) return 0;
         p = p.is_end ? a->enext : a->snext;
         n += 1;
-        if (n > (int)(T->idcap * 2u + 8u)) return 0;
+        if (n > (int)(T->idmax * 2u + 8u)) return 0;
     }
     return 1;
 }
 
 TEST_STATIC int att_checkanchor(const at_Tree *T, at_Id id) {
-    const at_Anchor *a = &T->ids[id];
+    const at_Anchor *a = atA_slot(T, id);
     int              side;
     if (a->end == NULL) return 1;
     if (a->start == NULL) return 0;
-    side = att_side(a->gravity, 0);
+    side = (int)a->start_right;
     if (att_counttag(T, side ? &a->start->right : &a->start->left, id, 0) != 1)
         return 0;
-    side = att_side(a->gravity, 1);
+    side = (int)a->end_right;
     return att_counttag(T, side ? &a->end->right : &a->end->left, id, 1) == 1;
 }
 
 TEST_STATIC int att_checkchains(const at_Tree *T) {
     at_Seq s;
-    at_Id  id;
     int    i;
     if (T == NULL || !att_checktree(T)) return 0;
     att_seq(T, &s);
@@ -404,9 +409,6 @@ TEST_STATIC int att_checkchains(const at_Tree *T) {
         if (!att_checkbucket(T, s.edge[i], 0)) return 0;
         if (!att_checkbucket(T, s.edge[i], 1)) return 0;
     }
-    if (T->ids == NULL) return 1;
-    for (id = 1; id < T->idcap; ++id)
-        if (!att_checkanchor(T, id)) return 0;
     return 1;
 }
 

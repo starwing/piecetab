@@ -477,10 +477,8 @@ SP_API int sp_advance(sp_Cursor *C, sp_Delta d) {
     off = sp_offset(C);
     if (d < 0 && (size_t)-d > off) return spK_backwardoff(C, off), SP_OK;
     if (d < 0) return spK_backwardoff(C, (size_t)(-d)), SP_OK;
-    if ((off + d) >= spK_bytes(C)) {
-        size_t vir = (off + d) - spK_bytes(C);
-        return spK_locend(C), C->poff += vir, SP_OK;
-    }
+    if ((off + d) >= spK_bytes(C))
+        return spK_locend(C), (C->poff += (off + d) - spK_bytes(C)), SP_OK;
     return spK_forwardoff(C, d), SP_OK;
 }
 

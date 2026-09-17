@@ -73,7 +73,7 @@ TEST_STATIC int att_splice_brute_ok(void) {
                 assertok(at_splice(&C, del, ins) == AT_OK);
                 assertok(att_checktree(T));
                 assertok(att_no_empty_edges(T));
-                assertok(att_checkcursor(&C, pos));
+                assertok(att_checkcursor(&C, pos + ins));
                 assertok(att_model_ok(T, m, AT_BRUTE_N));
             }
         }
@@ -99,7 +99,7 @@ TEST_STATIC void att_random_splice_run(at_Tree *T, att_Model *m, int n) {
         assertok(at_splice(&C, del, ins) == AT_OK);
         assertok(att_checktree(T));
         assertok(att_no_empty_edges(T));
-        assertok(att_checkcursor(&C, L));
+        assertok(att_checkcursor(&C, L + ins));
         assertok(att_model_ok(T, m, n));
     }
 }
@@ -219,6 +219,10 @@ TEST_STATIC void att_guards_cursor(at_Tree *T) {
     assertok(at_splice(&BadC, 0, 0) == AT_ESTALE);
     assertok(at_locate(&BadC, 0) == AT_OK);
     assertok(at_splice(&BadC, 0, 0) == AT_OK);
+    assertok(at_newanchor(&BadC, 0, -1, AT_GROW, &id) == AT_ERRPARAM);
+    assertok(
+            at_newanchor(&BadC, 0, (int)AT_MAX_NS + 1, AT_GROW, &id)
+            == AT_ERRPARAM);
     BadC.tree = NULL;
     assertok(at_splice(&BadC, 0, 0) == AT_ERRPARAM);
     assertok(at_newanchor(&BadC, 0, 0, AT_GROW, &id) == AT_ERRPARAM);
@@ -253,9 +257,9 @@ TEST_STATIC void att_edge_guards_pos(at_Tree *T) {
     at_Edge  *e;
     at_Id     id;
     assertok(at_seek(&C, T, (size_t)-1) == AT_OK);
-    assertok(at_newanchor(&C, 1, 0, AT_GROW, &id) == AT_ERRPARAM);
-    assertok(at_seek(&C, T, 0) == AT_OK);
-    assertok(at_newanchor(&C, (size_t)-1, 0, AT_GROW, &id) == AT_ERRPARAM);
+    assertok(at_newanchor(&C, 1, 0, AT_GROW, &id) == AT_ERROVERFLOW);
+    assertok(at_seek(&C, T, 1) == AT_OK);
+    assertok(at_newanchor(&C, (size_t)-1, 0, AT_GROW, &id) == AT_ERROVERFLOW);
     assertok(att_setup_insert(T, 0, 0) == AT_OK);
     assertok(att_setup_insert(T, 0, 7) == AT_OK);
     assertok(att_setup_edge(T, 10, &e) == AT_OK);
@@ -266,18 +270,18 @@ TEST_STATIC void att_edge_guards_pos(at_Tree *T) {
     assertok(att_setup_dropedge(T, 5) == AT_ERRPARAM);
 }
 
-TEST_STATIC void att_edge_guards_idcap(at_Tree *T) {
+TEST_STATIC void att_edge_guards_idmax(at_Tree *T) {
     at_Cursor C;
     at_Id     id;
     size_t    x = 0, y = 0, oldcap;
     assertok(at_seek(&C, T, 0) == AT_OK);
-    /* setup-only: force id-pool exhaustion without growing the pool. */
-    oldcap = T->idcap;
-    T->idcap = (size_t)-1, T->idfree = 0;
+    /* setup-only: force id-pool growth guards without growing the pool. */
+    oldcap = T->idmax;
+    T->idmax = 1, T->idfree = 0;
     assertok(at_newanchor(&C, 0, 0, AT_GROW, &id) == AT_ERRMEM);
-    T->idcap = AT_ANCHOR_MAX, T->idfree = 0;
+    T->idmax = AT_ANCHOR_MAX, T->idfree = 0;
     assertok(at_newanchor(&C, 0, 0, AT_GROW, &id) == AT_ERRMEM);
-    T->idcap = oldcap;
+    T->idmax = (at_Id)oldcap;
     assertok(at_newanchor(&C, 0, 0, AT_GROW, &id) == AT_OK);
     assertok(at_delanchor(T, 1000) == AT_ERRPARAM);
     assertok(at_range(T, 1000, &x, &y) == AT_ERRPARAM);
@@ -289,7 +293,7 @@ TEST_STATIC void att_case_edge_guards(void) {
     at_State *S = at_open(NULL, NULL);
     at_Tree  *T = at_newtree(S);
     att_edge_guards_pos(T);
-    att_edge_guards_idcap(T);
+    att_edge_guards_idmax(T);
     at_deltree(T), at_close(S);
 }
 
@@ -740,7 +744,7 @@ TEST_STATIC void att_case_splice_edge_gravity_insert(void) {
         assertok(at_splice(&C, 0, 7) == AT_OK);
         assertok(att_checktree(T));
         assertok(att_no_empty_edges(T));
-        assertok(att_checkcursor(&C, 100));
+        assertok(att_checkcursor(&C, 107));
         assertok(at_gravity(T, id) == gv[i]);
         assertok(at_range(T, id, &x, &y) == AT_OK);
         asserteq(x, ex[i][0]);
@@ -883,7 +887,7 @@ TEST_STATIC void att_case_anchor_oom_idalloc(void) {
     asserteq(at_bytes(T), 0);
     /* structural checker (white-box): OOM before id-pool growth leaves the
      * pool unallocated; not observable through the public API. */
-    assertok(T->ids == NULL);
+    assertok(T->anchors == NULL);
     at_deltree(T), at_close(S);
     asserteq(oc.live, 0);
 }
@@ -1681,6 +1685,9 @@ TEST_STATIC void att_case_iter_params(void) {
     len = 99;
     assertok(at_next(&C, -1, &len) == AT_NONE);
     asserteq(len, 0);
+    len = 99;
+    assertok(at_next(&C, (int)AT_MAX_NS + 1, &len) == AT_NONE);
+    asserteq(len, 0);
     assertok(at_next(&C, 0, NULL) == a);
     len = 99;
     assertok(at_next(&C, 0, &len) == AT_NONE);
@@ -1798,7 +1805,8 @@ TEST_STATIC void att_case_splice_after_iter_exhaust(void) {
     assertok(at_splice(&C, 0, 5) == AT_OK);
     assertok(att_checktree(T));
     assertok(att_checkchains(T));
-    assertok(att_checkcursor(&C, 10));
+    assertok(att_checkcursor(&C, 15));
+    assertok(at_seek(&C, T, 10) == AT_OK);
     asserteq(at_next(&C, 0, &len), a);
     asserteq(len, 0);
     at_deltree(T), at_close(S);
@@ -1930,7 +1938,7 @@ TEST_STATIC void att_case_splice_delete_all(void) {
     assertok(at_splice(&C, 0, 5) == AT_OK);
     asserteq(at_bytes(T), 5);
     assertok(att_checktree(T));
-    assertok(att_checkcursor(&C, 0));
+    assertok(att_checkcursor(&C, 5));
     at_deltree(T), at_close(S);
 }
 
@@ -2013,11 +2021,12 @@ TEST_STATIC void att_case_splice_ins_overflow(void) {
     at_Edge  *e;
     assertok(att_setup_edge(T, 10, &e) == AT_OK);
     assertok(at_seek(&C, T, 0) == AT_OK);
-    assertok(at_splice(&C, 0, (size_t)-1) == AT_ERRPARAM);
+    assertok(at_splice(&C, 0, (size_t)-1) == AT_ERROVERFLOW);
     assertok(at_bytes(T) == 10 && att_checktree(T));
-    assertok(at_advance(&C, (at_Delta)AT_DELTA_MAX) == AT_OK);
+    assertok(at_advance(&C, (at_Delta)(((size_t)-1) >> 1)) == AT_OK);
+    assertok(at_advance(&C, (at_Delta)(((size_t)-1) >> 1)) == AT_OK);
     assertok(at_advance(&C, 1) == AT_OK);
-    assertok(at_splice(&C, 0, 1) == AT_ERRPARAM);
+    assertok(at_splice(&C, 0, 1) == AT_ERROVERFLOW);
     assertok(at_bytes(T) == 10 && att_checktree(T));
     at_deltree(T), at_close(S);
 }
@@ -2033,10 +2042,10 @@ TEST_STATIC void att_case_advance_overflow_guard(void) {
     assertok(att_setup_insert(T, 10, 10) == AT_OK);
     asserteq(at_bytes(T), 20);
     assertok(at_seek(&C, T, (size_t)-1) == AT_OK);
-    assertok(at_advance(&C, 1) == AT_OK);
+    assertok(at_advance(&C, 1) == AT_ERROVERFLOW);
     assertok(at_offset(&C) == (size_t)-1);
-    assertok(at_splice(&C, 0, 1) == AT_ERRPARAM);
-    assertok(at_newanchor(&C, 1, 0, AT_GROW, &id) == AT_ERRPARAM);
+    assertok(at_splice(&C, 0, 1) == AT_ERROVERFLOW);
+    assertok(at_newanchor(&C, 1, 0, AT_GROW, &id) == AT_ERROVERFLOW);
     asserteq(at_bytes(T), 20);
     assertok(att_checktree(T));
     assertok(att_checkchains(T));
@@ -2144,6 +2153,8 @@ TEST_STATIC void att_epoch_splice_check(at_Tree *T, at_Id a, at_Id b) {
     size_t    len;
     assertok(at_seek(&C, T, 10) == AT_OK);
     assertok(at_splice(&C, 0, 5) == AT_OK);
+    assertok(att_checkcursor(&C, 15));
+    assertok(at_locate(&C, 10) == AT_OK);
     assertok(at_advance(&C, 0) == AT_OK);
     assertok(att_checkcursor(&C, 10));
     assertok(at_next(&C, 0, &len) == a);
@@ -2206,6 +2217,8 @@ TEST_STATIC void att_case_epoch_multi_cursor(void) {
     assertok(at_seek(&C1, T, 10) == AT_OK);
     assertok(at_seek(&C2, T, 20) == AT_OK);
     assertok(at_splice(&C1, 0, 5) == AT_OK);
+    assertok(att_checkcursor(&C1, 15));
+    assertok(at_locate(&C1, 10) == AT_OK);
     assertok(at_advance(&C1, 0) == AT_OK);
     assertok(at_next(&C1, 0, NULL) == a);
     att_epochchecks(T, a, b, &C2);

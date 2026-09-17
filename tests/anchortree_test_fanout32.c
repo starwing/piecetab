@@ -44,7 +44,7 @@ TEST_STATIC void att32_splice(at_Tree *T, att_Model *m, int n, att_Splice *w) {
     assertok(at_splice(&C, w->del, w->ins) == AT_OK);
     assertok(att_checkchains(T));
     assertok(att_no_empty_edges(T));
-    assertok(att_checkcursor(&C, w->L));
+    assertok(att_checkcursor(&C, w->L + w->ins));
     assertok(att_model_ok(T, m, n));
 }
 
