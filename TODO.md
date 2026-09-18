@@ -75,7 +75,13 @@
 - **sp_splice 事务化**：当前 `sp_splice` 先 `spD_remove`、后 `sp_append`；若
   `sp_append` 的 reserve 失败，删除已经提交，树处于半完成状态，这是正确性缺陷。
   应在任何 mutation 前统一 reserve 删除+插入所需的 nodes，保证失败时树不变；
-  参考 anchortree `at_splice` 的“先统一 reserve，再 D/I”结构。
+  参考 anchortree `at_splice` 的“先统一 reserve，再 D/I”结构。reserve 必须是
+  加法合并（remove 需 `(a,b)`、append 需 `(c,d)`，则 splice 需 `(a+c,b+d)`），
+  不能假设任一方的 reserve 足够覆盖另一方。
+- **sp_remove 签名统一为 `(C, len)`**：当前 `sp_remove(L, R)` 双 Cursor 形态可疑，
+  且与 `sp_append`/`sp_insert`/`sp_splice` 的 Cursor 语义不一致。要求改为
+  `sp_remove(sp_Cursor *C, size_t len)`：`C` 保持在删除起点，`len` 可超尾截断；
+  anchortree 的 `at_remove` 直接按 `(C, len)` 落地，spantree 后续同步修改。
 - **spantree.h：touch 写回 + expansion split（供 compositor object 语义）**
   - 设计结论（2026-09，探索中）：`spA_touch` 扩展为允许返回新 id；
     - 扩展（`db > 0`）返回原 id：run 整体变长；

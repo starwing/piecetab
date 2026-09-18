@@ -19,6 +19,23 @@
 /* shared M1 regression: at_next exhaust commit semantics at default fanout. */
 TEST(iter_exhaust_commit) { att_case_iter_exhaust_commit(); }
 
+/* fanout-independent API and stitch regressions at the default fanout. */
+TEST(remove_params) { att_case_remove_params(); }
+TEST(remove_cursor) { att_case_remove_cursor(); }
+TEST(insert_cursor) { att_case_insert_cursor(); }
+TEST(append_cursor) { att_case_append_cursor(); }
+TEST(splice_atomic_oom) { att_case_splice_atomic_oom(); }
+TEST(remove_append_equivalence) { att_case_remove_append_equivalence(); }
+TEST(stitch_delete_cross_leaf) { att_case_stitch_delete_cross_leaf(); }
+TEST(stitch_delete_tail) { att_case_stitch_delete_tail(); }
+TEST(stitch_delete_same_leaf) { att_case_stitch_delete_same_leaf(); }
+TEST(stitch_seam_cleared) { att_case_stitch_seam_cleared(); }
+TEST(stitch_rt_cleared) { att_case_stitch_rt_cleared(); }
+TEST(stitch_firstedge_keep) { att_case_stitch_firstedge_keep(); }
+TEST(stitch_tail_seam_anchors) { att_case_stitch_tail_seam_anchors(); }
+TEST(purge_insertion) { att_case_purge_insertion(); }
+TEST(purge_delanchor) { att_case_purge_delanchor(); }
+
 /* 640 anchors at unique increasing positions leave ~640 edges, above the
  * 512-edge minimum occupancy that forces a second internal level at the
  * default fanout (2 * AT_FANOUT/2 * AT_FANOUT/2). */

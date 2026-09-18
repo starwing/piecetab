@@ -421,6 +421,66 @@ TEST_STATIC int att_no_empty_edges(const at_Tree *T) {
     return 1;
 }
 
+TEST_STATIC size_t att_bucketcount(
+        const at_Tree *T, const at_Edge *e, int side) {
+    at_Point p = side ? e->right : e->left;
+    size_t   n = 0;
+    while (p.id != 0) {
+        const at_Anchor *a;
+        assert(p.id <= T->idmax);
+        a = atA_slot(T, p.id);
+        assert(a->end != NULL);
+        p = p.is_end ? a->enext : a->snext;
+        n += 1;
+    }
+    return n;
+}
+
+TEST_STATIC size_t att_anchorslots(const at_Tree *T, const at_Edge *e) {
+    return att_bucketcount(T, e, 0) + att_bucketcount(T, e, 1);
+}
+
+TEST_STATIC int att_liveanchors(const at_Tree *T) {
+    at_Id id;
+    int   n = 0;
+    if (T->anchors == NULL) return 0;
+    id = T->idfree;
+    while (id != 0) {
+        assert(id <= T->idmax);
+        id = *(at_Id *)atA_slot(T, id);
+        n += 1;
+        assert(n <= (int)T->idmax);
+    }
+    return (int)T->idmax - n;
+}
+
+TEST_STATIC int att_rtempty(const at_Tree *T) {
+    int k;
+    for (k = 0; k <= T->levels; ++k)
+        if (atN_cc(&T->S->rt[k]) != 0) return 0;
+    return 1;
+}
+
+TEST_STATIC int att_nextall(at_Tree *T, at_Id *out, int cap) {
+    at_Cursor C;
+    at_Id     id;
+    int       n = 0;
+    assertok(at_seek(&C, T, 0) == AT_OK);
+    while ((id = at_next(&C, 0, NULL)) != AT_NONE) {
+        if (n >= cap) return -1;
+        out[n] = id, n += 1;
+    }
+    return n;
+}
+
+TEST_STATIC int att_seqeq(const at_Seq *a, const at_Seq *b) {
+    int i;
+    if (a->n != b->n) return 0;
+    for (i = 0; i < a->n; ++i)
+        if (a->pos[i] != b->pos[i] || a->span[i] != b->span[i]) return 0;
+    return 1;
+}
+
 TEST_STATIC void att_anchor(at_Tree *T, size_t p, size_t n, int g, at_Id *id) {
     at_Cursor C;
     assertok(at_seek(&C, T, p) == AT_OK);

@@ -865,22 +865,76 @@ TEST_STATIC size_t att_poolpages(size_t obj_size, size_t need) {
     return (need + cap - 1u) / cap;
 }
 
-/* setup-only: OOM injection budget derived from the current tree depth. */
-TEST_STATIC size_t att_nodepages(const at_Tree *T, size_t passes) {
-    size_t need = passes * (4u * (size_t)(T->levels + 2) + 8u);
-    return att_poolpages(sizeof(at_Node), need);
+#define ATT_ANCHOR_SNAP 128
+typedef struct {
+    at_State  *state;
+    size_t     bytes;
+    int        levels;
+    unsigned   epoch;
+    at_Node    root;
+    at_Anchor *anchors;
+    at_Id      idmax;
+    at_Id      idfree;
+    at_Edge   *seam;
+    int        live;
+    int        nslot;
+    at_Anchor  slot[ATT_ANCHOR_SNAP];
+} att_TreeSnap;
+
+TEST_STATIC void att_treesnap(const at_Tree *T, att_TreeSnap *s) {
+    assertok(T != NULL && s != NULL);
+    assertok((int)T->idmax <= ATT_ANCHOR_SNAP);
+    memset(s, 0, sizeof(*s));
+    s->state = T->S, s->bytes = T->bytes, s->levels = T->levels;
+    s->epoch = T->epoch, s->root = T->root, s->anchors = T->anchors;
+    s->idmax = T->idmax, s->idfree = T->idfree, s->seam = T->seam;
+    s->live = att_liveanchors(T);
+    if (T->anchors != NULL && T->idmax > 0) {
+        s->nslot = (int)T->idmax;
+        memcpy(s->slot, T->anchors, (size_t)T->idmax * sizeof(at_Anchor));
+    }
+}
+
+TEST_STATIC int att_treesnapeq(const at_Tree *T, const att_TreeSnap *s) {
+    if (T->S != s->state || T->bytes != s->bytes || T->levels != s->levels)
+        return 0;
+    if (T->epoch != s->epoch || T->anchors != s->anchors) return 0;
+    if (T->idmax != s->idmax || T->idfree != s->idfree) return 0;
+    if (T->seam != s->seam) return 0;
+    if (memcmp(&T->root, &s->root, sizeof(at_Node)) != 0) return 0;
+    if (att_liveanchors(T) != s->live) return 0;
+    if (T->idmax > 0
+        && memcmp(T->anchors, s->slot, (size_t)T->idmax * sizeof(at_Anchor))
+                   != 0)
+        return 0;
+    return 1;
+}
+
+/* setup-only: at_newanchor allocates/frees an id before reserve fails, so
+ * the anchor free-list slot no longer compares byte-for-byte; still require
+ * the tree metadata, root and live-anchor set to be untouched. */
+TEST_STATIC int att_treebaseeq(const at_Tree *T, const att_TreeSnap *s) {
+    if (T->S != s->state || T->bytes != s->bytes || T->levels != s->levels)
+        return 0;
+    if (T->epoch != s->epoch || T->seam != s->seam) return 0;
+    if (memcmp(&T->root, &s->root, sizeof(at_Node)) != 0) return 0;
+    return att_liveanchors(T) == s->live;
 }
 
 TEST_STATIC void att_case_anchor_oom_idalloc(void) {
-    OomCount  oc = {0, 1 << 20};
-    at_State *S = at_open(&oomcount_alloc, &oc);
-    at_Tree  *T = at_newtree(S);
-    at_Cursor C;
-    at_Id     id;
+    OomCount     oc = {0, 1 << 20};
+    at_State    *S = at_open(&oomcount_alloc, &oc);
+    at_Tree     *T = at_newtree(S);
+    at_Cursor    C, C0;
+    att_TreeSnap ts;
+    at_Id        id;
     assertok(S != NULL && T != NULL);
     oc.oom = 0;
     assertok(at_seek(&C, T, 0) == AT_OK);
+    C0 = C, att_treesnap(T, &ts);
     assertok(at_newanchor(&C, 5, 0, AT_GROW, &id) == AT_ERRMEM);
+    assertok(memcmp(&C0, &C, sizeof C) == 0);
+    assertok(att_treesnapeq(T, &ts));
     assertok(att_checktree(T));
     assertok(att_checkchains(T));
     assertok(att_no_empty_edges(T));
@@ -903,21 +957,27 @@ TEST_STATIC void att_oom_newanchor_setup(at_Tree *T, at_Id *keep) {
 }
 
 TEST_STATIC void att_oom_newanchor(int mode) {
-    OomCount  oc = {0, 1 << 20};
-    at_State *S = at_open(&oomcount_alloc, &oc);
-    at_Tree  *T = at_newtree(S);
-    at_Cursor C;
-    at_Id     keep, id;
-    size_t    fail, bytes;
+    OomCount     oc = {0, 1 << 20};
+    at_State    *S = at_open(&oomcount_alloc, &oc);
+    at_Tree     *T = at_newtree(S);
+    at_Cursor    C, C0;
+    att_TreeSnap ts;
+    at_Id        keep, id;
+    size_t       fail, bytes;
     assertok(S != NULL && T != NULL);
     att_oom_newanchor_setup(T, &keep);
     bytes = at_bytes(T);
     /* setup-only: force page allocations for deterministic fail-at-N. */
     (void)att_drainpool(&S->nodes), (void)att_drainpool(&S->edges);
-    fail = mode == 2 ? att_nodepages(T, 2u) : (size_t)mode;
+    fail = mode == 2
+                 ? att_poolpages(sizeof(at_Node), 2u * (size_t)T->levels + 5u)
+                 : (size_t)mode;
     oc.oom = (int)fail;
     assertok(at_seek(&C, T, 50) == AT_OK);
+    C0 = C, att_treesnap(T, &ts);
     assertok(at_newanchor(&C, 0, 0, AT_GROW, &id) == AT_ERRMEM);
+    assertok(memcmp(&C0, &C, sizeof C) == 0);
+    assertok(att_treebaseeq(T, &ts));
     assertok(att_checktree(T));
     assertok(att_checkchains(T));
     assertok(att_no_empty_edges(T));
@@ -934,22 +994,28 @@ TEST_STATIC void att_case_anchor_oom_reserve(void) {
 }
 
 TEST_STATIC void att_oom_splice(int mode) {
-    OomCount  oc = {0, 1 << 20};
-    at_State *S = at_open(&oomcount_alloc, &oc);
-    at_Tree  *T = at_newtree(S);
-    at_Cursor C;
-    at_Id     a, b;
-    size_t    fail, bytes;
+    OomCount     oc = {0, 1 << 20};
+    at_State    *S = at_open(&oomcount_alloc, &oc);
+    at_Tree     *T = at_newtree(S);
+    at_Cursor    C, C0;
+    att_TreeSnap ts;
+    at_Id        a, b;
+    size_t       fail, bytes;
     assertok(S != NULL && T != NULL);
     att_anchor(T, 10, 5, AT_GROW, &a);
     att_anchor(T, 30, 5, AT_LOCK, &b);
     bytes = at_bytes(T);
     /* setup-only: force page allocations for deterministic fail-at-N. */
     (void)att_drainpool(&S->nodes), (void)att_drainpool(&S->edges);
-    fail = mode == 2 ? att_nodepages(T, 3u) : (size_t)mode;
+    fail = mode == 2
+                 ? att_poolpages(sizeof(at_Node), 2u * (size_t)T->levels + 2u)
+                 : (size_t)mode;
     oc.oom = (int)fail;
     assertok(at_seek(&C, T, 20) == AT_OK);
+    C0 = C, att_treesnap(T, &ts);
     assertok(at_splice(&C, 5, 1) == AT_ERRMEM);
+    assertok(memcmp(&C0, &C, sizeof C) == 0);
+    assertok(att_treesnapeq(T, &ts));
     assertok(att_checktree(T));
     assertok(att_checkchains(T));
     assertok(att_no_empty_edges(T));
@@ -1349,6 +1415,9 @@ TEST_STATIC void att_case_splice_cross_leaf_rebalance(void) {
     assertok(at_splice(&C, 180, 0) == AT_OK);
     assertok(att_checktree(T));
     assertok(att_no_empty_edges(T));
+    assertok(att_checkcursor(&C, 20));
+    assertok(T->seam == NULL);
+    assertok(att_rtempty(T));
     at_deltree(T), at_close(S);
 }
 
@@ -1387,6 +1456,8 @@ TEST_STATIC void att_case_delete_cross_leaf_merge(void) {
     assertok(att_no_empty_edges(T));
     assertok(att_checkchains(T));
     assertok(att_checkcursor(&C, 12));
+    assertok(T->seam == NULL);
+    assertok(att_rtempty(T));
     at_deltree(T), at_close(S);
 }
 
@@ -1403,6 +1474,9 @@ TEST_STATIC void att_case_delete_tail_sentinel(void) {
     assertok(att_checktree(T));
     assertok(att_no_empty_edges(T));
     assertok(att_checkchains(T));
+    assertok(att_checkcursor(&C, 10));
+    assertok(T->seam == NULL);
+    assertok(att_rtempty(T));
     at_deltree(T), at_close(S);
 }
 
@@ -1442,6 +1516,8 @@ TEST_STATIC void att_case_splice_delete_chain(void) {
     assertok(att_checktree(T));
     assertok(att_no_empty_edges(T));
     assertok(att_checkcursor(&C, 15));
+    assertok(T->seam == NULL);
+    assertok(att_rtempty(T));
     asserteq(at_bytes(T), 45);
     assertok(att_positions_match(T, ep, 6));
     for (i = 0; i < 10; ++i) {
@@ -1464,6 +1540,8 @@ TEST_STATIC void att_case_splice_delete_tail(void) {
     assertok(att_checktree(T));
     assertok(att_no_empty_edges(T));
     assertok(att_checkcursor(&C, 2));
+    assertok(T->seam == NULL);
+    assertok(att_rtempty(T));
     at_deltree(T), at_close(S);
 }
 
@@ -1915,6 +1993,8 @@ TEST_STATIC void att_case_splice_delete_large_span(void) {
     assertok(att_checktree(T));
     assertok(att_no_empty_edges(T));
     assertok(att_checkcursor(&C, 10));
+    assertok(T->seam == NULL);
+    assertok(att_rtempty(T));
     for (i = 0; i < 100; ++i) assertok(at_range(T, id[i], &x, &y) == AT_OK);
     at_deltree(T), at_close(S);
 }
@@ -2368,6 +2448,892 @@ TEST_STATIC void att_case_insert_span_split(void) {
     assertok(x == 75 && y == 85);
     assertok(at_bytes(T) == 100);
     at_deltree(T), at_close(S);
+}
+
+TEST_STATIC void att_model_buildspread(
+        at_Tree *T, att_Model *m, int n, size_t step) {
+    at_Cursor C;
+    int       i;
+    for (i = 0; i < n; ++i) {
+        m[i].gravity = i % 4;
+        assertok(at_seek(&C, T, 10u + (size_t)i * step) == AT_OK);
+        assertok(
+                at_newanchor(&C, (size_t)(i % 3), 0, m[i].gravity, &m[i].id)
+                == AT_OK);
+        assertok(at_range(T, m[i].id, &m[i].start, &m[i].end) == AT_OK);
+    }
+}
+
+TEST_STATIC int att_modelnext(
+        at_Tree *T, const att_Model *m, int n, at_Id *got, int cap) {
+    at_Id want[512];
+    int   i, k;
+    assertok(n <= 512);
+    for (i = 0; i < n; ++i) want[i] = m[i].id;
+    k = att_nextall(T, got, cap);
+    return k == n && att_idset(got, n, want, n);
+}
+
+TEST_STATIC void att_modelchecks(
+        at_Tree *T, const att_Model *m, int n, at_Id *got, int cap) {
+    assertok(att_model_ok(T, m, n));
+    asserteq(att_liveanchors(T), n);
+    assertok(att_modelnext(T, m, n, got, cap));
+}
+
+TEST_STATIC void att_stitchinv(const at_Tree *T) {
+    assertok(att_checktree(T));
+    assertok(att_checkchains(T));
+    assertok(T->seam == NULL);
+    assertok(att_rtempty(T));
+}
+
+TEST_STATIC int att_nonlastleafedge(
+        const at_Tree *T, size_t *pos, size_t *span) {
+    at_Seq         s;
+    const at_Node *lastleaf = att_lastleaf(T);
+    at_Edge       *e;
+    int            i;
+    att_seq(T, &s);
+    for (i = 0; i < s.n; ++i) {
+        e = s.edge[i];
+        if (e->parent == lastleaf || s.span[i] == 0) continue;
+        if ((int)e->idx == atN_cc(e->parent) - 1)
+            return *pos = s.pos[i], *span = s.span[i], 1;
+    }
+    return 0;
+}
+
+#define ATT_EDIT_REMOVE 0
+#define ATT_EDIT_INSERT 1
+#define ATT_EDIT_APPEND 2
+#define ATT_EDIT_SPLICE 3
+
+TEST_STATIC void att_poolfill(at_State *S, int donors) {
+    at_Id id;
+    int   i, j;
+    for (i = 0; i < donors; ++i) {
+        at_Tree *d = at_newtree(S);
+        for (j = 0; j < 256; ++j)
+            att_anchor(d, (size_t)j * 5u + 1u, 0, AT_GROW, &id);
+        at_deltree(d);
+    }
+}
+
+TEST_STATIC size_t att_editneednodes(const at_Tree *T, int op) {
+    size_t l = (size_t)T->levels;
+    if (op == ATT_EDIT_REMOVE) return l;
+    if (op == ATT_EDIT_INSERT || op == ATT_EDIT_APPEND) return l + 2u;
+    return 2u * l + 2u;
+}
+
+TEST_STATIC size_t att_editneedpages(const at_Tree *T, int op) {
+    return att_poolpages(sizeof(at_Node), att_editneednodes(T, op));
+}
+
+TEST_STATIC void att_oom_edit(int op, int stage) {
+    OomCount      oc = {0, 1 << 20};
+    at_State     *S = at_open(&oomcount_alloc, &oc);
+    at_Tree      *T;
+    at_Cursor     C, C0;
+    att_EpochSnap before, after;
+    att_TreeSnap  ts;
+    size_t        need, pos, del, ins, off, bytes, len;
+    unsigned      epoch;
+    long          alloc_live;
+    int           i, live, r;
+    at_Id         id, got;
+    assertok(S != NULL);
+    att_poolfill(S, 4);
+    T = at_newtree(S);
+    for (i = 0; i < 40; ++i)
+        att_anchor(T, (size_t)i * 7u + 1u, 0, AT_GROW, &id);
+    assertok(att_checktree(T));
+    assertok(att_checkchains(T));
+    need = att_editneednodes(T, op);
+    pos = 100, del = 40, ins = 30;
+    assertok(pos < at_bytes(T));
+    assertok(at_seek(&C, T, pos) == AT_OK);
+    C0 = C;
+    att_snapshot(T, &before);
+    att_treesnap(T, &ts);
+    off = at_offset(&C), bytes = at_bytes(T), epoch = T->epoch;
+    live = att_liveanchors(T);
+    if (stage == 2) {
+        (void)att_drainpool(&S->nodes), (void)att_drainpool(&S->edges);
+    } else if (stage == 1) {
+        (void)att_drainpool(&S->edges);
+        assertok(S->nodes.freed_obj >= need);
+    } else {
+        (void)att_drainpool(&S->nodes), (void)att_drainpool(&S->edges);
+    }
+    oc.oom = stage == 2 ? (int)att_editneedpages(T, op) : 0;
+    alloc_live = oc.live;
+    if (op == ATT_EDIT_REMOVE)
+        r = at_remove(&C, del);
+    else if (op == ATT_EDIT_INSERT)
+        r = at_insert(&C, ins);
+    else if (op == ATT_EDIT_APPEND)
+        r = at_append(&C, ins);
+    else
+        r = at_splice(&C, del, ins);
+    assertok(r == AT_ERRMEM);
+    assertok(memcmp(&C0, &C, sizeof C) == 0);
+    if (stage == 2) {
+        assertok(oc.live > alloc_live);
+        assertok(S->nodes.freed_obj >= need);
+    } else {
+        assertok(oc.live == alloc_live);
+    }
+    assertok(T->epoch == epoch);
+    assertok(at_offset(&C) == off);
+    asserteq(at_bytes(T), bytes);
+    att_snapshot(T, &after);
+    assertok(att_snapeq(&before, &after));
+    assertok(att_liveanchors(T) == live);
+    assertok(att_treesnapeq(T, &ts));
+    att_stitchinv(T);
+    oc.oom = 1 << 20;
+    assertok(at_advance(&C, 0) == AT_OK);
+    got = at_next(&C, 0, &len);
+    assertok(got != AT_NONE);
+    off = at_offset(&C);
+    assertok(at_insert(&C, 5) == AT_OK);
+    asserteq(at_bytes(T), bytes + 5);
+    assertok(att_checkcursor(&C, off));
+    assertok(att_checktree(T));
+    assertok(att_checkchains(T));
+    assertok(T->seam == NULL);
+    assertok(att_rtempty(T));
+    at_deltree(T), at_close(S);
+    asserteq(oc.live, 0);
+}
+
+TEST_STATIC void att_case_remove_params(void) {
+    Count     c = {0};
+    at_State *S = at_open(&count_alloc, &c);
+    at_Tree  *T = at_newtree(S);
+    at_Cursor C, D, Z;
+    at_Id     a, b;
+    size_t    x, y;
+    unsigned  e;
+    assertok(S != NULL && T != NULL);
+    memset(&Z, 0, sizeof(Z));
+    assertok(at_remove(NULL, 1) == AT_ERRPARAM);
+    assertok(at_remove(&Z, 1) == AT_ERRPARAM);
+    att_anchor(T, 10, 5, AT_GROW, &a);
+    att_anchor(T, 50, 5, AT_LOCK, &b);
+    assertok(at_seek(&C, T, 10) == AT_OK);
+    e = T->epoch;
+    assertok(at_remove(&C, 0) == AT_OK);
+    asserteq(T->epoch, e);
+    assertok(att_checkcursor(&C, 10));
+    assertok(at_advance(&C, 0) == AT_OK);
+    assertok(at_seek(&D, T, 0) == AT_OK);
+    assertok(at_remove(&D, 1) == AT_OK);
+    assertok(at_remove(&C, 1) == AT_ESTALE);
+    assertok(at_locate(&C, 10) == AT_OK);
+    assertok(at_remove(&C, (size_t)-1) == AT_OK);
+    asserteq(at_bytes(T), 10);
+    assertok(att_checkcursor(&C, 10));
+    assertok(att_checktree(T));
+    assertok(att_checkchains(T));
+    assertok(at_range(T, a, &x, &y) == AT_OK);
+    assertok(x == 9 && y == 10);
+    assertok(at_range(T, b, &x, &y) == AT_OK);
+    assertok(x == 10 && y == 10);
+    e = T->epoch;
+    assertok(at_remove(&C, 7) == AT_OK);
+    asserteq(T->epoch, e);
+    assertok(att_checkcursor(&C, 10));
+    assertok(at_seek(&C, T, 0) == AT_OK);
+    assertok(at_remove(&C, (size_t)-1) == AT_OK);
+    asserteq(at_bytes(T), 0);
+    assertok(att_checkcursor(&C, 0));
+    e = T->epoch;
+    assertok(at_remove(&C, (size_t)-1) == AT_OK);
+    asserteq(T->epoch, e);
+    att_stitchinv(T);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST_STATIC void att_case_remove_cursor(void) {
+    Count      c = {0};
+    at_State  *S = at_open(&count_alloc, &c);
+    at_Tree   *T = at_newtree(S);
+    at_Cursor  C;
+    att_Model  m[8];
+    att_Splice w;
+    at_Seq     s;
+    at_Id      got[8];
+    size_t     L, del;
+    int        i, idx;
+    assertok(S != NULL && T != NULL);
+    for (i = 0; i < 8; ++i) {
+        m[i].gravity = i % 4;
+        assertok(at_seek(&C, T, 10u + (size_t)i * 20u) == AT_OK);
+        assertok(
+                at_newanchor(
+                        &C, (size_t)(i % 4) * 3u, 0, m[i].gravity, &m[i].id)
+                == AT_OK);
+        assertok(at_range(T, m[i].id, &m[i].start, &m[i].end) == AT_OK);
+    }
+    w.L = 20, w.del = 60, w.ins = 0;
+    att_model_splice(m, 8, &w);
+    assertok(at_seek(&C, T, 20) == AT_OK);
+    assertok(at_remove(&C, 60) == AT_OK);
+    assertok(att_checkcursor(&C, 20));
+    att_stitchinv(T);
+    att_modelchecks(T, m, 8, got, 8);
+    assertok(att_checkcursor(&C, 20));
+    assertok(att_seq(T, &s));
+    assertok(s.n >= 3);
+    idx = 1;
+    while (idx < s.n && s.span[idx] == 0) ++idx;
+    assertok(idx < s.n && s.span[idx] > 0);
+    L = s.pos[idx], del = s.span[idx];
+    w.L = L, w.del = del, w.ins = 0;
+    att_model_splice(m, 8, &w);
+    assertok(at_seek(&C, T, L) == AT_OK);
+    assertok(at_remove(&C, del) == AT_OK);
+    assertok(att_checkcursor(&C, L));
+    att_stitchinv(T);
+    att_modelchecks(T, m, 8, got, 8);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST_STATIC void att_case_insert_cursor(void) {
+    Count      c = {0};
+    at_State  *S = at_open(&count_alloc, &c);
+    at_Tree   *T = at_newtree(S);
+    at_Cursor  C, D, Z;
+    att_Model  m[6];
+    att_Splice w;
+    at_Id      got[6];
+    size_t     bytes;
+    unsigned   e;
+    int        i;
+    assertok(S != NULL && T != NULL);
+    memset(&Z, 0, sizeof(Z));
+    for (i = 0; i < 6; ++i) {
+        m[i].gravity = i % 4;
+        assertok(at_seek(&C, T, 20u + (size_t)i * 20u) == AT_OK);
+        assertok(at_newanchor(&C, 10, 0, m[i].gravity, &m[i].id) == AT_OK);
+        assertok(at_range(T, m[i].id, &m[i].start, &m[i].end) == AT_OK);
+    }
+    bytes = at_bytes(T);
+    w.L = 50, w.del = 0, w.ins = 20;
+    att_model_splice(m, 6, &w);
+    assertok(at_seek(&C, T, 50) == AT_OK);
+    assertok(at_insert(&C, 20) == AT_OK);
+    assertok(att_checkcursor(&C, 50));
+    asserteq(at_bytes(T), bytes + 20);
+    att_stitchinv(T);
+    att_modelchecks(T, m, 6, got, 6);
+    e = T->epoch;
+    assertok(at_insert(&C, 0) == AT_OK);
+    asserteq(T->epoch, e);
+    assertok(att_checkcursor(&C, 50));
+    assertok(at_seek(&D, T, 0) == AT_OK);
+    w.L = 50, w.del = 0, w.ins = 7;
+    att_model_splice(m, 6, &w);
+    assertok(at_append(&C, 7) == AT_OK);
+    assertok(att_checkcursor(&C, 57));
+    assertok(at_insert(&D, 1) == AT_ESTALE);
+    att_modelchecks(T, m, 6, got, 6);
+    bytes = at_bytes(T);
+    assertok(at_seek(&C, T, bytes) == AT_OK);
+    assertok(at_insert(&C, (size_t)-1) == AT_ERROVERFLOW);
+    asserteq(at_bytes(T), bytes);
+    assertok(att_checkcursor(&C, bytes));
+    att_stitchinv(T);
+    assertok(at_insert(NULL, 1) == AT_ERRPARAM);
+    assertok(at_insert(&Z, 1) == AT_ERRPARAM);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST_STATIC void att_case_append_cursor(void) {
+    Count      c = {0};
+    at_State  *S = at_open(&count_alloc, &c);
+    at_Tree   *T = at_newtree(S);
+    at_Cursor  C, D, Z;
+    att_Model  m[6];
+    att_Splice w;
+    at_Id      got[6];
+    size_t     bytes;
+    unsigned   e;
+    int        i;
+    assertok(S != NULL && T != NULL);
+    memset(&Z, 0, sizeof(Z));
+    for (i = 0; i < 6; ++i) {
+        m[i].gravity = i % 4;
+        assertok(at_seek(&C, T, 20u + (size_t)i * 20u) == AT_OK);
+        assertok(at_newanchor(&C, 10, 0, m[i].gravity, &m[i].id) == AT_OK);
+        assertok(at_range(T, m[i].id, &m[i].start, &m[i].end) == AT_OK);
+    }
+    bytes = at_bytes(T);
+    w.L = 50, w.del = 0, w.ins = 25;
+    att_model_splice(m, 6, &w);
+    assertok(at_seek(&C, T, 50) == AT_OK);
+    assertok(at_append(&C, 25) == AT_OK);
+    assertok(att_checkcursor(&C, 75));
+    asserteq(at_bytes(T), bytes + 25);
+    att_stitchinv(T);
+    att_modelchecks(T, m, 6, got, 6);
+    e = T->epoch;
+    assertok(at_append(&C, 0) == AT_OK);
+    asserteq(T->epoch, e);
+    assertok(att_checkcursor(&C, 75));
+    assertok(at_seek(&D, T, 0) == AT_OK);
+    assertok(at_append(&D, 4) == AT_OK);
+    assertok(at_append(&C, 4) == AT_ESTALE);
+    assertok(at_seek(&C, T, at_bytes(T)) == AT_OK);
+    assertok(at_append(&C, (size_t)-1) == AT_ERROVERFLOW);
+    assertok(at_append(NULL, 1) == AT_ERRPARAM);
+    assertok(at_append(&Z, 1) == AT_ERRPARAM);
+    att_stitchinv(T);
+    at_reset(T);
+    assertok(at_seek(&C, T, 0) == AT_OK);
+    assertok(at_append(&C, 5) == AT_OK);
+    asserteq(at_bytes(T), 5);
+    assertok(att_checkcursor(&C, 5));
+    att_stitchinv(T);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST_STATIC void att_case_splice_atomic_oom(void) {
+    att_oom_edit(ATT_EDIT_REMOVE, 0);
+    att_oom_edit(ATT_EDIT_INSERT, 0);
+    att_oom_edit(ATT_EDIT_INSERT, 1);
+    att_oom_edit(ATT_EDIT_INSERT, 2);
+    att_oom_edit(ATT_EDIT_APPEND, 0);
+    att_oom_edit(ATT_EDIT_APPEND, 1);
+    att_oom_edit(ATT_EDIT_APPEND, 2);
+    att_oom_edit(ATT_EDIT_SPLICE, 0);
+    att_oom_edit(ATT_EDIT_SPLICE, 1);
+    att_oom_edit(ATT_EDIT_SPLICE, 2);
+}
+
+TEST_STATIC void att_case_remove_append_equivalence(void) {
+    Count      ca = {0}, cb = {0};
+    at_State  *SA = at_open(&count_alloc, &ca);
+    at_State  *SB = at_open(&count_alloc, &cb);
+    at_Tree   *A = at_newtree(SA), *B = at_newtree(SB);
+    att_Model  ma[AT_BRUTE_N], mb[AT_BRUTE_N];
+    at_Cursor  CA, CB;
+    att_Splice w;
+    at_Seq     sa, sb;
+    size_t     seed = 0x5eed1234u, bound, L, del, ins;
+    int        step;
+    assertok(SA != NULL && SB != NULL && A != NULL && B != NULL);
+    att_brute_build(A, ma);
+    att_brute_build(B, mb);
+    for (step = 0; step < 300; ++step) {
+        bound = att_model_bound(ma, AT_BRUTE_N);
+        L = att_lcg(&seed) % (bound + 20u);
+        del = att_lcg(&seed) % 25u, ins = att_lcg(&seed) % 10u;
+        w.L = L, w.del = del, w.ins = ins;
+        att_model_splice(ma, AT_BRUTE_N, &w);
+        att_model_splice(mb, AT_BRUTE_N, &w);
+        assertok(at_seek(&CA, A, L) == AT_OK);
+        assertok(at_remove(&CA, del) == AT_OK);
+        assertok(at_append(&CA, ins) == AT_OK);
+        assertok(at_seek(&CB, B, L) == AT_OK);
+        assertok(at_splice(&CB, del, ins) == AT_OK);
+        assertok(at_offset(&CA) == L + ins && at_offset(&CB) == L + ins);
+        assertok(att_checktree(A) && att_checkchains(A));
+        assertok(att_checktree(B) && att_checkchains(B));
+        assertok(att_rtempty(A) && att_rtempty(B));
+        assertok(A->seam == NULL && B->seam == NULL);
+        att_seq(A, &sa), att_seq(B, &sb);
+        assertok(att_seqeq(&sa, &sb));
+        asserteq(at_bytes(A), at_bytes(B));
+        asserteq(A->levels, B->levels);
+        assertok(att_model_ok(A, ma, AT_BRUTE_N));
+        assertok(att_model_ok(B, mb, AT_BRUTE_N));
+    }
+    at_deltree(A), at_close(SA);
+    at_deltree(B), at_close(SB);
+    asserteq(ca.live, 0);
+    asserteq(cb.live, 0);
+}
+
+TEST_STATIC void att_case_stitch_delete_cross_leaf(void) {
+    Count      c = {0};
+    at_State  *S = at_open(&count_alloc, &c);
+    at_Tree   *T = at_newtree(S);
+    at_Cursor  C;
+    att_Model  m[40];
+    att_Splice w;
+    at_Id      got[40];
+    assertok(S != NULL && T != NULL);
+    att_model_buildspread(T, m, 40, 7);
+    assertok(T->levels >= 1);
+    w.L = 12, w.del = 120, w.ins = 0;
+    att_model_splice(m, 40, &w);
+    assertok(at_seek(&C, T, 12) == AT_OK);
+    assertok(at_remove(&C, 120) == AT_OK);
+    assertok(att_checkcursor(&C, 12));
+    att_stitchinv(T);
+    att_modelchecks(T, m, 40, got, 40);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST_STATIC void att_case_stitch_delete_multi_level(void) {
+    Count      c = {0};
+    at_State  *S = at_open(&count_alloc, &c);
+    at_Tree   *T = at_newtree(S);
+    at_Cursor  C;
+    att_Model  m[300];
+    att_Splice w;
+    at_Id      got[300];
+    assertok(S != NULL && T != NULL);
+    att_model_buildspread(T, m, 300, 5);
+    assertok(att_checkdepth(T, 2));
+    w.L = 500, w.del = 600, w.ins = 0;
+    att_model_splice(m, 300, &w);
+    assertok(at_seek(&C, T, 500) == AT_OK);
+    assertok(at_remove(&C, 600) == AT_OK);
+    assertok(att_checkcursor(&C, 500));
+    att_stitchinv(T);
+    assertok(att_checkdepth(T, 2));
+    att_modelchecks(T, m, 300, got, 300);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST_STATIC void att_case_stitch_delete_tail(void) {
+    Count      c = {0};
+    at_State  *S = at_open(&count_alloc, &c);
+    at_Tree   *T = at_newtree(S);
+    at_Cursor  C;
+    att_Model  m[80];
+    att_Splice w;
+    at_Seq     s;
+    at_Id      got[80];
+    size_t     bytes;
+    assertok(S != NULL && T != NULL);
+    att_model_buildspread(T, m, 80, 7);
+    bytes = at_bytes(T);
+    w.L = 200, w.del = bytes - 200, w.ins = 0;
+    att_model_splice(m, 80, &w);
+    assertok(at_seek(&C, T, 200) == AT_OK);
+    assertok(at_remove(&C, bytes - 200) == AT_OK);
+    assertok(att_checkcursor(&C, 200));
+    asserteq(at_bytes(T), 200);
+    att_stitchinv(T);
+    att_modelchecks(T, m, 80, got, 80);
+    assertok(att_seq(T, &s));
+    assertok(s.span[s.n - 1] == 0);
+    assertok(att_anchorslots(T, s.edge[s.n - 1]) > 0);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST_STATIC void att_case_stitch_delete_same_leaf(void) {
+    Count      c = {0};
+    at_State  *S = at_open(&count_alloc, &c);
+    at_Tree   *T = at_newtree(S);
+    at_Cursor  C;
+    at_Id      a;
+    att_Model  m[1];
+    att_Splice w;
+    at_Seq     s;
+    at_Id      got[1];
+    size_t     L, del;
+    int        idx;
+    assertok(S != NULL && T != NULL);
+    assertok(att_setup_insert(T, 0, 100) == AT_OK);
+    att_anchor(T, 50, 20, AT_FIXED, &a);
+    assertok(T->levels == 0);
+    m[0].id = a, m[0].gravity = AT_FIXED;
+    assertok(at_range(T, a, &m[0].start, &m[0].end) == AT_OK);
+    w.L = 10, w.del = 5, w.ins = 0;
+    att_model_splice(m, 1, &w);
+    assertok(at_seek(&C, T, 10) == AT_OK);
+    assertok(at_remove(&C, 5) == AT_OK);
+    assertok(att_checkcursor(&C, 10));
+    att_stitchinv(T);
+    att_modelchecks(T, m, 1, got, 1);
+    assertok(att_seq(T, &s));
+    idx = 1;
+    while (idx < s.n && s.span[idx] == 0) ++idx;
+    assertok(idx < s.n && s.span[idx] > 0);
+    L = s.pos[idx], del = s.span[idx];
+    w.L = L, w.del = del, w.ins = 0;
+    att_model_splice(m, 1, &w);
+    assertok(at_seek(&C, T, L) == AT_OK);
+    assertok(at_remove(&C, del) == AT_OK);
+    assertok(att_checkcursor(&C, L));
+    att_stitchinv(T);
+    att_modelchecks(T, m, 1, got, 1);
+    assertok(att_seq(T, &s));
+    idx = s.n - 1;
+    if (s.span[idx] == 0) idx -= 1;
+    assertok(idx >= 0 && s.span[idx] > 0);
+    L = s.pos[idx], del = s.span[idx];
+    w.L = L, w.del = del, w.ins = 0;
+    att_model_splice(m, 1, &w);
+    assertok(at_seek(&C, T, L) == AT_OK);
+    assertok(at_remove(&C, del) == AT_OK);
+    assertok(att_checkcursor(&C, L));
+    asserteq(at_bytes(T), L);
+    att_stitchinv(T);
+    att_modelchecks(T, m, 1, got, 1);
+    at_reset(T);
+    assertok(att_setup_insert(T, 0, 10) == AT_OK);
+    assertok(at_seek(&C, T, 0) == AT_OK);
+    assertok(at_remove(&C, 10) == AT_OK);
+    asserteq(at_bytes(T), 0);
+    assertok(att_checkcursor(&C, 0));
+    att_stitchinv(T);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST_STATIC void att_case_stitch_seam_cleared(void) {
+    Count      c = {0};
+    at_State  *S = at_open(&count_alloc, &c);
+    at_Tree   *T = at_newtree(S);
+    at_Cursor  C;
+    att_Model  m[60];
+    att_Splice w;
+    at_Id      got[60];
+    size_t     L;
+    assertok(S != NULL && T != NULL);
+    att_model_buildspread(T, m, 60, 7);
+    w.L = 30, w.del = 100, w.ins = 0;
+    att_model_splice(m, 60, &w);
+    assertok(at_seek(&C, T, 30) == AT_OK);
+    assertok(at_remove(&C, 100) == AT_OK);
+    assertok(att_checkcursor(&C, 30));
+    att_stitchinv(T);
+    L = at_bytes(T) / 2u;
+    w.L = L, w.del = 40, w.ins = 0;
+    att_model_splice(m, 60, &w);
+    assertok(at_seek(&C, T, L) == AT_OK);
+    assertok(at_remove(&C, 40) == AT_OK);
+    assertok(att_checkcursor(&C, L));
+    att_stitchinv(T);
+    L = at_bytes(T) / 3u;
+    w.L = L, w.del = 0, w.ins = 25;
+    att_model_splice(m, 60, &w);
+    assertok(at_seek(&C, T, L) == AT_OK);
+    assertok(at_insert(&C, 25) == AT_OK);
+    assertok(att_checkcursor(&C, L));
+    att_stitchinv(T);
+    L = at_bytes(T) / 4u;
+    w.L = L, w.del = 10, w.ins = 15;
+    att_model_splice(m, 60, &w);
+    assertok(at_seek(&C, T, L) == AT_OK);
+    assertok(at_splice(&C, 10, 15) == AT_OK);
+    assertok(att_checkcursor(&C, L + 15));
+    att_stitchinv(T);
+    att_modelchecks(T, m, 60, got, 60);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST_STATIC void att_case_stitch_rt_cleared(void) {
+    Count      c = {0};
+    at_State  *S = at_open(&count_alloc, &c);
+    at_Tree   *T = at_newtree(S);
+    at_Cursor  C;
+    att_Model  m[80];
+    att_Splice w;
+    at_Id      got[80];
+    size_t     L;
+    int        k;
+    assertok(S != NULL && T != NULL);
+    att_model_buildspread(T, m, 80, 5);
+    for (k = 0; k < 3; ++k) {
+        L = 10u + (size_t)k * 40u;
+        w.L = L, w.del = 30u + (size_t)k * 20u, w.ins = 0;
+        att_model_splice(m, 80, &w);
+        assertok(at_seek(&C, T, L) == AT_OK);
+        assertok(at_remove(&C, w.del) == AT_OK);
+        assertok(att_checkcursor(&C, L));
+        assertok(att_checktree(T));
+        assertok(att_checkchains(T));
+        assertok(T->seam == NULL);
+        assertok(att_rtempty(T));
+    }
+    L = at_bytes(T) / 2u;
+    w.L = L, w.del = at_bytes(T) - L, w.ins = 0;
+    att_model_splice(m, 80, &w);
+    assertok(at_seek(&C, T, L) == AT_OK);
+    assertok(at_remove(&C, w.del) == AT_OK);
+    assertok(att_checkcursor(&C, L));
+    att_stitchinv(T);
+    att_modelchecks(T, m, 80, got, 80);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST_STATIC void att_case_stitch_random_edit(void) {
+    Count      c = {0};
+    at_State  *S = at_open(&count_alloc, &c);
+    at_Tree   *T = at_newtree(S);
+    at_Cursor  C;
+    att_Model  m[160];
+    att_Splice w;
+    at_Id      got[160];
+    size_t     seed = 0xc0ffeeu, bound, pos, L, del, ins, len, want;
+    at_Id      id;
+    int        op, step, k, nlive = 80;
+    assertok(S != NULL && T != NULL);
+    att_model_buildspread(T, m, nlive, 5);
+    for (step = 0; step < 20000; ++step) {
+        bound = att_model_bound(m, nlive);
+        op = (int)(att_lcg(&seed) % 6u);
+        if (op == 0 && nlive < 160) {
+            pos = att_lcg(&seed) % (bound ? bound + 1u : 20u);
+            len = att_lcg(&seed) % 40u;
+            ins = att_lcg(&seed) % 4u;
+            assertok(at_seek(&C, T, pos) == AT_OK);
+            assertok(at_newanchor(&C, len, 0, (int)ins, &id) == AT_OK);
+            m[nlive].id = id, m[nlive].start = pos, m[nlive].end = pos + len;
+            m[nlive].gravity = (int)ins, nlive += 1;
+            att_stitchinv(T);
+            assertok(att_model_ok(T, m, nlive));
+            continue;
+        }
+        if (op == 1 && nlive > 0) {
+            k = (int)(att_lcg(&seed) % (size_t)nlive);
+            assertok(at_delanchor(T, m[k].id) == AT_OK);
+            m[k] = m[nlive - 1], nlive -= 1;
+            att_stitchinv(T);
+            assertok(att_model_ok(T, m, nlive));
+            continue;
+        }
+        op = 2 + (int)(att_lcg(&seed) % 4u);
+        L = att_lcg(&seed) % (bound + 20u);
+        del = att_lcg(&seed) % 40u, ins = att_lcg(&seed) % 15u;
+        w.L = L, w.del = op == 2 || op == 5 ? del : 0;
+        w.ins = op == 3 || op == 4 || op == 5 ? ins : 0;
+        want = op == 4 || op == 5 ? L + w.ins : L;
+        att_model_splice(m, nlive, &w);
+        assertok(at_seek(&C, T, L) == AT_OK);
+        if (op == 2)
+            assertok(at_remove(&C, w.del) == AT_OK);
+        else if (op == 3)
+            assertok(at_insert(&C, w.ins) == AT_OK);
+        else if (op == 4)
+            assertok(at_append(&C, w.ins) == AT_OK);
+        else
+            assertok(at_splice(&C, w.del, w.ins) == AT_OK);
+        assertok(att_checkcursor(&C, want));
+        assertok(att_checktree(T));
+        assertok(att_checkchains(T));
+        assertok(T->seam == NULL);
+        assertok(att_rtempty(T));
+        assertok(att_model_ok(T, m, nlive));
+        if (step % 20 == 0) assertok(att_modelnext(T, m, nlive, got, 160));
+    }
+    att_modelchecks(T, m, nlive, got, 160);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST_STATIC void att_case_stitch_delete_boundary(void) {
+    Count      c = {0};
+    at_State  *S = at_open(&count_alloc, &c);
+    at_Tree   *T = at_newtree(S);
+    at_Cursor  C;
+    att_Model  m[200];
+    att_Splice w;
+    at_Id      got[200];
+    size_t     pos, span;
+    assertok(S != NULL && T != NULL);
+    att_model_buildspread(T, m, 200, 5);
+    assertok(att_nonlastleafedge(T, &pos, &span));
+    assertok(pos + span + 1 <= at_bytes(T));
+    w.L = pos, w.del = span + 1, w.ins = 0;
+    att_model_splice(m, 200, &w);
+    assertok(at_seek(&C, T, pos) == AT_OK);
+    assertok(at_remove(&C, span + 1) == AT_OK);
+    assertok(att_checkcursor(&C, pos));
+    att_stitchinv(T);
+    att_modelchecks(T, m, 200, got, 200);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST_STATIC void att_case_stitch_delete_brute(void) {
+    Count      c = {0};
+    at_State  *S = at_open(&count_alloc, &c);
+    at_Tree   *T = at_newtree(S);
+    at_Cursor  C;
+    att_Model  m[32];
+    att_Splice w;
+    size_t     limit, L, del;
+    assertok(S != NULL && T != NULL);
+    at_reset(T), att_model_buildspread(T, m, 32, 5);
+    assertok(T->levels >= 1);
+    limit = at_bytes(T);
+    for (L = 0; L <= limit; ++L) {
+        for (del = 1; del <= limit - L; ++del) {
+            at_reset(T), att_model_buildspread(T, m, 32, 5);
+            w.L = L, w.del = del, w.ins = 0;
+            att_model_splice(m, 32, &w);
+            assertok(at_seek(&C, T, L) == AT_OK);
+            assertok(at_remove(&C, del) == AT_OK);
+            assertok(att_checkcursor(&C, L));
+            att_stitchinv(T);
+            assertok(att_no_empty_edges(T));
+            assertok(att_model_ok(T, m, 32));
+        }
+    }
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST_STATIC void att_case_stitch_firstedge_keep(void) {
+    Count      c = {0};
+    at_State  *S = at_open(&count_alloc, &c);
+    at_Tree   *T = at_newtree(S);
+    at_Cursor  C;
+    att_Model  m[3];
+    att_Splice w;
+    at_Seq     s;
+    at_Id      got[3];
+    assertok(S != NULL && T != NULL);
+    assertok(att_setup_insert(T, 0, 100) == AT_OK);
+    att_anchor(T, 10, 5, AT_GROW, &m[0].id);
+    att_anchor(T, 40, 5, AT_LOCK, &m[1].id);
+    att_anchor(T, 70, 5, AT_FIXED, &m[2].id);
+    m[0].gravity = AT_GROW, m[1].gravity = AT_LOCK, m[2].gravity = AT_FIXED;
+    assertok(at_range(T, m[0].id, &m[0].start, &m[0].end) == AT_OK);
+    assertok(at_range(T, m[1].id, &m[1].start, &m[1].end) == AT_OK);
+    assertok(at_range(T, m[2].id, &m[2].start, &m[2].end) == AT_OK);
+    assertok(att_seq(T, &s));
+    assertok(s.span[0] == 10 && att_empty(s.edge[0]));
+    w.L = 5, w.del = 30, w.ins = 0;
+    att_model_splice(m, 3, &w);
+    assertok(at_seek(&C, T, 5) == AT_OK);
+    assertok(at_remove(&C, 30) == AT_OK);
+    assertok(att_checkcursor(&C, 5));
+    att_stitchinv(T);
+    att_modelchecks(T, m, 3, got, 3);
+    assertok(att_seq(T, &s));
+    assertok(s.span[0] == 5 && att_empty(s.edge[0]));
+    att_rangeeq(T, m[0].id, 5, 5);
+    att_rangeeq(T, m[1].id, 10, 15);
+    att_rangeeq(T, m[2].id, 40, 45);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST_STATIC void att_case_stitch_tail_seam_anchors(void) {
+    Count      c = {0};
+    at_State  *S = at_open(&count_alloc, &c);
+    at_Tree   *T = at_newtree(S);
+    at_Cursor  C;
+    att_Model  m[2];
+    att_Splice w;
+    at_Seq     s;
+    at_Id      got[2];
+    assertok(S != NULL && T != NULL);
+    assertok(att_setup_insert(T, 0, 100) == AT_OK);
+    att_anchor(T, 50, 0, AT_GROW, &m[0].id);
+    att_anchor(T, 100, 0, AT_LOCK, &m[1].id);
+    m[0].gravity = AT_GROW, m[1].gravity = AT_LOCK;
+    assertok(at_range(T, m[0].id, &m[0].start, &m[0].end) == AT_OK);
+    assertok(at_range(T, m[1].id, &m[1].start, &m[1].end) == AT_OK);
+    w.L = 50, w.del = 50, w.ins = 0;
+    att_model_splice(m, 2, &w);
+    assertok(at_seek(&C, T, 50) == AT_OK);
+    assertok(at_remove(&C, 50) == AT_OK);
+    assertok(att_checkcursor(&C, 50));
+    asserteq(at_bytes(T), 50);
+    att_stitchinv(T);
+    att_modelchecks(T, m, 2, got, 2);
+    assertok(att_seq(T, &s));
+    assertok(s.span[s.n - 1] == 0);
+    assertok(att_anchorslots(T, s.edge[s.n - 1]) > 0);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST_STATIC void att_case_purge_insertion(void) {
+    Count      c = {0};
+    at_State  *S = at_open(&count_alloc, &c);
+    at_Tree   *T = at_newtree(S);
+    at_Cursor  C;
+    at_Id      a;
+    att_Model  m[1];
+    att_Splice w;
+    at_Id      got[1];
+    size_t     x, y;
+    assertok(S != NULL && T != NULL);
+    assertok(att_setup_insert(T, 0, 100) == AT_OK);
+    att_anchor(T, 50, 20, AT_FIXED, &a);
+    m[0].id = a, m[0].gravity = AT_FIXED;
+    assertok(at_range(T, a, &m[0].start, &m[0].end) == AT_OK);
+    w.L = 50, w.del = 0, w.ins = 30;
+    att_model_splice(m, 1, &w);
+    assertok(at_seek(&C, T, 50) == AT_OK);
+    assertok(at_insert(&C, 30) == AT_OK);
+    assertok(att_checkcursor(&C, 50));
+    att_stitchinv(T);
+    att_modelchecks(T, m, 1, got, 1);
+    assertok(at_range(T, a, &x, &y) == AT_OK);
+    assertok(x == 80 && y == 100);
+    at_reset(T);
+    assertok(att_setup_insert(T, 0, 100) == AT_OK);
+    att_anchor(T, 0, 20, AT_FIXED, &a);
+    m[0].id = a, m[0].gravity = AT_FIXED;
+    assertok(at_range(T, a, &m[0].start, &m[0].end) == AT_OK);
+    w.L = 0, w.del = 0, w.ins = 30;
+    att_model_splice(m, 1, &w);
+    assertok(at_seek(&C, T, 0) == AT_OK);
+    assertok(at_insert(&C, 30) == AT_OK);
+    assertok(att_checkcursor(&C, 0));
+    att_stitchinv(T);
+    att_modelchecks(T, m, 1, got, 1);
+    assertok(at_range(T, a, &x, &y) == AT_OK);
+    assertok(x == 30 && y == 50);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST_STATIC void att_case_purge_delanchor(void) {
+    Count     c = {0};
+    at_State *S = at_open(&count_alloc, &c);
+    at_Tree  *T = at_newtree(S);
+    at_Id     a;
+    size_t    x, y;
+    assertok(S != NULL && T != NULL);
+    assertok(att_setup_insert(T, 0, 100) == AT_OK);
+    att_anchor(T, 50, 0, AT_GROW, &a);
+    assertok(at_delanchor(T, a) == AT_OK);
+    assertok(at_range(T, a, &x, &y) == AT_ERRPARAM);
+    asserteq(at_bytes(T), 100);
+    att_stitchinv(T);
+    at_reset(T);
+    att_anchor(T, 0, 0, AT_GROW, &a);
+    assertok(at_delanchor(T, a) == AT_OK);
+    asserteq(at_bytes(T), 0);
+    att_stitchinv(T);
+    at_reset(T);
+    assertok(att_setup_insert(T, 0, 100) == AT_OK);
+    att_anchor(T, 100, 0, AT_GROW, &a);
+    assertok(at_delanchor(T, a) == AT_OK);
+    asserteq(at_bytes(T), 100);
+    att_stitchinv(T);
+    at_reset(T);
+    assertok(att_setup_insert(T, 0, 100) == AT_OK);
+    att_anchor(T, 50, 20, AT_FIXED, &a);
+    assertok(at_delanchor(T, a) == AT_OK);
+    asserteq(at_bytes(T), 100);
+    att_stitchinv(T);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
 }
 
 #endif /* AT_CASES_H */
