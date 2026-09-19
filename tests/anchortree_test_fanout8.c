@@ -30,6 +30,7 @@ TEST(anchor_zero_length) { att_case_anchor_zero_length(); }
 TEST(anchor_ns_tag) { att_case_anchor_ns_tag(); }
 TEST(anchor_ns_relocate) { att_case_anchor_ns_relocate(); }
 TEST(anchor_range_positions) { att_case_anchor_range_positions(); }
+TEST(anchor_query) { att_case_anchor_query(); }
 TEST(anchor_delete_cleans) { att_case_anchor_delete_cleans(); }
 TEST(anchor_lifecycle_ids) { att_case_anchor_lifecycle_ids(); }
 TEST(anchor_invalid_params) { att_case_anchor_invalid_params(); }

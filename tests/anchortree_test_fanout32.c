@@ -35,6 +35,7 @@ TEST(stitch_firstedge_keep) { att_case_stitch_firstedge_keep(); }
 TEST(stitch_tail_seam_anchors) { att_case_stitch_tail_seam_anchors(); }
 TEST(purge_insertion) { att_case_purge_insertion(); }
 TEST(purge_delanchor) { att_case_purge_delanchor(); }
+TEST(anchor_query) { att_case_anchor_query(); }
 
 /* 640 anchors at unique increasing positions leave ~640 edges, above the
  * 512-edge minimum occupancy that forces a second internal level at the
