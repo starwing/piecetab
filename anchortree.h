@@ -279,7 +279,9 @@ static int atP_reserve(at_State *S, at_Pool *p, size_t n) {
 
 #define atA_slot(T, id)   (&(T)->anchors[(id) - 1])
 #define atE_head(side, e) ((side) ? &(e)->right : &(e)->left)
+#define atE_first(e)      (*atE_head((e)->left.id == 0, e))
 #define atE_next(p, a)    ((p).is_end ? (a)->enext : (a)->snext)
+#define atK_edge(C)       ((at_Edge *)*(C)->paths[atK_levels(C)])
 
 /* clang-format off */
 static int atE_empty(at_Edge *e)
@@ -357,15 +359,6 @@ static at_Anchor *atA_fromid(at_Tree *T, at_Id id) {
     at_Anchor *a;
     if (T == NULL || id == 0 || id > T->idmax) return NULL;
     return (a = atA_slot(T, id))->end ? a : NULL;
-}
-
-static at_Id atE_nextstart(at_Tree *T, at_Point *p, int ns) {
-    at_Anchor *a;
-    for (; p->id != 0; *p = atE_next(*p, a)) {
-        a = atA_slot(T, p->id);
-        if (!p->is_end && (ns == 0 || a->ns == (unsigned)ns)) return p->id;
-    }
-    return AT_NONE;
 }
 
 static int atU_reserve(at_Cursor *C, size_t edges, size_t pass, size_t extra) {
@@ -537,23 +530,18 @@ static int atK_backwardoff(at_Cursor *C, size_t d) {
     return atK_findleaf(C, l + 1, &d), C->poff = d, 1;
 }
 
-static int atK_nextedge(at_Cursor *C) {
+static at_Point atK_nextedge(at_Cursor *C) {
     at_Node *p;
     int      l = atK_levels(C), i = atK_idx(C, p = atK_parent(C, l), l);
     size_t   bc;
-    if (C->poff >= p->bytes[i]) return 0;
+    if (C->poff >= p->bytes[i]) return C->cur = atU_point(0, 1);
     bc = p->bytes[i];
     for (; (i += 1) >= atN_cc(p); i = atK_idx(C, p = atK_parent(C, l), l))
-        if (--l < 0) return atK_locend(C), 0;
+        if (--l < 0) return C->poff = bc, C->cur = atU_point(0, 1);
     C->paths[l] = &p->children[i];
     for (; ++l <= atK_levels(C); C->paths[l] = &p->children[0])
         p = atK_parent(C, l);
-    return (C->off += bc, C->poff = 0), 1;
-}
-
-static at_Edge *atK_edge(at_Cursor *C) {
-    at_Node *p = atK_parent(C, atK_levels(C));
-    return atN_edge(p, atK_idx(C, p, atK_levels(C)));
+    return (C->off += bc, C->poff = 0), C->cur = atE_first(atK_edge(C));
 }
 
 static size_t atK_fromedge(at_Cursor *C, at_Tree *T, at_Edge *e) {
@@ -567,25 +555,6 @@ static size_t atK_fromedge(at_Cursor *C, at_Tree *T, at_Edge *e) {
         pos += atN_sumbytes(p, 0, n->idx), n = p;
     }
     return C->off = pos;
-}
-
-static at_Id atK_nextstart(at_Cursor *C, int ns) {
-    at_Point q = atK_edge(C)->left;
-    int      side = 0;
-    assert(!(C->cur.id == 0 && C->cur.is_end));
-    if (C->cur.id == 0 && C->poff > 0) return AT_NONE;
-    if (C->cur.id != 0) {
-        at_Anchor *a = atA_slot(C->tree, C->cur.id);
-        at_Edge   *e = (q = C->cur, q.is_end ? a->end : a->start);
-        side = (int)(q.is_end ? a->end_right : a->start_right);
-        if (atK_edge(C) != e) atK_fromedge(C, C->tree, e), C->cur = q;
-        q = atE_next(q, a);
-    }
-    for (; side < 2; ++side) {
-        if (atE_nextstart(C->tree, &q, ns) != AT_NONE) return C->cur = q, q.id;
-        if (side == 0) q = atK_edge(C)->right;
-    }
-    return C->cur = atU_point(0, 0), AT_NONE;
 }
 
 /* remove */
@@ -1099,20 +1068,27 @@ AT_API at_Id at_anchor(at_Cursor *C, int *pns, size_t *plen) {
 }
 
 AT_API at_Id at_next(at_Cursor *C, int ns, size_t *plen) {
-    size_t start = 0, end = 0;
-    at_Id  id;
+    at_Anchor *a;
+    at_Edge   *e;
+    at_Point   p;
     if (C == NULL || C->tree == NULL) return atK_none(plen);
     if (C->epoch != C->tree->epoch || ns < 0 || (unsigned)ns > AT_MAX_NS)
         return atK_none(plen);
     if (atN_cc(&C->tree->root) == 0 || (C->cur.id == 0 && C->cur.is_end))
         return C->cur = atU_point(0, 1), atK_none(plen);
-    while ((id = atK_nextstart(C, ns)) == AT_NONE)
-        if (!atK_nextedge(C)) return C->cur = atU_point(0, 1), atK_none(plen);
-    if (plen) {
-        at_range(C->tree, id, &start, &end);
-        *plen = start <= end ? end - start : 0;
+    if ((p = C->cur).id == 0 && C->poff == 0) C->cur = atE_first(atK_edge(C));
+    while (C->cur.id || atK_nextedge(C).id) {
+        if (p.id) {
+            a = atA_slot(C->tree, p.id), C->cur = atE_next(p, a);
+            e = p.is_end ? a->end : a->start, assert(e == atK_edge(C));
+            if (C->cur.id == 0 && !atA_side(C->tree, p)) C->cur = e->right;
+        }
+        if ((p = C->cur).id == 0) continue;
+        a = atA_slot(C->tree, p.id);
+        if (!p.is_end && (ns == 0 || (int)a->ns == ns))
+            return at_anchor(C, NULL, plen);
     }
-    return id;
+    return atK_none(plen);
 }
 
 AT_API int at_remove(at_Cursor *C, size_t len) {

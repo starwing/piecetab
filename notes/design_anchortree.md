@@ -211,7 +211,7 @@ typedef struct at_Cursor {
     at_Tree   *tree;   /* tree being navigated */
     size_t     off;    /* start coordinate of the current edge */
     size_t     poff;   /* offset inside the current span */
-    at_Point   cur;     /* last consumed slot; see atC_fresh/atC_done */
+    at_Point   cur;     /* last consumed slot */
     unsigned   epoch;   /* tree generation captured by seek/locate */
     at_Node  **paths[AT_MAX_LEVEL]; /* root-to-leaf path */
 } at_Cursor;
@@ -222,50 +222,52 @@ typedef struct at_Cursor {
 - `cur` 是“最后已消费/续扫槽位”：有效槽为 `cur.id != 0`，下一次从
   `atE_next(cur, anchor)` 开始，不是“下一个待消费槽”。4 字节 `at_Point`
   直接嵌入 Cursor，不再拆成 `cur_id`/`cur_end` 两个字段（8 字节→4 字节）。
-  - `atC_fresh(C)`（`cur.id == 0 && !cur.is_end`）：当前 edge 尚未产出
-    anchor，下一次从当前 edge 的 left 桶头开始。
-  - `atC_done(C)`（`cur.id == 0 && cur.is_end`）：当前扫描范围已耗尽，
-    `at_next` 幂等返回 `AT_NONE`。anchor id 0 从不分配，`AT_NONE == 0`
-    既是“无 id”也是 Cursor 的 fresh/done 基线，由 `is_end` 区分。
+  - fresh（`cur.id == 0 && !cur.is_end`）：当前 edge 尚未产出 anchor；
+    `at_next` 在 `poff == 0` 时从当前 edge 的 `atE_first` 桶头开始。
+  - done（`cur.id == 0 && cur.is_end`）：当前扫描范围已耗尽，`at_next`
+    幂等返回 `AT_NONE`。anchor id 0 从不分配，`AT_NONE == 0` 既是“无
+    id”也是 Cursor 的 fresh/done 基线，由 `is_end` 区分。
   - `cur.id != 0`：最后已消费槽；`cur.is_end` 决定取
     `anchor->end`/`end_right` 还是 `anchor->start`/`start_right`；
     `at_next` 只产出 START 槽（`is_end == 0`）。
-- `at_next` 由三个层次组成：
-  1. `at_next`：公共入口校验；空树或 `atC_done(C)` 直接耗尽；循环调用
-     `atK_nextstart`，返回 `AT_NONE` 时调用 `atK_nextedge` 后再次调用
-     `atK_nextstart`；找到 id 后用 `at_range` 填充 `plen`。
-  2. `atK_nextstart`：求当前 edge 的扫描位置并扫 left→right 桶链。
-     `at_next` 已过滤 done，因此这里 `assert(!atC_done(C))`；`cur.id == 0`
-     且 `poff > 0` 时返回 `AT_NONE`（现场交给 `at_next` 调 `atK_nextedge`）；
-     `cur.id == 0` 且 `poff == 0` 时从当前 edge left 桶头开始；`cur.id != 0`
-     时按 `cur.is_end` 选 `anchor->start/end` 与 `start_right/end_right`，
-     paths 不一致时用 `atK_fromedge` 恢复并把 `C->cur` 放回，从
-     `atE_next(cur)` 继续。找到第一个匹配 `ns` 的 START 时写 `C->cur = q`
-     并返回 id；当前 edge 左右桶都耗尽时写 `C->cur = atU_point(0, 0)` 并
-     返回 `AT_NONE`。`atK_nextstart` 不调用 `atK_nextedge`。
-  3. `atK_nextedge`：只负责前进到下一 edge，核心与 `sp_next`/`pt_next`
-     行行对应（见 §12.3）。
-- 正常耗尽：`at_next` 在 `atK_nextedge` 失败后写 `C->cur = atU_point(0, 1)`；
-  `atK_nextedge` 无后继时按 `spK_locend` 语义提交 Cursor 到 `T`。参数错误、
-  过期 Cursor 等非正常耗尽不改 `cur`、不改坐标。
+- `at_next` 由两个层次组成：
+  1. `at_next`：公共入口校验；空树或 done 直接耗尽；`cur` 为 fresh 且
+     `poff == 0` 时把 `C->cur` 置为当前 edge 的 `atE_first`；随后进入
+     `while (C->cur.id || atK_nextedge(C).id)` 循环：body 先测试当前
+     candidate，匹配 `ns` 的 START 用 `at_anchor` 填充 `plen` 并返回；
+     不匹配时以 `p` 保存候选，用 `atE_next(p, anchor)` 沿桶链推进；桶内
+     耗尽且 `p` 在 left 桶时跨到 `e->right`；`C->cur` 清 0 后由下一次
+     循环条件的 `atK_nextedge` 转入下一 edge。
+  2. `atK_nextedge`：提交 cursor 到下一 edge：当前 leaf 的
+     `poff >= bytes` 直接写 done；有后继时 `off += bytes[current]`、
+     `poff = 0`，把 `C->cur` 置为下一 edge 的 `atE_first` 并返回它；无后继
+     时由 `l < 0` 分支直接把 `C->poff` 设为当前 edge 末尾并写 done。
+  - `at_next` 循环的 `p` 只保存“上一个已消费/待推进槽位”；`C->cur` 是当前
+    candidate，匹配时用 `at_anchor` 填充 `plen`。
+- 正常耗尽：`atK_nextedge` 的两个无后继出口都把 `C->cur` 写为 done
+  `{0,1}`，`at_next` 循环因此退出并返回 `AT_NONE`。参数错误、过期 Cursor
+  等非正常耗尽不改 `cur`、不改坐标。
 - `atK_nextedge` 的提交规则：当前 leaf 的 `poff >= bytes`（已在/越过 `T`）
-  直接返回 0，不移动；有后继时 `off += bytes[current]`、`poff = 0`，落到下一
-  edge；无后继时调用 `atK_locend(C)` 提交到 `T`。不再保留“span 内部无后继
-  保持原坐标”的旧规则。
+  直接写 done，不移动；有后继时 `off += bytes[current]`、`poff = 0`，落到下一
+  edge 并把 `C->cur` 置为 `atE_first(next edge)`；`l < 0` 无后继时
+  `C->poff = bytes[current]`、`C->cur = {0,1}`：此时当前 edge 已是最后一条，
+  `paths/off` 保持现状，由 `bc` 直接提交尾坐标。
 - 末尾 0 长 edge 的 START 按正常 edge 序遍历：cursor 在它之前时
-  `atK_nextedge` 把它当作后继 edge 落脚，再由 `atK_nextstart` 扫描；只有
+  `atK_nextedge` 把它当作后继 edge 落脚，`at_next` 下一轮扫描它；只有
   cursor 已在 `T` 之后（虚尾）时 `poff >= bytes` 直接耗尽。
 - `atK_rewind`：非空树写 `C->cur = atU_point(0, 0)`，空树写
   `C->cur = atU_point(0, 1)`。
 - `atK_fromedge`：写 `C->cur = atU_point(0, 0)`（不是 done），并在建立 paths
   时把 `C->off` 置为当前 edge 起点，返回该位置；它的语义是“当前 edge 尚未
-  开始”。`at_next`/`atK_nextstart` 在用它恢复路径前保存 `C->cur`，恢复后放回。
+  开始”。`at_range`/`atE_purge` 消费它。
 - `at_advance(C, 0)` 保留 `cur` 与坐标；`d != 0` 经
   `atK_forwardoff`/`atK_backwardoff` 后由 `atK_rewind` 复位；
   `at_seek`/`at_locate` 刷新 epoch 并把 `cur` 复位。
-- `atE_nextstart` 保持单链扫描 helper：从给定槽位开始在一条桶链上找 START；
-  left/right 桶切换由 `atK_nextstart` 负责，跨 edge 推进由 `at_next` 调
-  `atK_nextedge`。
+- 桶链扫描由 `at_next` 循环 body 直接完成：`atE_next(p, anchor)` 取单链
+  后继，left→right 桶切换由 `C->cur.id == 0 && !atA_side(...)` 的
+  `e->right` 分支完成；跨 edge 由循环条件的 `atK_nextedge` 完成。
+  `atE_first` 是选择当前 edge 首个 occurrence 的宏（left 非空取 left，
+  否则取 right）。
 - insert 的耗尽态契约：`atI_insert` 不创建 anchor，纯 resize 分支不改写
   `cur`。`atI_growleft` 无条件写 `C->cur = atU_point(0, 0)`：现场移交后当前
   位置落在前驱 span 内部，没有 edge 承载 `cur`，只能 fresh 后由 `at_next` 走
@@ -287,10 +289,10 @@ typedef struct at_Cursor {
   `paths[0] = root.children; off = poff = 0; cur = atU_point(0, 1)`；
   删除路径同时保持 `T->seam == NULL` 断言。非空树不得残留 done 或
   `cur.id != 0` 指向已删除 edge。
-- `at_next`/`atK_nextstart` 用 `atK_fromedge` 把 paths 对到 `cur.id` 的真实
-  anchor edge 时，仅保证“返回 anchor 时坐标以该 anchor 所在 edge 为准”；
-  若随后耗尽，`atK_nextedge` 按 `atK_locend` 把 Cursor 提交到 `T`（虚尾保持
-  原位）。该语义由 `at_checkcursor` 覆盖。
+- `at_next` 返回 anchor 时保证 `C->cur` 是当前 edge 内的 START，
+  `C->off`/`C->poff` 以该 edge 为基准；body 用 `assert(e == atK_edge(C))`
+  校验现场。若随后耗尽，`atK_nextedge` 直接把 Cursor 提交到 `T` 的末尾
+  done 态（虚尾保持原位）。该语义由 `at_checkcursor` 覆盖。
 - `epoch` 规则不变：`unsigned` 相等性失效计数，公共入口成功后统一递增并刷新
   Cursor 的 epoch；过期 Cursor 在解引用 paths 前被挡（`at_next` 返回
   `AT_NONE` 且 `*plen = 0`）。
@@ -300,8 +302,9 @@ typedef struct at_Cursor {
   因此不需要额外 clamp（与 `spD_remove` 的 `sp_advance + spK_locend` 结果一致）。
 - 桶链只保存 id 与 is_end 标签，不保存槽指针；`atE_next(p, a)` 按
   `p.is_end ? a->enext : a->snext` 取后继。anchor 数组扩容搬移不影响 `cur`。
-- `atC_fresh(C)`/`atC_done(C)` 是 Cursor 续扫状态的两个读取宏；`{0,0}`/
-  `{0,1}` 只出现在 Cursor，不进入 edge 桶链（桶链空头恒为 `{0,0}`）。
+- fresh/done 由 `cur.id == 0` 加 `cur.is_end` 直接判定；
+  `{0,0}`/`{0,1}` 只出现在 Cursor，不进入 edge 桶链（桶链空头恒为
+  `{0,0}`）。
 
 ## 三、不变量
 
@@ -468,8 +471,8 @@ point 已链入，anchor 端点指针已写。`atA_addpoint` 不返回值；调�
 - `plen != NULL` 时用 `at_range` 取 `[start, end)` 长度：`start <= end` 写
   `end - start`（零长写 0），交叉区间（`start > end`）写 0；`plen == NULL`
   时不查 range。
-- `atC_fresh(C)`（当前 edge 尚未产出槽）、`atC_done(C)`（扫描已耗尽）
-  或 id 已释放/超出 `T->idmax` 时返回 `AT_NONE`，且 `plen != NULL` 时写 0。
+- `C->cur.id == 0`（fresh 或 done）或 id 已释放/超出 `T->idmax` 时返回
+  `AT_NONE`，且 `plen != NULL` 时写 0。
 - `C == NULL`、`C->tree == NULL` 或 Cursor 过期（`epoch` 不匹配）返回
   `AT_NONE`，同样写 `*plen = 0`；只读查询不返回 `AT_ESTALE`。
 - 成本：`cur.id` 直索引 anchor 为 O(1)；带 `plen` 时加一次 `at_range`
@@ -642,20 +645,17 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
 - 正长 object 的 END 在其 end edge 被跳过；零长 object 的 START 产出一次，
   END 跳过。
 - 同一 edge 内多个对象不排序；稳定序由上层按 `(start, id)` 自行稳定。
-- `at_next` 从 Cursor 当前位置开始，按 §2.5 的三层结构：
-  - 空树或 `atC_done(C)` 直接耗尽；
-  - `at_next` 循环派发：先 `atK_nextstart`；有命中就返回，`AT_NONE` 时
-    调用 `atK_nextedge`，然后再次 `atK_nextstart`；
-  - `atK_nextstart`：`assert(!atC_done(C))`；`cur.id == 0` 且 `poff > 0`
-    返回 `AT_NONE`；`cur.id == 0` 且 `poff == 0` 从当前 edge left 桶头开始；
-    `cur.id != 0` 时按 `cur.is_end` 取 anchor 端点 edge 与桶，从
-    `atE_next(cur)` 继续；链尾 left→right；当前 edge 两桶耗尽时清 `cur`
-    为 `{0,0}` 并返回；
-  - `atK_nextedge`：有后继时提交 `off += bytes[current]`、`poff = 0`
-    到下一 edge；当前 leaf 的 `poff >= bytes` 时直接失败且不移动（虚尾）；
-    无后继时按 `atK_locend` 提交到 `T`；
-  - `plen` 由 `at_next` 在拿到 id 后按 `at_range` 填充，交叉/零长写 0。
-- 耗尽用 `atC_done(C)`（`cur == {0,1}`）表达，不写额外 flag：正常耗尽后
+- `at_next` 从 Cursor 当前位置开始，按 §2.5 的两层结构：
+  - 空树或 done（`cur.id == 0 && cur.is_end`）直接耗尽；
+  - `at_next` 循环条件 `while (C->cur.id || atK_nextedge(C).id)`：
+    当前 edge 尚有 slot 时，body 先判断 candidate；不匹配则用
+    `atE_next` + `e->right` 推进桶链；当前 edge 耗尽时由条件的
+    `atK_nextedge` 转入下一 edge；
+  - `atK_nextedge`：有后继时 `off += bytes[current]`、`poff = 0`，把
+    `C->cur` 置为下一 edge 的 `atE_first` 并返回它；当前 leaf 的
+    `poff >= bytes` 或 `l < 0` 无后继时直接把 `C->cur` 置 done；
+  - `plen` 由 `at_next` 命中后经 `at_anchor`/`at_range` 填充，交叉/零长写 0。
+- 耗尽用 done（`cur == {0,1}`）表达，不写额外 flag：正常耗尽后
   Cursor 已在 `T`（虚尾时保持原位）；之后重复调用幂等返回 `AT_NONE`；
   `at_locate`/`at_advance` 重新播种桶游标使迭代恢复。
 - 过期 Cursor（与 tree epoch 不匹配）直接返回 `AT_NONE` 且写 `*plen = 0`，
@@ -728,9 +728,10 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
   `bytes` 并入前驱槽（跨叶时用 `atE_resize`/`atM_up` 沿两条路径调整内层计数），
   必要时 `atD_rebalance`；不再维护 Cursor 契约。`atN_purge` + `T->seam` 服务
   删除路径。
-- `at_next` 三层：入口校验 → 空树/`atC_done` 耗尽 → 循环 `atK_nextstart` +
-  `atK_nextedge`；`atK_nextstart` 扫当前 edge 的 left→right 桶链，
-  `atE_nextstart` 是单链 helper；`atK_nextedge` 与 `sp_next` 行行对应。
+- `at_next` 两层：入口校验 → 空树/done 耗尽 → `while (C->cur.id ||
+  atK_nextedge(C).id)`；body 扫当前 edge 的 left→right 桶链，
+  `atE_next` 是单链 helper；`atK_nextedge` 负责提交 Cursor 到下一 edge 或
+  done。
 - 桶迁移 `atE_mvlink`：块倒序、块内正序整块前插，单块 O(源链长)。
 - `atK_forwardoff` 保留虚拟尾语义；`at_advance` 正向用 `off + d < off` 检测回绕；
   `atK_locend` 带空树保护。
@@ -765,7 +766,7 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
 | `atA_*`（`slot`/`alloc`/`free`/`fromid`/`clear`/`side`） | 无 | 稠密 id 池与 freelist 属 anchortree 领域 |
 | `atA_*`（`newempty`/`splitat`/`pad`/`addpoint`） | 无（sp 由 pad/grow 分支持有） | point 物化：base edge + 分支 override + 端点链入；`addpoint` 为 `void` |
 | `atE_resize` | `spA_touch` | 只维护 bytes，无 mask/arbiter |
-| `atE_*`（`head`/`unlink`/`mvlink`/`next`/`nextstart`/`purge`） | `spA_born`/`died`/`merge` + `spL_*` 读路径 | left/right 桶链表与空 edge 回收属领域 |
+| `atE_*`（`head`/`unlink`/`mvlink`/`next`/`first`/`purge`） | `spA_born`/`died`/`merge` + `spL_*` 读路径 | left/right 桶链表与空 edge 回收属领域 |
 | `atK_*` + `at_next` | `spK_*` + `sp_next`/`spN_findslot` | `atK_forwardoff` 支持虚拟尾；`atK_fromedge`/`atK_prevedge` 是 edge 现场 helper |
 | `atD_*` | `spD_*` | `makechain` 无 new-root、`findroom` 禁右兄弟、`mergeleaf` 无 id/mask 合并、`rmleaf` 整条 edge 删除必在末槽、`stitch` 以末尾结构断言收口 |
 | `atI_*` | `spI_*` + `sp_append`/`sp_insert` | `splitroot`/`splitchild`/`makeroom` 同形；`growleft` 与 `spI_growleft` 同形但动机不同；无 span id/mask |
@@ -794,8 +795,9 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
 内部函数只在“调用方消费该值”或“C89 提交语义（`return helper(...), 0/1;`）”时
 返回非 void，否则改 `void`。有消费者：`atI_insert`（`AT_OK`/`AT_ERROVERFLOW`/
 `AT_ERRMEM`）、`atD_remove`（`AT_OK`/`AT_ERRMEM`）、`atI_growleft`（1 = 已平移、
-0 = 无前驱）、`atK_forwardoff`/`atK_backwardoff`/`atK_locend`/`atK_nextedge`/
-`atE_empty`、`atK_fromedge`（返回 edge 起点，被 `at_range`/`atE_purge` 消费）、
+0 = 无前驱）、`atK_forwardoff`/`atK_backwardoff`/`atK_locend`/`atK_nextedge`
+（返回下一 edge 首 occurrence 并同步写 `C->cur`）、`atE_empty`、`atK_fromedge`
+（返回 edge 起点，被 `at_range`/`atE_purge` 消费）、
 `atA_newempty`/`atA_splitat`/`atA_pad`（返回 edge，由 `atA_addpoint`
 消费）；`atE_purge` 与 `atA_addpoint` 为 `void`。no-op 与失败路径不 bump epoch、
 不改 C。
@@ -803,8 +805,10 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
 ### 12.3 结构同构项
 
 - `at_locate`/`at_next`/`atK_nextedge`/`atI_splitroot`/`atI_splitchild`/
-  `atI_makeroom` 与 sp 对应函数同形；`atK_nextedge` 与 `sp_next` 行行对应，
-  无后继时尾部就是 `atK_locend`。
+  `atI_makeroom` 与 sp 对应函数同形；`at_next` 的桶扫描与 `atK_nextedge`
+  在 anchortree 内合并为“bucket 扫描 + edge 提交”两层，`sp_next` 则用
+  `spN_findslot` + `spK_locend` 单函数完成；两者语义一致，形态差异来自
+  edge bucket 表示。无后继时 `atK_nextedge` 直接写 done。
 - insert 不再无条件 rewind：`atI_insert` 维护 paths/off/poff；`atI_growleft`
   用 `atK_prevedge` + `parent/idx` 把现场移交到前驱叶槽并无条件重置 `cur`；
   `atI_insertsplit` 仅当 `cur` 在迁移的 RIGHT 桶中时用 `atA_side` 判定并重置。

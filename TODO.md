@@ -66,6 +66,13 @@
 
 ## 下一步候选（未完成）
 
+- **各树库 `*K_nextedge` 尾定位简化**：anchortree `atK_nextedge` 的
+  `l < 0` 分支已改为直接 `C->poff = bc`、`C->cur = {0,1}`：上升过程结束
+  意味着 `paths/off` 已指向最后一条 edge，由当前 edge 的 `bc` 提交尾坐标
+  即可。spantree.h 的 `sp_next`（`if (--l < 0) return spK_locend(C), ...`）
+  应同步检查/应用；linecache.h / piecetab.h 中同类 `*K_locend` 调用若也由
+  对应 nextedge 循环到达，同样评估。`*K_locend` 仍供 locate/advance 使用，
+  保留。
 - **多返回值内部 helper 跨库统一**：`atD_balancenode` / `spD_balancenode`
   当前均为 `int d + <Delta> *ds`；计划改为调用方计算 `d`、helper 单返回 `ds`，
   需 anchortree / spantree / piecetab / linecache 等所有树库同步修改。
