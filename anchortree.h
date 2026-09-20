@@ -88,6 +88,7 @@ AT_API int at_gravity(at_Tree *T, at_Id id);
 
 /* constructor */
 AT_API int at_seek(at_Cursor *C, at_Tree *T, size_t pos);
+AT_API int at_fromanchor(at_Cursor *C, at_Tree *T, at_Id id);
 
 /* navigation */
 AT_API int   at_locate(at_Cursor *C, size_t pos);
@@ -329,16 +330,17 @@ static at_Id atA_alloc(at_Tree *T) {
     at_Anchor *as;
     size_t     nc;
     if (id) return (T->idfree = *(at_Id *)atA_slot(T, id)), id;
-    id = T->idmax + 1;
-    nc = T->idmax ? T->idmax + (T->idmax >> 1) : 8;
+    id = T->idmax + 1, nc = T->idmax ? T->idmax + (T->idmax >> 1) : 8;
     if (nc <= T->idmax || nc > AT_ANCHOR_MAX) return 0;
     as = (at_Anchor *)T->S->allocf(
             T->S->ud, T->anchors, T->idmax * sizeof(at_Anchor),
             nc * sizeof(at_Anchor));
     if (as == NULL) return 0;
-    for (i = id + 1; i < (at_Id)nc; ++i) *(at_Id *)&as[i - 1] = (at_Id)(i + 1);
-    *(at_Id *)&as[i - 1] = T->idfree, T->idfree = (at_Id)(id + 1);
-    return T->anchors = as, T->idmax = (at_Id)nc, id;
+    for (i = id + 1; i < (at_Id)nc; ++i)
+        *(at_Id *)&as[i - 1] = (at_Id)(i + 1), as[i - 1].end = NULL;
+    *(at_Id *)&as[i - 1] = T->idfree, as[i - 1].end = NULL;
+    T->idfree = (at_Id)(id + 1), T->idmax = (at_Id)nc;
+    return T->anchors = as, id;
 }
 
 static void atA_free(at_Tree *T, at_Id id) {
@@ -1015,6 +1017,14 @@ AT_API int at_locate(at_Cursor *C, size_t pos) {
 AT_API int at_seek(at_Cursor *C, at_Tree *T, size_t pos) {
     if (C == NULL || T == NULL) return AT_ERRPARAM;
     return memset(C, 0, sizeof(at_Cursor)), (C->tree = T), at_locate(C, pos);
+}
+
+AT_API int at_fromanchor(at_Cursor *C, at_Tree *T, at_Id id) {
+    at_Anchor *a;
+    if (C == NULL || T == NULL || (a = atA_fromid(T, id)) == NULL)
+        return AT_ERRPARAM;
+    memset(C, 0, sizeof(at_Cursor)), atK_fromedge(C, T, a->start);
+    return C->cur = atU_point(id, 0), AT_OK;
 }
 
 AT_API int at_advance(at_Cursor *C, at_Delta d) {

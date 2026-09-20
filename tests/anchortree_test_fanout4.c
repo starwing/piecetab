@@ -394,6 +394,140 @@ TEST(advance_span) {
     at_deltree(T), at_close(S);
 }
 
+TEST(fromanchor_params) {
+    at_State *S = at_open(NULL, NULL);
+    at_Tree  *T = at_newtree(S);
+    at_Cursor C, C0;
+    at_Id     id;
+    assertok(S != NULL && T != NULL);
+    assertok(at_fromanchor(NULL, T, 1) == AT_ERRPARAM);
+    assertok(at_fromanchor(&C, NULL, 1) == AT_ERRPARAM);
+    assertok(at_fromanchor(&C, T, AT_NONE) == AT_ERRPARAM);
+    assertok(at_fromanchor(&C, T, 1) == AT_ERRPARAM);
+    atT_anchor(T, 10, 5, AT_GROW, &id);
+    memset(&C, 0xAA, sizeof(C)), C0 = C;
+    assertok(at_fromanchor(&C, T, id + 1) == AT_ERRPARAM);
+    assertok(at_fromanchor(&C, T, AT_ANCHOR_MAX) == AT_ERRPARAM);
+    assertok(memcmp(&C0, &C, sizeof(C)) == 0);
+    assertok(at_fromanchor(&C, T, id) == AT_OK);
+    assertok(at_checkcursor(&C, 10));
+    assertok(at_delanchor(T, id) == AT_OK);
+    C0 = C;
+    assertok(at_fromanchor(&C, T, id) == AT_ERRPARAM);
+    assertok(memcmp(&C0, &C, sizeof(C)) == 0);
+    assertok(at_checktree(T));
+    at_deltree(T), at_close(S);
+}
+
+TEST(fromanchor_cursor) {
+    at_State        *S = at_open(NULL, NULL);
+    at_Tree         *T = at_newtree(S);
+    at_Cursor        C;
+    static const int gv[4] = {AT_GROW, AT_FIXED, AT_SHIFT, AT_LOCK};
+    at_Id            id[9];
+    unsigned         e0;
+    size_t           x, y, len;
+    int              i, ns;
+    assertok(S != NULL && T != NULL);
+    for (i = 0; i < 4; ++i)
+        atT_anchor(T, 10u + (size_t)i * 20u, 5, gv[i], &id[i]);
+    for (i = 0; i < 4; ++i) atT_anchor(T, 100, 0, gv[i], &id[4 + i]);
+    atT_mkns(T, 140, 3, 7, &id[8]);
+    e0 = T->epoch;
+    for (i = 0; i < 9; ++i) {
+        memset(&C, 0xAA, sizeof(C));
+        assertok(at_fromanchor(&C, T, id[i]) == AT_OK);
+        assertok(C.tree == T && C.epoch == e0 && C.cur.id == id[i]);
+        assertok(!C.cur.is_end && C.poff == 0);
+        assertok(at_range(T, id[i], &x, &y) == AT_OK);
+        assertok(at_offset(&C) == x);
+        assertok(at_checkcursor(&C, x));
+        assertok(at_anchor(&C, NULL, NULL) == id[i]);
+        assertok(at_anchor(&C, &ns, &len) == id[i]);
+        asserteq(ns, i == 8 ? 7 : 0);
+        asserteq(len, y - x);
+        assertok(at_next(&C, 0, NULL) != id[i]);
+    }
+    asserteq(T->epoch, e0);
+    assertok(at_checktree(T));
+    assertok(atT_checkchains(T));
+    at_deltree(T), at_close(S);
+}
+
+TEST(fromanchor_cross) {
+    at_State *S = at_open(NULL, NULL);
+    at_Tree  *T = at_newtree(S);
+    at_Cursor C;
+    at_Id     id;
+    size_t    x, y;
+    assertok(S != NULL && T != NULL);
+    atT_anchor(T, 100, 0, AT_FIXED, &id);
+    assertok(at_seek(&C, T, 100) == AT_OK);
+    assertok(at_splice(&C, 0, 7) == AT_OK);
+    assertok(at_range(T, id, &x, &y) == AT_OK);
+    asserteq(x, 107);
+    asserteq(y, 100);
+    assertok(at_fromanchor(&C, T, id) == AT_OK);
+    assertok(at_offset(&C) == 107);
+    assertok(at_checkcursor(&C, 107));
+    assertok(at_anchor(&C, NULL, NULL) == id);
+    assertok(at_next(&C, 0, NULL) == AT_NONE);
+    assertok(at_checktree(T));
+    assertok(atT_noemptyedges(T));
+    at_deltree(T), at_close(S);
+}
+
+TEST(fromanchor_iter) {
+    at_State *S = at_open(NULL, NULL);
+    at_Tree  *T = at_newtree(S);
+    at_Cursor C;
+    at_Id     all[20], a, b, first;
+    int       i, k, n;
+    assertok(S != NULL && T != NULL);
+    for (i = 0; i < 8; ++i)
+        atT_anchor(T, 10u + (size_t)i * 7u, 2, i % 4, &all[i]);
+    atT_anchor(T, 100, 0, AT_GROW, &a);
+    atT_anchor(T, 100, 0, AT_GROW, &b);
+    n = atT_nextall(T, all, 20);
+    asserteq(n, 10);
+    for (i = 0; i < n; ++i) {
+        assertok(at_fromanchor(&C, T, all[i]) == AT_OK);
+        assertok(at_anchor(&C, NULL, NULL) == all[i]);
+        for (k = 0; k < n - i - 1; ++k)
+            assertok(at_next(&C, 0, NULL) == all[i + 1 + k]);
+        assertok(at_next(&C, 0, NULL) == AT_NONE);
+    }
+    assertok(at_seek(&C, T, 100) == AT_OK);
+    first = at_next(&C, 0, NULL);
+    assertok(first == a || first == b);
+    assertok(at_fromanchor(&C, T, first == a ? b : a) == AT_OK);
+    assertok(at_anchor(&C, NULL, NULL) == (first == a ? b : a));
+    assertok(at_checktree(T));
+    assertok(atT_checkchains(T));
+    at_deltree(T), at_close(S);
+}
+
+TEST(fromanchor_zeroalloc) {
+    OomCount  oc = {0, 1 << 20};
+    at_State *S = at_open(&oomcount_alloc, &oc);
+    at_Tree  *T = at_newtree(S);
+    at_Cursor C;
+    at_Id     id;
+    size_t    x, y;
+    assertok(S != NULL && T != NULL);
+    atT_anchor(T, 10, 5, AT_GROW, &id);
+    oc.oom = 0;
+    assertok(at_fromanchor(&C, T, id) == AT_OK);
+    assertok(at_checkcursor(&C, 10));
+    assertok(at_anchor(&C, NULL, NULL) == id);
+    assertok(at_range(T, id, &x, &y) == AT_OK);
+    assertok(x == 10 && y == 15);
+    assertok(at_next(&C, 0, NULL) == AT_NONE);
+    assertok(at_checktree(T));
+    at_deltree(T), at_close(S);
+    asserteq(oc.live, 0);
+}
+
 TEST(split_sequence) {
     at_State *S = at_open(NULL, NULL);
     at_Tree  *T = at_newtree(S);
@@ -783,6 +917,39 @@ TEST(anchor_invalid_params) {
     assertok(at_delanchor(T, id) == AT_ERRPARAM);
     assertok(at_range(T, id, &x, &y) == AT_ERRPARAM);
     assertok(at_gravity(T, id) < 0);
+    at_deltree(T), at_close(S);
+}
+
+TEST(anchor_free_ids) {
+    at_State *S = at_open(NULL, NULL);
+    at_Tree  *T = at_newtree(S);
+    at_Id     ids[10], probe;
+    size_t    x, y;
+    int       i, live;
+    assertok(S != NULL && T != NULL);
+    atT_anchor(T, 10, 1, AT_GROW, &ids[0]);
+    /* first capacity region: never-allocated ids must be rejected */
+    for (probe = 2; probe <= T->idmax; ++probe) {
+        assertok(at_range(T, probe, &x, &y) == AT_ERRPARAM);
+        assertok(at_gravity(T, probe) < 0);
+        assertok(at_delanchor(T, probe) == AT_ERRPARAM);
+    }
+    /* grow the pool; new-region and released ids must be rejected too */
+    for (i = 1; i < 10; ++i)
+        atT_anchor(T, 20u + (size_t)i * 10u, 1, AT_GROW, &ids[i]);
+    assertok(T->idmax > 8);
+    assertok(at_delanchor(T, ids[1]) == AT_OK);
+    ids[1] = 0;
+    for (probe = 1; probe <= T->idmax; ++probe) {
+        live = 0;
+        for (i = 0; i < 10; ++i)
+            if (ids[i] == probe) live = 1;
+        if (live) continue;
+        assertok(at_range(T, probe, &x, &y) == AT_ERRPARAM);
+        assertok(at_gravity(T, probe) < 0);
+        assertok(at_delanchor(T, probe) == AT_ERRPARAM);
+    }
+    assertok(at_checktree(T));
     at_deltree(T), at_close(S);
 }
 
@@ -2735,6 +2902,53 @@ TEST_STATIC int atT_contseqok(
     at_deltree(T), at_close(S);
     asserteq(c.live, 0);
     return 1;
+}
+
+TEST_STATIC int atT_fromanchoredit(
+        int op, int grav, int zero, size_t del, size_t ins) {
+    Count      c = {0};
+    at_State  *S = at_open(&count_alloc, &c);
+    at_Tree   *T = at_newtree(S);
+    at_Cursor  C;
+    att_Model  m[AT_CONT_N];
+    att_Splice w;
+    at_Id      seen[1], id;
+    size_t     pos;
+    int        i, n = AT_CONT_N;
+    assertok(S != NULL && T != NULL);
+    atT_contbuild(T, m, n, -1);
+    for (i = 0; i < n; ++i)
+        if (m[i].gravity == grav && zero == (m[i].start == m[i].end)) break;
+    assertok(i < n);
+    id = m[i].id, seen[0] = id;
+    assertok(at_fromanchor(&C, T, id) == AT_OK);
+    pos = at_offset(&C);
+    w.L = pos, w.del = del, w.ins = ins;
+    atT_modelsplice(m, n, &w);
+    if (op == 0)
+        assertok(at_remove(&C, del) == AT_OK);
+    else if (op == 1)
+        assertok(at_insert(&C, ins) == AT_OK);
+    else
+        assertok(at_splice(&C, del, ins) == AT_OK);
+    pos += op == 2 ? ins : 0;
+    assertok(at_checkcursor(&C, pos));
+    assertok(atT_contmiss(T, &C, m, n, seen, 1));
+    assertok(at_checktree(T));
+    assertok(atT_checkchains(T));
+    assertok(T->seam == NULL);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+    return 1;
+}
+
+TEST(fromanchor_edit) {
+    assertok(atT_fromanchoredit(0, AT_GROW, 0, 25, 0));
+    assertok(atT_fromanchoredit(0, AT_FIXED, 0, 25, 0));
+    assertok(atT_fromanchoredit(1, AT_GROW, 0, 0, 7));
+    assertok(atT_fromanchoredit(1, AT_FIXED, 0, 0, 7));
+    assertok(atT_fromanchoredit(2, AT_GROW, 1, 5, 3));
+    assertok(atT_fromanchoredit(2, AT_FIXED, 1, 5, 3));
 }
 
 TEST_STATIC void atT_contpoolfree(void) {

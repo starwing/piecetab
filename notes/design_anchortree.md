@@ -189,7 +189,11 @@ typedef struct at_Anchor {
 - `T->anchors` 是稠密数组；`at_Id` 从 1 开始，0 保留为“空/未使用”；
   `AT_NONE == 0` 即由此而来。
 - 空闲 id 用槽内前 4 字节串成 freelist，`T->idfree == 0` 表示 freelist 空。
-- `anchor->end == NULL` 表示 id 已释放；live anchor 的 `start/end` 均非 NULL。
+- `anchor->end == NULL` 即非 live；live anchor 的 `start/end` 均非 NULL。
+- 空闲槽（从未分配或已释放）都满足 `end == NULL`：释放路径由 `atA_free`
+  写入；扩容路径在串 freelist 时对该段每个新槽（含链尾）写入。`atA_alloc`
+  返回的槽由 `at_newanchor` 整体清零后再初始化，因此 `atA_fromid` 的
+  live 判定对任意 `id <= T->idmax` 成立。
 - `at_Id` 复用顺序不是公共契约：`at_newanchor` 返回的 id 保证有效；已释放且
   未被复用的 id 在 `at_range`/`at_gravity`/`at_delanchor` 上继续报错。调用方
   只能依赖“新 id 有效、其他已释放 id 失效”，不得断言 LIFO/FIFO 复用顺序。
@@ -478,6 +482,28 @@ point 已链入，anchor 端点指针已写。`atA_addpoint` 不返回值；调�
 - 成本：`cur.id` 直索引 anchor 为 O(1)；带 `plen` 时加一次 `at_range`
   （O(树高 × fanout)），无桶扫描、无内存分配。
 
+### 6.6 `at_fromanchor(C, T, id)`
+
+- 语义：按 `id` 构造 Cursor，落在该 anchor 的 START 槽上；现场与 `at_next`
+  刚产出该 id 时一致（§2.5）：`cur = {id, 0}`、`off == at_range` 的 `start`、
+  `poff == 0`、`epoch == T->epoch`。与 `at_anchor` 对偶：`at_fromanchor`
+  由 id 取现场，`at_anchor` 由现场取 id 与元数据。
+- 入口：`C`/`T` 非 NULL 且 `atA_fromid(T, id)` 命中 live anchor，否则返回
+  `AT_ERRPARAM`；`AT_NONE`、已释放 id、`id > T->idmax`、空树同归此错误，
+  失败时不改动 `C`。构造语义与 `at_seek` 一致：完全重建 Cursor 并捕获
+  当前 `T->epoch`。
+- 实现：`memset(C, 0, sizeof(at_Cursor))` 后调用 `atK_fromedge(C, T, a->start)`
+  建立 paths/坐标/epoch，再写 `C->cur = atU_point(id, 0)`；零分配，
+  复杂度 O(levels × fanout)（只读 `atN_sumbytes` 与建 paths），不修改树与 epoch。
+- 派生契约：
+  - `at_anchor(C, pns, plen)` 立即返回该 id 的 ns 与长度；
+  - `at_next(C, ...)` 从该槽后继继续，不重复返回该 id；
+  - 现场即 `at_next` 的规范产出态，§7.1/§7.2 的续扫槽与迁桶规则、epoch
+    失效规则原样适用。
+- 零长 / 交叉零长：`start == end` 时落在同一条 edge；位于 `T` 的 EOF 零长
+  edge 上时 `poff == bytes == 0`，属 §2.5 的合法尾态；`start > end`（交叉
+  零长）时位置取 `start`，与 `at_range` 的 `start` 一致。
+
 ## 七、文本编辑
 
 anchortree 提供四个编辑原语：`at_remove(C, len)`、`at_insert(C, ins)`、
@@ -680,8 +706,8 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
 
 - 生命周期：`at_open` / `at_close` / `at_newtree` / `at_deltree` / `at_bytes` /
   `at_reset`；`at_bytes(T)` 返回缓存的 `T->bytes`，`T == NULL` 返回 0。
-- Cursor：`at_seek` / `at_locate` / `at_advance`（导航）与 `at_anchor` /
-  `at_next`（只读迭代），语义见 §2.5、§八。
+- Cursor：`at_seek` / `at_fromanchor`（构造函数）/ `at_locate` / `at_advance`
+  （导航）与 `at_anchor` / `at_next`（只读迭代），语义见 §2.5、§6.5、§6.6、§八。
 - anchor：`at_newanchor` / `at_delanchor` / `at_range` / `at_gravity`，语义见
   §6.1–§6.4。
 - 文本编辑：`at_remove` / `at_insert` / `at_append` / `at_splice`，语义见 §七。
