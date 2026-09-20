@@ -387,8 +387,8 @@ point 已链入，anchor 端点指针已写。`atA_addpoint` 不返回值；调�
   `edge@p`、`bytes = 0`，`T = p`。返回 `edge@p`。
 - edge 分配先于任何度量/结构修改；公共入口在 mutation 前统一走
   `atU_reserve(C, edges, pass, extra)`，失败返回 `AT_ERRMEM` 且树不变。
-  helper 位于 `/* object/edge helpers */`，只做一次 nodes 预留与一次 edges
-  预留；reserve 成功后插入槽触发的 node split 与 edge 分配只用
+  helper 位于 node operations 末尾（`atM_up` 之后），只做一次 nodes 预留与
+  一次 edges 预留；reserve 成功后插入槽触发的 node split 与 edge 分配只用
   `atP_ralloc`/assert，不再返回 OOM，也不留下需要回滚的半成品。
   `atA_addpoint` 自身不 reserve；它由 `at_newanchor` 的一个事务预留覆盖。
 
@@ -524,8 +524,8 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
   立即建立该前导 span。
 - mutation 前的资源预留统一走 `atU_reserve(C, edges, pass, extra)`：
   `at_remove` 由 `atD_remove` 自保护 `(0, 1, 0)`；`at_insert`/`at_append`
-  由 `atI_insert` 自保护 `(1, 1, 2)`；`at_splice` 传 `(1, rm + add, 2*add)`，其中
-  `rm = del > 0 && pos < T->bytes`、`add = ins > 0`；`at_newanchor` 传
+  由 `atI_insert` 自保护 `(1, 1, 2)`；`at_splice` 传 `(1, rm + extra, 2*extra)`，
+  其中 `rm = del > 0 && pos < T->bytes`、`extra = ins > 0`；`at_newanchor` 传
   `(3, 2, 5)`。`pass`/`extra` 由调用者精确计算，helper 不解释事务来源。
 - `atI_insert` 是唯一插入 mutation：自保护 reserve、overflow 检查（直接写
   `limit + ins < limit`）都在 mutation 前；
@@ -585,7 +585,8 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
   cur = atU_point(0, 1)`，并保持 `T->seam == NULL` 断言。
 - rmleaf/rmrange 返回时的现场不变量：`at_offset(C) == pos`；`atK_edge(C)` 必须是
   有效叶子槽；`cur.id != 0` 时其 anchor 端点 edge 必须等于 `atK_edge(C)`。
-  rmrange 成功返回时 `poff == 0`（mergeleaf 已把 poff 合进 off）；
+  rmrange 成功返回时 `poff == 0`（`atD_stitch` 的 merge-leaf 步骤已把 poff 合进
+  off）；
   rmleaf 保留原 `poff`。不再存在“允许 `cur.id` 与 `atK_edge(C)` 不同、
   由 `at_next` 恢复”的例外；`at_splice`/`at_remove` 直接接在 rmrange 后使用时
   依赖该不变量。
@@ -613,8 +614,8 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
   - `at_remove`：由 `atD_remove` 自保护 `(0, 1, 0)`；`atD_stitch` 入口断言同步改窄。
   - `at_insert`/`at_append`：由 `atI_insert` 自保护 `(1, 1, 2)`；一次
     `atI_makeroom` 最坏 `L+2`。
-  - `at_splice`：一次 combined `(1, rm + add, 2*add)`，其中
-    `rm = del > 0 && pos < T->bytes`、`add = ins > 0`；`rm+add >= 1`。
+  - `at_splice`：一次 combined `(1, rm + extra, 2*extra)`，其中
+    `rm = del > 0 && pos < T->bytes`、`extra = ins > 0`；`rm+extra >= 1`。
     纯删除时 `L+2` 覆盖 stitch 断言；纯插入时 `L+2` 覆盖 insert；删除+插入时
     `2L+2` 覆盖 remove ≤L 与 insert ≤L+2 的总和。
   - `at_newanchor`：`(3, 2, 5)`；两次 `atA_addpoint`，edges 最大 3（空树
@@ -625,7 +626,7 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
   `atD_makechain` 只在第一次建链时分配；最坏左树满时链高为 L。insert 的 L+2
   依据：`atI_makeroom` 最坏根分裂新增 2、之后每层 `atI_splitchild` 新增 1；
   组合覆盖证明：remove 实际分配 ≤ L，insert 实际分配 ≤ levels_after + 2 ≤ L+2，
-  `(rm+add)L + 2*add` 恰好覆盖；`atD_stitch` 入口断言同步改窄为 `>= levels`。
+  `(rm+extra)L + 2*extra` 恰好覆盖；`atD_stitch` 入口断言同步改窄为 `>= levels`。
 - `atI_insert` 返回 `AT_OK`/`AT_ERROVERFLOW`/`AT_ERRMEM`；overflow 与 reserve
   失败在 mutation 前。`at_splice` 的 remove/insert 内部自保护 reserve 在
   combined 覆盖下是 no-op 检查，再失败视为 internal invariant violation
@@ -768,7 +769,7 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
 | `atE_resize` | `spA_touch` | 只维护 bytes，无 mask/arbiter |
 | `atE_*`（`head`/`unlink`/`mvlink`/`next`/`first`/`purge`） | `spA_born`/`died`/`merge` + `spL_*` 读路径 | left/right 桶链表与空 edge 回收属领域 |
 | `atK_*` + `at_next` | `spK_*` + `sp_next`/`spN_findslot` | `atK_forwardoff` 支持虚拟尾；`atK_fromedge`/`atK_prevedge` 是 edge 现场 helper |
-| `atD_*` | `spD_*` | `makechain` 无 new-root、`findroom` 禁右兄弟、`mergeleaf` 无 id/mask 合并、`rmleaf` 整条 edge 删除必在末槽、`stitch` 以末尾结构断言收口 |
+| `atD_*` | `spD_*` | `makechain` 无 new-root、`findroom` 禁右兄弟、merge-leaf 步骤内联于 `stitch`（无 id/mask 合并）、`rmleaf` 整条 edge 删除必在末槽、`stitch` 以末尾结构断言收口 |
 | `atI_*` | `spI_*` + `sp_append`/`sp_insert` | `splitroot`/`splitchild`/`makeroom` 同形；`growleft` 与 `spI_growleft` 同形但动机不同；无 span id/mask |
 
 ## 十二、与其他树库的差异
@@ -785,8 +786,8 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
 - `at_remove`（经 `atD_remove`）`(0,1,0)`：remove 实际分配 ≤ L。
 - `at_insert`/`at_append`（经 `atI_insert`）`(1,1,2)`：insert 最坏 `L+2`
   （根分裂 +2、之后每层 +1）。
-- `at_splice` 一次 combined `(1, rm+add, 2*add)`，`rm = del > 0 && pos < T->bytes`、
-  `add = ins > 0`，覆盖 remove ≤ L 与 insert ≤ L+2 之和；禁止拆成两次调用。
+- `at_splice` 一次 combined `(1, rm+extra, 2*extra)`，`rm = del > 0 && pos < T->bytes`、
+  `extra = ins > 0`，覆盖 remove ≤ L 与 insert ≤ L+2 之和；禁止拆成两次调用。
 - `at_newanchor` `(3,2,5)`。
 - no-op 不 reserve；`at_splice` 的 overflow 检查先于 remove。
 
@@ -816,7 +817,8 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
 - 删除不集中 rewind：`atD_rmleaf` 链不变，`atD_rmrange` 按 §7.2 设置续扫槽；
   `atE_purge` 不再有 Cursor 契约（只服务 `at_delanchor`，现场自成一体）。
 - remove 相关短 helper 按用户指定内联（`atD_trimright`/`atD_trimleft` →
-  `atD_rmrange`），仅在不超 25 行且逻辑等价时执行。
+  `atD_rmrange`、merge-leaf 步骤 → `atD_stitch`），仅在不超 25 行且逻辑等价时
+  执行。
 
 ### 12.4 领域差异（允许保留）
 
