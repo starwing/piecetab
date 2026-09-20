@@ -266,13 +266,21 @@ typedef struct at_Cursor {
 - `atE_nextstart` 保持单链扫描 helper：从给定槽位开始在一条桶链上找 START；
   left/right 桶切换由 `atK_nextstart` 负责，跨 edge 推进由 `at_next` 调
   `atK_nextedge`。
-- insert 的耗尽态契约：`atI_insert` 不创建 anchor，也不改写 `cur`（含
-  `atI_growleft` 的现场移交）；若 mutation 前 `atC_done(C)`，完成后保持 done。
-  `atE_purge` 只服务 `at_delanchor`，不再触碰任何 Cursor。`atD_rmrange` 是例外：删除会把未扫 anchor 搬入 seam，允许
-  从 done 经 `left_end` 恢复续扫，避免 skip。
+- insert 的耗尽态契约：`atI_insert` 不创建 anchor，纯 resize 分支不改写
+  `cur`。`atI_growleft` 无条件写 `C->cur = atU_point(0, 0)`：现场移交后当前
+  位置落在前驱 span 内部，没有 edge 承载 `cur`，只能 fresh 后由 `at_next` 走
+  `atK_nextedge`；`cur.id == 0`（fresh/done）也统一写 fresh，done 重扫的对外
+  结果仍是不再产出 anchor。`atI_insertsplit` 仅当 `cur` 在迁移的 RIGHT 桶中
+  才写 fresh（`atA_side` 判定）；LEFT 桶中的 `cur` 保持现场，`cur.id == 0`
+  不被 split 改写。
+  `atE_purge` 只服务 `at_delanchor`，不再触碰任何 Cursor。`atD_rmrange` 是
+  例外：仅当 `L->poff == 0`（L 零长末槽将被 purge、其桶前置到 seam）且旧
+  `cur` 属于 L 桶时，才保留旧 `cur` 或改用 `left_end`；`L->poff > 0` 时一律
+  fresh seam，避免越过 seam 新前插的 left 节点。
 - 结构 mutation 后 Cursor 现场：`at_remove`/`at_insert`/`at_append`/`at_splice`
   在操作内维护同一个 Cursor 并刷新 epoch，不调用 `at_locate`/`at_seek`
-  事后归位；insert 不再无条件 rewind；rmleaf 链不变；rmrange 按 §7.2 设置
+  事后归位；insert 仅在 growleft（无条件）或 split 迁移含 `cur` 的 RIGHT 桶时
+  把 `cur` 复位为 fresh，其余现场保持；rmleaf 链不变；rmrange 按 §7.2 设置
   续扫槽。`at_delanchor` 不维护 Cursor，旧 Cursor 失效；`at_newanchor` 成功
   递增 epoch 但不刷新传入 Cursor，调用方须重新 seek/locate。
 - 空树归一：任何 mutation 出口若 `root.child_count == 0`，必须统一写
@@ -341,7 +349,8 @@ typedef struct at_Cursor {
 1. 取 base edge：root 为空→`atA_newempty(C)`；否则 `atK_edge(C)`；
 2. 取当前 leaf 现场 `p/i/l/b`；
 3. `C->poff > 0` 时：`poff < b`→`atA_splitat(C)`；否则→`atA_pad(C)`；
-4. `atE_link` 把 slot 链入 edge 对应桶，并写回 anchor 的 `start/end` 指针。
+4. 用 `atE_head` 按 `slot.is_end ? a->end_right : a->start_right` 选桶，把
+   slot 链入并写回 anchor 的 `start/end` 指针。
 
 后置条件：目标 edge 位于 `at_offset(C)`，Cursor 在该 edge 且 `poff == 0`；
 point 已链入，anchor 端点指针已写。`atA_addpoint` 不返回值；调用方
@@ -487,11 +496,16 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
     `p`，后续 edge 连同其桶随前缀和自动右移 `ins`。
   - RIGHT 桶非空且 LEFT 桶非空：原 edge 的 `bytes` 改为 `ins`（LEFT 槽留在
     `p`）；新建 `edge@p+ins`，其 `bytes` 为原 edge 的旧 `bytes`，插在原 edge
-    之后；把 RIGHT 桶整体迁移到新 edge（同步 anchor 的 `start/end`）。
+    之后；把 RIGHT 桶整体迁移到新 edge（同步 anchor 的 `start/end`）。若 `cur`
+    在该 RIGHT 桶中，迁移后写 `C->cur = atU_point(0, 0)`：LEFT 桶仍留在当前
+    edge，但从旧现场继续会跳过/错连新 edge，必须从 fresh 重扫。
   - RIGHT 桶非空且 LEFT 桶为空：没有槽需要留在 `p`，当前 edge 必须整体右移
     `ins`，即把 `ins` 增长到前一个 edge 上（`atI_growleft`）；不新建 edge、不
-    产生无槽 edge，Cursor 现场移交到前驱叶槽（绝对坐标不变）。例外：`p == 0`
-    时无前驱，首 edge 允许无槽（§三.5），此时仍走上面的 split 形态。
+    产生无槽 edge，Cursor 现场移交到前驱叶槽（绝对坐标不变），并无条件写
+    `C->cur = atU_point(0, 0)`：当前位置落在前驱 span 内部，没有 edge 承载
+    `cur`，只能由 `at_next` 走 `atK_nextedge`（原 fresh/done 统一为 fresh）。
+    例外：`p == 0` 时无前驱，首 edge 允许无槽（§三.5），此时仍走上面的
+    split 形态。
 - `p` 位于某个 span 内部（`0 < poff < bytes`）：没有端点在 `p`，把该 span 的
   `bytes` 增加 `ins`，之后所有 edge 自动右移，`T` 增加 `ins`。
 - `p == T` 且没有 EOF 零长 edge（最后一条正长 span，位置 `T` 无端点）：把最后一条
@@ -538,8 +552,8 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
   首 edge/EOF 零长规则处理，并且只在 `i + 1 == cc` 时发生。
 - 跨 edge 时 `T->seam = atK_edge(&R)`，断言 seam 不是左边界 edge；
   `atD_rmrange(C, &R, fl)` 用 `rt[]` 暂存 R 侧、trim 左右边界、cutrange purge
-  L 侧。`atN_purge` 通过 `atE_movelink` 把被回收叶子 edge 的桶搬到 seam。
-- `atE_movelink` 采用“块倒序、块内正序”的整块前插：单次遍历源链更新
+  L 侧。`atN_purge` 通过 `atE_mvlink` 把被回收叶子 edge 的桶搬到 seam。
+- `atE_mvlink` 采用“块倒序、块内正序”的整块前插：单次遍历源链更新
   `anchor->start/end` 并找尾，尾接 dst 旧头，dst 头设为源链头；单块 O(源链长)，
   全部被搬槽只搬一次，总 O(N)。
 - 释放顺序保持 cutrange/stitch 原序（L右 → R左 → 中间；
@@ -548,29 +562,30 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
   seam 每个桶最前，这是 rmrange 续扫不 skip 的前提。块间顺序除此之外不保证。
 - L 零长末槽清理写成 `atN_purge(...) + atN_setcc(p, cc - 1)`：L 已是最后一个
   槽，只需把链搬进 seam。
-- rmrange 不 rewind。Cursor 续扫策略：
-  - `atC_fresh(C)`：保留 `{0,0}`；删除后从当前 edge（seam）left 桶头开始。
-  - `cur.id != 0`：桶由 `cur.is_end ? anchor->end_right : anchor->start_right`
-    决定。left 桶保留原 `cur`；right 桶在 mutation 前记下当前 edge 左链尾
-    `left_end`，mutation 后设 `C->cur = left_end`（左链为空则 `{0,0}`），
-    从 left 桶继续。
-  - `atC_done(C)`：同样在 mutation 前记 `left_end`；mutation 后从
-    `left_end` 恢复。删除会把未扫 anchor 搬进 seam，这里恢复续扫是刻意的，
-    不属于“耗尽态被误清”。
-- 以上策略保证：left 桶从 `left_end` 后继扫完所有未扫左链，再切 right 桶头
-  重扫 L.right 已扫前缀；允许重复当前 id 附近，但不 skip。`left_end` 查找在
-  mutation 前完成，O(左链长)。
+- rmrange 不 rewind。`cur` 默认为 `{0,0}`；只有 `L->poff == 0` 且旧
+  `cur.id != 0` 时才可能沿用旧现场：
+  - `L->poff > 0`：L edge 存活，其桶原地不动；删除后 Cursor 落 seam，
+    `cur = {0,0}`，从 seam left 桶头重扫。seam 可能刚被前插了 left 节点，
+    因此不能保留旧 `cur` 或取 L.left 尾。
+  - `L->poff == 0`：L 零长末槽在 stitch 开始时被 purge，其 left/right 桶作为
+    最后一块整块前插到 seam 各桶最前，此时旧现场才可用：
+    - 旧 `cur` 在 L 左桶：保留旧 `cur`，从其后继继续；
+    - 旧 `cur` 在 L 右桶：取 L 左链尾 `left_end`（左链为空则 `{0,0}`），
+      扫完 L.left 尾、L.right 头及更早搬入的块；
+    - 旧 `cur.id == 0`（fresh/done）：保持 `{0,0}`，从 seam 头重扫。
+- 以上策略保证不 skip；允许重复当前 id 附近。`left_end` 查找在 mutation 前
+  完成，O(左链长)。
 - 删除后 `T->seam` 清回 `NULL`；`atD_remove` 返回 `AT_OK`。`at_remove` 只在真正
   发生 mutation 时递增 epoch 并刷新 C；`atD_remove` 内部不碰 epoch。
 - 空树归一：`atD_rmleaf`/`atD_rmrange`/`atD_remove` 任一出口若
   `root.child_count == 0`，统一写 `paths[0] = root.children; off = poff = 0;
   cur = atU_point(0, 1)`，并保持 `T->seam == NULL` 断言。
 - rmleaf/rmrange 返回时的现场不变量：`at_offset(C) == pos`；`atK_edge(C)` 必须是
-  有效叶子槽；`cur.id != 0` 时其 anchor 端点 edge 必须可由 `cur` 恢复。
+  有效叶子槽；`cur.id != 0` 时其 anchor 端点 edge 必须等于 `atK_edge(C)`。
   rmrange 成功返回时 `poff == 0`（mergeleaf 已把 poff 合进 off）；
-  rmleaf 保留原 `poff`。rmrange 后允许 `cur.id` 指向与 `atK_edge(C)` 不同的
-  edge（链已搬入 seam），`at_next` 负责按 anchor 端点恢复；`at_splice`/
-  `at_remove` 直接接在 rmrange 后使用时依赖该不变量。
+  rmleaf 保留原 `poff`。不再存在“允许 `cur.id` 与 `atK_edge(C)` 不同、
+  由 `at_next` 恢复”的例外；`at_splice`/`at_remove` 直接接在 rmrange 后使用时
+  依赖该不变量。
 - `atD_stitch` 末尾结构断言 `assert(cc != 0 && i < cc)` 及
   `atD_stitch`/`atD_rmleaf` 的现场维护规则保持；不恢复 spD_stitch inline
   tail 修正。
@@ -716,7 +731,7 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
 - `at_next` 三层：入口校验 → 空树/`atC_done` 耗尽 → 循环 `atK_nextstart` +
   `atK_nextedge`；`atK_nextstart` 扫当前 edge 的 left→right 桶链，
   `atE_nextstart` 是单链 helper；`atK_nextedge` 与 `sp_next` 行行对应。
-- 桶迁移 `atE_movelink`：块倒序、块内正序整块前插，单块 O(源链长)。
+- 桶迁移 `atE_mvlink`：块倒序、块内正序整块前插，单块 O(源链长)。
 - `atK_forwardoff` 保留虚拟尾语义；`at_advance` 正向用 `off + d < off` 检测回绕；
   `atK_locend` 带空树保护。
 - `at_delanchor` 全程零分配；`atA_fromid` 是三个公共入口共享的 live 校验。
@@ -745,10 +760,10 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
 | anchortree | sp 对应 | 差异边界 |
 | --- | --- | --- |
 | `atP_*`/`atS_*`/`atN_*`/`atM_up` | `spP_*`/`spS_*`/`spN_*`/`spM_up` | 基本同构 |
-| `atA_*`（`slot`/`alloc`/`free`/`fromid`/`clear`） | 无 | 稠密 id 池与 freelist 属 anchortree 领域 |
+| `atA_*`（`slot`/`alloc`/`free`/`fromid`/`clear`/`side`） | 无 | 稠密 id 池与 freelist 属 anchortree 领域 |
 | `atA_*`（`newempty`/`splitat`/`pad`/`addpoint`） | 无（sp 由 pad/grow 分支持有） | point 物化：base edge + 分支 override + 端点链入；`addpoint` 为 `void` |
 | `atE_resize` | `spA_touch` | 只维护 bytes，无 mask/arbiter |
-| `atE_*`（`link`/`unlink`/`movelink`/`next`/`nextstart`/`purge`） | `spA_born`/`died`/`merge` + `spL_*` 读路径 | left/right 桶链表与空 edge 回收属领域 |
+| `atE_*`（`head`/`unlink`/`mvlink`/`next`/`nextstart`/`purge`） | `spA_born`/`died`/`merge` + `spL_*` 读路径 | left/right 桶链表与空 edge 回收属领域 |
 | `atK_*` + `at_next` | `spK_*` + `sp_next`/`spN_findslot` | `atK_forwardoff` 支持虚拟尾；`atK_fromedge`/`atK_prevedge` 是 edge 现场 helper |
 | `atD_*` | `spD_*` | `makechain` 无 new-root、`findroom` 禁右兄弟、`mergeleaf` 无 id/mask 合并、`rmleaf` 整条 edge 删除必在末槽、`stitch` 以末尾结构断言收口 |
 | `atI_*` | `spI_*` + `sp_append`/`sp_insert` | `splitroot`/`splitchild`/`makeroom` 同形；`growleft` 与 `spI_growleft` 同形但动机不同；无 span id/mask |
@@ -788,9 +803,10 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
 - `at_locate`/`at_next`/`atK_nextedge`/`atI_splitroot`/`atI_splitchild`/
   `atI_makeroom` 与 sp 对应函数同形；`atK_nextedge` 与 `sp_next` 行行对应，
   无后继时尾部就是 `atK_locend`。
-- insert 不再无条件 rewind：`atI_insert` 维护 paths/off/poff 与 `cur`；
-  `atI_growleft` 用 `atK_prevedge` + `parent/idx` 把现场移交到前驱叶槽，不调用
-  重建原语。`at_append` 由 `atK_forwardoff` 完成坐标移动。
+- insert 不再无条件 rewind：`atI_insert` 维护 paths/off/poff；`atI_growleft`
+  用 `atK_prevedge` + `parent/idx` 把现场移交到前驱叶槽并无条件重置 `cur`；
+  `atI_insertsplit` 仅当 `cur` 在迁移的 RIGHT 桶中时用 `atA_side` 判定并重置。
+  不调用重建原语，`at_append` 由 `atK_forwardoff` 完成坐标移动。
 - 删除不集中 rewind：`atD_rmleaf` 链不变，`atD_rmrange` 按 §7.2 设置续扫槽；
   `atE_purge` 不再有 Cursor 契约（只服务 `at_delanchor`，现场自成一体）。
 - remove 相关短 helper 按用户指定内联（`atD_trimright`/`atD_trimleft` →

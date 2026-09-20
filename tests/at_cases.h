@@ -3077,6 +3077,42 @@ TEST_STATIC void att_case_insert_cursor(void) {
     asserteq(c.live, 0);
 }
 
+TEST_STATIC void att_case_insert_cursor_growleft(void) {
+    at_State *S = at_open(NULL, NULL);
+    at_Tree  *T = at_newtree(S);
+    at_Cursor C;
+    at_Id     a;
+    assertok(S != NULL && T != NULL);
+    att_anchor(T, 10, 5, AT_FIXED, &a);
+    assertok(at_seek(&C, T, 10) == AT_OK);
+    assertok(at_next(&C, 0, NULL) == a);
+    assertok(at_insert(&C, 20) == AT_OK);
+    assertok(att_checkcursor(&C, 10));
+    assertok(C.cur.id == 0 && C.cur.is_end == 0);
+    assertok(at_next(&C, 0, NULL) == a);
+    assertok(att_checktree(T));
+    at_deltree(T), at_close(S);
+}
+
+TEST_STATIC void att_case_insert_cursor_splitmove(void) {
+    at_State *S = at_open(NULL, NULL);
+    at_Tree  *T = at_newtree(S);
+    at_Cursor C;
+    at_Id     a, b;
+    assertok(S != NULL && T != NULL);
+    att_anchor(T, 10, 5, AT_FIXED, &a);
+    att_anchor(T, 0, 10, AT_FIXED, &b);
+    assertok(a != b);
+    assertok(at_seek(&C, T, 10) == AT_OK);
+    assertok(at_next(&C, 0, NULL) == a);
+    assertok(at_insert(&C, 20) == AT_OK);
+    assertok(att_checkcursor(&C, 10));
+    assertok(C.cur.id == 0 && C.cur.is_end == 0);
+    assertok(at_next(&C, 0, NULL) == a);
+    assertok(att_checktree(T));
+    at_deltree(T), at_close(S);
+}
+
 TEST_STATIC void att_case_append_cursor(void) {
     Count      c = {0};
     at_State  *S = at_open(&count_alloc, &c);

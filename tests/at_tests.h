@@ -169,8 +169,10 @@ TEST_STATIC int att_checkcpoff(const at_Cursor *C, size_t expected_off) {
 }
 
 TEST_STATIC int att_checkcursor(const at_Cursor *C, size_t expected_off) {
-    size_t sum = 0;
-    int    l;
+    size_t           sum = 0;
+    int              l;
+    const at_Anchor *a;
+    const at_Edge   *ce;
     check(at_offset(C) == expected_off,
           "[atc] OFFSET mismatch off=%lu expected=%lu\n", test_lu(at_offset(C)),
           test_lu(expected_off));
@@ -186,6 +188,16 @@ TEST_STATIC int att_checkcursor(const at_Cursor *C, size_t expected_off) {
         check(att_checkcpath(C, l, &sum), "[atc] PATHS[%d] invalid\n", l);
     check(C->off == sum, "[atc] OFF mismatch off=%lu sum=%lu\n",
           test_lu(C->off), test_lu(sum));
+    a = atA_fromid(C->tree, C->cur.id);
+    check(C->cur.id == 0 || a != NULL, "[atc] CUR dead id=%u\n", C->cur.id);
+    if (a != NULL) {
+        ce = (const at_Edge *)*C->paths[C->tree->levels];
+        check((C->cur.is_end ? a->end : a->start) == ce,
+              "[atc] CUR edge mismatch id=%u is_end=%u cur=%p edge=%p\n",
+              C->cur.id, C->cur.is_end,
+              (const void *)(C->cur.is_end ? a->end : a->start),
+              (const void *)ce);
+    }
     return att_checkcpoff(C, expected_off);
 }
 

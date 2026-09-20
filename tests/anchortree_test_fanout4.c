@@ -101,6 +101,8 @@ TEST(epoch_reset) { att_case_epoch_reset(); }
 TEST(remove_params) { att_case_remove_params(); }
 TEST(remove_cursor) { att_case_remove_cursor(); }
 TEST(insert_cursor) { att_case_insert_cursor(); }
+TEST(insert_cursor_growleft) { att_case_insert_cursor_growleft(); }
+TEST(insert_cursor_splitmove) { att_case_insert_cursor_splitmove(); }
 TEST(append_cursor) { att_case_append_cursor(); }
 TEST(splice_atomic_oom) { att_case_splice_atomic_oom(); }
 TEST(remove_append_equivalence) { att_case_remove_append_equivalence(); }
