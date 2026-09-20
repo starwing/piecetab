@@ -568,7 +568,7 @@ static void lcD_trimright(lc_Cursor *C) {
     lc_Node *p = lcK_parent(C, lcK_levels(C));
     int      i = lcK_idx(C, p, lcK_levels(C)), lc = (int)p->breaks[i];
     lc_Delta db = lcL_sumbytes(lcN_leaf(p, i), C->lnu, lc), dl = lc - C->lnu;
-    lcM_up(C, lcK_levels(C), -(lc_Delta)db, -(lc_Delta)dl);
+    lcM_up(C, lcK_levels(C), -db, -dl);
 }
 
 static void lcD_trimleft(lc_Cursor *C) {
@@ -583,7 +583,7 @@ static void lcD_trimleft(lc_Cursor *C) {
         memmove(lf->bytes, &lf->bytes[dl], (lc - dl) * sizeof(unsigned));
         db += C->col, lf->bytes[0] -= C->col;
     }
-    lcM_up(C, lcK_levels(C), -(lc_Delta)db, -(lc_Delta)dl);
+    lcM_up(C, lcK_levels(C), -db, -dl);
 }
 
 static void lcD_cutrange(lc_Cursor *L, lc_Cursor *R, lc_Node *rt, int fl) {
