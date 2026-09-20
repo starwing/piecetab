@@ -290,7 +290,7 @@ typedef struct at_Cursor {
 - `at_next`/`atK_nextstart` 用 `atK_fromedge` 把 paths 对到 `cur.id` 的真实
   anchor edge 时，仅保证“返回 anchor 时坐标以该 anchor 所在 edge 为准”；
   若随后耗尽，`atK_nextedge` 按 `atK_locend` 把 Cursor 提交到 `T`（虚尾保持
-  原位）。该语义由 `att_checkcursor` 覆盖。
+  原位）。该语义由 `at_checkcursor` 覆盖。
 - `epoch` 规则不变：`unsigned` 相等性失效计数，公共入口成功后统一递增并刷新
   Cursor 的 epoch；过期 Cursor 在解引用 paths 前被挡（`at_next` 返回
   `AT_NONE` 且 `*plen = 0`）。
@@ -738,7 +738,9 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
 - epoch：内部 helper 不检查、不递增；公共入口在 mutation 成功后
   `T->epoch += 1, C->epoch = T->epoch`（`at_splice` 只 bump 一次）；
   `at_newanchor` 链接完成后递增但不刷新 C；`at_delanchor` 摘槽前递增。
-- debug checker 与共享模型在 `tests/at_tests.h`，场景共享在 `tests/at_cases.h`；
+- debug checker 与共享模型在 `tests/at_tests.h`；fanout 无关的共享场景全部在
+  `tests/anchortree_test_fanout4.c`，奇数/默认 fanout 专属用例分别在
+  `tests/anchortree_test_fanout9.c` / `tests/anchortree_test_fanout32.c`；
   单测/fuzz 只走公共 API（结构断言经只读 checker）。
 
 ### 块顺序与 sp 映射

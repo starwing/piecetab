@@ -11,9 +11,10 @@
  *   ./at_fuzz replay [path] replay the op log, checking each op
  *
  * The shared tests/at_tests.h model tracks live anchor ranges and
- * gravity; the same att_model_splice drives tests and fuzz.  o->op =
+ * gravity; the same atT_modelsplice drives tests and fuzz.  o->op =
  * rnd % 100 maps through the op table below (weights sum to 100).
- * Cursor and chain checks use the shared att_* checkers. */
+ * Cursor and chain checks use the shared atT_/at_ checkers from
+ * tests/at_tests.h. */
 #ifndef AT_FANOUT
 # define AT_FANOUT 4
 #endif
@@ -80,7 +81,7 @@ static void fz_drop(at_Id id) {
     fz_nlive -= 1;
 }
 
-static size_t fz_bound(void) { return att_model_bound(fz_models, fz_nlive); }
+static size_t fz_bound(void) { return atT_modelbound(fz_models, fz_nlive); }
 
 static int fz_seen(const char *seen, const at_Id *ids, int n, at_Id id) {
     int i;
@@ -128,7 +129,7 @@ static void fz_stale_ok(const at_Cursor *stale, size_t pos) {
     assertok(at_newanchor(&S, 0, 0, AT_GROW, &id) == AT_ESTALE);
     assertok(at_splice(&S, 0, 0) == AT_ESTALE);
     assertok(at_locate(&S, pos) == AT_OK);
-    assertok(att_checkcursor(&S, pos));
+    assertok(at_checkcursor(&S, pos));
 }
 
 static void fz_opnew(at_Cursor *C, const fz_Op *o) {
@@ -147,7 +148,7 @@ static void fz_opsplice(at_Cursor *C, const fz_Op *o) {
     att_Splice w;
     w.del = o->len % 30u, w.ins = o->extra % 20u, w.L = o->off;
     assertok(at_splice(C, w.del, w.ins) == AT_OK);
-    att_model_splice(fz_models, fz_nlive, &w);
+    atT_modelsplice(fz_models, fz_nlive, &w);
 }
 
 static void fz_opdel(at_Tree *T, const fz_Op *o) {
@@ -174,7 +175,7 @@ static void fz_opnext(at_Tree *T, const fz_Op *o) {
 }
 
 static void fz_check(const at_Tree *T, int i, const fz_Op *o) {
-    if (!att_checkchains(T) || !att_no_empty_edges(T)) {
+    if (!atT_checkchains(T) || !atT_noemptyedges(T)) {
         fprintf(stderr, "check fail at op %d: %s(off=%lu len=%lu extra=%lu)\n",
                 i, fz_opname(o->op), o->off, o->len, o->extra);
         abort();
@@ -200,7 +201,7 @@ static void runop(at_Cursor *C, fz_Op *o, FILE *lf) {
     }
     if (T->epoch != epoch) fz_stale_ok(&stale, o->off);
     assertok(at_seek(C, T, exp) == AT_OK);
-    if (!att_checkcursor(C, exp)) {
+    if (!at_checkcursor(C, exp)) {
         fprintf(stderr, "cursor fail at op %u: %s(off=%lu len=%lu extra=%lu)\n",
                 fz_opno, fz_opname(o->op), o->off, o->len, o->extra);
         abort();
