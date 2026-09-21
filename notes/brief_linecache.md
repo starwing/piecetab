@@ -177,18 +177,24 @@ grep '^static' linecache.h
 ## 十、测试
 
 ```bash
-just lc               # 编译运行 lc_test4 (FANOUT=4, ASAN+UBSAN)
-just lc <prefix>      # 运行名称以 prefix 开头的测试
-just lc8              # 编译运行 lc_test8 (FANOUT=8)
-just cov              # 全量覆盖率（编译、运行、lcov 报告、未覆盖列表）
+just lc               # linecache 双 FANOUT（4 + 8，ASan/UBSan）
+just lc4 / just lc8   # 单 FANOUT
+just lc4 <prefix>     # 只跑名称以 prefix 开头的测试
+just t lc-cov         # 本库覆盖率（lcov + 未覆盖行/分支列表）
 ```
 
-测试用例以 `TESTS(X)` 宏列举，scanner 从 `unsigned*` 数组顺序取行长度。`lc_test4` 以极小扇出逼树分裂/合并/旋转变换。
-
-```bash
-# 列出全部测试名
-grep '^    X(' tests/lc_test4.c
-```
+- 测试源 `tests/linecache_test_fanout4.c` / `linecache_test_fanout8.c`：只写 `TEST(name)` body，entries 表与 `main` 由 `misc/gen_entries.lua` 生成 `.gen.inc`（勿手改）；通用纪律见 `notes/brief_tests.md`
+- 双 FANOUT 共享基建在 `tests/lc_tests.h`；scanner 从行长度数组顺序取行；fanout=4 以极小扇出逼树分裂 / 合并 / 旋转
+- 树构造：
+  - `lc_scanV(c, 10, 15)` — 扫描构建（真实负载 / 大量 break）
+  - `lc_rscanV(c, 512, 1, 256, 1)` — [次数, 值] RLE（大量重复值）
+  - `cacheV(S, levels, botV(leafV(10), leafV(15)))` — 手工精确构造树（边界 / 内部路径），已含 `lc_newcache`，用后须清理
+- 校验（每个测试必须）：
+  - `lc_checktree(c)` / `lc_checktree_allow_empty(c, n)` — 树不变量
+  - `lc_checkcursor(&C, off)` — 游标位置与 paths 一致
+  - `checkleavesV(c, count, val, ..., 0)` — 叶段序列 RLE 比对
+  - `lc_asserttree(c, lvls, ...)` — 构造期望树全树精确比对，失败自动 dump 期望 / 实际；可预知终态的测试优先用（仅断 `lc_breaks` / `bytes` 会假阴性）
+  - `lc_dumptree(c, tag)` — 调试打印
 
 ## 十一、相关文档
 
@@ -206,12 +212,13 @@ grep '^    X(' tests/lc_test4.c
 | `notes/research_highlighter.md`       | 语法高亮器输出与增量更新调研      |
 | `docs/linecache.zh.md`                | 面向用户的 API 参考手册           |
 
-## 十二、编码铁律 (AGENTS.md)
+## 十二、编码铁律
 
-- Clean C 唯。函数 25/30 行限。签名 ≤79 字。
-- static helper 不校验参数 — assert 保不变式。
-- 内部函数前缀 `lcX_` (如 `lcK_findleaf`)，X 为单字母分类码。
-- **禁止删测试**。先修测试后改代码。
+书写 / 命名细则见 `notes/brief_writing.md`；会话铁律见 `AGENTS.md`。本库专属要点：
+
+- 内部函数前缀 `lcX_name`（如 `lcB_scanempty`），X 为单字母分类码，全名最多一个下划线。
+- static helper 不校验参数 — 用 `assert` 保不变式。
+- **禁止删测试**；先修测试后改代码。
 - 修改后必过 `clang-format`。
 
 ## 十三、变量命名规范

@@ -30,7 +30,7 @@ TEST(foo) { ... }
 - 函数命名保持 `<category>_<detail>`（如 `TEST(hunks_params)`）
 - 测试文件末尾**不写** TESTS(X) 列表和 main —— 由生成物提供
 
-### 3. 免 TESTS 列表 — `tests/gen_entries.lua` 脚本生成
+### 3. 免 TESTS 列表 — `misc/gen_entries.lua` 脚本生成
 
 - 扫描测试源 `^TEST(name)` 行，生成 `<src>.gen.inc`：
   entries 表（`{"name", test_name}`）+ main
@@ -59,7 +59,7 @@ TEST(foo) { ... }
 | 文件 | 动作 |
 |---|---|
 | tests/tests.h | 新建（公共：TEST/asserteq/assertstreq/check/test_run） |
-| tests/gen_entries.lua | 新建（生成 .gen.inc：entries + main + banner） |
+| misc/gen_entries.lua | 新建（生成 .gen.inc：entries + main + banner） |
 | tests/piecetab_test_fanout4.c | 基建并入 .c；删 pt_tests.h |
 | tests/lc_tests.h | 瘦身（删公共部分） |
 | tests/linecache_test_fanout4.c / fanout8.c | 双 FANOUT 共享 lc_tests.h |
