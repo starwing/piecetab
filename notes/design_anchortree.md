@@ -163,7 +163,7 @@ typedef struct at_Edge {
 - 树内 edge 必须至少有一个端点槽，但首 edge 例外：`T > 0` 时首 edge 即使两桶
   全空也永久保留，作为 0 边界与前导 span。EOF 零长 edge 在桶空后删除。
 - 任何新 edge 在创建后必须立即获得端点槽；因为创建前 reserve 已保证后续不失败，
-  `at_newanchor` 通过两次 `atA_addpoint` 无失败地完成 edge 物化与端点链入。
+  `at_newanchor` 通过两次 `atI_addpoint` 无失败地完成 edge 物化与端点链入。
 - 删除/切割不创建带槽临时 edge：幸存目标由 `T->seam` 指定，被回收叶子 edge
   的桶由 `atN_purge` 逐槽搬进 `seam`，随后 edge 槽位由 `atD_cutrange`/stitch
   重新接回左子树；`at_delanchor` 摘槽后空掉的 edge 由 `atE_purge` 回收，
@@ -222,6 +222,9 @@ typedef struct at_Cursor {
 ```
 
 - `off + poff` 是 Cursor 的绝对坐标；当前 edge 是 `*paths[levels]` 指向的叶子槽，按 `at_Edge *` 解释。
+- **树中段尾禁令**：当前 edge 不是最后一条时恒有 `C->poff < p->bytes[i]`（`p` 为当前叶子节点）；
+  只有当前 edge 是最后一条时才允许 `C->poff >= p->bytes[i]`。该条件是快速判断
+  “Cursor 是否位于树末”的依据，多个 API 依赖它。
 - 指向树内 edge@`p` 时 `off + poff == p` 且 `poff == 0`；位于 span 内部时 `0 < poff < bytes`；超过最后一个 edge 时停留在最后一个叶子槽，`poff >= bytes` 为虚拟距离；空树由 `paths[0] == root.children`、`off == 0`、`poff == pos` 表达，没有 edge 可指。
 - `cur` 是“最后已消费/续扫槽位”：有效槽为 `cur.id != 0`，下一次从
   `atE_next(cur, anchor)` 开始，不是“下一个待消费槽”。4 字节 `at_Point`
@@ -272,23 +275,26 @@ typedef struct at_Cursor {
   `e->right` 分支完成；跨 edge 由循环条件的 `atK_nextedge` 完成。
   `atE_first` 是选择当前 edge 首个 occurrence 的宏（left 非空取 left，
   否则取 right）。
-- insert 的耗尽态契约：`atI_insert` 不创建 anchor，纯 resize 分支不改写
-  `cur`。`atI_growleft` 无条件写 `C->cur = atU_point(0, 0)`：现场移交后当前
-  位置落在前驱 span 内部，没有 edge 承载 `cur`，只能 fresh 后由 `at_next` 走
-  `atK_nextedge`；`cur.id == 0`（fresh/done）也统一写 fresh，done 重扫的对外
-  结果仍是不再产出 anchor。`atI_insertsplit` 仅当 `cur` 在迁移的 RIGHT 桶中
-  才写 fresh（`atA_side` 判定）；LEFT 桶中的 `cur` 保持现场，`cur.id == 0`
-  不被 split 改写。
+- insert 的耗尽态契约：`atI_insert` 不创建 anchor；它按 §7.1 的三路状态决定
+  growspan/growleft/split，并按 `advance` 提交 Cursor/cur。空树由
+  `atI_makefirst` 建首 edge 并保持 cur；当前 span 增长保持 cur；R10 由
+  `atI_growleft(ins, advance)` 处理：叶内/跨叶共用一趟下降，按 `advance`
+  在循环外选择两个变体——`advance=0` 的变体在 mutation 时同步写
+  `C->paths` 并无条件写 fresh，`advance=ins` 的变体只 mutation 并保持端点
+  为当前 edge 的 cur。`atI_split` 只保留 insertion 模式：`advance=0` 时 RIGHT
+  桶 cur 写 fresh、LEFT 桶与 id0 保持；`advance=ins` 时 RIGHT 桶 cur 保持、
+  LEFT 桶与 id0 写 fresh。`atI_splitpoint` 的 point 模式不改 cur，由
+  `atI_addpoint`/`at_newanchor` 的 epoch 失效契约收口。
   `atE_purge` 只服务 `at_delanchor`，不再触碰任何 Cursor。`atD_rmrange` 是
   例外：仅当 `L->poff == 0`（L 零长末槽将被 purge、其桶前置到 seam）且旧
   `cur` 属于 L 桶时，才保留旧 `cur` 或改用 `left_end`；`L->poff > 0` 时一律
   fresh seam，避免越过 seam 新前插的 left 节点。
 - 结构 mutation 后 Cursor 现场：`at_remove`/`at_insert`/`at_append`/`at_splice`
   在操作内维护同一个 Cursor 并刷新 epoch，不调用 `at_locate`/`at_seek`
-  事后归位；insert 仅在 growleft（无条件）或 split 迁移含 `cur` 的 RIGHT 桶时
-  把 `cur` 复位为 fresh，其余现场保持；rmleaf 链不变；rmrange 按 §7.2 设置
-  续扫槽。`at_delanchor` 不维护 Cursor，旧 Cursor 失效；`at_newanchor` 成功
-  递增 epoch 但不刷新传入 Cursor，调用方须重新 seek/locate。
+  事后归位；插入由 `atI_insert` 按 §7.1 的 `advance` 规则维护
+  paths/off/poff/cur；rmleaf 链不变；rmrange 按 §7.2 设置续扫槽。
+  `at_delanchor` 不维护 Cursor，旧 Cursor 失效；`at_newanchor` 成功递增
+  epoch 但不刷新传入 Cursor，调用方须重新 seek/locate。
 - 空树归一：任何 mutation 出口若 `root.child_count == 0`，必须统一写
   `paths[0] = root.children; off = poff = 0; cur = atU_point(0, 1)`；
   删除路径同时保持 `T->seam == NULL` 断言。非空树不得残留 done 或
@@ -300,8 +306,8 @@ typedef struct at_Cursor {
 - `epoch` 规则不变：`unsigned` 相等性失效计数，公共入口成功后统一递增并刷新
   Cursor 的 epoch；过期 Cursor 在解引用 paths 前被挡（`at_next` 返回
   `AT_NONE` 且 `*plen = 0`）。
-- `atK_forwardoff` 的虚拟尾语义保留给 `at_advance`/`at_append`/
-  `at_newanchor`；`atD_remove` 的 del 已截断，`atK_forwardoff` 最多走到
+- `atK_forwardoff` 的虚拟尾语义保留给 `at_advance`/`at_newanchor`；
+  `atD_remove` 的 del 已截断，`atK_forwardoff` 最多走到
   `off + d == T->bytes`，其 end 分支 `atK_locend` 且虚拟 overshoot 为 0，
   因此不需要额外 clamp（与 `spD_remove` 的 `sp_advance + spK_locend` 结果一致）。
 - 桶链只保存 id 与 is_end 标签，不保存槽指针；`atE_next(p, a)` 按
@@ -313,12 +319,15 @@ typedef struct at_Cursor {
 ## 三、不变量
 
 1. 空树 `root.child_count == 0`、没有 edge、`T->bytes == 0`。
-2. 非空树首个叶子槽是 `edge@0`；除 EOF 零长 edge 外所有叶子槽 `bytes > 0`。
+2. 非空树首个叶子槽是 `edge@0`；除末位 EOF 零长 edge 外所有叶子槽 `bytes > 0`。
+   末位槽 `bytes == 0` 仅表示 EOF 字节缝存在 point；其他叶子槽与内部节点
+   聚合 `bytes` 均 > 0。
 3. EOF 零长 edge 只在位置 `T` 有端点项时存在：`bytes == 0`，且必须是最后一个叶子槽。
 4. `T->bytes` 等于所有叶子 `bytes` 之和；edge 位置严格递增。
 5. `T > 0` 时首 edge 永久保留，即使它的两个桶都空。
-6. 除首 edge 与 EOF 零长 edge 外，每个树内 edge 至少有一个端点槽；失去全部槽的 edge 按
-   §四删除。EOF 零长 edge 在两个桶都空后删除。
+6. 除 `edge@0` 与末位 EOF 零长 edge 外，每个树内 edge 至少有一个端点槽；
+   edge 失去全部端点槽后必须删除并由 `atE_purge` 回收。EOF 零长 edge 在两个
+   桶都空后删除。
 7. 每个 live anchor 恰好有两个槽：START `{id, 0}` 与 END `{id, 1}`。
 8. 槽位于它 role 对应的桶中：`start_right`/`end_right` 记录两个槽各自的桶
    （见 §6.1 表）；同一 anchor 的两个槽可以在同一桶内。
@@ -334,6 +343,9 @@ typedef struct at_Cursor {
     release 构建不会自动扩张 path 数组。
 14. `T->idmax <= AT_ANCHOR_MAX`；freelist 上的 id 必须已释放
     （`end == NULL`）。
+15. `p` 为 Cursor 当前叶子节点：当前 edge 不是末 edge 时必须
+    `C->poff < p->bytes[i]`；只有末 edge 才允许 `C->poff >= p->bytes[i]`
+    （树中段尾禁令，详见 §2.5）。
 
 ## 四、edge 删除
 
@@ -347,31 +359,27 @@ typedef struct at_Cursor {
   坐标由最后一条正长 span 的 `poff == bytes` 表达。
 - 删除后同步被搬移槽的 `parent/idx`，并沿路径更新内层 `bytes`。
 
-## 五、点物化
+## 五、点物化（`atI_addpoint`）
 
 树内 point 由 edge 承载；point 是 anchor 端点 occurrence（`at_Point`）。
-`atA_addpoint(C, slot)` 在 Cursor 坐标上为 `slot.id` 的 anchor 添加
+`atI_addpoint(C, slot)` 在 Cursor 坐标上为 `slot.id` 的 anchor 添加
 `slot.is_end` point：
 
-1. 取 base edge：root 为空→`atA_newempty(C)`；否则 `atK_edge(C)`；
-2. 取当前 leaf 现场 `p/i/l/b`；
-3. `C->poff > 0` 时：`poff < b`→`atA_splitat(C)`；否则→`atA_pad(C)`；
-4. 用 `atE_head` 按 `slot.is_end ? a->end_right : a->start_right` 选桶，把
+1. root 为空或 `C->poff > 0` 时调用 `atI_insert(0, 0)`，把 span 长到
+   cursor（空树建首 edge；虚拟尾补 gap）；
+2. `C->poff > 0` 时直接调用 `atI_splitpoint(keep=C->poff)`，以返回的 `ne`
+   作为 base edge；否则 base edge 为当前 edge；
+3. 用 `atE_head` 按 `slot.is_end ? a->end_right : a->start_right` 选桶，把
    slot 链入并写回 anchor 的 `start/end` 指针。
 
 后置条件：目标 edge 位于 `at_offset(C)`，Cursor 在该 edge 且 `poff == 0`；
-point 已链入，anchor 端点指针已写。`atA_addpoint` 不返回值；调用方
+point 已链入，anchor 端点指针已写。`atI_addpoint` 不返回值；调用方
 `at_newanchor` 已按两次调用预留资源，post-reserve 无失败路径。
 
-分支 helper：
-
-- `atA_newempty(C)`：空树；`pos == 0` 时该 edge 同时是首 edge 与 EOF 零长
-  edge；`pos > 0` 时先建首 `edge@0`（`bytes = pos`），再追加 `edge@pos`
-  （`bytes = 0`）。
-- `atA_splitat(C)`：`0 < poff < b`，把当前 span 从 `poff` 处切开，返回右半
-  edge。
-- `atA_pad(C)`：当前 edge 是尾槽且 `poff >= b`；先把尾 span 增加 `poff - b`，
-  再追加 EOF 零长 `edge@pos`，返回新 edge。
+`atI_addpoint` 是第二个主入口：span 物化走 `atI_insert(0, 0)`，cursor 处的
+edge 由 `atI_splitpoint` 直接提供。point 模式保持 RIGHT 桶不动：原 edge
+的桶属于 `cursor` 之前的位置，新 edge 先取得 `b - keep` 的 span，随后由本次
+`atI_addpoint` 立即获得端点槽。
 
 ### 5.1 edge 位置规则
 
@@ -394,7 +402,7 @@ point 已链入，anchor 端点指针已写。`atA_addpoint` 不返回值；调�
   helper 位于 node operations 末尾（`atM_up` 之后），只做一次 nodes 预留与
   一次 edges 预留；reserve 成功后插入槽触发的 node split 与 edge 分配只用
   `atP_ralloc`/assert，不再返回 OOM，也不留下需要回滚的半成品。
-  `atA_addpoint` 自身不 reserve；它由 `at_newanchor` 的一个事务预留覆盖。
+  `atI_addpoint` 自身不 reserve；它由 `at_newanchor` 的一个事务预留覆盖。
 
 ## 六、对象操作
 
@@ -404,30 +412,30 @@ point 已链入，anchor 端点指针已写。`atA_addpoint` 不返回值；调�
 - `ns` 必须在 `0..AT_MAX_NS`（29 bit）内，否则返回 `AT_ERRPARAM`。
 - `end = start + len`；允许 `end` 超过 `T`（虚拟区），此时会创建新的最后 edge。
 - 从 freelist 分配 `at_Id`（可能扩容 `T->anchors`，失败返回 `AT_ERRMEM` 且树保持
-  不变）；初始化 `ns` 与两个 side 位；`start`/`end` 指针由 `atA_addpoint` 写入。
+  不变）；初始化 `ns` 与两个 side 位；`start`/`end` 指针由 `atI_addpoint` 写入。
 - 用同一个传入 Cursor `C` 创建两个 point：
-  - `atA_addpoint(C, atU_point(id, 0));`
-  - `atK_forwardoff(C, len), atA_addpoint(C, atU_point(id, 1));`
-  `atA_addpoint` 的 base/override 与分支见 §五；`len == 0` 时第二次 base 返回
-  与 start 相同的 edge，不需要额外分支。
+  - `atI_addpoint(C, atU_point(id, 0));`
+  - `atK_forwardoff(C, len), atI_addpoint(C, atU_point(id, 1));`
+  `atI_addpoint` 的 point 物化编排见 §五；`len == 0` 时第二次调用落在同一
+  edge，不需要额外分支。
 - `at_newanchor` 不做任何本地 Cursor 副本：它用同一个传入 `C` 完成两个
   point 的物化，成功返回时递增 `T->epoch` 但不刷新 `C->epoch`；结束时 C 的
   内部 paths 已被本次操作改写，epoch 仍为旧值，调用方必须重新
   `at_seek`/`at_locate`。这里不调用 `at_advance`、不建立第二个 Cursor。
-- `at_newanchor` 在做任何树修改前预留两次 `atA_addpoint` 所需的 nodes/edges；
+- `at_newanchor` 在做任何树修改前预留两次 `atI_addpoint` 所需的 nodes/edges；
   预留失败直接返回 `AT_ERRMEM`，不产生任何新 edge，失败后树与操作前一致。
 - `ns` 写入 `anchor->ns`；`start_right`/`end_right` 按 gravity 写入，anchortree
   不解释 ns 含义。
 - 按 gravity 选择两个槽的桶：
 
-| gravity | START 槽桶 | END 槽桶 |
-|---|---|---|
+| gravity  | START 槽桶       | END 槽桶       |
+| -------- | ---------------- | -------------- |
 | AT_GROW  | start edge LEFT  | end edge RIGHT |
 | AT_FIXED | start edge RIGHT | end edge LEFT  |
 | AT_SHIFT | start edge RIGHT | end edge RIGHT |
 | AT_LOCK  | start edge LEFT  | end edge LEFT  |
 
-- `atA_addpoint` 按 `slot.is_end` 选择 anchor 端点指针与 side 位：START 槽
+- `atI_addpoint` 按 `slot.is_end` 选择 anchor 端点指针与 side 位：START 槽
   `{id, 0}` 链入 start edge 的 `start_right` 桶，END 槽 `{id, 1}` 链入 end edge
   的 `end_right` 桶；`at_gravity` 由两位反推调用方创建时给的 gravity。
 - `len == 0` 时 start/end 是同一个 edge，仍然链入两个槽；两者可能落在同一个
@@ -518,47 +526,167 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
 
 ### 7.1 插入阶段（append semantics）
 
-插入发生在 Cursor 当前坐标 `p`，长度为 `ins > 0`：
+插入发生在 Cursor 当前坐标 `p`，长度为 `ins > 0`。插入阶段只有一个内部主入口
+`atI_insert(C, ins, advance)`：它完成事务检查、tree mutation 选择与 Cursor
+提交。insert 与 append 的 tree mutation 完全相同，区别只在 Cursor 终态，由
+`advance` 表达：
 
-- `p` 是某个 edge 的位置（`poff == 0`）：
-  - RIGHT 桶为空：原 edge 的 `bytes` 增加 `ins`；没有槽需要右移，LEFT 桶留在
-    `p`，后续 edge 连同其桶随前缀和自动右移 `ins`。
-  - RIGHT 桶非空且 LEFT 桶非空：原 edge 的 `bytes` 改为 `ins`（LEFT 槽留在
-    `p`）；新建 `edge@p+ins`，其 `bytes` 为原 edge 的旧 `bytes`，插在原 edge
-    之后；把 RIGHT 桶整体迁移到新 edge（同步 anchor 的 `start/end`）。若 `cur`
-    在该 RIGHT 桶中，迁移后写 `C->cur = atU_point(0, 0)`：LEFT 桶仍留在当前
-    edge，但从旧现场继续会跳过/错连新 edge，必须从 fresh 重扫。
-  - RIGHT 桶非空且 LEFT 桶为空：没有槽需要留在 `p`，当前 edge 必须整体右移
-    `ins`，即把 `ins` 增长到前一个 edge 上（`atI_growleft`）；不新建 edge、不
-    产生无槽 edge，Cursor 现场移交到前驱叶槽（绝对坐标不变），并无条件写
-    `C->cur = atU_point(0, 0)`：当前位置落在前驱 span 内部，没有 edge 承载
-    `cur`，只能由 `at_next` 走 `atK_nextedge`（原 fresh/done 统一为 fresh）。
-    例外：`p == 0` 时无前驱，首 edge 允许无槽（§三.5），此时仍走上面的
-    split 形态。
-- `p` 位于某个 span 内部（`0 < poff < bytes`）：没有端点在 `p`，把该 span 的
-  `bytes` 增加 `ins`，之后所有 edge 自动右移，`T` 增加 `ins`。
-- `p == T` 且没有 EOF 零长 edge（最后一条正长 span，位置 `T` 无端点）：把最后一条
-  span 的 `bytes` 增加 `ins`，`T` 增加 `ins`。
-- `p == T` 且有 EOF 零长 edge（`bytes == 0`）：等价于“`p` 是 edge 位置”的分支：
-  - RIGHT 桶非空：EOF 零长 edge `bytes` 改为 `ins`，新建 `edge@T+ins`（EOF 零长 edge）并把
-    RIGHT 桶迁移过去，`T` 增加 `ins`；
-  - RIGHT 桶为空：EOF 零长 edge `bytes` 增加 `ins`，`T` 增加 `ins`；它变成最后一条
-    正长 span，不再需要 EOF 零长 edge（新 `T` 无端点）。
-- `p > T`（虚拟区）：把最后一条 span 的 `bytes` 增加 `pos - T + ins`，`T` 变为
-  `pos + ins`；不创建新 edge，后续若需要承载端点由 §五扩展出前导 span/edge。
-- 空树：创建首 `edge@0`，其 `bytes = pos + ins`，`T = pos + ins`；纯插入也会
-  立即建立该前导 span。
+- `advance == 0`：Cursor 停在 `p`（insert semantics）；
+- `advance == ins`：Cursor 到 `p + ins`（append semantics）。
+
+`atI_addpoint` 是第二个主入口，负责 point 物化；它直接调用
+`atI_splitpoint`，并复用 `atI_insert(0, 0)` 把 span 长到 cursor。tree mutation 由
+“当前位置 + LEFT/RIGHT 桶状态 + `p` 是否为 0”直接决定；`advance` 只决定
+Cursor/cur 提交，不参与 split/growleft 的选择。
+
+#### 术语表
+
+| 术语 | 含义 |
+| --- | --- |
+| `e` / `b` / `q` | 操作前的当前 edge、它的 `bytes`、它的起点坐标 `Cursor.off` |
+| `p` | 插入坐标 `q + Cursor.poff` |
+| `L空` / `L非空` | `e` 的 LEFT 桶是否为空 |
+| `R空` / `R非空` | `e` 的 RIGHT 桶是否为空 |
+| `ep` / `bp` | `p > 0` 时的前驱 edge、它操作前的 `bytes` |
+| `advance` | 插入后 Cursor 需要前进的字节数：`0` 或 `ins` |
+| `target` | 终态坐标 `p + advance`；insert 为 `p`，append 为 `p + ins`；实现由 `C->poff += advance` 或 `pos + advance` 直接得到 |
+| `keep` | `atI_split` 后旧 edge 保留的 span 长度；insertion 模式等于 `ins`；`atI_splitpoint` 的 `keep` 等于 `Cursor.poff` |
+| `growspan` | 不新建 edge 的 span 增长；空树建首 edge 由 `atI_makefirst` 实现，其余内联在 `atI_insert` 中 |
+| `growleft` | 把 `ins` 长到前驱 `ep`，当前 `e` 整体右移；由 `atI_growleft` 实现，叶内/跨叶共用一趟下降，advance 在循环外选择两个提交变体 |
+| `split` | insertion 模式在指定位置新建 edge，并把 RIGHT 桶迁到新 edge；由 `atI_split` 实现 |
+| `splitpoint` | point 模式在 `Cursor.poff` 处新建 edge，RIGHT 桶不动；由 `atI_splitpoint` 实现 |
+| insertion 模式 | `atI_split` 的 `Cursor.poff == 0` 形态，服务 `atI_insert` |
+| point 模式 | `atI_splitpoint` 的 `Cursor.poff > 0` 形态，服务 `atI_addpoint` |
+| fresh / done | Cursor 的 `{0,0}` / `{0,1}` 续扫槽状态 |
+| keep（cur） | 保留 `cur` 原值，不改成 fresh |
+
+#### 行为表
+
+| Rx | 条件 | tree mutation | `advance = 0` 终态 | `advance = ins` 终态 |
+| --- | --- | --- | --- | --- |
+| R0 | 空树，`p == 0` | 建首 `edge@0`，`bytes = ins`，`T = ins` | 首 edge；`off=0`；`poff=0`；cur keep | 首 edge；`off=0`；`poff=ins`；cur keep |
+| R1 | 空树，`p > 0` | 建首 `edge@0`，`bytes = p + ins`，`T = p + ins` | 首 edge；`off=0`；`poff=p`；cur keep | 首 edge；`off=0`；`poff=p+ins`；cur keep |
+| R2 | 非空树，`poff > 0`；R/L 四种组合同 | 当前叶槽 bytes 增加 `ins`；`poff > b` 时再加 `poff-b` gap；`T` 同步 | `e`；`off=q`；`poff` 不变；cur keep | `e`；`off=q`；`poff+ins`；cur keep |
+| R3 | 非空树，`poff==0`、R空、L空、`p==0` | 首 edge bytes 增加 `ins`；`T` 增加 `ins` | 首 edge；`off=0`；`poff=0`；cur keep | 首 edge；`off=0`；`poff=ins`；cur keep |
+| R4 | 非空树，`poff==0`、R空、L空、`p>0` | 不变量排除；空非首 edge 已由 `atE_purge` 删除 | 非法格，不制定操作 | 非法格，不制定操作 |
+| R5 | 非空树，`poff==0`、R空、L非空、`p==0` | 首 edge bytes 增加 `ins`；`T` 增加 `ins` | 首 edge；`off=0`；`poff=0`；cur keep | 首 edge；`off=0`；`poff=ins`；cur keep |
+| R6 | 非空树，`poff==0`、R空、L非空、`p>0` | `e` bytes 增加 `ins`；`T` 增加 `ins` | `e`；`off=p`；`poff=0`；cur keep | `e`；`off=p`；`poff=ins`；cur keep |
+| R7 | 非空树，`poff==0`、R非空、L非空、`p==0` | split：旧 edge bytes 改为 `ins`；在 `ins` 建 `ne`，bytes 为旧 `b`；RIGHT 桶迁 `ne`；`T` 增加 `ins` | 首 edge；`off=0`；`poff=0`；R桶 cur→FR；L桶 cur→keep；id0→keep | `ne`；`off=ins`；`poff=0`；R桶 cur→keep；L桶 cur→FR；id0→FR |
+| R8 | 非空树，`poff==0`、R非空、L非空、`p>0` | 同 R7，起点为 `p`，`ne` 在 `p+ins` | `e`；`off=p`；`poff=0`；R桶 cur→FR；L桶 cur→keep；id0→keep | `ne`；`off=p+ins`；`poff=0`；R桶 cur→keep；L桶 cur→FR；id0→FR |
+| R9 | 非空树，`poff==0`、R非空、L空、`p==0` | split（首 edge 例外）：首 edge bytes 改为 `ins`；在 `ins` 建 `ne`，bytes 为旧 `b`，RIGHT 桶迁入；`T` 增加 `ins` | 首 edge；`off=0`；`poff=0`；R桶 cur→FR；id0→keep | `ne`；`off=ins`；`poff=0`；R桶 cur→keep；id0→FR |
+| R10 | 非空树，`poff==0`、R非空、L空、`p>0` | growleft：前驱 `ep` bytes 增加 `ins`；`e` 起点变为 `p+ins`；RIGHT 桶仍属 `e`；`T` 增加 `ins` | `ep` 最右叶槽；`off=p-bp`；`poff=bp`；cur→FR | `e`；`off=p+ins`；`poff=0`；端点为 `e` 的 cur→keep；id0→keep |
+
+#### 分派表
+
+| 公共操作 | 内部调用 |
+| --- | --- |
+| `at_insert` | `atI_insert(ins, advance=0)` |
+| `at_append` | `atI_insert(ins, advance=ins)` |
+| `at_splice` 插入阶段 | `atI_insert(ins, advance=ins)` |
+| `at_newanchor` 的 point 物化 | `atI_addpoint` 直接调 `atI_splitpoint` |
+
+Rx 在 `atI_insert` 内部的分派：
+
+| Rx | `atI_insert` 内部操作 |
+| --- | --- |
+| R0、R1 | `atI_makefirst(ins, advance)` 建首 edge |
+| R2、R3、R5、R6 | 当前 span 增长；`advance` 决定 `poff` |
+| R7、R8、R9 | `atI_split(keep=ins, advance)` |
+| R10 | `atI_growleft(ins, advance)` |
+
+直接判据：
+
+- `poff > 0`：growspan。
+- `poff == 0` 且 R 空：growspan。
+- `poff == 0` 且 R 非空、L 非空：split。
+- `poff == 0` 且 R 非空、L 空、`p == 0`：split（首 edge 例外）。
+- `poff == 0` 且 R 非空、L 空、`p > 0`：growleft。
+
+`advance` 不参与以上判据；split/growleft 的选择只看 tree 状态。R10 由
+`atI_growleft` 沿前驱子树最右路径完成叶内/跨叶统一的 bytes 增长；`advance`
+在循环外选择两个变体：`advance == 0` 的变体在每层 mutation 时同步写
+`C->paths`，`advance == ins` 的变体只写 bytes；两者的 Cursor/cur 提交见下。
+
+#### helper 行为描述
+
+- `atI_insert(ins, advance)`（插入主入口）：
+  - 前置：`ins >= 0`，`advance == 0 || advance == ins`；`ins > 0` 时由
+    public 插入入口调用，`ins == 0` 时只由 `atI_addpoint` 在
+    `at_newanchor` 事务内调用。
+  - 事务：`ins > 0` 时先做 `limit + ins < limit` overflow 检查，再
+    `atU_reserve(C, 1, 1, 2)`；`ins == 0` 时资源由调用方事务覆盖，主入口不
+    再 reserve。
+  - 空树：转调 `atI_makefirst(ins, advance)`，cur keep。
+  - 非空且 `poff > 0` 或 R 空：当前叶槽 bytes 增加 `ins + gap`
+    （`gap = poff - b`，仅 `poff > b` 时存在）；`C->poff += advance`，
+    cur keep。
+  - 非空、`poff == 0`、R 非空、L 空、`p > 0`：转调
+    `atI_growleft(ins, advance)`。
+  - 其余：转调 `atI_split(ins, advance)`。
+- `atI_makefirst(ins, advance)`（空树具体 case）：
+  - 前置：root 为空；资源已由 `atI_insert` 的事务覆盖。
+  - tree 后置：创建首 `edge@0`，`bytes = pos + ins`，`T = pos + ins`。
+  - Cursor 后置：`paths[0]` 指向该槽，`off = 0`；`poff = pos + advance`；
+    cur keep。
+- `atI_growleft(ins, advance)`：
+  - 前置：R10；前驱 `ep` 必存在（由调用方保证）。
+  - tree 后置：叶内前驱直接命中时更新前驱叶槽；跨叶时升到首个有前驱兄弟的
+    `base`，从前驱子树最右路径下降，逐个覆盖 `base..l` 的前驱槽 bytes；最后
+    叶槽 `bytes += ins`；`e` bytes 不变、起点变为 `p+ins`；RIGHT 桶仍属 `e`；
+    `T` 增加 `ins`；不产生空 edge。
+  - Cursor 后置：叶内/跨叶共用一趟下降，循环内不做 `advance` 判断，按
+    `advance` 在循环外选择两个变体：
+    `advance == 0` 的变体在每层 mutation 时同步写
+    `C->paths[d] = &p->children[i]`，下降结束后补 `C->paths[l]`，落在 `ep`
+    最右叶槽，`off=p-bp`、`poff=bp`、cur 无条件 fresh；
+    `advance == ins` 的变体只写 bytes，C paths 保持指向 `e`，`off=p+ins`、
+    `poff=0`，端点为 `e` 的 cur keep，id0 且旧当前 edge 为 `e` 时 keep。
+    函数返回 1/0 仅作 C89 提交语义，调用方写
+    `return atI_growleft(...), AT_OK;`。
+- `atI_split(keep, advance)`（insertion split）：
+  - 前置：`Cursor.poff == 0`、R 非空、L 非空或 `p == 0`、`keep > 0`、
+    `advance == 0 || advance == ins`；用于 R7/R8/R9。
+  - tree 后置：旧 edge bytes 改为 `keep`；在起点 `q+keep` 建 `ne`，bytes 为
+    旧 `b`；RIGHT 桶整体迁到 `ne` 并同步 anchor 端点指针；`T` 增加 `keep`；
+    旧 `b == 0` 时 `ne` 是末位 EOF 零长 edge。
+  - Cursor/cur：`advance == 0` 时落在旧 edge，`off=p`、`poff=0`；
+    R桶 cur→FR，L桶 cur 与 id0 keep。`advance == ins` 时落在 `ne`，
+    `off=p+keep`、`poff=0`；R桶 cur keep，L桶 cur 与 id0→FR。
+- `atI_splitpoint(keep)`（point split）：
+  - 前置：`Cursor.poff > 0`、`keep == Cursor.poff`、
+    `keep <= 当前 edge bytes`；虚拟 gap 已由 `atI_insert(0, 0)` 吸收。
+  - tree 后置：旧 edge bytes 改为 `keep`；在起点 `q+keep` 建 `ne`，bytes 为
+    `b-keep`；RIGHT 桶不动；`T` 不变；`keep == b` 时 `ne` 是末位零长 edge。
+    `ne` 返回给 `atI_addpoint` 立即链入 occurrence。
+  - Cursor/cur：cursor 落在 `ne`，`off=q+keep`、`poff=0`；cur 不改，由
+    `atI_addpoint` 与 `at_newanchor` 的 epoch 失效契约收口。
+- `atI_addpoint(slot)`（第二个主入口）：
+  - root 空或 `Cursor.poff > 0` 时先调 `atI_insert(0, 0)`，把 span 长到
+    cursor（空树建首 edge；虚拟尾补 gap）。
+  - `Cursor.poff > 0` 时直接调 `atI_splitpoint(keep=Cursor.poff)`，以返回的
+    `ne` 作为 base edge；否则 base edge 为当前 edge。
+  - 最后按 anchor 的 side 位选桶并链入 occurrence；不 reserve、不刷新
+    epoch、不改 cur。
+
+#### 资源与 epoch
+
 - mutation 前的资源预留统一走 `atU_reserve(C, edges, pass, extra)`：
   `at_remove` 由 `atD_remove` 自保护 `(0, 1, 0)`；`at_insert`/`at_append`
-  由 `atI_insert` 自保护 `(1, 1, 2)`；`at_splice` 传 `(1, rm + extra, 2*extra)`，
-  其中 `rm = del > 0 && pos < T->bytes`、`extra = ins > 0`；`at_newanchor` 传
-  `(3, 2, 5)`。`pass`/`extra` 由调用者精确计算，helper 不解释事务来源。
-- `atI_insert` 是唯一插入 mutation：自保护 reserve、overflow 检查（直接写
-  `limit + ins < limit`）都在 mutation 前；
-  返回 `AT_OK`/`AT_ERROVERFLOW`/`AT_ERRMEM`，不碰 epoch、不 rewind。
-  `at_insert`/`at_append` 只是薄 wrapper。
+  由 `atI_insert` 自保护 `(1, 1, 2)`；`at_splice` 传
+  `(1, rm + extra, 2*extra)`，其中 `rm = del > 0 && pos < T->bytes`、
+  `extra = ins > 0`；`at_newanchor` 传 `(3, 2, 5)`，覆盖 `atI_addpoint` 的
+  `atI_insert(0, 0)` 与 point split。`pass`/`extra` 由调用者精确计算，
+  helper 不解释事务来源。
+- overflow 检查 `limit + ins < limit`（`limit = max(pos, T->bytes)`）在
+  mutation 前完成；overflow 与 reserve 失败返回 `AT_ERROVERFLOW`/`AT_ERRMEM`，
+  树、Cursor、epoch 均不变。
 - 预留成功后 `atD_*`/`atI_*` 只用 `atP_ralloc`/assert，不产生需要回滚的
-  半成品；预留失败返回 `AT_ERRMEM` 且树、Cursor、epoch 均不变。
+  半成品。
+- `atI_insert` 不碰 epoch；公共入口在 mutation 成功后统一
+  `T->epoch += 1, C->epoch = T->epoch`。`at_splice` 的插入阶段调用
+  `atI_insert(ins, ins)`；`atI_addpoint` 依靠 `at_newanchor` 的旧 epoch 失效
+  契约收口。
+
 
 ### 7.2 删除（stitch + seam）
 
@@ -632,9 +760,8 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
      `AT_ERROVERFLOW`；此检查必须在 reserve/remove 之前，避免 `del > 0` 时
      先删除再报 overflow；
   4. combined reserve（一次 `atU_reserve`）；
-  5. `if (del > 0) atD_remove(...)`；`if (ins > 0) atI_insert(...)`，成功后
-     `if (ins > 0) atK_forwardoff(C, ins)`；`del == 0` 不得调用 `atD_remove`，
-     `ins == 0` 不得调用 `atI_insert`；
+  5. `if (del > 0) atD_remove(...)`；`if (ins > 0) atI_insert(C, ins, ins)`；
+     `del == 0` 不得调用 `atD_remove`，`ins == 0` 不得调用 `atI_insert`；
   6. 只有真实 mutation 成功后才 bump epoch/刷新 C。
 - reserve 调用值：
   - `at_remove`：由 `atD_remove` 自保护 `(0, 1, 0)`；`atD_stitch` 入口断言同步改窄。
@@ -642,10 +769,11 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
     `atI_makeroom` 最坏 `L+2`。
   - `at_splice`：一次 combined `(1, rm + extra, 2*extra)`，其中
     `rm = del > 0 && pos < T->bytes`、`extra = ins > 0`；`rm+extra >= 1`。
-    纯删除时 `L+2` 覆盖 stitch 断言；纯插入时 `L+2` 覆盖 insert；删除+插入时
-    `2L+2` 覆盖 remove ≤L 与 insert ≤L+2 的总和。
-  - `at_newanchor`：`(3, 2, 5)`；两次 `atA_addpoint`，edges 最大 3（空树
-    2 条 + 尾部 pad 1 条），nodes 最坏 `2(L+2) = 2L+4`，`2L+5` 余 1。
+    纯删除时 `L+2` 覆盖 stitch 断言；纯插入时 `L+2` 覆盖 append；删除+插入时
+    `2L+2` 覆盖 remove ≤L 与 append ≤L+2 的总和。
+  - `at_newanchor`：`(3, 2, 5)`；两次 `atI_addpoint`，edges 最大 3（空树
+    `atI_insert(0,0)` + point split 最多 2 条 + 后续 point 的 split 1 条），
+    nodes 最坏 `2(L+2) = 2L+4`，`2L+5` 余 1。
 - `atP_reserve` 是“至少 n 个空闲对象”的下界保证，不是累加额度；`atU_reserve`
   对 nodes/edges 各只调用一次。
 - remove 的 L 依据：`atD_stitchnode` 延迟分段修复 `kl -> l` 各段不重叠，
@@ -656,14 +784,14 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
 - `atI_insert` 返回 `AT_OK`/`AT_ERROVERFLOW`/`AT_ERRMEM`；overflow 与 reserve
   失败在 mutation 前。`at_splice` 的 remove/insert 内部自保护 reserve 在
   combined 覆盖下是 no-op 检查，再失败视为 internal invariant violation
-  （实现用 assert 或 design 定义的传播），禁止 remove 已成功而 insert 失败
+  （实现用 assert 或 design 定义的传播），禁止 remove 已成功而 append 失败
   留下半成品。
 - 删除阶段按 §7.2；插入阶段按 §7.1。`atI_insert`/`atD_remove` 等内部 helper
   不检查、不递增 epoch；公共入口统一 `T->epoch += 1, C->epoch = T->epoch`，
   `at_splice` 只 bump 一次。
 - 删除与插入都不调用 `at_seek`/`at_locate` 事后归位：删除由 stitch/rmleaf
-  自维护并按 §7.2 设置 cur，插入由 `atI_insert` 维护；insert 不再无条件
-  rewind，`at_append` 由 `atK_forwardoff` 完成坐标移动。
+  自维护并按 §7.2 设置 cur；插入由 `atI_insert` 按 §7.1 的 `advance` 规则维护
+  paths/off/poff/cur。
 
 ## 八、对象级迭代
 
@@ -739,22 +867,37 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
 - 内部 helper 以 Cursor 为工作结构：禁止 `at_locate`/`at_seek` 重新建立位置，
   禁止用 `atK_locend`/`atK_backwardoff`/`at_advance` 丢弃现场；现场由算法自己
   维护（`atD_remove` 的本地 `R` 用 `atK_forwardoff` 从 `*C` 派生）。`at_newanchor`
-  通过 `atA_addpoint` 在传入 Cursor 上物化 point，不属于内部 helper 强制定位。
+  通过 `atI_addpoint` 在传入 Cursor 上物化 point，不属于内部 helper 强制定位。
 - 内部前置条件用 `assert` 表达，不写防御分支：`atI_splitchild` 两侧子节点均不少
-  于 `AT_FANOUT / 2`；`atA_splitat` 断言 `C->poff > 0` 且拆分点在 span 内；
-  `atA_pad` 入口断言当前 edge 是叶尾槽且 `C->poff >= p->bytes[i]`，补 gap 后断言
-  `C->poff == p->bytes[i]`；
-  `atI_insertsplit` 断言 `C->poff == 0` 且 RIGHT 桶非空；`atI_growleft` 断言
-  `C->poff == 0`，无前驱（首 edge）时返回 0 由调用方回退 split。
+  于 `AT_FANOUT / 2`；`atI_insert` 断言 `advance == 0 || advance == ins` 与
+  四路状态的前置；`atI_growleft` 断言 R10、`C->poff == 0`、`at_offset(C) > 0`、
+  前驱下标 `i > 0` 与前驱叶槽 `bytes > 0`；`atI_split` 断言 `C->poff == 0`、
+  RIGHT 桶非空、`keep > 0`、`e->left.id != 0 || p == 0`；
+  `atI_splitpoint` 断言 `0 < C->poff`、`keep == C->poff <= 当前 edge bytes`。
 - reserve 单点、`pass`/`extra` 由调用者精确计算、helper 不解释事务来源；reserve
   成功后的分配只用 `atP_ralloc`/assert，不产生需回滚的半成品（详见 §12.1）。
-- 插入：grow（`atE_resize`，含 `poff - bytes` gap）、`atI_growleft`（LEFT 空，
-  把 `ins` 长到前驱、当前 edge 整体右移）、`atI_insertsplit`（其余 RIGHT 非空）
-  三支；空树内联在 `atI_insert`；insert 不调用 `atE_purge`。
-- `atE_purge(T, e)` 只服务 `at_delanchor`：删除无槽 edge 的槽位，把它的
-  `bytes` 并入前驱槽（跨叶时用 `atE_resize`/`atM_up` 沿两条路径调整内层计数），
-  必要时 `atD_rebalance`；不再维护 Cursor 契约。`atN_purge` + `T->seam` 服务
-  删除路径。
+- 插入：`atI_insert` 空树转 `atI_makefirst`，内联当前 span 增长，R10 转
+  `atI_growleft(ins, advance)`，其余转 `atI_split(keep=ins, advance)`；
+  `atI_addpoint` 是第二个主入口，复用 `atI_insert(0, 0)` 物化 span，并直接
+  调用 `atI_splitpoint`；插入不调用 `atE_purge`。
+- 插入 helper 的实现顺序约束：
+  - `atI_insert` 先做 `ins > 0` 时的 overflow/reserve；再判空树并转
+    `atI_makefirst`；再判 `poff > 0 || R 空` 的当前 span 增长；再判 R10 并转
+    `atI_growleft`；其余转 `atI_split`。`ins == 0` 只由 `atI_addpoint` 在
+    `at_newanchor` 事务内使用。
+  - `atI_growleft(ins, advance)` 叶内/跨叶共用一趟前驱子树最右路径的 bytes
+    增长：循环内不做 `advance` 判断，按 `advance` 在循环外选择变体；
+    `advance == 0` 的变体在 mutation 时同步写 `C->paths`，`advance == ins`
+    的变体只写 bytes。两变体都不使用额外路径数组、不产生第二趟下降；叶槽提交
+    后返回 1/0 仅作 C89 提交语义。
+  - `atI_split` 先调用 `atI_makeroom`，再按 insertion 模式计算 `p/i/l/b`；
+    point 模式由 `atI_addpoint` 在 `atI_insert(0, 0)` 之后直接调用
+    `atI_splitpoint`。
+- `atE_purge(T, e)` 只服务 `at_delanchor`：入口经 `atK_fromedge` 建立本地现场，
+  删除无槽 edge 的槽位，把它的 `bytes` 并入前驱槽；叶内前驱直接命中，跨叶时
+  沿原路径上升/下降就地调整内层 `bytes`（删除侧减 `b`、前驱侧加 `b`，公共
+  祖先不变），必要时 `atD_rebalance`；返回 1 仅作 C89 提交语义，不再维护
+  Cursor 契约。`atN_purge` + `T->seam` 服务删除路径。
 - `at_next` 两层：入口校验 → 空树/done 耗尽 → `while (C->cur.id ||
   atK_nextedge(C).id)`；body 扫当前 edge 的 left→right 桶链，
   `atE_next` 是单链 helper；`atK_nextedge` 负责提交 Cursor 到下一 edge 或
@@ -777,26 +920,23 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
 
 1. metric/path helpers 与 `/* cursor navigation */` 置于前面；
 2. `/* remove */`（含末尾 `atE_purge`）；
-3. `/* insertion */`（`splitroot`/`splitchild`/`makeroom`/`growleft`/`insertsplit`/`insert`）；
-4. `/* anchor edges */`（`atA_newempty`/`splitat`/`pad`/`addpoint`，`addpoint` 只被
-   `at_newanchor` 调用）；
-5. `/* APIs */`。
+3. `/* insertion */`（`splitroot`/`splitchild`/`makeroom`/`makefirst`/
+   `growleft`/`split`/`splitpoint`/`insert`/`addpoint`）；
+4. `/* APIs */`。
 
 无依赖的双行短函数按 `brief_writing.md` §3 聚入相邻的双行函数区，不单独开块
 （如 `atK_rewind`）；只有一个函数的独立块不单开：metric/path helper（如
-`atM_up`）可直接并入 node operations，共享 helper（如 `atE_resize`）放在首个
+`atM_up`）可直接并入 node operations，共享 helper（如 `atU_reserve`）放在首个
 使用块前。
 
-| anchortree | sp 对应 | 差异边界 |
-| --- | --- | --- |
-| `atP_*`/`atS_*`/`atN_*`/`atM_up` | `spP_*`/`spS_*`/`spN_*`/`spM_up` | 基本同构 |
-| `atA_*`（`slot`/`alloc`/`free`/`fromid`/`clear`/`side`） | 无 | 稠密 id 池与 freelist 属 anchortree 领域 |
-| `atA_*`（`newempty`/`splitat`/`pad`/`addpoint`） | 无（sp 由 pad/grow 分支持有） | point 物化：base edge + 分支 override + 端点链入；`addpoint` 为 `void` |
-| `atE_resize` | `spA_touch` | 只维护 bytes，无 mask/arbiter |
-| `atE_*`（`head`/`unlink`/`mvlink`/`next`/`first`/`purge`） | `spA_born`/`died`/`merge` + `spL_*` 读路径 | left/right 桶链表与空 edge 回收属领域 |
-| `atK_*` + `at_next` | `spK_*` + `sp_next`/`spN_findslot` | `atK_forwardoff` 支持虚拟尾；`atK_fromedge`/`atK_prevedge` 是 edge 现场 helper |
-| `atD_*` | `spD_*` | `makechain` 无 new-root、`findroom` 禁右兄弟、merge-leaf 步骤内联于 `stitch`（无 id/mask 合并）、`rmleaf` 整条 edge 删除必在末槽、`stitch` 以末尾结构断言收口 |
-| `atI_*` | `spI_*` + `sp_append`/`sp_insert` | `splitroot`/`splitchild`/`makeroom` 同形；`growleft` 与 `spI_growleft` 同形但动机不同；无 span id/mask |
+| anchortree                                                 | sp 对应                                    | 差异边界                                                                                                                                                      |
+| ---------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `atP_*`/`atS_*`/`atN_*`/`atM_up`                           | `spP_*`/`spS_*`/`spN_*`/`spM_up`           | 基本同构                                                                                                                                                      |
+| `atA_*`（`slot`/`alloc`/`free`/`fromid`/`clear`/`side`）   | 无                                         | 稠密 id 池与 freelist 属 anchortree 领域                                                                                                                      |
+| `atE_*`（`head`/`unlink`/`mvlink`/`next`/`first`/`purge`） | `spA_born`/`died`/`merge` + `spL_*` 读路径 | left/right 桶链表与空 edge 回收属领域                                                                                                                         |
+| `atK_*` + `at_next`                                        | `spK_*` + `sp_next`/`spN_findslot`         | `atK_forwardoff` 支持虚拟尾；`atK_fromedge` 是 edge 现场 helper                                                                                              |
+| `atD_*`                                                    | `spD_*`                                    | `makechain` 无 new-root、`findroom` 禁右兄弟、merge-leaf 步骤内联于 `stitch`（无 id/mask 合并）、`rmleaf` 整条 edge 删除必在末槽、`stitch` 以末尾结构断言收口 |
+| `atI_*`                                                    | `spI_*` + `sp_append`/`sp_insert`          | `splitroot`/`splitchild`/`makeroom` 同形；`insert` 合并 sp_append/sp_insert 的事务检查与 spI_grow 的当前 span 增长，空树转 `makefirst`，`advance` 提交两种 Cursor 终态；`growleft` 与 spI_growleft 同形，叶内/跨叶共用一趟下降，advance 在循环外选择两个提交变体；`split` 只做 insertion split，point split 由 `splitpoint` 服务 `atI_addpoint`；无 span id/mask |
 
 ## 十二、与其他树库的差异
 
@@ -810,24 +950,27 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
 由调用者精确计算，helper 不解释事务来源，失败不改变树/Cursor/epoch：
 
 - `at_remove`（经 `atD_remove`）`(0,1,0)`：remove 实际分配 ≤ L。
-- `at_insert`/`at_append`（经 `atI_insert`）`(1,1,2)`：insert 最坏 `L+2`
-  （根分裂 +2、之后每层 +1）。
+- `at_insert`/`at_append`（经 `atI_insert`）`(1,1,2)`：append 最坏
+  `L+2`（根分裂 +2、之后每层 +1）。
 - `at_splice` 一次 combined `(1, rm+extra, 2*extra)`，`rm = del > 0 && pos < T->bytes`、
-  `extra = ins > 0`，覆盖 remove ≤ L 与 insert ≤ L+2 之和；禁止拆成两次调用。
+  `extra = ins > 0`，覆盖 remove ≤ L 与 append ≤ L+2 之和；禁止拆成两次调用。
 - `at_newanchor` `(3,2,5)`。
 - no-op 不 reserve；`at_splice` 的 overflow 检查先于 remove。
 
 ### 12.2 返回值契约
 
 内部函数只在“调用方消费该值”或“C89 提交语义（`return helper(...), 0/1;`）”时
-返回非 void，否则改 `void`。有消费者：`atI_insert`（`AT_OK`/`AT_ERROVERFLOW`/
-`AT_ERRMEM`）、`atD_remove`（`AT_OK`/`AT_ERRMEM`）、`atI_growleft`（1 = 已平移、
-0 = 无前驱）、`atK_forwardoff`/`atK_backwardoff`/`atK_locend`/`atK_nextedge`
+返回非 void，否则改 `void`。有消费者：`atI_insert`（`AT_OK`/
+`AT_ERROVERFLOW`/`AT_ERRMEM`）、`atD_remove`（`AT_OK`/`AT_ERRMEM`）、
+`atK_forwardoff`/`atK_backwardoff`/`atK_locend`/`atK_nextedge`
 （返回下一 edge 首 occurrence 并同步写 `C->cur`）、`atE_empty`、`atK_fromedge`
-（返回 edge 起点，被 `at_range`/`atE_purge` 消费）、
-`atA_newempty`/`atA_splitat`/`atA_pad`（返回 edge，由 `atA_addpoint`
-消费）；`atE_purge` 与 `atA_addpoint` 为 `void`。no-op 与失败路径不 bump epoch、
-不改 C。
+（返回 edge 起点，被 `at_range`/`atE_purge` 消费）、`atI_split`（返回新
+edge，由 `atI_insert` 消费）、`atI_splitpoint`（返回新 edge，由
+`atI_addpoint` 消费）；`atI_growleft` 返回 0/1 仅作 C89 提交语义，调用方写
+`return atI_growleft(...), AT_OK;`；`atI_makefirst`/
+`atI_makeroom`/`atI_splitroot`/`atI_splitchild` 无外部消费者，返回 `void`；
+`atE_purge` 返回 0/1 仅作 C89 提交语义、调用方丢弃，`atI_addpoint` 为
+`void`。no-op 与失败路径不 bump epoch、不改 C。
 
 ### 12.3 结构同构项
 
@@ -836,10 +979,16 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
   在 anchortree 内合并为“bucket 扫描 + edge 提交”两层，`sp_next` 则用
   `spN_findslot` + `spK_locend` 单函数完成；两者语义一致，形态差异来自
   edge bucket 表示。无后继时 `atK_nextedge` 直接写 done。
-- insert 不再无条件 rewind：`atI_insert` 维护 paths/off/poff；`atI_growleft`
-  用 `atK_prevedge` + `parent/idx` 把现场移交到前驱叶槽并无条件重置 `cur`；
-  `atI_insertsplit` 仅当 `cur` 在迁移的 RIGHT 桶中时用 `atA_side` 判定并重置。
-  不调用重建原语，`at_append` 由 `atK_forwardoff` 完成坐标移动。
+- 插入由一个内部主入口 `atI_insert(ins, advance)` 维护 paths/off/poff/cur：
+  空树转 `atI_makefirst`，当前 span 增长内联，按 Rx 直接选择 `atI_growleft`
+  或 `atI_split`。`atI_insert` 的当前 span 增长与 `spI_grow` 同形；`advance`
+  只提交 Cursor 终态。R10 转 `atI_growleft(ins, advance)`：叶内/跨叶共用
+  一趟前驱子树最右路径的 mutation，按 `advance` 在循环外选择两个变体；
+  `advance=0` 的变体在 mutation 时同步写 `paths` 并 fresh，`advance=ins` 的
+  变体保持当前 edge 现场并保留端点为其 cur；函数返回 0/1 仅作 C89 提交
+  语义。`atI_split` 只做 insertion split，按 RIGHT 桶迁移写 cur；
+  `atI_splitpoint` 把新 edge 返回给 `atI_addpoint`。`atI_addpoint` 是第二个
+  主入口，直接调用 `atI_splitpoint`。
 - 删除不集中 rewind：`atD_rmleaf` 链不变，`atD_rmrange` 按 §7.2 设置续扫槽；
   `atE_purge` 不再有 Cursor 契约（只服务 `at_delanchor`，现场自成一体）。
 - remove 相关短 helper 按用户指定内联（`atD_trimright`/`atD_trimleft` →
@@ -848,16 +997,16 @@ no-op，不递增 epoch；过期 Cursor 返回 `AT_ESTALE`；插入侧对
 
 ### 12.4 领域差异（允许保留）
 
-| 差异 | 领域原因 | 同步策略 |
-| --- | --- | --- |
-| run id/mask → anchor 池 + left/right 桶链表 | 一个 edge 可挂多个 START/END；ns 是 29bit 精确值，非位掩码 | 保留；D/I 主干只删去 run 合并分支 |
-| LEFT/RIGHT 桶语义 | 插入发生在边界 `p` 时槽按 gravity 分两族：LEFT 留 `p`、RIGHT 右移 `ins`；因此边界可能需复制（split）或整体右移（growleft） | 保留；`spI_grow`/`spI_pad` 的 span-id 判据不可直接搬 |
-| 无 per-node 匹配聚合 | ns 挂在 anchor 上，node/edge 无聚合 | 保留；`at_next` 逐 edge 扫桶链 |
-| EOF 零长 edge、首 edge 永久保留 | 左边缘 span 模型承载 T 位置端点与 0 边界 | 保留 |
-| `atA_*` 点物化 | anchor 端点在 Cursor 坐标取得/创建 edge 并链入桶，只服务 `at_newanchor` | 保留；独立 `/* anchor edges */` 块 |
-| `atE_purge` / `T->seam` 端点搬迁 | 回收 edge 前需搬桶 | 保留（仅 `at_delanchor`；insert 侧由 `atI_growleft` 直接平移；`void atE_purge(T, e)`，无 Cursor 契约） |
-| `atK_forwardoff` 虚拟尾 | 删除后插入、point 物化可跨 `T` | 保留 |
-| Cursor 续扫槽 `at_Point cur` | 同一 edge 多个 anchor | 保留 |
-| epoch / `AT_ESTALE` | mutation 后 Cursor 悬空 | 保留 |
-| 节点池 + edge 池分离 | edge 是独立领域对象 | 保留 |
-| `atU_reserve` | 需在 mutation 前一次算清 remove+insert 的 nodes/edges | 保留 |
+| 差异                                        | 领域原因                                                                                                                   | 同步策略                                                                                               |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| run id/mask → anchor 池 + left/right 桶链表 | 一个 edge 可挂多个 START/END；ns 是 29bit 精确值，非位掩码                                                                 | 保留；D/I 主干只删去 run 合并分支                                                                      |
+| LEFT/RIGHT 桶语义                           | 插入发生在边界 `p` 时槽按 gravity 分两族：LEFT 留 `p`、RIGHT 右移 `ins`；因此边界可能需复制（split）或整体右移（growleft） | 保留；`atI_insert`/`atI_split` 以 `advance` 提交 insert/append 两种 Cursor 终态，`atI_splitpoint` 只服务 point；`spI_grow`/`spI_pad` 的 span-id 判据不可直接搬 |
+| 无 per-node 匹配聚合                        | ns 挂在 anchor 上，node/edge 无聚合                                                                                        | 保留；`at_next` 逐 edge 扫桶链                                                                         |
+| EOF 零长 edge、首 edge 永久保留             | 左边缘 span 模型承载 T 位置端点与 0 边界                                                                                   | 保留                                                                                                   |
+| `atI_addpoint` 点物化                       | anchor 端点在 Cursor 坐标取得/创建 edge 并链入桶，只服务 `at_newanchor`                                                    | 保留；并入 `/* insertion */` 块；复用 `atI_insert(0, 0)` 与 `atI_splitpoint` |
+| `atE_purge` / `T->seam` 端点搬迁            | 回收 edge 前需搬桶                                                                                                         | 保留（仅 `at_delanchor`；insert 侧由 `atI_growleft` 直接平移；`atE_purge(T, e)` 无 Cursor 契约，返回 1 仅作 C89 提交语义） |
+| `atK_forwardoff` 虚拟尾                     | 删除与 point 物化可跨 `T`                                                                                                  | 保留                                                                                                   |
+| Cursor 续扫槽 `at_Point cur`                | 同一 edge 多个 anchor                                                                                                      | 保留                                                                                                   |
+| epoch / `AT_ESTALE`                         | mutation 后 Cursor 悬空                                                                                                    | 保留                                                                                                   |
+| 节点池 + edge 池分离                        | edge 是独立领域对象                                                                                                        | 保留                                                                                                   |
+| `atU_reserve`                               | 需在 mutation 前一次算清 remove+insert 的 nodes/edges                                                                      | 保留                                                                                                   |

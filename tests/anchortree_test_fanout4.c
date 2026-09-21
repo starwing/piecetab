@@ -3383,6 +3383,196 @@ TEST(append_cursor) {
     asserteq(c.live, 0);
 }
 
+TEST(insert_empty) {
+    Count     c = {0};
+    at_State *S = at_open(&count_alloc, &c);
+    at_Tree  *T = at_newtree(S);
+    at_Cursor C;
+    at_Point  keep;
+    assertok(S != NULL && T != NULL);
+    assertok(at_seek(&C, T, 0) == AT_OK);
+    keep = C.cur;
+    assertok(at_insert(&C, 10) == AT_OK);
+    assertok(at_checktree(T));
+    assertok(atT_checkchains(T));
+    assertok(at_checkcursor(&C, 0));
+    asserteq(at_bytes(T), 10);
+    assertok(C.cur.id == keep.id && C.cur.is_end == keep.is_end);
+    at_reset(T);
+    assertok(at_seek(&C, T, 4) == AT_OK);
+    keep = C.cur;
+    assertok(at_insert(&C, 6) == AT_OK);
+    assertok(at_checktree(T));
+    assertok(atT_checkchains(T));
+    assertok(at_checkcursor(&C, 4));
+    asserteq(at_bytes(T), 10);
+    assertok(C.cur.id == keep.id && C.cur.is_end == keep.is_end);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST(append_empty) {
+    Count     c = {0};
+    at_State *S = at_open(&count_alloc, &c);
+    at_Tree  *T = at_newtree(S);
+    at_Cursor C;
+    at_Point  keep;
+    assertok(S != NULL && T != NULL);
+    assertok(at_seek(&C, T, 0) == AT_OK);
+    keep = C.cur;
+    assertok(at_append(&C, 5) == AT_OK);
+    assertok(at_checktree(T));
+    assertok(atT_checkchains(T));
+    assertok(at_checkcursor(&C, 5));
+    asserteq(at_bytes(T), 5);
+    assertok(C.cur.id == keep.id && C.cur.is_end == keep.is_end);
+    at_reset(T);
+    assertok(at_seek(&C, T, 4) == AT_OK);
+    keep = C.cur;
+    assertok(at_append(&C, 6) == AT_OK);
+    assertok(at_checktree(T));
+    assertok(atT_checkchains(T));
+    assertok(at_checkcursor(&C, 10));
+    asserteq(at_bytes(T), 10);
+    assertok(C.cur.id == keep.id && C.cur.is_end == keep.is_end);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST(insert_split_first) {
+    Count     c = {0};
+    at_State *S = at_open(&count_alloc, &c);
+    at_Tree  *T = at_newtree(S);
+    at_Cursor C;
+    at_Id     a;
+    size_t    x, y;
+    assertok(S != NULL && T != NULL);
+    atT_anchor(T, 0, 5, AT_FIXED, &a);
+    assertok(at_seek(&C, T, 0) == AT_OK);
+    assertok(at_next(&C, 0, NULL) == a);
+    assertok(at_insert(&C, 7) == AT_OK);
+    assertok(at_checktree(T));
+    assertok(atT_checkchains(T));
+    assertok(at_checkcursor(&C, 0));
+    asserteq(at_bytes(T), 12);
+    assertok(C.cur.id == 0 && C.cur.is_end == 0);
+    assertok(at_next(&C, 0, NULL) == a);
+    assertok(at_range(T, a, &x, &y) == AT_OK);
+    assertok(x == 7 && y == 12);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST(insert_split_mid) {
+    Count     c = {0};
+    at_State *S = at_open(&count_alloc, &c);
+    at_Tree  *T = at_newtree(S);
+    at_Cursor C;
+    at_Id     a, b, k;
+    at_Point  keep;
+    size_t    x, y;
+    assertok(S != NULL && T != NULL);
+    atT_anchor(T, 0, 5, AT_FIXED, &a);
+    atT_anchor(T, 5, 5, AT_FIXED, &b);
+    atT_anchor(T, 5, 0, AT_LOCK, &k);
+    assertok(at_seek(&C, T, 5) == AT_OK);
+    assertok(at_next(&C, 0, NULL) == k);
+    keep = C.cur;
+    assertok(at_insert(&C, 4) == AT_OK);
+    assertok(at_checktree(T));
+    assertok(atT_checkchains(T));
+    assertok(at_checkcursor(&C, 5));
+    assertok(C.cur.id == keep.id && C.cur.is_end == keep.is_end);
+    assertok(at_next(&C, 0, NULL) == b);
+    assertok(at_range(T, k, &x, &y) == AT_OK);
+    assertok(x == 5 && y == 5);
+    assertok(at_range(T, b, &x, &y) == AT_OK);
+    assertok(x == 9 && y == 14);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST(append_split_first) {
+    Count     c = {0};
+    at_State *S = at_open(&count_alloc, &c);
+    at_Tree  *T = at_newtree(S);
+    at_Cursor C;
+    at_Id     a;
+    at_Point  keep;
+    size_t    x, y;
+    assertok(S != NULL && T != NULL);
+    atT_anchor(T, 0, 5, AT_FIXED, &a);
+    assertok(at_seek(&C, T, 0) == AT_OK);
+    assertok(at_next(&C, 0, NULL) == a);
+    keep = C.cur;
+    assertok(at_append(&C, 7) == AT_OK);
+    assertok(at_checktree(T));
+    assertok(atT_checkchains(T));
+    assertok(at_checkcursor(&C, 7));
+    asserteq(at_bytes(T), 12);
+    assertok(C.cur.id == keep.id && C.cur.is_end == keep.is_end);
+    assertok(at_next(&C, 0, NULL) == AT_NONE);
+    assertok(at_range(T, a, &x, &y) == AT_OK);
+    assertok(x == 7 && y == 12);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST(append_split_mid) {
+    Count     c = {0};
+    at_State *S = at_open(&count_alloc, &c);
+    at_Tree  *T = at_newtree(S);
+    at_Cursor C;
+    at_Id     a, b;
+    at_Point  keep;
+    size_t    x, y;
+    assertok(S != NULL && T != NULL);
+    atT_anchor(T, 0, 5, AT_FIXED, &a);
+    atT_anchor(T, 5, 5, AT_FIXED, &b);
+    assertok(at_seek(&C, T, 5) == AT_OK);
+    assertok(at_next(&C, 0, NULL) == b);
+    keep = C.cur;
+    assertok(at_append(&C, 4) == AT_OK);
+    assertok(at_checktree(T));
+    assertok(atT_checkchains(T));
+    assertok(at_checkcursor(&C, 9));
+    asserteq(at_bytes(T), 14);
+    assertok(C.cur.id == keep.id && C.cur.is_end == keep.is_end);
+    assertok(at_next(&C, 0, NULL) == AT_NONE);
+    assertok(at_range(T, a, &x, &y) == AT_OK);
+    assertok(x == 0 && y == 5);
+    assertok(at_range(T, b, &x, &y) == AT_OK);
+    assertok(x == 9 && y == 14);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
+TEST(append_growleft) {
+    Count     c = {0};
+    at_State *S = at_open(&count_alloc, &c);
+    at_Tree  *T = at_newtree(S);
+    at_Cursor C;
+    at_Id     a;
+    at_Point  keep;
+    size_t    x, y;
+    assertok(S != NULL && T != NULL);
+    atT_anchor(T, 5, 5, AT_FIXED, &a);
+    assertok(at_seek(&C, T, 5) == AT_OK);
+    assertok(at_next(&C, 0, NULL) == a);
+    keep = C.cur;
+    assertok(at_append(&C, 7) == AT_OK);
+    assertok(at_checktree(T));
+    assertok(atT_checkchains(T));
+    assertok(at_checkcursor(&C, 12));
+    asserteq(at_bytes(T), 17);
+    assertok(C.cur.id == keep.id && C.cur.is_end == keep.is_end);
+    assertok(at_next(&C, 0, NULL) == AT_NONE);
+    assertok(at_range(T, a, &x, &y) == AT_OK);
+    assertok(x == 12 && y == 17);
+    at_deltree(T), at_close(S);
+    asserteq(c.live, 0);
+}
+
 TEST(splice_atomic_oom) {
     atT_oomedit(ATT_EDIT_REMOVE, 0);
     atT_oomedit(ATT_EDIT_INSERT, 0);
