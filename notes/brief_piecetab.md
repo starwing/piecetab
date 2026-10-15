@@ -60,6 +60,7 @@ typedef struct pt_Tree {
     pt_Arena        arena;  /* 本树 literal 数据 arena（惰性） */
     size_t          bytes;  /* 总字节 O(1) */
     unsigned        refc;
+    unsigned short  epoch;  /* 原地修改代次（游标失效检测） */
     unsigned short  levels; /* 0 = root 即叶容器 */
 } pt_Tree;
 ```
@@ -70,6 +71,7 @@ typedef struct pt_Tree {
 struct pt_Cursor {
     struct pt_Node **paths[PT_MAX_LEVEL]; /* 根→叶路径槽位指针 */
     struct pt_Tree  *tree;
+    unsigned         epoch; /* 绑定时捕获的 tree 修改代次 */
     size_t           poff;  /* piece 内偏移 */
     size_t           off;   /* 当前 piece 之前累计字节 */
     int              dirty; /* 编辑态(transient)标志 */
@@ -79,6 +81,11 @@ struct pt_Cursor {
 - `paths[l]` 恒指向 `ptK_parent(C, l)->children` 某槽；`paths[levels]` 指叶槽
 - 绝对偏移 = `pt_offset(C)` = off + poff
 - 由 `pt_seek` 构造（清 dirty）；`pt_locate`/`pt_advance` 保留 dirty
+- `pt_valid(C)`（函数）= tree 非空且 `epoch` 等于 tree 当前值；解引用 paths 的公共
+  入口先判它（`pt_rollback` 例外：只要求附着，用 `pt_buffer(C)` 判），
+  过期时 `int` 入口返回 `PT_ERRPARAM`、指针入口返回 `NULL`（有 `plen` 出参的置
+  `*plen = 0`）、`pt_read` 返回 0。`pt_seek` 是唯一构造器（捕获 epoch），成功修改
+  在出口递增所在 tree 的 `epoch`（机制见 `notes/design_piecetab_v2.md` §4.7）
 
 ### 层级模型（易误解，必读）
 
@@ -137,7 +144,7 @@ grep '^PT_API' piecetab.h
 | 生命周期 | `pt_open`, `pt_close`, `pt_reset`, `pt_getallocf`    | 状态管理                                                                |
 | Buffer   | `pt_empty`, `pt_from`, `pt_retain`, `pt_release`     | 构造/引用计数。`pt_empty` 返回哨兵零分配                                |
 | Buffer   | `pt_compact`                                         | 产出紧凑新 blob：external 保原指针，internal 拷新 arena，from=empty；不内部 release 旧链 |
-| 查询     | `pt_bytes`, `pt_version`                             | 树级汇总                                                                |
+| 查询     | `pt_bytes`, `pt_version`, `pt_valid`                 | 树级汇总；`pt_valid` 判游标可用（epoch）                                |
 | 定位     | `pt_seek`(构造器,清dirty), `pt_locate`, `pt_advance`, `pt_prefix` | 游标；`pt_prefix` 返回当前 piece 内当前位置之前的字节数 |
 | 读       | `pt_read`, `pt_piece`, `pt_next`, `pt_prev`          | piece 遍历："移动后返回落脚点"语义                                      |
 | 编辑     | `pt_edit`                                            | splice via hole（**copy 语义**，追尾）                                  |
@@ -163,11 +170,11 @@ grep '^static' piecetab.h
 | `ptM_` | Mask/Metric | 位图 + 度量传播       | `ishole`, `sethole`, `iterhole`（mask）; `up`（度量+mask 一体向上传播）                                                                                                                                               |
 | `ptN_` | Node        | 节点运作              | `sumbytes`, `copy`, `move`, `remove`, `makespace`, `purge`（版本感知递归释放）                                                                                                                                        |
 | `ptH_` | Hole        | hole 操作             | `new`, `append`, `remove`（宏 `fit`, `reserve`）                                                                                                                                                                      |
-| `ptC_` | Commit      | 冻结+压缩             | `holebytes`, `freezeleaf`, `mergelits`, `nexthole`, `freezestep`, `freeze`                                                                                                                                            |
+| `ptC_` | Commit      | 冻结+压缩             | `holebytes`, `freezeleaf`, `nexthole`, `freeze`                                                                                                                                                                        |
 | `ptA_` | Arena       | arena + 全局 arena 链表 | `alloc`, `free`, `destroy`, `link`, `unlink`                                                                                                                                                                          |
 | `ptZ_` | Zip/Compact | compact 全家          | `collect`, `addranges`, `rangecmp`, `inranges`, `freeranges`（from 链 arena 区间收集/qsort/二分判定 internal）; `bulknext`, `bulkleaf`, `bulkbuild`（批量建树，lc_scan 式）; struct `ptZ_Compact`                      |
 | `ptP_` | Pool        | 池                    | `init`, `destroy`, `alloc`, `ralloc`, `free`, `reserve`                                                                                                                                                               |
-| `ptS_` | State       | 状态                  | `defallocf`                                                                                                                                                                                                           |
+| `ptS_` | Service     | 供公共 API 使用的内部助手 | `defallocf`, `null`, `ok`                                                                                                                                                                                                           |
 
 与 linecache 的差异：插入类用 `I`（lc 用 `B`=Break）；`M` 兼管 mask 与 metric；
 新增 `H`/`C`/`A`/`S` 类。
@@ -193,15 +200,17 @@ grep '^static' piecetab.h
   `ptK_beginedit` = reserve + markdirty + 沿 paths 全线 cow
 - **from 链**: 保证共享节点存活；`pt_release` 归零时 `ptN_purge` 只删
   `version == 本树 version` 的私有节点，再沿 from 链回溯；链终止于 `S->empty` 哨兵
-- **commit**: `ptC_holebytes` 汇总 → `pt_reserve` arena → `ptC_freeze` 循环：
-  `ptC_nexthole` 迭代器（pt_next 式 ascend+descend，按 mask 均摊前进到下一
-  含 hole 叶容器）→
-  `ptC_freezestep` 不动点循环（freezeleaf 冻结 → `ptC_mergelits` 合并相连
-  literal 槽 → 欠满则 `ptD_rebalance` fold/borrow，fold 吸进邻居可能带来新
-  hole/接缝故循环）→ 清 dirty，返回 Buffer 并 **detach cursor（tree=NULL）**。
-  长 hole run 合并为单 literal，树可收缩。冻结期 OOM → 返回 NULL，树合法、
-  dirty 保持、cursor 经 `pt_locate` 复位可重试（设计见
-  `notes/plans/design_commit_freeze.md`）
+- **commit**: `pt_valid` 判定 → `ptC_holebytes` 汇总 → `pt_reserve`/`pt_literal`
+  预留 arena → `ptC_nexthole` 定位首个含 hole 叶并 `ptS_ok`（tree epoch 递增，
+  其它持有该树的游标失效）→
+  `ptC_freeze` 不动点循环（每轮先 `ptP_reserve(nodes, levels)` → `ptC_freezeleaf`
+  冻结 hole 数据 → 叶内合并相连 literal 槽 → 欠满则 `ptD_rebalance` fold/borrow，
+  fold 吸进邻居可能带来新 hole/接缝故循环；同一 `ptC_freeze` 内循环可重复多轮，
+  故 reserve 在每轮开头补充）→ 成功 **detach cursor（tree=NULL）** 并返回 Buffer。
+  长 hole run 合并为单 literal，树可收缩。arena 预留失败 → 返回 NULL 且树未变；
+  freeze 期 OOM → 返回 NULL，树合法（已冻结部分保持）、dirty 保持、cursor 经
+  `pt_locate(C, off)` 复位故仍有效可重试（设计见
+  `notes/archive/design_commit_freeze.md`）
 - **rollback**: 返回 `pt_Buffer`（`retain(from)` 后 release transient，
   返回值为调用者持有引用，源树被返回值续命故无条件安全）并 detach cursor。
   clean cursor 时 commit/rollback 均 retain 当前树返回
@@ -339,10 +348,15 @@ just pt-lines         # 未覆盖行源码
 | `pt_splice` | del=0且(s=NULL或len=0)→PT_OK | del=0且len=0→OK | remove clamp | 设 dirty |
 | `pt_edit` | PT_OK | ERRPARAM (len>0) | len>MAX→ERR | 设 dirty |
 | `pt_remove` | PT_OK | — | clamp 到尾 | 设 dirty |
-| `pt_commit` | — | — | — | dirty→0, detach cursor |
+| `pt_commit` | — | — | — | detach cursor（`tree=NULL`，dirty 不变） |
 | `pt_rollback` | — | — | — | dirty→0, detach cursor |
 | `pt_read` | 返回 0 | 返回 0 | — | 不改变 |
 | `pt_advance` | 无移动 | — | clamp | 不改变 |
+
+> 过期游标（`epoch` 不匹配）：`int` 入口返回 `PT_ERRPARAM`，`pt_reserve`/`pt_literal`
+> 返回 `NULL`，`pt_piece`/`pt_next`/`pt_prev`/`pt_scratch` 返回 `NULL` 且置
+> `*plen = 0`，`pt_read` 返回 0；判定用 `pt_valid(C)`。
+> `pt_read` 的请求恰好停在片段边界时游标落在下一片起点（树中段不驻留 piece 尾）。
 
 ### 14.2 关键语义区分
 

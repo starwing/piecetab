@@ -1044,23 +1044,24 @@ TEST(remove_deep_shrink) {
 TEST(edit_cow) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer a, b = pt_empty(S);
-    pt_Cursor c;
-    pt_seek(&c, b, 0);
-    asserteq(pt_edit(&c, 0, "hello world", 11), PT_OK);
-    a = pt_commit(&c);
-    assertok(a != NULL && !c.dirty);
+    pt_Cursor C;
+    pt_seek(&C, b, 0);
+    asserteq(pt_edit(&C, 0, "hello world", 11), PT_OK);
+    a = pt_commit(&C);
+    assertok(a != NULL && !C.tree);
     /* fork: edit on committed buffer */
-    pt_seek(&c, a, 5);
-    asserteq(pt_edit(&c, 0, "XYZ", 3), PT_OK);
-    assertok(c.dirty);
-    assertok(pt_version(c.tree) != pt_version(a));
-    assertok(pt_checktree(c.tree) && pt_checktree(a));
+    pt_seek(&C, a, 5);
+    assertok(!C.dirty);
+    asserteq(pt_edit(&C, 0, "XYZ", 3), PT_OK);
+    assertok(C.dirty);
+    assertok(pt_version(C.tree) != pt_version(a));
+    assertok(pt_checktree(C.tree) && pt_checktree(a));
     /* source unchanged */
     pt_asserttree(a, 0, leafV(litV("hello world")));
     /* transient has hole at position 5 */
-    asserteq(pt_bytes(c.tree), 14);
+    asserteq(pt_bytes(C.tree), 14);
     {
-        pt_Node *r = &c.tree->root;
+        pt_Node *r = &C.tree->root;
         asserteq(r->child_count, 3);
         assertok(!ptM_ishole(r, 0));
         asserteq(r->bytes[0], 5);
@@ -1082,7 +1083,7 @@ TEST(edit_cow) {
             assertok(!ptM_ishole(&a->root, i));
     }
     /* independent versions: edit transient, verify source */
-    pt_release(c.tree);
+    pt_release(C.tree);
     assertok(pt_checktree(a));
     asserteq(pt_bytes(a), 11);
     pt_release(a), pt_release(b);
@@ -1383,10 +1384,10 @@ TEST(peekscratch_params) {
 
     pt_seek(&c, b, 0); /* init cursor */
 
-    /* NULL cursor */
+    /* NULL cursor: NULL return, *plen set to 0 */
     cap = 123;
     asserteq(pt_scratch(NULL, &cap), NULL);
-    asserteq(cap, 123);
+    asserteq(cap, 0);
 
     /* NULL plen */
     asserteq(pt_scratch(&c, NULL), NULL);
@@ -2578,7 +2579,7 @@ TEST(seam_append_skip_hole_right) {
  * literal: seamleaf must not merge them. */
 TEST(seam_append_skip_noncontig) {
     static const char buf[8] = "abcdef";
-    static const char sb[8]  = "def";
+    static const char sb[8] = "def";
     pt_State         *S = pt_open(&test_alloc, NULL);
     pt_Cursor         c;
     editV(&c, 3, 0, leafV(litV_(buf, 3), litV_(sb, 3)));
@@ -3209,15 +3210,14 @@ TEST(edit_upmask) {
 TEST(commit_single_hole) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
-    pt_Cursor c;
+    pt_Cursor C;
     pt_Buffer snap;
-    pt_seek(&c, b, 0);
-    asserteq(pt_edit(&c, 0, "hello", 5), PT_OK);
-    assertok(c.dirty);
-    snap = pt_commit(&c);
-    assertok(snap != NULL);
-    assertok(!c.dirty);
-    asserteq(c.tree, NULL);
+    pt_seek(&C, b, 0);
+    asserteq(pt_edit(&C, 0, "hello", 5), PT_OK);
+    assertok(C.dirty);
+    snap = pt_commit(&C);
+    assertok(snap != NULL && !C.tree);
+    asserteq(C.tree, NULL);
     assertok(pt_checktree(snap));
     {
         const pt_Node *r = &snap->root;
@@ -3255,7 +3255,7 @@ TEST(commit_merge) {
         assertok(ptM_ishole(r, 0) && ptM_ishole(r, 1));
     }
     snap = pt_commit(&c);
-    assertok(snap != NULL);
+    assertok(snap != NULL && !c.tree);
     assertok(pt_checktree(snap));
     {
         const pt_Node *r = &snap->root;
@@ -3285,7 +3285,7 @@ TEST(commit_mixed) {
     pt_locate(&c, 0);
     asserteq(pt_edit(&c, 0, "x", 1), PT_OK);
     snap = pt_commit(&c);
-    assertok(snap != NULL);
+    assertok(snap != NULL && !c.tree);
     assertok(pt_checktree(snap));
     {
         const pt_Node *r = &snap->root;
@@ -3306,7 +3306,7 @@ TEST(commit_deep) {
                  leafV(litV("def"), litV("ghi"))));
     asserteq(pt_edit(&c, 0, "XYZ", 3), PT_OK);
     snap = pt_commit(&c);
-    assertok(snap != NULL);
+    assertok(snap != NULL && !c.tree);
     assertok(pt_checktree(snap));
     {
         const pt_Node *r = &snap->root;
@@ -3325,20 +3325,20 @@ TEST(commit_fillblock) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b = pt_empty(S);
     pt_Buffer snap;
-    pt_Cursor c;
+    pt_Cursor C;
     size_t    cap;
-    pt_seek(&c, b, 0);
-    assertok(pt_reserve(&c, 0) != NULL); /* PT_ARENA_SIZE block */
-    assertok(pt_scratch(&c, &cap) != NULL);
-    assertok(pt_literal(&c, cap - 8) != NULL);      /* leave exactly 8 bytes */
-    asserteq(pt_edit(&c, 0, "12345678", 8), PT_OK); /* 8-byte hole */
-    snap = pt_commit(&c); /* freeze consumes the last 8 bytes */
-    assertok(snap != NULL && !c.dirty);
+    pt_seek(&C, b, 0);
+    assertok(pt_reserve(&C, 0) != NULL); /* PT_ARENA_SIZE block */
+    assertok(pt_scratch(&C, &cap) != NULL);
+    assertok(pt_literal(&C, cap - 8) != NULL);      /* leave exactly 8 bytes */
+    asserteq(pt_edit(&C, 0, "12345678", 8), PT_OK); /* 8-byte hole */
+    snap = pt_commit(&C); /* freeze consumes the last 8 bytes */
+    assertok(snap != NULL && !C.tree);
     assertok(pt_checktree(snap));
     assertok(snap->arena.full != NULL);
     asserteq(snap->arena.current, NULL);
-    pt_seek(&c, snap, 0);
-    asserteq(pt_scratch(&c, &cap), NULL);
+    pt_seek(&C, snap, 0);
+    asserteq(pt_scratch(&C, &cap), NULL);
     asserteq(cap, 0);
     pt_release(snap), pt_release(b);
     asserteq(S->nodes.live_obj, 0);
@@ -3349,14 +3349,14 @@ TEST(commit_fillblock) {
 /* E7: freeze copies holes into scratch, handles page transition */
 TEST(commit_freshpage) {
     pt_State *S = pt_open(&test_alloc, NULL);
-    pt_Cursor c;
+    pt_Cursor C;
     pt_Buffer b = pt_empty(S);
     pt_Buffer snap;
     /* Single edit -> 1 hole; commit copies data into scratch */
-    pt_seek(&c, b, 0);
-    asserteq(pt_edit(&c, 0, "aaaaaaaaaaaaaaa", 15), PT_OK);
-    snap = pt_commit(&c);
-    assertok(snap != NULL && !c.dirty);
+    pt_seek(&C, b, 0);
+    asserteq(pt_edit(&C, 0, "aaaaaaaaaaaaaaa", 15), PT_OK);
+    snap = pt_commit(&C);
+    assertok(snap != NULL && !C.tree);
     assertok(pt_checktree(snap));
     {
         const pt_Node *r = &snap->root;
@@ -3393,7 +3393,7 @@ TEST(commit_then_reseek) {
     pt_seek(&c, b, 0);
     asserteq(pt_edit(&c, 0, "abcdef", 6), PT_OK);
     snap = pt_commit(&c);
-    assertok(snap != NULL);
+    assertok(snap != NULL && !c.tree);
     pt_seek(&c, snap, 3);
     asserteq(pt_offset(&c), 3);
     assertok(pt_checkcursor(&c, 3));
@@ -3422,7 +3422,7 @@ TEST(commit_bytes_invariant) {
     levels_before = c.tree->levels;
     cc_before = c.tree->root.child_count;
     snap = pt_commit(&c);
-    assertok(snap != NULL);
+    assertok(snap != NULL && !c.tree);
     asserteq(pt_bytes(snap), bytes_before);
     asserteq(snap->levels, levels_before);
     asserteq(snap->root.child_count, cc_before);
@@ -3448,7 +3448,7 @@ TEST(commit_reserve_pages) {
                        holeV("aaaaaaaaaaaaaaaa"), holeV("aaaaaaaaaaaaaaaa"))));
     asserteq(pt_edit(&c, 0, ".", 1), PT_OK);
     snap = pt_commit(&c);
-    assertok(snap != NULL);
+    assertok(snap != NULL && !c.tree);
     assertok(pt_checktree(snap));
     asserteq(snap->levels, 0);
     asserteq(snap->root.child_count, 1);
@@ -3508,8 +3508,7 @@ TEST(edit_commit_roundtrip) {
     pt_seek(&c, b, 5);
     asserteq(pt_edit(&c, 1, "XY", 2), PT_OK); /* replace " " with "XY" */
     snap = pt_commit(&c);
-    assertok(snap != NULL);
-    assertok(!c.dirty);
+    assertok(snap != NULL && !c.tree);
     assertok(pt_checktree(snap));
     asserteq(pt_bytes(snap), 12);
     {
@@ -3538,15 +3537,14 @@ TEST(edit_commit_edit) {
     pt_seek(&c, b, 2);
     asserteq(pt_edit(&c, 0, "XY", 2), PT_OK); /* "HeXYlo" */
     snap = pt_commit(&c);
-    assertok(snap != NULL && !c.dirty);
+    assertok(snap != NULL && !c.tree);
     /* second edit on committed snapshot */
     pt_seek(&c, snap, 4);
     asserteq(pt_edit(&c, 0, "!", 1), PT_OK);
     assertok(c.dirty);
     asserteq(pt_bytes(c.tree), 8);
     snap2 = pt_commit(&c);
-    assertok(snap2 != NULL);
-    assertok(!c.dirty);
+    assertok(snap2 != NULL && !c.tree);
     assertok(pt_checktree(snap2));
     asserteq(pt_bytes(snap2), 8);
     {
@@ -3602,7 +3600,7 @@ TEST(commit_deep2) {
     for (k = 0; k < n; ++k) asserteq(pt_append(&c, buf + k * 3, 2), PT_OK);
     assertok(c.tree->levels >= 2);
     a = pt_commit(&c);
-    assertok(a != NULL && !c.dirty);
+    assertok(a != NULL && !c.tree);
     pt_release(b);
     assertok(pt_checktree(a));
     len0 = collect_bytes(a, exp0, sizeof(exp0)); /* ground truth content */
@@ -3621,7 +3619,7 @@ TEST(commit_deep2) {
     asserteq(memcmp(got, exp1, len1), 0);
 
     a2 = pt_commit(&c); /* freeze: must descend into inner subtree */
-    assertok(a2 != NULL && !c.dirty);
+    assertok(a2 != NULL && !c.tree);
     asserteq(S->holes.live_obj, 0); /* every hole frozen -> descend worked */
     assertok(pt_checktree(a2));
     asserteq(pt_bytes(a2), len1);
@@ -3656,7 +3654,7 @@ TEST(commit_reserve_leftover) {
     /* Commit: freeze hole data into tree arena; the contiguous run
      * merges into a single literal and the tree collapses */
     snap = pt_commit(&c);
-    assertok(snap != NULL && !c.dirty);
+    assertok(snap != NULL && !c.tree);
     assertok(pt_checktree(snap));
     asserteq(snap->levels, 0);
     asserteq(snap->root.child_count, 1);
@@ -3737,9 +3735,8 @@ TEST(commit_stitch_seam) {
           innerV(leafV(holeV("ab"), holeV("cd")),
                  leafV(holeV("ef"), litV("XY"))));
     snap = pt_commit(&c);
-    assertok(snap != NULL);
+    assertok(snap != NULL && !c.tree);
     asserteq(c.tree, NULL);
-    assertok(!c.dirty);
     assertok(pt_checktree(snap));
     pt_asserttree(snap, 0, leafV(litV("abcdef"), litV("XY")));
     pt_release(snap);
@@ -3758,7 +3755,7 @@ TEST(commit_seam_left) {
           innerV(leafV(litV("ab"), litV("cd")),
                  leafV(holeV("ef"), holeV("gh"))));
     snap = pt_commit(&c);
-    assertok(snap != NULL);
+    assertok(snap != NULL && !c.tree);
     asserteq(c.tree, NULL);
     assertok(pt_checktree(snap));
     pt_asserttree(snap, 0, leafV(litV("ab"), litV("cd"), litV("efgh")));
@@ -3773,28 +3770,53 @@ TEST(commit_seam_left) {
 TEST(commit_freeze_oom) {
     int       cnt = 1000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
-    pt_Cursor c;
+    pt_Cursor C;
     pt_Drain  d;
-    editV(&c, 0, 1,
+    editV(&C, 0, 1,
           innerV(leafV(holeV("ab"), holeV("cd")),
                  leafV(holeV("ef"), litV("XY"))));
-    pt_locate(&c, 3);
+    pt_locate(&C, 3);
     d = pt_drainpool(&S->nodes);
     cnt = 1; /* arena block alloc ok; freezestep node reserve fails */
-    asserteq(pt_commit(&c), NULL);
-    assertok(c.dirty && c.tree != NULL);
-    assertok(pt_checktree(c.tree));
-    asserteq(pt_offset(&c), 3);
-    assertok(pt_checkcursor(&c, 3));
+    asserteq(pt_commit(&C), NULL);
+    assertok(C.dirty && C.tree != NULL);
+    assertok(pt_checktree(C.tree));
+    asserteq(pt_offset(&C), 3);
+    assertok(pt_checkcursor(&C, 3));
     pt_refillpool(&S->nodes, d), cnt = 1000;
     {
-        pt_Buffer snap = pt_commit(&c);
-        assertok(snap != NULL);
-        asserteq(c.tree, NULL);
+        pt_Buffer snap = pt_commit(&C);
+        assertok(snap != NULL && !C.tree);
+        asserteq(C.tree, NULL);
         assertok(pt_checktree(snap));
         pt_asserttree(snap, 0, leafV(litV("abcdef"), litV("XY")));
         pt_release(snap);
     }
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* The freeze fold merges an underflowing hole leaf with its neighbour; a
+ * neighbour owned by the source version is COWed, consuming one node. */
+TEST(commit_freeze_fold_node) {
+    pt_State *S = pt_open(NULL, NULL);
+    pt_Cursor C;
+    pt_Drain  d;
+    pt_Buffer src, snap;
+
+    src = treeV_(S, 1, innerV(leafV(litV("XY"), litV("ZW"))));
+    editV(&C, 0, 1,
+          innerV(leafV(holeV("ab"), holeV("cd")), src->root.children[0]));
+    C.tree->root.version = ++S->max_version; /* neighbour keeps source ver */
+    C.tree->root.children[0]->version = C.tree->root.version;
+    d = pt_drainpool(&S->nodes);
+    snap = pt_commit(&C);
+    assertok(snap != NULL && !C.tree);
+    pt_refillpool(&S->nodes, d);
+    assertok(pt_checktree(snap));
+    pt_asserttree(snap, 0, leafV(litV("abcd"), litV("XY"), litV("ZW")));
+    pt_release(snap), pt_release(src);
     asserteq(S->nodes.live_obj, 0);
     asserteq(S->holes.live_obj, 0);
     pt_close(S);
@@ -3938,7 +3960,7 @@ TEST(prefix_basic) {
     size_t      n, pre, full;
 
     /* Middle of a piece: prefix + remaining reconstruct the full piece. */
-    pt_seek(&c, b, 2);
+    pt_seek(&c, (assert(b), b), 2);
     p = pt_piece(&c, &n);
     assertok(p != NULL);
     pre = pt_prefix(&c);
@@ -3979,7 +4001,7 @@ TEST(next_basic) {
     size_t      n;
 
     /* Forward from start: piece then next */
-    pt_seek(&c, b, 0);
+    pt_seek(&c, (assert(b), b), 0);
     p = pt_piece(&c, &n);
     assertok(p != NULL);
     asserteq(n, 2);
@@ -4107,7 +4129,7 @@ TEST(trav_single) {
     size_t      n;
 
     /* Forward: current piece via pt_piece, then next stops */
-    pt_seek(&c, b, 0);
+    pt_seek(&c, (assert(b), b), 0);
     p = pt_piece(&c, &n);
     assertok(p != NULL);
     asserteq(n, 5);
@@ -4153,7 +4175,7 @@ TEST(next_levels1) {
     size_t      n;
 
     /* Build levels=1 tree via editing (triggers splitroot) */
-    pt_seek(&c, b, 0);
+    pt_seek(&c, (assert(b), b), 0);
     pt_append(&c, "aa", 2);
     pt_append(&c, "bb", 2);
     pt_append(&c, "cc", 2);
@@ -4163,7 +4185,7 @@ TEST(next_levels1) {
     asserteq(c.tree->levels, 1);
 
     /* Full forward */
-    pt_seek(&c, c.tree, 0);
+    pt_seek(&c, (assert(c.tree), c.tree), 0);
     {
         char   fwd[16];
         size_t off = 0;
@@ -4192,7 +4214,7 @@ TEST(prev_levels1) {
     size_t      n;
 
     /* Full backward */
-    pt_seek(&c, b, 8);
+    pt_seek(&c, (assert(b), b), 8);
     {
         char   rev[16];
         size_t end = 8;
@@ -4202,7 +4224,7 @@ TEST(prev_levels1) {
     }
 
     /* From "cc" (start of leaf 1), prev jumps to "bb" (leaf 0) */
-    pt_seek(&c, b, 4);
+    pt_seek(&c, (assert(b), b), 4);
     p = pt_prev(&c, &n);
     assertok(p != NULL);
     asserteq(n, 2);
@@ -4223,7 +4245,7 @@ TEST(read_basic) {
     size_t    r;
 
     /* Read partial from start */
-    pt_seek(&c, b, 0);
+    pt_seek(&c, (assert(b), b), 0);
     r = pt_read(&c, buf, 5);
     asserteq(r, 5);
     asserteq(memcmp(buf, "hello", 5), 0);
@@ -4240,7 +4262,7 @@ TEST(read_basic) {
     asserteq(r, 0);
 
     /* Read from middle */
-    pt_seek(&c, b, 6);
+    pt_seek(&c, (assert(b), b), 6);
     r = pt_read(&c, buf, 5);
     asserteq(r, 5);
     asserteq(memcmp(buf, "world", 5), 0);
@@ -4277,6 +4299,58 @@ TEST(read_cross) {
     r = pt_read(&c, buf, 32);
     asserteq(r, 12);
     asserteq(memcmp(buf, "aaaabbbbcccc", 12), 0);
+
+    pt_release(b);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* a read that stops exactly at a piece end must leave the cursor on the next
+ * piece so that reading continues; a mid-piece stop keeps poff inside the
+ * current piece; the tree tail is the only piece-end state allowed */
+TEST(read_piece_boundary) {
+    pt_State   *S = pt_open(&test_alloc, NULL);
+    pt_Buffer   b = treeV(0, leafV(litV("aaaa"), litV("bbbb"), litV("cccc")));
+    pt_Cursor   c;
+    const char *p;
+    char        buf[32];
+    size_t      pl, r;
+
+    /* stop exactly at piece[0]'s end: piece[1] must be reachable */
+    pt_seek(&c, b, 0);
+    r = pt_read(&c, buf, 4);
+    asserteq(r, 4);
+    assertok(pt_checkcursor(&c, 4));
+    p = pt_piece(&c, &pl);
+    assertok(p != NULL);
+    asserteq(pl, 4);
+    asserteq(memcmp(p, "bbbb", 4), 0);
+    r = pt_read(&c, buf + 4, 4);
+    asserteq(r, 4);
+    asserteq(memcmp(buf, "aaaabbbb", 8), 0);
+    asserteq(pt_offset(&c), 8);
+
+    /* stop exactly at piece[1]'s end, starting mid-piece */
+    pt_seek(&c, b, 2);
+    r = pt_read(&c, buf, 6);
+    asserteq(r, 6);
+    asserteq(memcmp(buf, "aabbbb", 6), 0);
+    assertok(pt_checkcursor(&c, 8));
+    p = pt_piece(&c, &pl);
+    assertok(p != NULL);
+    asserteq(pl, 4);
+    asserteq(memcmp(p, "cccc", 4), 0);
+
+    /* the tree tail is the only piece-end state: nothing left to read */
+    pt_seek(&c, b, 8);
+    r = pt_read(&c, buf, 8);
+    asserteq(r, 4);
+    asserteq(memcmp(buf, "cccc", 4), 0);
+    assertok(pt_checkcursor(&c, 12));
+    asserteq(pt_piece(&c, &pl), NULL);
+    asserteq(pl, 0);
+    asserteq(pt_read(&c, buf, 8), 0);
 
     pt_release(b);
     asserteq(S->nodes.live_obj, 0);
@@ -4372,7 +4446,7 @@ TEST(trav_deep) {
     const char *p;
     size_t      n, off = 0, end = 16;
     char        fwd[16], rev[16];
-    pt_seek(&c, b, 0);
+    pt_seek(&c, (assert(b), b), 0);
     for (p = pt_piece(&c, &n); n > 0; p = pt_next(&c, &n))
         memcpy(fwd + off, p, n), off += n;
     asserteq(off, 16);
@@ -4549,7 +4623,7 @@ TEST(commit_deep_holes) {
     pt_edit(&c, 0, "CCCC", 4);
     assertok(c.dirty);
     snap = pt_commit(&c);
-    assertok(snap != NULL && !c.dirty);
+    assertok(snap != NULL && !c.tree);
     pt_checktree(snap);
     {
         const pt_Node *r = &snap->root;
@@ -4770,7 +4844,7 @@ TEST(error_paths) {
         pt_Buffer   a = pt_commit(&c); /* commit to test prev */
         const char *p;
         size_t      n;
-        assertok(a != NULL);
+        assertok(a != NULL && !c.tree);
         pt_seek(&c, a, 5);   /* end */
         p = pt_prev(&c, &n); /* "hello" */
         assertok(p);
@@ -5053,7 +5127,7 @@ TEST(error_cov_params) {
     asserteq(pt_scratch(&c, NULL), NULL);
     asserteq(pt_literal(&c, 0), NULL);
     asserteq(pt_splice(&c, 0, "x", 0), PT_OK);
-    asserteq(pt_splice(&c, 0, NULL, 5), PT_OK);
+    asserteq(pt_splice(&c, 0, NULL, 5), PT_ERRPARAM);
     asserteq(pt_splice(&c, 1, "x", 0), PT_OK);
     assertok(pt_checktree(c.tree));
     pt_release(pt_rollback(&c)); /* returns retained b */
@@ -5201,7 +5275,7 @@ TEST(compact_basic) {
     pt_seek(&c, b0, 8);
     asserteq(pt_edit(&c, 0, "xy", 2), PT_OK);
     b1 = pt_commit(&c);
-    assertok(b1 != NULL);
+    assertok(b1 != NULL && !c.tree);
     old = (const char *)b1->root.children[1]; /* internal "xy" */
 
     nb = pt_compact(S, b1);
@@ -5237,11 +5311,11 @@ TEST(compact_merge) {
     pt_seek(&c, pt_empty(S), 0);
     asserteq(pt_edit(&c, 0, "ab", 2), PT_OK);
     b1 = pt_commit(&c);
+    assertok(b1 != NULL && !c.tree);
     pt_seek(&c, b1, 2);
     asserteq(pt_edit(&c, 0, "cd", 2), PT_OK);
     b2 = pt_commit(&c);
-    assertok(b1);
-    assertok(b2);
+    assertok(b2 != NULL && !c.tree);
     asserteq(b2->root.child_count, 2);
 
     /* both pieces internal: copied back-to-back, hence merged */
@@ -5266,7 +5340,7 @@ TEST(compact_merge) {
 static pt_Buffer compact_makewide(pt_State *S, const char *src, int np) {
     pt_Cursor c;
     int       i;
-    pt_seek(&c, pt_empty(S), 0);
+    pt_seek(&c, (assert(S), pt_empty(S)), 0);
     for (i = 0; i < np; ++i) asserteq(pt_append(&c, src + 2 * i, 1), PT_OK);
     return pt_commit(&c);
 }
@@ -5355,7 +5429,7 @@ TEST(compact_oom) {
     size_t    pre;
 
     /* three generations so ranges collect must grow (cap 2) */
-    pt_seek(&c, pt_empty(S), 0);
+    pt_seek(&c, (assert(S), pt_empty(S)), 0);
     asserteq(pt_edit(&c, 0, "aa", 2), PT_OK);
     b1 = pt_commit(&c);
     pt_seek(&c, b1, 2);
@@ -5433,7 +5507,7 @@ TEST(edit_pieceend_escape) {
 
     /* flat: two pieces in one leaf container (levels == 0) */
     b = pt_from(S, f1, 3);
-    pt_seek(&c, b, 3);
+    pt_seek(&c, (assert(b), b), 3);
     pt_append(&c, f2, 3);
     o = b;
     b = pt_commit(&c);
@@ -5513,7 +5587,7 @@ TEST(close_unreleased_commit) {
     pt_seek(&cur, b, 0);
     assertok(pt_edit(&cur, 0, "hello", 5) == PT_OK);
     nb = pt_commit(&cur);
-    assertok(nb != NULL);
+    assertok(nb != NULL && !cur.tree);
     assertok(S->arenas != NULL);
     pt_close(S);
     asserteq(c.live, 0);
@@ -5549,7 +5623,7 @@ TEST(release_unlinks_arena_blocks) {
     pt_seek(&cur, b, 0);
     assertok(pt_edit(&cur, 0, "hello", 5) == PT_OK);
     nb = pt_commit(&cur);
-    assertok(nb != NULL);
+    assertok(nb != NULL && !cur.tree);
     assertok(S->arenas != NULL);
     pt_release(nb);
     assertok(S->arenas == NULL);

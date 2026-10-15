@@ -48,7 +48,7 @@ static void ud_close(bench_pt_ud *u) {
 
 static void ud_discard_dirty(bench_pt_ud *u) {
     pt_Buffer b;
-    if (!pt_valid(&u->cur)) return;
+    if (!pt_buffer(&u->cur)) return;
     b = pt_rollback(&u->cur);
     if (b) pt_release(b);
 }
@@ -478,7 +478,7 @@ static int run_replay(void *ud, long iters) {
             if (!replay_reset_work(u, b)) return 0;
         } else {
             pt_Buffer b;
-            if (pt_valid(&u->cur) && u->cur.dirty != 0) {
+            if (pt_buffer(&u->cur) && u->cur.dirty != 0) {
                 b = pt_rollback(&u->cur);
                 if (b == NULL) return 0;
                 if (!replay_reset_work(u, b)) return 0;

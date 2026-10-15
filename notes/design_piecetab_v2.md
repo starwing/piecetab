@@ -109,7 +109,7 @@ literal 无独立结构体，零额外开销（对比旧 `pt_Piece` 128 字节�
 
 hole 是编辑态中原地改写的可变缓存。固定容量，池化管理：
 
-- 宏 `PT_MAX_HOLESIZE=64`（`piecetab.h:172-174`）。
+- 宏 `PT_MAX_HOLESIZE=64`（`piecetab.h:175-177`）。
 - `pt_Hole` 唯一 field 是 `char data[PT_MAX_HOLESIZE]`；hole 的当前长度以父节点同槽的 `bytes[i]` 为准。
 - 结构体总大小 64 字节（2 的幂，cache 友好）；容量是编译期宏，不占 field。
 - 创建时机：`pt_edit` 命中非 hole 位置 → 分裂 literal → 插入 hole。
@@ -148,7 +148,7 @@ spantree 与 anchortree 的叶同质、游标是纯字节型，两者都不需�
 中间槽 `bytes == 0` 会让 `poff >= bytes` 把该槽误判为耗尽，`pt_next` / 导航与虚拟尾判定全部失效。
 
 0 长槽只在"游标指向末尾"处需要处理：`ptD_cutrange` 用 `i += (k || p->bytes[i] == 0);`
-（`piecetab.h:720`、`725`）把切点处的 0 长槽随切点一起删去，因此 survivor 永不为 0 长槽 ——
+（`piecetab.h:724`、`729`）把切点处的 0 长槽随切点一起删去，因此 survivor 永不为 0 长槽 ——
 这就是"禁止树中段尾"在删除路径上的落点。（spantree 同款：`spD_cutrange:592/597`；
 linecache 的负载度量是行数，故写 `p->breaks[i] == 0`，`lcD_cutrange:600/605`。）
 
@@ -183,6 +183,8 @@ linecache 的负载度量是行数，故写 `p->breaks[i] == 0`，`lcD_cutrange:
 - 每个 `pt_State` 维护全局 `max_version`，cursor 首次编辑时递增并赋给新 tree
 - 节点 version 标记其所属编辑区间
 - **literal 无 version**（纯 immutable 数据，COW 只作用于 Node 层）
+- `pt_Tree.epoch`（`unsigned short`）是与 `version` 无关的**原地修改代次**：每次成功
+  修改该 tree 时递增，供 Cursor 失效检测使用（§4.7）
 
 ### 4.2 COW 触发
 
@@ -209,68 +211,90 @@ linecache 的负载度量是行数，故写 `p->breaks[i] == 0`，`lcD_cutrange:
 | ---------------------------------------- | -------------------------------------------------------------------------- |
 | 首次 `pt_edit(C, ...)`                   | fork 旧 b → 新 transient tree，dirty=1                                     |
 | 再次 `pt_edit(C, ...)` （同一 C）        | 直接在 transient tree 上操作（版本号不变）                                 |
-| `nC = *C` 后 `pt_edit(&nC, ...)`         | 两 Cursor 共享同一 transient tree，可协同编辑                              |
+| `nC = *C` 后 `pt_edit(&nC, ...)`         | 两 Cursor 共享同一 transient tree；一方成功修改后另一方判失效（§4.7）      |
 | 从旧 Snapshot `pt_seek(&C2, oldSnap, 0)` | C2 拿到 persistent tree → 首次编辑 fork 出另一 transient（新版本号，独立） |
 
 **多副本编辑**：从同一 Snapshot(version=100) 派生的两个 Cursor 各自 fork 出
-独立 transient tree（101、102），互不干扰。但若通过 `nC = *C` 拷贝则共享同一
-transient tree — paths 可能因树结构修改而失效，库不加锁，使用者负责。
+独立 transient tree（101、102），互不干扰。若通过 `nC = *C` 拷贝则共享同一
+transient tree，一方成功修改后另一方在下一次公共入口被判失效（§4.5、§4.7）。
 
 ### 4.4 commit / rollback
 
-- **commit**：遍历 hole → 写入 scratch → 替换为 literal 指针 → `C->dirty=0` → 返回 b
-- **rollback**：读 `from = C->tree->from`；若 `from->refcount == 1`（source 仅靠本
-  transient 的 fork-retain 存活，release 后必死）则 `from = NULL`；`pt_release(C->tree)`
-  （删本 transient 私有节点 + 链式 `release(from)`）；`C->tree = from`、`C->dirty=0`
-- commit 后 tree 可被共享（返回的 Snapshot）；**rollback 后：source 仍被外部持有
-  （常见）则 Cursor 回到源树继续可用；source 已被外部放弃（仅 transient 持有）则
-  Cursor 失效（`b=NULL`），须重新 `pt_seek`**
+两个出口都返回**已拥有的引用**并 detach cursor（`C->tree = NULL`）；继续使用需对
+返回的 buffer 重新 `pt_seek`。
+
+- **commit**：`pt_valid` 判定 → `ptC_holebytes` 汇总 hole 字节 → `pt_reserve`/
+  `pt_literal` 预留 arena → `ptC_nexthole` 定位首个含 hole 叶并 `ptS_ok` 递增 tree
+  `epoch` → `ptC_freeze` 及其推进循环（每轮 `ptP_reserve(nodes, levels)` → 冻结该叶
+  hole 数据、合并相连 literal 槽 → 欠满则 `ptD_rebalance` fold/borrow）→ detach 返回 b。
+  clean cursor（`!C->dirty`）时仅 `pt_retain` 当前树并 detach 返回。
+- **rollback**：`b = C->tree->from` 先 `pt_retain(b)`，再 `pt_release(C->tree)` 沿
+  from 链回收本 transient 的私有节点，置 `C->tree = NULL`、`C->dirty = 0`、返回 b；
+  返回引用使源树无条件存活（§4.4.1）。clean cursor 时仅 retain 当前树并 detach 返回。
+- commit 后 tree 可被共享（返回的 Snapshot）；rollback 返回编辑前源树的新引用。
+- **失败语义**：arena 预留失败 → 返回 `NULL`，树与 `epoch` 均未变；`ptC_freeze` 期
+  OOM → 返回 `NULL`，此时 tree 已发生部分冻结、`epoch` 已递增，cursor 经
+  `pt_locate(C, off)` 复位到原偏移故仍有效，可重试 commit。
 
 **COW 生命周期（`from` 机制，关键）**：`pt_Tree.from` 指向 fork 来源并在 fork 时
 `retain`。这保证"只要 transient/committed 存活，其共享的源节点就存活"，根除
 "旧版本先 release、释放仍被新版本共享的节点"这一 use-after-free。`pt_release`
 归零时**先**删本版本私有节点，**最后** `release(from)` 沿链回溯。
 
-### 4.4.1 rollback 的条件失效（保留常见可用路径）
+### 4.4.1 rollback 的源树存活
 
-若 rollback 无条件令 `C->tree` 回到源树，则当"源树仅靠本 transient 的 `from`
-存活（外部已 release）"时，`release(transient)` 会连带释放源树，`C->tree` 悬空
-（实测 ASan use-after-free）。根因是 refcount 无法表达 cursor 的**借用**语义
+源树可能仅靠本 transient 的 `from` 存活（外部已 release）。若 rollback 直接
+`release(transient)` 并把 `C->tree` 指回源树，则源树随 release 一起死，`C->tree`
+悬空（实测 ASan use-after-free）；根因是 refcount 无法表达 cursor 的**借用**语义
 （cursor 无脑 drop、不通知 tree，故无法维护弱计数）。
 
-解法：**rollback 前检测 `from->refcount`**——
-- `> 1`：外部仍持有源树，`release(transient)` 只让源树 rc 减 1 仍存活，Cursor
-  安全回到源树（`C->tree = from`），**常见路径，rollback 后 cursor 仍可用**。
-- `== 1`：源树仅靠本 transient 持有，`release` 后必死，故置 `C->tree = NULL`
-  使 cursor 失效，**不悬空**。
-
-refcount 会计干净（fork 的 retain 被 rollback 的 release 恰好抵消）。契约：
-**使用者负责持有"要回退到的 buffer"**——持有则 rollback 后可继续用，放弃则
-cursor 失效。
+解法：**rollback 先把源树引用交给调用者**——`b = C->tree->from`、`pt_retain(b)`，
+再 `pt_release(C->tree)`（fork 的 retain 由这条 release 链抵消），最后
+`C->tree = NULL`、返回 b。返回引用使源树无条件存活，无需检查 `from->refcount`；
+cursor 在 clean / dirty 两条路径上都被 detach，回退后继续编辑需对返回的 buffer
+重新 `pt_seek`。
 
 ### 4.5 multi-cursor 协同编辑
 
-`nC = *C` 后两个 Cursor 共享同一 transient tree，各自可独立编辑。
-任一 Cursor 修改树结构（裂叶、释放 hole）后，其他 Cursor 的 paths 可能失效 —
-这是 B+ 树无 parent 的固有代价。库不加锁不保护，使用者负责保证不冲突。
+`nC = *C` 后两个 Cursor 共享同一 transient tree，各自可独立编辑。任一 Cursor 成功
+修改该 tree（裂叶、释放 hole、原地改写）都会递增 tree 的 `epoch`，于是仍指向同一
+tree 的其他 Cursor 在下一次公共入口调用时被判失效并返回 `PT_ERRPARAM`（§4.7）——
+其他 Cursor 的 paths 不会被静默改写后继续使用。库不加锁：并发语义由调用顺序确定。
 
-### 4.6 TODO：多 Cursor 借用失效检测（暂不实现）
+从旧 Snapshot（persistent tree）fork 出各自 transient 的多副本编辑不受影响：fork
+复制 `epoch` 而不改动源 tree，源 tree 上的 Cursor 继续有效（§4.3 派生表）。
 
-**问题**：buffer 上存在多个 Cursor（C1 派生出 C2/C3…）时，某些操作会让其他
-Cursor 静默失效，而库无法检测：
-- 情况 1：C1 edit → 派生 C2/C3 → C1 再 edit（改树结构）→ C2/C3 的 paths 失效。
-  **符合文档**（§4.5，使用者负责）。
-- 情况 2：C1 派生 C2/C3 → C1 edit（own transient）→ 外部 release 源 b → C1
-  rollback（源 b 真释放）→ C2/C3 失效。**仅置空 C1 无法让 C2/C3 发现问题**。
-- 情况 3：b 有 C1/C2/C3 → 外部立即 release b → 使用 C1/C2/C3。**本就无任何
-  保证**（借用已失效），且在 remove 开发之前就已存在、同样未检测。
+### 4.6 失效检测的覆盖范围
 
-**结论**：情况 2 与情况 3 同源（借用失效不可检测），根因是 refcount 无法表达
-借用（见 §4.4.1）。情况 3 既已长期存在且未检测，情况 2 不单独处理。
+- **结构失效**：Cursor 指向的 tree 在存活期间被其他 Cursor 原地修改（`nC = *C`
+  协同编辑，或把 transient 当 buffer 再 `pt_seek` 进去）→ 由 `epoch` 检测（§4.7），
+  公共入口返回 `PT_ERRPARAM`，`pt_valid(C)` 可先行判定。
+- **借用生命周期失效**：Cursor 所借的 buffer 被外部 `pt_release`、tree 被释放 →
+  Cursor 不持有引用，故不在 `epoch` 覆盖内；契约是"借用期间持有该 buffer"（§6.1），
+  恢复手段是在仍被持有的 tree 上重新 `pt_seek`。
 
-**未来可选方案**（若需健壮化）：将 `Cursor.dirty` 扩为位域
-`dirty:1, valid:1`（或 status enum）；tree 真释放时能标记关联 cursor 为 dead，
-使用前 assert(valid)。需要 tree→cursor 的反向登记（与"无脑 drop"权衡），故暂缓。
+### 4.7 Cursor 失效检测（epoch）
+
+- **字段**：`pt_Tree.epoch`（`unsigned short`，原地修改代次）、`pt_Cursor.epoch`
+  （`pt_seek` 捕获；`pt_locate`/`pt_advance` 只导航、不重打戳）。
+- **判定**：`pt_valid(C)`（公共函数，非宏）=
+  `C && C->tree && C->epoch == C->tree->epoch`；`epoch` 只做相等比较。从未 `pt_seek`
+  过的零值 Cursor 因 `tree == NULL` 不通过。
+- **递增点**：`pt_edit`/`pt_append`/`pt_remove` 的成功出口调用 `ptS_ok(C)`
+  （`C->epoch = ++C->tree->epoch`，返回 `PT_OK`），`pt_insert`/`pt_splice` 经内部调用
+  覆盖；no-op 出口与错误返回不改 `epoch`——即"返回失败 ⇒ tree 与 epoch 都不变"。
+  `pt_commit` 是例外：arena 预留失败时不改 `epoch`；进入 freeze 前先 `ptS_ok`
+  （冻结会原地改树，须使其上其它 Cursor 失效），此后 freeze 内 OOM 返回 `NULL` 时
+  tree 已部分冻结、`epoch` 已递增，本 Cursor 经 `pt_locate(C, off)` 复位后仍有效。
+- **fork 不递增**：`ptK_markdirty` 以 `*nt = *old` 复制 `epoch`，源 tree 的 `epoch`
+  不变，故旧 Snapshot 上的 Cursor 继续有效（§4.3 多版本编辑不受影响）。
+- **入口检查**：解引用 cursor 的公共入口在解 paths 前判定失效——
+  `pt_advance`/`pt_locate`/`pt_edit`/`pt_append`/`pt_insert`/`pt_remove`/`pt_splice`
+  返回 `PT_ERRPARAM`；`pt_reserve`/`pt_literal` 返回 `NULL`；`pt_piece`/`pt_next`/
+  `pt_prev`/`pt_scratch` 返回 `NULL` 且置 `*plen = 0`；`pt_read` 返回 `0`；
+  事务入口 `pt_commit` 同样先判 `pt_valid`，过期返回 `NULL`。
+- **恢复**：`pt_seek` 是唯一 Cursor 构造器（重新捕获 `epoch`）；dirty 的 transient 先经
+  `pt_rollback`（§4.4.1）。
 
 ---
 
@@ -298,32 +322,38 @@ Cursor 静默失效，而库无法检测：
 ### 6.1 生命周期
 
 ```c
-pt_State *pt_newstate(pt_Alloc *allocf, void *ud);
+pt_State  *pt_open(pt_Alloc *allocf, void *ud);
+void       pt_reset(pt_State *S);
 void       pt_close(pt_State *S);
-pt_Buffer    pt_empty(pt_State *S);
-pt_Buffer    pt_from(pt_State *S, const char *s, size_t len);
-int        pt_retain(pt_Buffer b);
-int        pt_release(pt_Buffer b);
-pt_Size    pt_bytes(pt_Buffer b);
-int        pt_version(pt_Buffer b);
+pt_Alloc  *pt_getallocf(pt_State *S, void **pud);
+pt_Buffer  pt_empty(const pt_State *S);
+pt_Buffer  pt_from(pt_State *S, const char *s, size_t len);
+pt_Buffer  pt_compact(pt_State *S, pt_Buffer b);
+unsigned   pt_retain(pt_Buffer b);
+unsigned   pt_release(pt_Buffer b);
+size_t     pt_bytes(pt_Buffer b);
+unsigned   pt_version(pt_Buffer b);
 ```
 
 > `pt_empty(S)` 返回 `&S->empty`（state 内嵌 sentinel tree，零分配）。
 > `pt_release` 遇 sentinel（含 from 链到达 sentinel）直接返回。
 > `pt_from` 设置 `t->from = &S->empty`，from 链始终终止于 sentinel。
 > 公共 API 均已正确处理 `NULL` 和 sentinel。
+> Cursor 只借用 buffer（不持有引用）：绑定的 tree 必须在 Cursor 存活期间被外部持有，
+> 否则 Cursor 失效（§4.6）；失效判定与错误通道见 §4.7。
 
 ### 6.2 导航
 
 ```c
 /* construction */
-int  pt_seek(pt_Cursor *C, pt_Buffer b, size_t off); /* Cursor 构造器: reset + bind + 定位, 清 dirty */
+int  pt_seek(pt_Cursor *C, pt_Buffer b, size_t off); /* 构造器: reset + bind + 捕获 epoch + 定位, 清 dirty */
 
 /* navigate */
 int  pt_locate(pt_Cursor *C, size_t off);  /* 纯绝对定位, 保留 dirty */
-int  pt_advance(pt_Cursor *C, pt_Offset delta);
+int  pt_advance(pt_Cursor *C, pt_Delta delta);
 
 /* query */
+int  pt_valid(const pt_Cursor *C); /* 已绑定且未被其他 Cursor 修改过 */
 #define pt_offset(C) ((C)->off + (C)->poff)
 #define pt_prefix(C) ((C)->poff)
 #define pt_buffer(C)   ((C)->tree)
@@ -332,9 +362,14 @@ int  pt_advance(pt_Cursor *C, pt_Offset delta);
 - `pt_seek` 是 Cursor 构造器，重置所有内部状态（含 dirty），适合首次绑定 buffers
 - `pt_locate` 和 `pt_advance` 用于已绑定 Cursor 的导航，保留 dirty 和 transaction 状态
 - 无行级 API（无 `pt_seekline`/`pt_advline`/`pt_setcol`）— 行映射由外置 linecache 承担
+- `pt_valid(C)` 判定 Cursor 是否可用；失效时下列入口按各自错误通道返回（§4.7）
+- Cursor 只借用 buffer：`pt_seek` 绑定的 tree 必须在 Cursor 存活期间被持有（§6.1）
 - piece 级遍历：`pt_piece` 返回当前 piece 剩余数据；`pt_next` 前进一片并返回落脚片；
   `pt_prev` 后退一片并返回落脚片（两者对称，均为"移动后返回落脚点"语义）。
   全量遍历惯用法：`for (p = pt_piece(C,&n); n; p = pt_next(C,&n))`
+- piece 尾约定：树中段不允许 Cursor 停在 piece 尾（`C->poff == 该片剩余长度` 只在
+  `pt_offset(C) == pt_bytes(tree)` 时合法）；`pt_read` 的请求恰好结束在片段边界时，
+  Cursor 落在下一片起点。`pt_checkcursor` 校验同一不变量
 - `pt_prefix(C)` 返回当前 piece 内、当前位置之前的字节数（即 `C->poff`），不移动游标；
   与 `pt_piece` 组合可得到当前完整 piece 的 base 指针、起始 offset 和完整长度。
 
@@ -390,25 +425,29 @@ int  pt_remove(pt_Cursor *C, size_t len);
 - 删除后检查相邻 literal 是否可合并（物理连续则合并）
 - cursor 留在删除点
 
+**epoch 与错误契约（见 §4.7）**
+
+- 成功返回前递增所在 tree 的 `epoch` 并刷新执行 Cursor；no-op 与错误返回
+  （`PT_ERRPARAM`/`PT_ERRMEM`）既不修改 tree 也不修改 `epoch`
+- 入口先判 `pt_valid(C)`，失效 Cursor 在解引用 paths 之前返回 `PT_ERRPARAM`
+
 ### 6.4 事务
 
 ```c
 pt_Buffer pt_commit(pt_Cursor *C);
-void        pt_rollback(pt_Cursor *C);
+pt_Buffer pt_rollback(pt_Cursor *C);
 ```
 
 ### 6.5 scratch pool
 
 ```c
-char *pt_buffer(pt_State *S, size_t *plen);
+char *pt_scratch(pt_Cursor *C, size_t *plen);
 ```
 
-返回 scratch pool 中当前写入头的指针和可用容量。
-通过 `pt_insert`/`pt_append`/`pt_splice` 传递给库时，库自动消费该 buffer（推进写入头），
-下次 `pt_buffer` 返回新区。
-
-**已知问题（低优先级 TODO）**：`pt_buffer` 两次调用间若无 insert，返回同一块内存，
-用户可能意外覆盖。编辑器开发中若实际踩坑，加引用保护。
+返回 Cursor 所在树 arena 活动块写入头的指针和剩余可写容量。
+通过 `pt_literal`/`pt_insert`/`pt_append`/`pt_splice` 传递给库时，库自动消费该 buffer
+（推进写入头），下次 `pt_scratch` 返回新区。
+两次 `pt_scratch` 之间没有消费时，返回的仍是同一块内存（同一写入头）。
 
 ---
 
@@ -416,11 +455,22 @@ char *pt_buffer(pt_State *S, size_t *plen);
 
 commit 流程：
 
-1. 自 root DFS，利用内部节点 mask 跳过无 hole 子树。
-2. 按顺序访问每个 hole：把 hole 数据追加到 scratch page；若跨页，自动分裂 literal；把槽换为指向 scratch 的 literal；槽长度改为 hole 当前长度；清除该槽的 hole 位；`pt_Hole` 对象回池。
-3. 所有 hole 处理完后，检查相邻 literal 是否可合并（物理连续则合并）。
-4. 沿路径向上传播度量修正，并清除内层 mask。
-5. `C->dirty = 0`，返回 b。
+1. `pt_valid(C)` 判定；clean Cursor（`!C->dirty`）直接 `pt_retain` 当前树并 detach 返回。
+2. `ptC_holebytes` 自 root 汇总 hole 字节（沿内部节点 mask 跳过无 hole 子树）；
+   `pt_reserve`/`pt_literal` 在 arena 预留等长空间。
+3. `ptC_nexthole(C, 0)` 按 mask 下降定位首个含 hole 叶，`ptS_ok(C)` 递增 tree `epoch`
+   （冻结原地改树，须使其上其它 Cursor 失效）。
+4. `ptC_freeze` 冻结该叶：`ptP_reserve(nodes, levels)` 预留本轮节点 → hole 数据追加到
+   arena、槽换为指向 arena 的 literal、槽长度改为 hole 当前长度、清除 hole 位
+   （`pt_Hole` 回池）→ 合并物理相连 literal 槽 → 叶欠满则 `ptD_rebalance` fold/borrow
+   （fold 吸进邻居可能带来新 hole/接缝，故同一叶上循环至稳定；一轮内 loop 可重复
+   多轮，故 reserve 在每轮开头补充）。
+5. `ptC_nexthole(C, ptK_levels(C) - 1)` 前进到下一含 hole 叶并重复 4；无更多 hole 时
+   结束，detach Cursor（`C->tree = NULL`）并返回 b。
+
+失败语义：步骤 2 的 arena 预留失败 → 返回 `NULL`，树与 `epoch` 均未变；步骤 4 的
+`ptP_reserve` 失败 → 返回 `NULL`，tree 已部分冻结、`epoch` 已递增，Cursor 经
+`pt_locate(C, off)` 复位到原偏移故仍有效（树保持 dirty，可重试 commit）。
 
 ---
 
@@ -456,8 +506,8 @@ piecetab 不内嵌调用 linecache。两个库各自独立，状态由外部分�
 | ---------------------------- | ---- | --------------------------------------------------------- |
 | fanout 调优基准              | TODO | 当前默认 31，后期 benchmark 决定                          |
 | hole 容量调优基准            | TODO | 当前默认 `PT_MAX_HOLESIZE=64`，后期 benchmark 决定        |
-| `pt_buffer` 多次调用保护     | TODO | 编辑器开发后按需加引用保护                                |
-| multi-cursor 同编辑态协同    | 未定 | API 设计待讨论                                            |
+| `pt_scratch` 多次调用保护    | TODO | 编辑器开发后按需加引用保护                                |
+| multi-cursor 同编辑态协同    | 已定 | 一方成功修改后另一方判失效（§4.5、§4.7）                   |
 | 全局统计 `pt_chars/pt_lines` | 移除 | 由 linecache 承担                                         |
 
 ---

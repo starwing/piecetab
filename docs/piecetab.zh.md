@@ -16,7 +16,7 @@
 | 宏             | 值   | 含义                         |
 | -------------- | ---- | ---------------------------- |
 | `PT_OK`        | 0    | 成功                         |
-| `PT_ERRPARAM`  | -1   | 空指针或参数越界             |
+| `PT_ERRPARAM`  | -1   | 空指针、参数越界或游标过期   |
 | `PT_ERRMEM`    | -2   | 内存分配失败                 |
 
 ### pt_State — 内存上下文
@@ -49,6 +49,7 @@ struct pt_Cursor {
     struct pt_Tree  *tree;                /* 当前 buffer（编辑态为内部新树） */
     size_t           poff;                /* 当前 piece 内偏移 */
     size_t           off;                 /* 当前 piece 之前的累计字节数 */
+    unsigned         epoch;               /* 绑定时捕获的 tree 原地修改代次 */
     int              dirty;               /* 编辑态（transient）标志 */
 };
 ```
@@ -57,7 +58,10 @@ struct pt_Cursor {
 - 绝对偏移 = `pt_offset(C)` = `off + poff`。
 - **游标不拥有 buffer 引用**——它只借用传给 `pt_seek`/`pt_locate` 的 buffer。
   使用游标期间，调用方必须保持该 buffer 存活。
-- 由 `pt_seek` 构造（清除 `dirty`）；`pt_locate`/`pt_advance` 保留 `dirty`。
+- 由 `pt_seek` 构造（清除 `dirty`，捕获 tree 的原地修改代次 `epoch`）；
+  `pt_locate`/`pt_advance` 保留 `dirty` 与已捕获的 `epoch`。
+- 当游标所绑的树被其他游标原地修改时，该游标**过期**（stale）；`pt_valid`
+  （§3.4）判定其是否仍可用。
 
 ### pt_Delta
 
@@ -135,7 +139,7 @@ unsigned pt_release(pt_Buffer b);
 ### 3.3 Buffer 构造与查询
 
 ```c
-pt_Buffer   pt_empty(pt_State *S);
+pt_Buffer   pt_empty(const pt_State *S);
 pt_Buffer   pt_from(pt_State *S, const char *s, size_t len);
 pt_Buffer   pt_compact(pt_State *S, pt_Buffer b);
 unsigned  pt_version(pt_Buffer b);
@@ -162,16 +166,24 @@ size_t    pt_bytes(pt_Buffer b);
   per-state 计数器分配的值。
 - **`pt_bytes`**：返回 buffer 的总字节数。`b==NULL` 返回 0。O(1)。
 
-### 3.4 游标查询宏
+### 3.4 游标查询
 
 ```c
+int pt_valid(const pt_Cursor *C);
+
 #define pt_offset(C) ((C)->off + (C)->poff)
 #define pt_buffer(C)   ((C)->tree)
 ```
 
+- **`pt_valid`**：游标仍挂载且其捕获的 `epoch` 与树当前值相等时返回非 0。通过某
+  个游标原地修改 transient 树，会使绑定同一棵树的其他游标全部过期。过期游标在
+  每个公共入口都失败——返回 `int` 的入口返回 `PT_ERRPARAM`，返回指针的入口返回
+  `NULL`（带长度出参的同时置 `*plen = 0`），`pt_read` 返回 0——直到用 `pt_seek`
+  重新绑定。从未 `pt_seek` 过的游标（`tree == NULL`）不合法。
 - **`pt_offset`**：游标当前绝对字节偏移。直接解引用；调用方须保证 `C` 非空。
 - **`pt_buffer`**：游标当前关联的树指针。编辑态时是内部新树；否则是传给
-  `pt_seek` 的 buffer。
+  `pt_seek` 的 buffer。判断游标是否仍挂载用 `pt_buffer(C) != NULL`；`pt_valid`
+  还要求 `epoch` 相等。
 
 ### 3.5 游标定位与移动
 
@@ -181,15 +193,18 @@ int pt_locate(pt_Cursor *C, size_t off);
 int pt_advance(pt_Cursor *C, pt_Delta d);
 ```
 
-- **`pt_seek`** — 游标构造器：绑定 buffer 并清除 dirty。重置游标后，若
-  `off >= b->bytes` 定位到树尾，否则自顶向下定位到目标叶。返回 `PT_OK` 或
+- **`pt_seek`** — 游标构造器：绑定 buffer、清除 dirty 并捕获树的原地修改代次。
+  重置游标后，若 `off >= b->bytes` 定位到树尾，否则自顶向下定位到目标叶。它同时
+  是恢复入口——对过期游标重新 `pt_seek` 即可继续使用。返回 `PT_OK` 或
   `PT_ERRPARAM`。
 - **`pt_locate`** — 在已绑定 buffer 内重新定位。定位前清零 `C->off`/`C->poff`。
-  **保留 dirty 状态**（编辑中可重新定位）。返回 `PT_OK` 或 `PT_ERRPARAM`。
+  **保留 dirty 状态**（编辑中可重新定位）。过期游标返回 `PT_ERRPARAM` 且不移动。
+  返回 `PT_OK` 或 `PT_ERRPARAM`。
 - **`pt_advance`** — 按字节偏移移动游标。`d>0` 前进，`d<0` 后退。
   - 越界自动钳制：`<0` 钳到 offset=0，`>bytes` 钳到 offset=bytes。
   - `d==0` 或空树（`bytes==0`）立即返回 `PT_OK`。
   - **保留 dirty 状态**。
+  - 过期游标返回 `PT_ERRPARAM` 且不移动。
   - 返回 `PT_OK` 或 `PT_ERRPARAM`。
 
 ### 3.6 Piece 遍历与读取
@@ -222,8 +237,9 @@ piece 的数据指针。
   完整数据指针。若已在 piece 开头（`poff == 0`）且不在树头，左移到前一 piece
   开头并返回。在树头（`off==0 && poff==0`）返回 `NULL` 且 `*plen=0`。
 - **`pt_read`**：从游标位置逐 piece 拷贝 `len` 字节到 `buf`，边拷边移动游标。
-  自动跨越 piece 边界。可用字节不足时返回实际拷贝数。`C==NULL` 或 `buf==NULL`
-  返回 0。`pt_read` 内部循环使用 `pt_piece`/`pt_next`，**会移动游标**。
+  自动跨越 piece 边界。可用字节不足时返回实际拷贝数。`C==NULL`、`buf==NULL` 或
+  游标过期返回 0。`pt_read` 内部循环使用 `pt_piece`/`pt_next`，**会移动游标**。
+  树中段的游标不会停在 piece 尾：请求恰好结束在片段边界时，游标落在下一片起点。
 
 ### 3.7 编辑 — Hole 语义（拷贝）
 
@@ -262,7 +278,8 @@ int pt_remove(pt_Cursor *C, size_t len);
   - **零拷贝合并**：若插入点与相邻 literal piece 物理连续，直接扩展该 piece 的
     长度而不分裂叶。合并条件：左侧 literal 尾相邻，或当前 literal 尾相邻。
 - **`pt_splice`**：先 `pt_remove(C, del)` 删除 `del` 字节，再
-  `pt_append(C, s, len)`。`del==0 && (s==NULL || len==0)` 是合法 no-op。
+  `pt_append(C, s, len)`。`del==0 && len==0` 是合法 no-op；`s==NULL && len>0`
+  在任何修改之前返回 `PT_ERRPARAM`，树保持不变。
 - **`pt_remove`**：从游标位置删除 `len` 字节。自动将 `len` 钳制到
   `bytes - offset`。`len==0` 或游标已在树尾（`offset >= bytes`）立即返回
   `PT_OK`。
@@ -287,10 +304,12 @@ rollback。
 - **`pt_commit`**：
   - **无待提交编辑（`!C->dirty`）**：将当前 buffer retain 一次并返回。
   - **有待提交编辑（`C->dirty`）**：把 hole 数据冻结到 arena 块，将 hole piece
-    替换为 literal 指针，合并物理相邻 literal，并重新平衡树。清除 dirty，返回
-    新 buffer。
-  - 若冻结 OOM（arena 分配失败），返回 `NULL`：树保持一致，dirty 保留，游标仍
-    附着（已重新定位），可重试 commit。
+    替换为 literal 指针，合并物理相邻 literal，并重新平衡树。树的修改代次
+    （`epoch`）递增，其上其它游标随之失效；游标被分离（`C->tree = NULL`）。
+  - 若 arena 预留失败，返回 `NULL`，什么都没变。
+  - 若冻结期节点内存不足，返回 `NULL`：树仍一致（已冻结的 hole 保持已冻结），
+    dirty 保留，游标被重新定位到原偏移且仍附着，故可重试 commit；树的 epoch
+    已经递增。
 - **`pt_rollback`**：
   - **无待提交编辑**：将当前 buffer retain 一次并返回（同干净 commit）。
   - **有待提交编辑**：丢弃内部 transient 树，返回 retain 过的编辑前源 buffer。
@@ -331,6 +350,8 @@ arena 是**每棵树**的块链，用于存放冻结的 literal 数据。
   - `len==0` 返回 `NULL`。
   - 返回指针可直接传给 `pt_append`/`pt_insert` 等——数据已在 arena 中，随树释放。
 
+游标过期时 `pt_reserve`、`pt_scratch`、`pt_literal` 均返回 `NULL`，不触碰树。
+
 ---
 
 ## 4. 所有权、生命周期与线程
@@ -341,9 +362,10 @@ arena 是**每棵树**的块链，用于存放冻结的 literal 数据。
   剩余 arena block 也会由 state 一并回收。
 - `pt_commit`/`pt_rollback` 后游标被分离；如需继续，在返回的 buffer 上重新
   `pt_seek`。
-- 多个游标若从同一游标拷贝，可共享同一棵 transient 树；但树结构变化会使其他
-  游标的路径指针失效。库不对此提供保护；调用方必须避免通过别名游标并发做结构
-  性编辑。
+- 多个游标若从同一游标拷贝，可共享同一棵 transient 树。通过其中一个游标原地
+  修改该树会递增其 epoch，于是共享该树的其他游标在下一次公共入口失败（返回 `int`
+  的入口返回 `PT_ERRPARAM`，读取与 arena 入口返回 `NULL`/0），而不会拿着已失效的
+  路径指针继续使用；重新 `pt_seek` 即可继续。
 - 库非线程安全：一个 state、其 buffer 和 cursor 不得在无外部同步的情况下并发
   访问。
 

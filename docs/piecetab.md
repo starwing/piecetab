@@ -14,11 +14,11 @@
 
 ### Error Codes
 
-| Macro         | Value | Meaning                                |
-| ------------- | ----- | -------------------------------------- |
-| `PT_OK`       | 0     | Success                                |
-| `PT_ERRPARAM` | -1    | Null pointer or out-of-range parameter |
-| `PT_ERRMEM`   | -2    | Memory allocation failure              |
+| Macro         | Value | Meaning                                                |
+| ------------- | ----- | ------------------------------------------------------ |
+| `PT_OK`       | 0     | Success                                                |
+| `PT_ERRPARAM` | -1    | Null pointer, out-of-range parameter, or stale cursor  |
+| `PT_ERRMEM`   | -2    | Memory allocation failure                              |
 
 ### pt_State — Memory Context
 
@@ -53,6 +53,7 @@ struct pt_Cursor {
     struct pt_Tree  *tree;                /* current buffer (internal new tree when transient) */
     size_t           poff;                /* offset within current piece */
     size_t           off;                 /* cumulative bytes before current piece */
+    unsigned         epoch;               /* tree mutation epoch captured at bind time */
     int              dirty;               /* transient (editing) flag */
 };
 ```
@@ -63,8 +64,11 @@ struct pt_Cursor {
 - **The cursor owns no buffer reference** — it only borrows the buffer passed to
   `pt_seek`/`pt_locate`. The caller must keep that buffer alive while the cursor
   is in use.
-- Constructed by `pt_seek` (clears `dirty`); `pt_locate`/`pt_advance` preserve
-  `dirty`.
+- Constructed by `pt_seek` (clears `dirty`, captures the tree's mutation
+  `epoch`); `pt_locate`/`pt_advance` preserve `dirty` and keep the captured
+  epoch.
+- A cursor goes **stale** when the tree it is bound to is mutated in place by
+  another cursor; `pt_valid` (§3.4) reports whether it is still usable.
 
 ### pt_Delta
 
@@ -149,7 +153,7 @@ belongs to the tree being released are freed.
 ### 3.3 Buffer Construction & Queries
 
 ```c
-pt_Buffer   pt_empty(pt_State *S);
+pt_Buffer   pt_empty(const pt_State *S);
 pt_Buffer   pt_from(pt_State *S, const char *s, size_t len);
 pt_Buffer   pt_compact(pt_State *S, pt_Buffer b);
 unsigned  pt_version(pt_Buffer b);
@@ -182,18 +186,28 @@ size_t    pt_bytes(pt_Buffer b);
 - **`pt_bytes`**: Returns total byte count of the buffer. `b==NULL` returns 0.
   O(1).
 
-### 3.4 Cursor Query Macros
+### 3.4 Cursor Query
 
 ```c
+int pt_valid(const pt_Cursor *C);
+
 #define pt_offset(C) ((C)->off + (C)->poff)
 #define pt_buffer(C)   ((C)->tree)
 ```
 
+- **`pt_valid`**: Non-zero when the cursor is attached and its captured `epoch`
+  still matches the tree. In-place mutation of a transient tree through one
+  cursor makes every other cursor bound to that tree stale. A stale cursor fails
+  at every public entry — `PT_ERRPARAM` for int-returning entries, `NULL` for
+  pointer-returning entries (length out-parameters are set to 0), 0 for
+  `pt_read` — until it is re-bound with `pt_seek`. A never-seeked cursor
+  (`tree == NULL`) is invalid.
 - **`pt_offset`**: The cursor's current absolute byte offset. Direct
   dereference; caller must ensure `C` is non-NULL.
 - **`pt_buffer`**: The tree pointer currently associated with the cursor. In
   transient state this is the internal new tree; otherwise the buffer passed to
-  `pt_seek`.
+  `pt_seek`. Use `pt_buffer(C) != NULL` to test whether the cursor is still
+  attached; `pt_valid` additionally requires the epoch to match.
 
 ### 3.5 Cursor Positioning & Movement
 
@@ -203,18 +217,22 @@ int pt_locate(pt_Cursor *C, size_t off);
 int pt_advance(pt_Cursor *C, pt_Delta d);
 ```
 
-- **`pt_seek`** — Cursor constructor: binds a buffer and clears dirty. After
-  resetting the cursor, if `off >= b->bytes` positions at tree tail, otherwise
-  descends top-down to the target leaf. Returns `PT_OK` or `PT_ERRPARAM`.
+- **`pt_seek`** — Cursor constructor: binds a buffer, clears dirty, and captures
+  the tree's mutation epoch. After resetting the cursor, if `off >= b->bytes`
+  positions at tree tail, otherwise descends top-down to the target leaf. It is
+  also the recovery entry — re-seek a stale cursor to make it usable again.
+  Returns `PT_OK` or `PT_ERRPARAM`.
 - **`pt_locate`** — Relocates the cursor within the bound buffer. Resets
   `C->off`/`C->poff` before locating. **Preserves dirty state** (reposition
-  during editing). Returns `PT_OK` or `PT_ERRPARAM`.
+  during editing). A stale cursor returns `PT_ERRPARAM` without moving.
+  Returns `PT_OK` or `PT_ERRPARAM`.
 - **`pt_advance`** — Moves the cursor by byte offset. `d>0` forward, `d<0`
   backward.
   - Out-of-bounds auto-clamps: `<0` clamps to offset=0, `>bytes` clamps to
     offset=bytes.
   - `d==0` or empty tree (`bytes==0`) returns `PT_OK` immediately.
   - **Preserves dirty state**.
+  - A stale cursor returns `PT_ERRPARAM` without moving.
   - Returns `PT_OK` or `PT_ERRPARAM`.
 
 ### 3.6 Piece Traversal & Reading
@@ -255,8 +273,10 @@ the cursor first, then return the target piece's data pointer.
 - **`pt_read`**: Copies `len` bytes from the cursor position piece-by-piece into
   `buf`, advancing the cursor as it goes. Automatically crosses piece
   boundaries. Returns actual bytes copied when fewer than `len` are available.
-  `C==NULL` or `buf==NULL` returns 0. `pt_read` internally loops over
-  `pt_piece`/`pt_next`, **moving the cursor**.
+  `C==NULL`, `buf==NULL`, or a stale cursor returns 0. `pt_read` internally
+  loops over `pt_piece`/`pt_next`, **moving the cursor**. A mid-tree cursor
+  never rests on a piece end: when the request ends exactly at a piece
+  boundary, the cursor lands at the start of the next piece.
 
 ### 3.7 Editing — Hole Semantics (copy)
 
@@ -300,7 +320,9 @@ ensure `s` remains valid for the lifetime of all buffers that reference it.
     splitting the leaf. Merge conditions: left literal tail adjacent or current
     literal tail adjacent.
 - **`pt_splice`**: First `pt_remove(C, del)` deletes `del` bytes, then
-  `pt_append(C, s, len)`. `del==0 && (s==NULL || len==0)` is a valid no-op.
+  `pt_append(C, s, len)`. `del==0 && len==0` is a valid no-op;
+  `s==NULL && len>0` returns `PT_ERRPARAM` before any mutation, leaving the tree
+  unchanged.
 - **`pt_remove`**: Deletes `len` bytes from the cursor position. Auto-clamps
   `len` to `bytes - offset`. `len==0` or cursor already at tree tail
   (`offset >= bytes`) returns `PT_OK` immediately.
@@ -330,10 +352,13 @@ Both functions return an **owned reference** and **detach the cursor**
     returns it.
   - **Pending edits (`C->dirty`)**: freezes hole data into arena blocks, replaces
     hole pieces with literal pointers, merges physically adjacent literals, and
-    rebalances the tree. Clears dirty, returns the new buffer.
-  - If the freeze OOMs (arena allocation fails), returns `NULL`: the tree stays
-    consistent, dirty is preserved, and the cursor stays attached (repositioned)
-    so the commit can be retried.
+    rebalances the tree. The tree's mutation epoch advances, so other cursors
+    bound to it become invalid; the cursor is detached (`C->tree = NULL`).
+  - If the arena reservation fails, returns `NULL` with nothing changed.
+  - If the freeze runs out of node memory, returns `NULL`: the tree stays
+    consistent (holes already frozen stay frozen), `dirty` is preserved, and the
+    cursor is repositioned to the same offset and stays attached, so the commit
+    can be retried; the tree's epoch has already advanced.
 
 - **`pt_rollback`**:
   - **No pending edits**: retains the current buffer once and returns it (same
@@ -388,6 +413,9 @@ The arena is a **per-tree** block chain that stores frozen literal data.
   - The returned pointer can be passed directly to `pt_append`/`pt_insert` etc.
     — data is already in the arena and will be freed with the tree.
 
+A stale cursor makes `pt_reserve`, `pt_scratch`, and `pt_literal` return `NULL`
+without touching the tree.
+
 ---
 
 ## 4. Ownership, Lifetime & Threading
@@ -399,10 +427,11 @@ The arena is a **per-tree** block chain that stores frozen literal data.
   are invalid; any remaining arena blocks are reclaimed by the state.
 - After `pt_commit`/`pt_rollback`, the cursor is detached; re-seek it on the
   returned buffer to continue.
-- Multiple cursors can share one transient tree if copied from the same cursor,
-  but tree-structure changes can invalidate the other cursor's path pointers.
-  The library does not guard against this; callers must avoid concurrent
-  structural edits through aliased cursors.
+- Multiple cursors can share one transient tree if copied from the same cursor.
+  Editing that tree in place through one of them bumps its epoch, so the other
+  cursors sharing it fail their next public call (`PT_ERRPARAM`, or `NULL`/0 for
+  the reading and arena entries) instead of using invalidated path pointers;
+  re-`pt_seek` to continue.
 - The library is not thread-safe: a state, its buffers, and its cursors must not
   be accessed concurrently without external synchronization.
 

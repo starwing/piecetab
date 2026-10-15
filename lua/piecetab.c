@@ -301,7 +301,7 @@ static void lpt_openbuffer(lua_State *L) {
 
 static int Lcur_gc(lua_State *L) {
     pt_Cursor *C = (pt_Cursor *)lua_touserdata(L, 1);
-    if (pt_valid(C)) pt_release(pt_rollback(C));
+    if (pt_buffer(C)) pt_release(pt_rollback(C));
     return 0;
 }
 
