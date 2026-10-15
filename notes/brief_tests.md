@@ -9,6 +9,9 @@
 - **单测出现任何问题，放弃一切计划，先修单测，再继续原任务**
 - **遇 bug 必须先写单测重现、确认失败，再改业务代码**；禁止在重现之前修改业务代码
 - 测试是隐性契约的回归网（列行为清单、逐项映射既有测试，见 `brief_refine.md` 7.2）
+- **黑盒边界（anchortree 定案）**：测试侧 `atT_*` helper **可以任意读写库内 struct**（`at_Tree`/`at_Node`/`at_Leaf`/`at_Pair`/`at_Edge`/`at_Anchor`/`at_Cursor`/`at_Pool` 等），**也可以任意使用库内宏**；**只禁止调用库内 `atX_*` 私有函数**（`atN_*`/`atA_*`/`atP_*`/`atK_*`/`atL_*`/`atE_*`/`atD_*`/`atI_*`/`atU_*`/`atB_*`/`atS_*`/`atM_*`/`atO_*`/`atG_*`）。原因：私有函数的覆盖必须由公共 API 路径触发，测试直接调用会污染覆盖率口径。
+- **不得删减任何 `atT_*` 结构检查 helper**（`checktree` / `checkchains` / `noemptyedges` / `checkdepth` / `checkcursor` 等）；迁移到新模型时保留 helper 名与检查语义，只把内部字段表达式换到新布局。
+- **实现偏差必须停下问**：测试迁移 / 实现与需求、已批准计划、design 出现任何不一致，或需要对规则边界做扩大 / 缩小解释时，立即停止并询问用户；禁止自行解释后继续。
 
 ## 2. 断言与不变式
 
@@ -63,7 +66,7 @@
   #include "linecache_test_fanout4.gen.inc"
   ```
 - `tests/tests.h` 提供：`asserteq` / `assertok` / `assertstreq`、`check(e, ...)`（失败打日志返回 0）、`test_alloc` / `oom_alloc` / 计数分配器、`test_log(...)`（stderr）；测试本地 helper 用 `TEST_STATIC`
-- 库专属工具（树构造 / 精确校验 helper）见对应库 brief（如 `lc_asserttree` / `lc_dumptree`，见 `notes/brief_linecache.md` §十）
+- 库专属工具（树构造 / 精确校验 helper）见对应库 brief（如 `lc_asserttree` / `lc_dumptree`，见 `notes/design_linecache.md` §十）
 
 ## 6. fuzz
 

@@ -56,7 +56,7 @@
 
 ## 5. lcB_cutleaf — 裂叶
 
-`static int lcB_cutleaf(lc_Cursor *C, lc_Node *rt)`
+`static int lcB_cutleaf(lc_Cursor *C)`
 
 于 C 所在叶中延行索引 `C->lnu` 裂开。裂点行及右侧行入新叶，右侧叶兄弟同入 `rt[0]`。游标移回左半叶末。
 
@@ -173,7 +173,7 @@ scanner 输出直填叶：先补完当前末叶，再分配新叶填至满或 sc
 
 ---
 
-`static int lcD_findroom(lc_Cursor *C, lc_Node *rt, int nofail, int l)`
+`static int lcD_findroom(lc_Cursor *C, int l, int nofail)`
 
 向上寻首个非末位层 `fl`，搬右兄弟入 `rt`，垂空链至 `l` 层。stitchnode 与 lc_append 共用。
 
@@ -203,7 +203,7 @@ scanner 输出直填叶：先补完当前末叶，再分配新叶填至满或 sc
 
 ## 8. lcD_mergeleaf — 叶合并
 
-`static int lcD_mergeleaf(lc_Cursor *C, lc_Node *rt)`
+`static int lcD_mergeleaf(lc_Cursor *C)`
 
 将 `rt[0].children[0]`（被裂出的右半叶或 splice 挖掘的右叶）与当前左邻叶合并。返回位置修正量 `d`，供 stitch末尾 在 foldleaf 后计算正确行位置。
 
@@ -387,7 +387,7 @@ d 的语义同 stitchnode 中的 d——"真正期待的行在当前行之前多
 
 ## 12. lcD_stitchnode — 洋葱序缝合
 
-`static void lcD_stitchnode(lc_Cursor *C, lc_Node *rt)`
+`static void lcD_stitchnode(lc_Cursor *C)`
 
 stitch 的主引擎。洋葱序（自叶向根，k=0..levels）将 `rt[k]` 中数据搬回树。边缝合边修复 underfill：先填满当前父节点（防溢出机制），再逐层 foldnode、最后 findroom 为剩余数据建新节点链。
 
@@ -434,7 +434,7 @@ stitch 的主引擎。洋葱序（自叶向根，k=0..levels）将 `rt[k]` 中�
   - `d = k ? LC_FANOUT - lcK_idx(C, lcK_parent(C, l), l) : m`
     - 叶层（k==0）：`d = m`——当前父节点中新搬入的子节点数
     - 内层（k>0）：`d = LC_FANOUT - idx(C, parent(l), l)`——当前父节点中 C 右侧的槽位数（findroom 前父节点必满，此值为右侧搬出子节点数）
-  - `lcD_findroom(C, rt, 1, l)`：向上寻非末位层，搬右兄弟入 rt，垂空链。`l += r`（r 为 rootpush 补偿）
+  - `lcD_findroom(C, l, 1)`：向上寻非末位层，搬右兄弟入 rt，垂空链。`l += r`（r 为 rootpush 补偿）
   - `lcN_copy(p, 0, &rt[k], m, rtcc - m)`：剩余子节点搬入新链的根 `p`
   - `lcM_up(C, l - 1, db, dl)` 度量加回
 
@@ -464,7 +464,7 @@ stitch 的主引擎。洋葱序（自叶向根，k=0..levels）将 `rt[k]` 中�
 
 ## 13. lcD_stitch — 缝合入口
 
-`static int lcD_stitch(lc_Cursor *C, lc_Node *rt)`
+`static void lcD_stitch(lc_Cursor *C)`
 
 lc_append 之缝合入口。调度 mergeleaf → stitchnode → foldleaf → 位置修正。
 
@@ -487,8 +487,8 @@ stitch 内部其他子调用均不分配节点：`mergeleaf` 仅释放叶子，`
 ### 行为
 
 - 预分配节点保 findroom 不 OOM
-- `d = (cc && rtcc) ? lcD_mergeleaf(C, rt) : 0`：将裂点叶与 `rt[0].children[0]` 合并。`d` 的语义见 §8——为 0 则表示完全合并（无需 stitch末尾 修正）；> 0 则表示部分合并（`d = LC_LEAF_FANOUT - bc` = 合并后 C 之后的行数）
-- `lcD_stitchnode(C, rt)`：洋葱序缝合（§12），事务性保证永不失败
+- `d = (cc && rtcc) ? lcD_mergeleaf(C) : 0`：将裂点叶与 `rt[0].children[0]` 合并。`d` 的语义见 §8——为 0 则表示完全合并（无需 stitch末尾 修正）；> 0 则表示部分合并（`d = LC_LEAF_FANOUT - bc` = 合并后 C 之后的行数）
+- `lcD_stitchnode(C)`：洋葱序缝合（§12），事务性保证永不失败
 - 修正 `paths[l]`：若 `i >= cc`（C 在越界位置），回退至末叶：`i = cc - 1`，`C->paths[l] = &p->children[i]`，`C->lnu = p->breaks[i]`，`C->off -= p->bytes[i]`
 - `lcD_foldleaf(C)`：叶层折叠。折叠后可能 `lcD_rebalance(C, l-1)` 缩根
 - **d 修正**（§8 `d` 的语义之应用）：
@@ -573,14 +573,14 @@ OOM 时恢复树至 cutleaf 后状态。降根至裂叶时高度（清除 append
 
 **S1 — 参数校验**：若 `C == NULL || C->tree == NULL || sc == NULL` → `LC_ERRPARAM`。`rt[]` 清空。
 
-**S2 — 裂叶**：`lcB_cutleaf(C, rt)` 将 C 右侧数据搬入 `rt[0]`。失败 → `return LC_ERRMEM`。保存快照 `sC = *C`、`sl = lcK_levels(C)`（备 OOM 回滚与 rm 补写）。
+**S2 — 裂叶**：`lcB_cutleaf(C)` 将 C 右侧数据搬入 `rt[0]`。失败 → `return LC_ERRMEM`。保存快照 `sC = *C`、`sl = lcK_levels(C)`（备 OOM 回滚与 rm 补写）。
 
 **S3 — 追搬轮替**：while 循环：
 - `r = lcB_append(C, sc, ud)`：scanner 输出填叶。`r < 0` → rollback；`r == 0` → break（scanner 耗尽）
 - `C->off += C->loff, C->loff = 0, C->lnu = 0`（append 已做此操作，此为防御性）
-- `r = lcD_findroom(C, rt, 0, lcK_levels(C))`：叶父满则扩容搬右兄弟。失败 → rollback
+- `r = lcD_findroom(C, lcK_levels(C), 0)`：叶父满则扩容搬右兄弟。失败 → rollback
 
-**S4 — 缝合**：`lcD_stitch(C, rt)`。失败 → rollback。
+**S4 — 缝合**：`lcD_stitch(C)`；节点池已由 `lcD_findroom` 的入口 reserve 覆盖，缝合不失败。
 
 **S5 — 补 e/rm**：
 - `lcB_fixsource(&sC, sl, C->col)`：补裂点残字节 `rm`。若返 1：sC 与 C 同叶 → `C->loff += C->col`；否则 → `C->off += C->col`。`C->col = 0`
@@ -618,7 +618,7 @@ L 和 R 界定删除区间（L 在区间左端、R 在区间右端）。操作�
 - L 侧：`i = idx(L, p, l)`。汇总 L 与 R 之间（i+1..cc）的度量 → `lcM_up` 扣祖先 → `lcN_remove` 释放中段子树并压实。中段子树直接删除，不存于 rt
 
 **第四段 — 缝合**：
-- `lcD_stitch(L, rt)`：将 rt 中 R 右侧数据缝合回树（mergeleaf → stitchnode → foldleaf → 位置修正）
+- `lcD_stitch(L)`：将 rt 中 R 右侧数据缝合回树（mergeleaf → stitchnode → foldleaf → 位置修正）
 - 最后将 `R->col`（trimleft 时从 R 叶抹去的残字节）加回 L 当前行
 
 ### lc_splice

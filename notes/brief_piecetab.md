@@ -296,7 +296,7 @@ just pt-lines         # 未覆盖行源码
 | 文档                          | 内容                                     |
 | ----------------------------- | ---------------------------------------- |
 | `notes/design_piecetab_v2.md` | 架构设计（命名漂移见 §十一，模型仍准确） |
-| `notes/brief_linecache.md`    | 姊妹库 linecache 总览（变量命名表通用）  |
+| `notes/design_linecache.md`    | 姊妹库 linecache 总览（变量命名表通用）  |
 | `notes/brief_debug.md`        | 调试指引                                 |
 
 本地文档（未随仓库发布）：`notes/plans/` 存设计文档（分代 arena——已实现，
@@ -305,7 +305,7 @@ just pt-lines         # 未覆盖行源码
 
 ## 十三、变量命名规范
 
-> 铁律：新增函数必须从表取名。基础表沿用 `notes/brief_linecache.md` §十三
+> 铁律：新增函数必须从表取名。基础表沿用 `notes/design_linecache.md` §十三
 > （`l`/`k`/`i`/`cc`/`db`/`rm`/`rt`/`sC`/`fl`/`kl`/`cL`/`cR` 等全部通用）。
 > piecetab 特有增补：
 

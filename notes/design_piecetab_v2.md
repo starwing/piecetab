@@ -22,7 +22,7 @@
             ├── pt_Tree (冻结核，可共享)
             │      ├── root (嵌入)
             │      │     ├── bytes[]     (度量：叶层=piece长，内层=子树累计)
-            │      │     ├── mask[]      (位图：叶层=hole标识，内层=子树含hole)
+            │      │     ├── mask        (单字位图：叶层=hole标识，内层=子树含hole)
             │      │     ├── children[]  (pt_Node* 或 数据指针)
             │      │     ├── version
             │      │     └── child_count
@@ -77,9 +77,9 @@ levels = 3 的树：从 root 到 piece 共 levels+2 = 5 层
                ↑ C->paths[3], *C->paths[3] = HOLE "##"
 ```
 
-**mask 维护铁律**：任何可能引入/移除 hole 的编辑操作，除 `ptM_upbytes` 更新度量外，
-**必须调用 `ptM_upmask`** 沿 paths 向上传播 mask 位。`ptI_splitins` 仅处理了度量
-（upbytes），mask 上推由调用方负责。
+**mask 维护铁律**：任何可能引入/移除 hole 的编辑操作，除 `ptM_up` 更新度量外，
+**必须调用 `ptM_remask` / `ptM_up` 沿 paths 向上传播 mask 位**。`ptI_splitins` 仅处理了度量，
+mask 上推由调用方负责。
 
 **不变量：位 ≥ cc 恒为 0** — cc 收缩处（`ptN_remove`、`ptD_balancenode`、
 `ptI_splitroot`/`ptI_splitchild` 裂半、`ptD_mergeleaf` merged 路径）统一以
@@ -109,57 +109,70 @@ literal 无独立结构体，零额外开销（对比旧 `pt_Piece` 128 字节�
 
 hole 是编辑态中原地改写的可变缓存。固定容量，池化管理：
 
-```c
-#define PT_HOLE_CAP (64 - sizeof(unsigned short))  /* 保持总大小 2^n */
-
-typedef struct pt_Hole {
-    unsigned short n;                /* 已写入字节数 (0..PT_HOLE_CAP) */
-    char           data[PT_HOLE_CAP]; /* 实际数据 */
-} pt_Hole;
-```
-
-- 总大小 = `sizeof(unsigned short) + PT_HOLE_CAP` = 64（2 的幂，cache 友好）
-- 容量为编译期宏，不占结构体字段
-- 创建时机：`pt_edit` 命中非 hole 位置 → 分裂 literal → 插入 hole
-- 销毁时机：空 hole（`n==0`）立即回池；commit 时遍历 hole，数据写入 scratch 后将原位换为 literal 指针
+- 宏 `PT_MAX_HOLESIZE=64`（`piecetab.h:172-174`）。
+- `pt_Hole` 唯一 field 是 `char data[PT_MAX_HOLESIZE]`；hole 的当前长度以父节点同槽的 `bytes[i]` 为准。
+- 结构体总大小 64 字节（2 的幂，cache 友好）；容量是编译期宏，不占 field。
+- 创建时机：`pt_edit` 命中非 hole 位置 → 分裂 literal → 插入 hole。
+- 销毁时机：空 hole（`bytes[i]==0`）立即回池；commit 时遍历 hole，数据写入 scratch 后将原位换为 literal 指针。
 
 ### 2.3 相邻 literal 合并
 
-若两相邻 literal 物理地址连续（`literal_i + node->bytes[i] == literal_{i+1}`）
-且版本号相同，进行叶层槽位合并：
-```
-node->bytes[i] += node->bytes[i+1];
-// 删除槽 i+1
-```
+若两相邻 literal 物理地址连续（`literal_i + node->bytes[i] == literal_{i+1}`）且版本号相同，进行叶层槽位合并：把右槽长度累加到左槽，然后删除右槽。
 
 此操作在编辑后和 pt_remove 后检查，防止叶槽碎片累积。
 commit 时连续 hole 转为 literal 时也按此规则自然合并。
+
+### 2.4 叶异质性：`ptD_mergeleaf` 为何返回 `d`
+
+叶槽是**异质**的（literal 指针 / `pt_Hole*`，由父 `mask` 位区分），而 §2.3 只允许**物理连续
+的 literal** 合并 —— hole 与 literal 之间、以及物理不连续的 literal 之间都不能合并。
+因此 `ptD_mergeleaf` 只有两条合并路径：
+
+- `lit + lit` 且物理连续 → 整槽合并（`merged`），rt 槽消失；
+- `hole + hole` → 把 rt 首槽（hole）的数据**部分或全部**追加进前槽的 hole：
+  `d = min(rt->bytes[0], PT_MAX_HOLESIZE - bc)`。受容量上限约束，`d` 常常只吃掉 rt 首槽的一部分，
+  于是 **rt 槽存活为一个缩短的 hole**，而"删除终点"落在这个洞的右边界上。
+
+正因为 rt 槽可能存活、且其起点已被搬走 `d` 字节，光标**无法在 mergeleaf 内一次放准**：
+mergeleaf 先把光标推迟到 survivor 槽尾（`off += poff + d; poff = 0; paths[l] = &p->children[cc]`），
+再由 `ptD_stitch` 的 `i == cc` 修正与 `d > poff` 尾段落回"删除终点前一个元素"上；`d` 就是这条
+修正链所需的字节数。
+
+**这是 piecetab 独有的需要**：linecache 的 `d` 来自叶内行索引 `lnu` 的修正（其游标是行索引型的）；
+spantree 与 anchortree 的叶同质、游标是纯字节型，两者都不需要 `d` —— `spD_mergeleaf` /
+`atD_mergeleaf` 在自己的搬移出口就地同步游标即可（见 `notes/design_spantree.md` §7.4 光标契约）。
+
+### 2.5 0 长槽禁止与 `ptD_cutrange` 的 0 长特判
+
+与 linecache / spantree / anchortree 一致，**树内不得存在 0 span 槽**：`poff` 是段内偏移，
+中间槽 `bytes == 0` 会让 `poff >= bytes` 把该槽误判为耗尽，`pt_next` / 导航与虚拟尾判定全部失效。
+
+0 长槽只在"游标指向末尾"处需要处理：`ptD_cutrange` 用 `i += (k || p->bytes[i] == 0);`
+（`piecetab.h:720`、`725`）把切点处的 0 长槽随切点一起删去，因此 survivor 永不为 0 长槽 ——
+这就是"禁止树中段尾"在删除路径上的落点。（spantree 同款：`spD_cutrange:592/597`；
+linecache 的负载度量是行数，故写 `p->breaks[i] == 0`，`lcD_cutrange:600/605`。）
+
+`ptD_cutrange` 的整体形状（L / R 两游标 + `rt` scratch；三库同构）：
+
+1. 自 `kl = levels` 向下到 `fl + 1`：L 侧 `ptN_remove(S, p, k, i + 1, cc)` 摘掉切点右侧；R 侧从
+   `i`（必要时 `+1`，见上）起 `ptN_copy` 到 `rt[k]`，再把 `[0, i)` `ptN_purge` 并 `ptN_setcc(p, 0)`；
+2. `fl` 层：同样 `ptN_copy` 到 `rt[k]`；`ptN_setcc(p, i)` 留下切点前的部分；最后 L 侧
+   `ptN_remove(S, p, k, i + 1, cc)`；
+3. 层号 `k = levels - kl` 决定 `rt[k]` 装哪一层（`rt[0]` = 叶层）；`rt` 由 `ptD_stitch` 逐层 graft 回去；
+   trim 由调用方在 cutrange 之前完成，cutrange 只看游标槽号与 `bytes[]`。
 
 ---
 
 ## 三、叶类型辨识
 
-内部节点新增 mask 位图数组，每个 child 占 1 bit：
+内部节点用一个单字 mask 位图标记每个 child（当前默认 `PT_FANOUT=31`，`mask` 类型为 `unsigned`；`PT_FANOUT>=32` 时为 `unsigned long long`）：
 
-```c
-#define PT_MASK_SIZE ((PT_FANOUT + 63) / 64)
-
-struct pt_Node {
-    size_t              bytes[PT_FANOUT];       /* 度量：叶层=piece长，内层=子树累计 */
-    unsigned long long  mask[PT_MASK_SIZE];     /* 位图：叶层=hole标识，内层=子树含hole */
-    struct pt_Node     *children[PT_FANOUT];    /* 数据指针或子节点 */
-    unsigned            version;
-    unsigned short      child_count;
-};
-```
-
-- **叶层**：`mask[i] == 1` → `children[i]` 指向 `pt_Hole*`；否则指向 `char*`（literal）
-- **内层**：`mask[i] == 1` → 子树 i 内含至少一个 hole（commit 遍历优化）
-- 位图随节点 COW 复制；编辑时沿 paths 向上传播（同 `lcM_up`）
-
-性能影响：
-- 每 8 字节指针仅多 1 bit 开销（≈1.5%）
-- fanout 不受 64 限制（只需调整 `PT_FANOUT`）
+- 宏 `PT_MASK_BITS = sizeof(pt_Mask) * CHAR_BIT`；静态断言 `PT_FANOUT <= PT_MASK_BITS`。
+- `pt_Node` 在共同 `children`、`bytes`、`child_count` 之外，额外 field 是 `mask`（单字位图）和 `version`（COW 版本）。
+- **叶层**：`mask` 第 i 位为 1 → `children[i]` 指向 `pt_Hole*`；否则指向 literal。
+- **内层**：`mask` 第 i 位为 1 → 子树 i 内含至少一个 hole（commit 遍历优化）。
+- 收缩 `child_count` 后必须 `ptM_clamp` 清掉高位残值；位图随节点 COW 复制；编辑时沿 paths 向上传播（同 `lcM_up`）。
+- 成本：每个 child 约 1 bit；默认 fanout 31，不受单字 64 位限制。
 
 ---
 
@@ -343,7 +356,7 @@ int  pt_remove(pt_Cursor *C, size_t len);
 - 若 cursor 位置已是 hole 尾 → 直接追加至 hole（无新分配）
 - 若 cursor 在 hole 中间且 hole 有空间 → memmove + copy
 - 若 hole 空间不足 → 裂新 hole，数据跨 hole 分布
-- `del=0` → 纯插入；`len=0` → 纯删除
+- `del == 0 && len > 0` → 纯插入；`del > 0 && len == 0` → 纯删除；两者皆 0 → no-op
 - `s` 生存期无要求（库已 copy）
 
 **`pt_insert(C, s, len)`** — 插入 literal（引用语义，原位）
@@ -359,21 +372,21 @@ int  pt_remove(pt_Cursor *C, size_t len);
 - 适用于批量载入文件块（配合 mmap 或 scratch）
 - 实现上等价于 `pt_insert` + `pt_advance(len)`，但内部统一走 `ptI_splitins`
 
-**实现注意事项**：`ptI_splitins` 仅处理 `ptM_upbytes`（度量），不做 `ptM_upmask`（mask 传播）。`pt_edit` 和 `pt_append` 的调用方负责在 `ptI_splitins` 后调用 `ptM_upmask`（见 §一.1 铁律）。
+**实现注意事项**：`ptI_splitins` 仅处理 `ptM_up`（度量），不做 `ptM_remask`（mask 传播）。`pt_edit` 和 `pt_append` 的调用方负责在 `ptI_splitins` 后调用 `ptM_remask` / `ptM_up`（见 §一.1 铁律）。
 
 **`pt_splice(C, del, s, len)`** — splice via literal（引用语义，追尾）
 
 - 先删除 cursor 位置起 `del` 字节
 - 再插入 literal `s[0..len-1]`（引用语义）
 - cursor 追尾到插入内容之后
-- `del=0, s=NULL` → 纯删除（等价 `pt_remove`）
+- 预 reserve `6*levels+8` 覆盖 remove 与 append 的合计，失败时树保持不变
 - `del=0` → 等价 `pt_append`
 - 若 `s` 在 scratch pool 内，库自动消费 buffer 头
 
 **`pt_remove(C, len)`** — 区间删除（原位）
 
 - 删除 cursor 位置起 `len` 字节（含跨 piece/hole）
-- 删除路径中若含 hole 且 hole 被清空（`n==0`），hole 对象立即回池
+- 删除路径中若含 hole 且 hole 被清空（父槽 `bytes[i]==0`），hole 对象立即回池
 - 删除后检查相邻 literal 是否可合并（物理连续则合并）
 - cursor 留在删除点
 
@@ -401,20 +414,13 @@ char *pt_buffer(pt_State *S, size_t *plen);
 
 ## 七、commit 流程
 
-```
-pt_commit(C):
-  1. 自 root DFS，利用内部节点 mask 跳过无 hole 子树
-  2. 按顺序访问每个 hole：
-     a. hole->data[0..n-1] append 到 scratch page
-     b. 若跨页，自动分裂 literal
-     c. children[i] = 新 literal 指针（指向 scratch 对应处）
-     d. node->bytes[i] = n
-     e. mask[i] = 0
-     f. pt_Hole 对象回池
-  3. 所有 hole 处理完后，检查相邻 literal 合并（物理连续则合并）
-  4. 沿路径向上传播度量修正 + 清除内层 mask
-  5. C->dirty = 0; 返回 b
-```
+commit 流程：
+
+1. 自 root DFS，利用内部节点 mask 跳过无 hole 子树。
+2. 按顺序访问每个 hole：把 hole 数据追加到 scratch page；若跨页，自动分裂 literal；把槽换为指向 scratch 的 literal；槽长度改为 hole 当前长度；清除该槽的 hole 位；`pt_Hole` 对象回池。
+3. 所有 hole 处理完后，检查相邻 literal 是否可合并（物理连续则合并）。
+4. 沿路径向上传播度量修正，并清除内层 mask。
+5. `C->dirty = 0`，返回 b。
 
 ---
 
@@ -437,7 +443,7 @@ piecetab 不内嵌调用 linecache。两个库各自独立，状态由外部分�
 | 宏              | 含义                    | 默认                          |
 | --------------- | ----------------------- | ----------------------------- |
 | `PT_FANOUT`     | 节点最大子数            | 31                            |
-| `PT_HOLE_CAP`   | hole 容量（字节）       | `64 - sizeof(unsigned short)` |
+| `PT_MAX_HOLESIZE` | hole 容量（字节）     | 64                            |
 | `PT_MAX_LEVEL`  | 最大树深                | 17（FANOUT=31 安全值，完整表见 docs/max_levels.zh.md） |
 | `PT_PAGE_SIZE`  | 池分配器页大小          | 65536                         |
 | `PT_STATIC_API` | 定义后所有函数为 static | —                             |
@@ -448,8 +454,8 @@ piecetab 不内嵌调用 linecache。两个库各自独立，状态由外部分�
 
 | 项目                         | 状态 | 说明                                                      |
 | ---------------------------- | ---- | --------------------------------------------------------- |
-| fanout 调优基准              | TODO | 首版用 62，后期 benchmark 决定                            |
-| hole 容量调优基准            | TODO | 首版用 `64 - sizeof(unsigned short)`，后期 benchmark 决定 |
+| fanout 调优基准              | TODO | 当前默认 31，后期 benchmark 决定                          |
+| hole 容量调优基准            | TODO | 当前默认 `PT_MAX_HOLESIZE=64`，后期 benchmark 决定        |
 | `pt_buffer` 多次调用保护     | TODO | 编辑器开发后按需加引用保护                                |
 | multi-cursor 同编辑态协同    | 未定 | API 设计待讨论                                            |
 | 全局统计 `pt_chars/pt_lines` | 移除 | 由 linecache 承担                                         |
@@ -464,7 +470,7 @@ piecetab 不内嵌调用 linecache。两个库各自独立，状态由外部分�
 | hole       | 编辑态可变叶，固定容量，commit 后内容迁移至 scratch                   |
 | transient  | 编辑态 tree（可变、独占、仅 Cursor 持有、不对外暴露）                 |
 | persistent | 持久态 tree（immutable buffer，可 COW 共享）                          |
-| mask       | `unsigned long long` 位图数组，标记 hole（叶层）或子树含 hole（内层） |
+| mask       | 单字位图（`unsigned` 或 `unsigned long long`，随 `PT_FANOUT` 选择），标记 hole（叶层）或子树含 hole（内层） |
 
 ---
 

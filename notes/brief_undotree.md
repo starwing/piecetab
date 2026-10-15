@@ -212,7 +212,7 @@ just ut-lines     # 未覆盖行源码
 | `notes/design_undotree.md`    | 架构设计               |
 | `docs/undotree.md`            | API 参考手册           |
 | `notes/brief_piecetab.md`     | 姊妹库 piecetab 总览   |
-| `notes/brief_linecache.md`    | 姊妹库 linecache 总览  |
+| `notes/design_linecache.md`    | 姊妹库 linecache 总览  |
 
 ## 十、边界行为速查表（供绑定层胶水参考）
 

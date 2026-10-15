@@ -545,7 +545,7 @@ doc 行查询即经其取）。
      残段区编辑、trailing 定格）
    - write 别名、光标落点断言（insert 不动/append 推进/remove 停点）
 7. **docs 回填**：linecache.md markbreak 节补"断点 = offset+len、
-   trailing col 定格入树"表述 + brief_linecache.md 同步（单测
+   trailing col 定格入树"表述 + design_linecache.md 同步（单测
    自证所得回填文档惯例）。
 
 验收：`just lua/test` 双运行时全绿；`just test` C 侧不回归。

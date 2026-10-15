@@ -146,7 +146,7 @@ int lc_markbreak(lc_Cursor *C, unsigned len);
 
 - `lc_markbreak`: 在游标位置插入一个行断点。`len` 为新行长度（含 `\n`），须 ≥ 1。
   - 若 `len == lc_linelen(C) - C->col`: no-op（断点已在末尾）
-  - 若 `len > 行剩余长度`: 先将 `len` 字节插入至行尾，再在 `len` 处断（见 `lc_markbreak` 的 splice 回退逻辑）
+  - 若 `len > 行剩余长度`: 先将 `len` 字节插入至行尾，再在 `len` 处断（见 `lc_markbreak` 的 splice 回退逻辑）；该 splice 的预分配失败时返回 `LC_ERRMEM`，树不变
   - 空树时：直接以 `len` 建立单行树
   - 返回后 `C` 定位断后新行之首（`col=0`, `lnu+=1`, `loff`/`off/nu` 已更新）
 
@@ -154,7 +154,7 @@ int lc_markbreak(lc_Cursor *C, unsigned len);
 - `lc_clearbreaks`: 删除从游标位置起 `len` 字节内的所有行断点（各段连接为一行）。等价于 `lc_splice(C, len, len)` 的宏。游标位于合并后行之 col 位置。
   - `lc_splice` 的宏包装。参数校验委托给 `lc_splice`。
 
-**返回值**: 同 `lc_splice` — `LC_OK`, `LC_ERRPARAM`。
+**返回值**: 同 `lc_splice` — `LC_OK`, `LC_ERRPARAM`, `LC_ERRMEM`。
 
 ### lc_remove — 擦除游标间区间
 
@@ -171,7 +171,7 @@ int lc_remove(lc_Cursor *L, lc_Cursor *R);
 
 **返回值**: `LC_OK`（成功或 no-op），`LC_ERRPARAM`（参数非法）。操作后 R 失效（树结构已变），L 指向删除点。
 
-**实现**: 同叶与跨叶删除均由内部处理（三段法：trim→cut→stitch）。内部池预分配保证不 OOM。
+**实现**: 同叶与跨叶删除均由内部处理（三段法：trim→cut→stitch）。入口预分配 `levels + 2` 个池节点；预分配失败时在任何修改之前返回 `LC_ERRMEM`。
 
 ### lc_splice — 区间删除/插入字节
 
@@ -186,7 +186,7 @@ int lc_splice(lc_Cursor *C, size_t del, unsigned ins);
 - 删+补字节: 内部 `lc_advance` + `lc_remove` 处理删除，再经直接字节追加路径加回插入字节。删除后若树已空，重置树。
 - 插入字节: 若游标在有效行内，`leaf->bytes[C->lnu] += ins` 加长当前行；`C->col += ins` 移动游标。
 
-**返回值**: `LC_OK`（成功），`LC_ERRPARAM`（参数非法）。删除路径由 `lc_remove` 的预分配保证不 OOM。
+**返回值**: `LC_OK`（成功），`LC_ERRPARAM`（参数非法），`LC_ERRMEM`（`lc_remove` 入口预分配失败，树不变）。
 
 **注意**: 删除区间可跨任意叶边界。`lc_splice` 内部委托 `lc_remove` 处理删除——`splice(C, del, ins)` 等价于 `remove + addbytes`。`lc_clearbreaks` 是 `splice(len, len)` 的便捷宏。
 
@@ -281,7 +281,7 @@ line   = nu + lnu
 
 每页 `LC_PAGE_SIZE` 字节，分配 `sizeof(lc_Node)` 或 `sizeof(lc_Leaf)` 的对象。空闲链表 (`freed`) 回收已释放对象。`S->nodes` 与 `S->leaves` 独立管理。
 
-池预分配保证池中至少有 `n` 个可用对象（含 freelist），用于事务——stitch 入口的预分配保证全程不 OOM。
+池预分配保证池中至少有 `n` 个可用对象（含 freelist），用于事务；分配器无法提供时返回失败——`lc_remove` / `lc_append` 据此在任何修改之前返回 `LC_ERRMEM`。
 
 ---
 
@@ -334,7 +334,7 @@ C 在原左侧时 `mid` 多留一个段给左侧，反之亦然。保证游标�
 2. **合并裂点叶**: `rt[0].children[0]` 拷贝回左半叶 `bytes[C->lnu]`
 3. **缝合 rt**: 洋葱序将 `rt[]` 中右侧兄弟子树全部缝回。net 度量差量以 `度量传播` 传播
 
-依赖 `stitch` 的事务性: 因为 `stitch` 内部 OOM 在入口池预分配已被阻止，rollback 在 stitch 之后不会执行（若此前 append/findroom 已失败则直接 rollback; 若 stitch 之后失败... 理论上不可能失败）。
+依赖 `stitch` 的事务性: `stitch` 不分配（入口已 reserve `levels + 2` 个节点），因此不会失败，rollback 在 stitch 开始之后不会执行；若此前 append/findroom 已失败，则直接 rollback 回裂叶后状态。
 
 ### 6. fixsource — rm 定位与补写
 

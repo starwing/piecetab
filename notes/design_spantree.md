@@ -55,6 +55,7 @@ spantree 中 attr 是**不透明 `sp_Id`**。
 - **节点内义务**：同一叶容器内相邻同 id 段必须合并（append merge、
   spI_merge 同容器部分、spD_mergeleaf）
 - **节点边界允许不合并**：跨容器相邻同 id 段不强求合并，原样保留
+- **树内不得存在 0 span 段**：`poff` 是段内偏移，中间段 `bytes == 0` 会让 `poff >= bytes` 把该段误判为耗尽，导航（`sp_next` 等）与虚拟尾判定失效。0 长段只在"游标指向末尾"处短暂出现，由 `spD_cutrange` 的 `i += (k || p->bytes[i] == 0);`（`spantree.h:454/459`）随切点一并删去；末槽另有 `spD_rmleaf` / `spD_stitch` 的 0 长清理。
 
 代价：最坏情况下每个叶容器至多 1 个额外段负担（约 1.58% 容量，FANOUT
 62），换取跨容器合并义务整体不存在、维护成本与 bug 面收窄。
@@ -258,10 +259,12 @@ backwardoff(off)；否则 backwardoff(-d)——虚拟起点经 backwardoff 天�
 | spI_pad(C) | 任意 | 树尾态（offset 不变） |
 | spF_filterleaf(C, len, in, right) | 区间头 | 区间尾（单出口；非树尾时 poff < 段长） |
 | spF_filterrange(C, R, fl, in) | L 可含半叶、R 实光标、fl=spD_diverlevel(L,R) | L 落在 fill 尾 |
-| spF_appendrt(C, rt) | C->poff == 0、rt 为待落段 | 段已落回、C 在插入内容尾 |
+| spF_appendrt(C) | C->poff == 0、rt 为待落段 | 段已落回、C 在插入内容尾 |
 | spF_appendvirt(C, id, len) | 树尾/虚拟态 | fill 段尾（off = 段起点、poff = len） |
 | spF_appendspan(C, id, len) | 链尾段（assert i ≥ cc-1） | 链尾（随 append 推进） |
-| spD_stitch(L, rt) | 链尾段（mergeleaf 前提） | L 位置保持 |
+| spD_rmrange(L, R, fl) / spD_rmleaf(C, del) | trim 已完成 / 光标于删除点 | 删除点收尾（`spD_rmleaf` 末尾 `cc < oc` 时 `spD_rebalance`） |
+| spD_cutrange(L, R, fl) | `fl = spD_diverlevel(L, R)`、L/R 已 trim | `rt[k]`（k = levels-kl）装被切下的层；L 侧只留切点前、R 侧清空待 graft；切点处 0 长槽用 `i += (k \|\| p->bytes[i] == 0);` 随切点删去（§2.1） |
+| spD_stitch(C) | 链尾段（mergeleaf 前提） | C 位置保持 |
 
 ### 7.5 导航语义：sp_next / sp_prev exclusive
 
@@ -353,7 +356,7 @@ spF_filterrange(L, R, fl, in):
      结束时 rt 中只剩 R 右。
 
   3. 缝回 R 右
-     调用 spD_stitch(C, rt) 把 rt 中剩余 R 右缝回 L。
+     调用 spD_stitch(C) 把 rt 中剩余 R 右缝回 L。
      结束后 L 已落在 fill 尾（原 R 段起点，R 右半已由 peelleaf 处理）。
 ```
 
@@ -438,7 +441,7 @@ peeldown(l, rt):                 # 层 l 的内容已在 rt[levels-l]
   右邻 `spK_seamleaf(C, 0)` 合并
 - `spI_fillrt(C, id, len, m)`：向 `S->rt` 追加/合并一段；返回 0 = 合
   并/复用，1 = 新增槽；左邻合并必须 `C->off += len`
-- `spF_appendrt(C, rt)`：`assert(C->poff == 0)`；把 rt 落回 L 链（满
+- `spF_appendrt(C)`：`assert(C->poff == 0)`；把 rt 落回 L 链（满
   时 `spI_makeroom` 再插），推进 C 到插入内容尾
 - `spF_append(C, in, n, keep)` / `spF_flushrt(rt, n)`：剥叶回填；
   `keep` 为真时不 flush rt[0]
@@ -446,7 +449,7 @@ peeldown(l, rt):                 # 层 l 的内容已在 rt[levels-l]
   下放 children 并 free 空壳
 - `spF_peeldown(C, R, in, l)`：前缀剥填下钻循环
 - `spF_peelleaf(C, R, in)`：处理 R 段本身，含虚拟区 zero-id 段
-- `spF_cutleaf(C, rt)` / `spF_cutright(C, rt, fl)`：切 L 右半 / 切 L
+- `spF_cutleaf(C)` / `spF_cutright(C, fl)`：切 L 右半 / 切 L
   路径各层右兄弟进 rt，并 spM_up 记账
 - `spF_filterrange(C, R, fl, in)`：三步总入口
 - `spD_stitch`：缝回 R 右并保证 L 落在 fill 尾；underfill 时参考
@@ -486,7 +489,8 @@ peeldown(l, rt):                 # 层 l 的内容已在 rt[levels-l]
    加回；arb 只改 id 不改变段长 → 全程净 0
 7. **reserve 顺序与预算**：reserve 必须在 pad 之前。fill 预算 =
    6*levels+7；insert/append = 3*levels+4；remove = 4*levels+5；
-   splice 无独立预算（remove 与 edit 各自 reserve）
+   splice 在任何 mutation 之前统一 reserve `6*levels+8`，覆盖
+   remove 的实际分配上界（`levels+2`）与 append 的 `3*levels+4`
 
 ### 8.10 边界情况
 

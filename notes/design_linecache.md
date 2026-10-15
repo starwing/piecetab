@@ -1,4 +1,4 @@
-# linecache.h 项目总览
+# linecache.h 设计总览
 
 > 供 Agent 快速了解项目全貌。可 grep 查询的信息不载此文，提供查询命令。
 
@@ -109,6 +109,8 @@ struct lc_Cursor {
 grep '^LC_API' linecache.h
 ```
 
+公共 API 的实现集中在文件末尾的 `/* APIs */` 段；其前依次是 `/* mempool */`、`/* utils */`、`/* navigation */`、`/* remove */`、`/* insertion */`、`/* scan */` 段。
+
 关键 API：
 
 | 类别     | 函数                                                            | 功用                                                                           |
@@ -170,9 +172,21 @@ grep '^static' linecache.h
 1. **嵌入 root**: `lc_Cache.root` 是值非指针 — 省一次分配，免 OOM 于建树
 2. **叶无 child_count**: 行数由父 `breaks[i]` 决定，冗余由上层约束保证
 3. **度量双计**: bytes + breaks 双数组允许 O(log n) 双向导航
-4. **lc_splice 事务性**: 删除路径委托 `lc_remove`，其内部 reserve 预分配保不 OOM；插入路径仅改叶内字节
-5. **stitch 事务性**: `lcD_checkstitch` 入口 reserve(levels+2 节点)，stitch 全程无 OOM
+4. **lc_splice 事务性**: 删除路径委托 `lc_remove`（入口 reserve，失败在任何修改之前返回 `LC_ERRMEM`）；插入路径仅改叶内字节、不分配；任一步失败时树保持删除前状态
+5. **stitch 事务性**: `lc_remove` 入口 reserve `levels + 2` 个节点，`stitch` 入口 assert 池内已有该数量、且光标处于容器末段（`idx >= cc - 1`），stitch 全程不再分配。`lc_append` 走 `lcD_checkstitch` 做同一 reserve
 6. **balanceleaf rounding**: `d = l - ((l + r + 1) >> 1)` 向上取整，与 foldleaf 游标修正断言强耦合（`assert((dl<0) != (*ls!=o))`）— 修改均分公式需同步改调用方
+7. **cutrange 的 0 长特判**：`lcD_cutrange:487` / `:492` 用 `i += (k || p->breaks[i] == 0);` 把切点处的 0 长槽**随切点一起**删去（不搬进 `rt`、也不留给 stitch）。linecache 的负载度量是**行数** `breaks[]`，故写 `breaks[i] == 0`；piecetab / spantree 的度量是 span，写 `p->bytes[i] == 0`（`ptD_cutrange:720/725`、`spD_cutrange:454/459`）——同一个意图，不同度量。理由是"树内不得存在 0 长槽"：中间槽 `bytes == 0` 会让 `poff >= bytes` 把该槽误判为耗尽，导航（`lc_next` 等）与虚拟尾判定失效；删除路径靠这行特判维持，survivor 因此永不为 0 长槽。
+
+### 9.1 `mergeleaf` 的 fill-L 与 `d` 机制（leaf occupancy + repair path）
+
+- linecache 的 leaf 行数由父 `breaks[i]` 表示，必须满足 fill（`>= LC_LEAF_FANOUT/2`）；这是 linecache 与 spantree / piecetab 规范形的重要差异。
+- `lcD_mergeleaf` 先把 R（`rt[0].children[0]`）的 leaf item 尽量填满 L（`dl = min(rtbc, LC_LEAF_FANOUT - bc)`）。合并完成后：
+  - R 全并入 L：R 被释放，无 underfill；
+  - 否则 L 被填到 `LC_LEAF_FANOUT`，**L 一定不 underfill**。
+- 因此 mergeleaf 之后唯一可能 underfill 的是 R，而 R 就是 Cursor 当前所在的 leaf（`C->paths[levels]`）。`lcD_foldleaf` 只修 paths 上的 leaf，所以它修的正好是 R，保证所有 underfill 都被修到。
+- `d` 不是 0/1 标记：`foldleaf` 修 R 时可能与 L 做 balance，leaf item 会在 L / R 之间移动，真正目标可能回到 L，也可能仍在 R。`d` 记录“当前位置与真正目标之间相差的 leaf item 数”；`lcD_stitch` 末尾用它修正 `C->lnu`，需要时经 `lcD_backwardnode` 跳回前一个 leaf。
+- 这与 `lcD_stitchnode` 的 `d` 同源：`findroom` 保证可能 underfill 的 node 在 paths 上，`foldnode` 先修它，再用 `d` 经 `backwardnode` 回到真正目标。
+- 结论：linecache 需要 `d` 的根本原因是 **leaf occupancy + fold 只修 paths 上的 leaf**，不是“leaf 异构”或“游标身份”。不要用 spantree / piecetab 的规范形反推 linecache；anchortree 是否沿用 `d`，要看 anchortree 自己的 occupancy 与 fold 契约。
 
 ## 十、测试
 
@@ -347,8 +361,9 @@ grep '^static.*lcX_' linecache.h
 | `lc_scan` | — | c==NULL→ERRPARAM | 从尾部开始追加 | 返回ERRMEM |
 | `lc_append` | — | C==NULL→ERRPARAM | 正常追加 | 回滚sC→ERRMEM |
 | `lc_insert` | — | 同 append | 同 append | 同 append |
-| `lc_splice` | off≥bytes→仅col+=ins | del=0,ins=0→完全无操作 | col+=ins | 委托 remove |
-| `lc_remove` | L≥R→无操作；R 越尾合法→删至树尾，L 所在行整体删除 | NULL/非同树→ERRPARAM | 无操作 | assert 预留 |
+| `lc_markbreak` | — | C==NULL/len==0→ERRPARAM | 直接建单行树 | splice 预分配失败→ERRMEM（树不变） |
+| `lc_splice` | off≥bytes→仅col+=ins | del=0,ins=0→完全无操作 | col+=ins | 委托 remove（入口 reserve） |
+| `lc_remove` | L≥R→无操作；R 越尾合法→删至树尾，L 所在行整体删除 | NULL/非同树→ERRPARAM | 无操作 | 入口 reserve 失败→ERRMEM（树不变） |
 | `lc_seek` | **软 clamp**, col=excess | C/c==NULL→ERRPARAM | 跳 locend, col=n | 无分配 |
 | `lc_seekline` | **硬 ERR_PARAM** | C/c==NULL→ERRPARAM | paths[0]=root.children | 无分配 |
 | `lc_advance` | clamp 到端 | C/tree==NULL→ERRPARAM | — | 无分配 |

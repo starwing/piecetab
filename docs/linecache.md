@@ -146,7 +146,7 @@ int lc_markbreak(lc_Cursor *C, unsigned len);
 
 - `lc_markbreak`: Inserts a line break at the cursor position. `len` is the new line length (including `\n`), must be ≥ 1.
   - If `len == lc_linelen(C) - C->col`: no-op (break is already at the end)
-  - If `len > remaining line length`: first inserts `len` bytes to the end of the line, then breaks at `len` (see `lc_markbreak`'s splice fallback logic)
+  - If `len > remaining line length`: first inserts `len` bytes to the end of the line, then breaks at `len` (see `lc_markbreak`'s splice fallback logic); if that splice's pre-allocation fails, returns `LC_ERRMEM` with the tree unchanged
   - Empty tree: directly builds a single-line tree with `len`
   - After return, `C` is positioned at the start of the new line after the break (`col=0`, `lnu+=1`, `loff`/`off/nu` updated)
 
@@ -154,7 +154,7 @@ int lc_markbreak(lc_Cursor *C, unsigned len);
 - `lc_clearbreaks`: Deletes all line breaks within `len` bytes from the cursor position (segments are joined into one line). Equivalent to the `lc_splice(C, len, len)` macro. The cursor ends up at column position within the merged line.
   - A macro wrapper around `lc_splice`. Parameter validation is delegated to `lc_splice`.
 
-**Return values**: Same as `lc_splice` — `LC_OK`, `LC_ERRPARAM`.
+**Return values**: Same as `lc_splice` — `LC_OK`, `LC_ERRPARAM`, `LC_ERRMEM`.
 
 ### lc_remove — Erase Interval Between Cursors
 
@@ -172,7 +172,7 @@ int lc_remove(lc_Cursor *L, lc_Cursor *R);
 
 **Return values**: `LC_OK` (success or no-op), `LC_ERRPARAM` (invalid parameters). After the operation, R is invalidated (tree structure changed); L points to the deletion point.
 
-**Implementation**: Same-leaf and cross-leaf deletions are handled internally (three-phase method: trim→cut→stitch). Internal pool pre-allocation guarantees no OOM.
+**Implementation**: Same-leaf and cross-leaf deletions are handled internally (three-phase method: trim→cut→stitch). The entry point pre-allocates `levels + 2` pool nodes; when that reservation fails, `LC_ERRMEM` is returned before any mutation.
 
 ### lc_splice — Interval Delete/Insert Bytes
 
@@ -187,7 +187,7 @@ int lc_splice(lc_Cursor *C, size_t del, unsigned ins);
 - Delete + insert bytes: internal `lc_advance` + `lc_remove` handles deletion, then uses the direct byte-append path to add back the inserted bytes. If the tree becomes empty after deletion, the tree is reset.
 - Insert bytes only: if the cursor is within a valid line, `leaf->bytes[C->lnu] += ins` lengthens the current line; `C->col += ins` moves the cursor.
 
-**Return values**: `LC_OK` (success), `LC_ERRPARAM` (invalid parameters). The deletion path is guaranteed OOM-free by `lc_remove`'s pre-allocation.
+**Return values**: `LC_OK` (success), `LC_ERRPARAM` (invalid parameters), `LC_ERRMEM` (the `lc_remove` entry reservation failed; the tree is unchanged).
 
 **Note**: Deletion intervals may span arbitrary leaf boundaries. `lc_splice` internally delegates deletion to `lc_remove` — `splice(C, del, ins)` is equivalent to `remove + addbytes`. `lc_clearbreaks` is a convenience macro for `splice(len, len)`.
 
@@ -282,7 +282,7 @@ The virtual line design allows the cursor to operate outside the text, eliminati
 
 Each page is `LC_PAGE_SIZE` bytes, allocating objects of `sizeof(lc_Node)` or `sizeof(lc_Leaf)`. A free list (`freed`) recycles freed objects. `S->nodes` and `S->leaves` are managed independently.
 
-Pool pre-allocation guarantees at least `n` available objects in the pool (including the freelist), used for transactions — pre-allocation at the stitch entry ensures no OOM throughout the entire process.
+Pool pre-allocation reserves at least `n` available objects in the pool (including the freelist), used for transactions; when the allocator cannot supply them it fails, which is how `lc_remove` / `lc_append` report `LC_ERRMEM` before mutating the tree.
 
 ---
 
@@ -334,7 +334,7 @@ When `lc_append` encounters OOM at any phase, `rollback` fully restores the tree
 2. **Merge split-point leaf**: `rt[0].children[0]` is copied back into the left-half leaf `bytes[C->lnu]`.
 3. **Stitch rt**: Onion-order stitches all right-sibling subtrees from `rt[]` back. Net metric delta is propagated via `metric propagation`.
 
-Relies on stitch's transactional nature: because OOM inside stitch is prevented by entry-point pool pre-allocation, rollback never executes after stitch succeeds (if append/findroom has already failed, rollback is taken directly; if failure occurs after stitch... theoretically impossible).
+Relies on stitch's transactional nature: stitch performs no allocation (the entry point has already reserved `levels + 2` nodes), so it cannot fail; rollback therefore never runs after stitch has started. If append/findroom fails earlier, rollback restores the tree to the post-cutleaf state.
 
 ### 6. fixsource — rm Positioning and Replenishment
 
