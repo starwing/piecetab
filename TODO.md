@@ -66,6 +66,18 @@
 
 ## 已完成（2026-10）
 
+### 树库 balancenode 统一（多返回值 helper）
+
+- [x] 四库 `*D_balancenode` 统一为「调用方算 `d`、helper 单回报 `ds`」：
+      helper 改为 `void`，签名 `(ns, d, ds)`（anchortree 另带 `leaf`），内部只做
+      child 搬移 + child_count 更新 + bytes/breaks 差量回报；`d` 由 `foldnode`
+      在 `seambound` / COW 之后、平衡决策原点算出（`d = cL - ((cL + cR + (!r)) >> 1)`），
+      与 `assert(d != 0 && (d < 0) != r)` 哨兵同处。已同步 piecetab / spantree /
+      anchortree / linecache；`just at|lc|pt|sp4|sp8|ut` 与 sanitizer fuzz 全绿，
+      四库头文件行 / 函数覆盖率保持 100%。文档同步见
+      `notes/design_stitch.md` §3.14、`notes/design_insert_delete_v2.md` §10、
+      `docs/linecache{,.zh}.md` §4。
+
 ### 树库尾定位（nextedge 家族）
 
 - [x] 无后继出口统一为「能证明当前槽就是树尾槽就直接提交，否则重建尾
@@ -80,9 +92,6 @@
 
 ## 下一步候选（未完成）
 
-- **多返回值内部 helper 跨库统一**：`atD_balancenode` / `spD_balancenode`
-  当前均为 `int d + <Delta> *ds`；计划改为调用方计算 `d`、helper 单返回 `ds`，
-  需 anchortree / spantree / piecetab / linecache 等所有树库同步修改。
 - **sp_splice reserve 加法合并**：`sp_splice` 已在任何 mutation 前统一 reserve
   `6*levels+8`（失败时树不变）；待证明它覆盖 remove 预算 `4*levels+5` 与 append
   预算 `3*levels+4` 的加法合并（`7*levels+9`）——参考 anchortree `at_splice` 的

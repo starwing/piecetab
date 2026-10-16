@@ -567,9 +567,8 @@ static void atD_cutrange(at_Cursor *L, at_Cursor *R, at_Node *rt, int fl) {
     atM_up(L, fl - 1, -db), atN_remove(L->tree, p, k, i + 1, atN_cc(p));
 }
 
-static int atD_balancenode(at_Node **ns, int left, at_Delta *ds, int leaf) {
-    int d, l = atN_cc(ns[0]), r = atN_cc(ns[1]);
-    d = l - ((l + r + (left != 0)) >> 1);
+static void atD_balancenode(at_Node **ns, int d, at_Delta *ds, int leaf) {
+    int l = atN_cc(ns[0]), r = atN_cc(ns[1]);
     if (assert(d != 0), d < 0) {
         atN_copy(ns[0], l, ns[1], 0, -d), atN_move(ns[1], 0, -d, r + d);
         atN_fixlinks(ns[0], l, -d, leaf), atN_fixlinks(ns[1], 0, r + d, leaf);
@@ -579,12 +578,12 @@ static int atD_balancenode(at_Node **ns, int left, at_Delta *ds, int leaf) {
         atN_fixlinks(ns[1], 0, r + d, leaf);
         *ds = (at_Delta)atN_sumbytes(ns[1], 0, d);
     }
-    return atN_setcc(ns[0], l - d), atN_setcc(ns[1], r + d), d;
+    atN_setcc(ns[0], l - d), atN_setcc(ns[1], r + d);
 }
 
 static int atD_foldnode(at_Cursor *C, int lfirst, int l) {
     at_Node  *p, ***cp = &C->paths[l];
-    int       cL, cR, dn, r = 0, i = atK_idx(C, p = atK_parent(C, l), l);
+    int       d, cL, cR, r = 0, i = atK_idx(C, p = atK_parent(C, l), l);
     int       leaf = l == atK_levels(C) - 1;
     at_Node **ns = &p->children[i];
     at_Delta  ds;
@@ -598,9 +597,9 @@ static int atD_foldnode(at_Cursor *C, int lfirst, int l) {
         if (r) cp[1] = &ns[0]->children[cp[1] - ns[1]->children + cL], --cp[0];
         return atN_remove(C->tree, p, atK_levels(C) - l, i + 1, i + 2), 1;
     }
-    dn = atD_balancenode(ns, !r, &ds, leaf);
-    assert(dn != 0 && (dn < 0) != r);
-    if (r) cp[1] += dn;
+    d = cL - ((cL + cR + (!r)) >> 1), assert(d != 0 && (d < 0) != r);
+    atD_balancenode(ns, d, &ds, leaf);
+    if (r) cp[1] += d;
     return p->bytes[i] -= ds, p->bytes[i + 1] += ds, 0;
 }
 

@@ -306,53 +306,54 @@ d 的语义同 stitchnode 中的 d——"真正期待的行在当前行之前多
 
 ## 10. lcD_foldnode — 内层折叠
 
-`static int lcD_foldnode(lc_Cursor *C, int left, int l)`
+`static int lcD_foldnode(lc_Cursor *C, int lfirst, int l)`
 
-内层节点平衡。`left` 参数为 1 时优先探左侧兄弟（stitchnode 的 `fl` 循环使用此标记以正确修复 C 所在路径）。与 foldleaf 结构对称。
+内层节点平衡。`lfirst` 参数为 1 时优先探左侧兄弟（stitchnode 的 `fl` 循环使用此标记以正确修复 C 所在路径）。与 foldleaf 结构对称。
 
 ### 前置条件
 
 - `l < levels`（操作的层次 < 叶层，即操作的是内部节点）
 - `p->child_count > 1`
-- `left` 为 1 且 `i > 0` 时向左探兄弟（非叶层 C 不恒在末位）
+- `lfirst` 为 1 且 `i > 0` 时向左探兄弟（非叶层 C 不恒在末位）
 
 ### 行为
 
-- `ns = (lc_Node **)&p->children[i]`，`o = *ns`（C 所在的原节点）
-- **提前退出**：若 `ns[0]->child_count > LC_FANOUT / 2`（C 所在节点子数已过半满），直接返回 0。与 foldleaf 同原理——均分方向数学约束保证该节点无需折叠
-- 若 `(i && left) || i == cc - 1`：`ns -= 1`，`i -= 1`——优先左探（`left=1` 时）或末位回退
-- `cl = ns[0]->child_count`、`cr = ns[1]->child_count`
-- **合并**（`cl + cr <= LC_FANOUT`）：
-  - `lcN_copy(ns[0], cl, ns[1], 0, cr)`、`ns[0]->child_count += cr`
+- `ns = &p->children[i]`，`o = *ns`（C 所在的原节点）
+- **提前退出**：若 `lcN_cc(ns[0]) > LC_FANOUT / 2`（C 所在节点子数已过半满），直接返回 0。与 foldleaf 同原理——均分方向数学约束保证该节点无需折叠
+- 若 `(i && lfirst) || i == lcN_cc(p) - 1`：`ns -= 1`，`i -= 1`，`r = 1`——优先左探（`lfirst=1` 时）或末位回退。`r` 标记 C 所在的原节点在本对中的位置（`r=1` 即 C 原在 `ns[1]`，否则在 `ns[0]`）
+- `ns[!r]` 为对侧邻居（`foldnode` 只改邻居，故对侧先按其原方向取好）
+- `cL = lcN_cc(ns[0])`、`cR = lcN_cc(ns[1])`
+- **合并**（`cL + cR <= LC_FANOUT`）：
+  - `lcN_copy(ns[0], cL, ns[1], 0, cR)`、`lcN_setcc(ns[0], cL + cR)`、`lcN_setcc(ns[1], 0)`
   - 父度量更新：`p->bytes[i] += p->bytes[i+1]`、`p->breaks[i] += p->breaks[i+1]`
-  - 若 `*ns != o`（C 原在右节点）：`lcN_tx(cp[l+1], ns[0], ns[1], cl)` 修正更深层路径，`cp[l] -= 1` 修正本层路径
+  - 若 `r`（C 原在右节点）：把深层路径重定位到左节点对应槽位 `cp[1] = &ns[0]->children[cp[1] - ns[1]->children + cL]`，`cp[0] -= 1` 修正本层路径
   - `lcN_remove` 释放右节点 → 父失一子 → 返回 1
-- **均分**（`cl + cr > LC_FANOUT`）：
-  - `lcD_balancenode(ns, 0, (*ns == o), ds)`：内部已含 `d == 0` 早退。若返回 0（无搬移），foldnode 直接返回 0
-  - `dn = cl - (cl + cr + (*ns == o)) / 2`（子节点数差量，正=左→右。仅 balancenode 成功后计算，故 `dn ≠ 0`）
-  - 断言 `dn != 0 && (dn < 0) != (*ns != o)`：与 foldleaf 同不变式——`dn < 0` iff `*ns == o`（C 原在左节点），`dn > 0` iff `*ns != o`（C 原在右节点）
+- **均分**（`cL + cR > LC_FANOUT`）：
+  - `d = cL - ((cL + cR + (!r)) >> 1)`（子节点数差量，正=左→右。由调用方在平衡决策原点算出；`!r` 即 C 所在方向）
+  - 断言 `d != 0 && (d < 0) != r`：与 foldleaf 同不变式——`d < 0` iff C 原在左节点，`d > 0` iff C 原在右节点
+  - `lcD_balancenode(ns, d, ds)`：搬移 `d` 个 child，只回报 `ds[0]`（bytes）/ `ds[1]`（breaks）
   - `p->bytes[i] -= ds[0]`、`p->bytes[i+1] += ds[0]`
   - `p->breaks[i] -= ds[1]`、`p->breaks[i+1] += ds[1]`
-  - **路径修正**（单分支）：`if (*ns != o) cp[l+1] += dn`
+  - **路径修正**（单分支）：`if (r) cp[1] += d`
   - 返回 0
 
 ### 游标修正的不变式
 
-与 foldleaf 完全对称。`dn` 的符号与 `*ns == o` 严格绑定：
-- **`*ns == o`**（C 在原左节点）：`dn < 0`，右节点子数更多，数据从右搬入左节点尾部。C 在左节点末不受影响，无需修正
-- **`*ns != o`**（C 在原右节点）：`dn > 0`，左节点子数更多，数据从左搬入右节点头部。C 被推后 dn 位（`cp[l+1] += dn`）
+与 foldleaf 完全对称。`d` 的符号与 C 所在方向严格绑定：
+- **C 在原左节点**（`!r`）：`d < 0`，右节点子数更多，数据从右搬入左节点尾部。C 在左节点末不受影响，无需修正
+- **C 在原右节点**（`r`）：`d > 0`，左节点子数更多，数据从左搬入右节点头部。C 被推后 `d` 位（`cp[1] += d`）
 
-`dn == 0`（`cl == cr+(*ns==o)`）时 balancenode 返回 0 早退，故到达 assert 时 `dn ≠ 0` 且 `(dn < 0) != (*ns != o)` 恒真。
+`d == 0`（`cL == cR + (!r)`）时不能到达符号断言（调用方先 `assert(d != 0)` 终止），故断言处 `d ≠ 0` 且 `(d < 0) != r` 恒真。
 
-游标跨节点跳转（原三分支的前两条 `lcN_tx` 跳对侧）不再需要——L659 提前退出保证游标所在节点仅在不足半满时才进入折叠，此时 `cl+cr < LC_FANOUT`（总会触发合并路径而非均分），或均分路径中游标恒在对侧不动。
+游标跨节点跳转（原三分支中跳对侧的两条路径）不再需要——提前退出保证游标所在节点仅在不足半满时才进入折叠，此时 `cL+cR < LC_FANOUT`（总会触发合并路径而非均分），或均分路径中游标恒在对侧不动。
 
-`dn` 的均分中点公式含 `(*ns == o)` 项：当 C 在原节点时，给原节点多留一个子节点（避免 C 被挤入对侧）。
+`d` 的均分中点公式含 `(!r)` 项：当 C 在原节点时，给原节点多留一个子节点（避免 C 被挤入对侧）。
 
 ### 与 foldleaf 差异
 
-- foldnode 需处理 `cp[l+1]`（更深层路径偏移），因合并/均分后子节点位置变化
-- `left` 参数：stitchnode 在缝合右单链时，用 `left=1` 保证 foldnode 优先选择左侧方向，避免将 C 路径推入已修复的右单链区域
-- 合并路径中用 `lcN_tx` 修正深层路径（而 foldleaf 仅需 `*ps -= 1`），因内层节点搬迁涉及子节点指针而非段数组
+- foldnode 需处理 `cp[1]`（更深层路径偏移），因合并/均分后子节点位置变化
+- `lfirst` 参数：stitchnode 在缝合右单链时，用 `lfirst=1` 保证 foldnode 优先选择左侧方向，避免将 C 路径推入已修复的右单链区域
+- 合并路径中把深层路径指针重定位到左节点对应槽位（`cp[1] - ns[1]->children + cl`）并 `cp[0] -= 1`（而 foldleaf 仅需 `*ps -= 1`），因内层节点搬迁涉及子节点指针而非段数组
 
 ## 11. lcD_rebalance — 缩根
 
@@ -645,7 +646,7 @@ L 和 R 界定删除区间（L 在区间左端、R 在区间右端）。操作�
 
 1. **append 后 paths[levels] 指向空位**：返回时 `paths[levels]` 指向下一待分配叶槽位（非最后有效叶）。lc_scan 若 `C.off != 0` 则后撤一位；lc_append 的 findroom 从此空位起建空链扩容。append 是 `off/nu/loff/lnu` 唯一增量更新者。
 
-2. **stitchnode 中 C 总在可能 underfill 的节点上**：findroom 的垂链策略保证 C->paths 路径上的节点左侧必为满节点（若不满，findroom 上溯会停在更低层），唯一可能 underfill 者就是 C->paths 所在的右侧单链。故 foldnode 时 `left=1` 优先左探，自动处理 underfill。
+2. **stitchnode 中 C 总在可能 underfill 的节点上**：findroom 的垂链策略保证 C->paths 路径上的节点左侧必为满节点（若不满，findroom 上溯会停在更低层），唯一可能 underfill 者就是 C->paths 所在的右侧单链。故 foldnode 时 `lfirst=1` 优先左探，自动处理 underfill。
 
 3. **d 的延迟生效**：stitchnode 的 `d` 在后一轮迭代中经 backwardnode 生效。findroom 建新链时右侧单链节点未及修复，此轮 d 记录的是"待修复的右侧子节点数"。前轮 foldnode 修复右链 underfill，后轮 backwardnode 用 d 修正 C->paths。
 

@@ -504,9 +504,8 @@ static void spD_seambound(sp_Cursor *C, int l, sp_Node **ns, int *cL, int *cR) {
     }
 }
 
-static int spD_balancenode(sp_Node **ns, int left, sp_Delta *ds) {
-    int d, l = spN_cc(ns[0]), r = spN_cc(ns[1]);
-    d = l - ((l + r + (left != 0)) >> 1);
+static void spD_balancenode(sp_Node **ns, int d, sp_Delta *ds) {
+    int l = spN_cc(ns[0]), r = spN_cc(ns[1]);
     if (assert(d != 0), d < 0) {
         spN_copy(ns[0], l, ns[1], 0, -d), spN_move(ns[1], 0, -d, r + d);
         *ds = -(sp_Delta)spN_sumbytes(ns[0], l, l - d);
@@ -514,12 +513,12 @@ static int spD_balancenode(sp_Node **ns, int left, sp_Delta *ds) {
         spN_move(ns[1], d, 0, r), spN_copy(ns[1], 0, ns[0], l - d, d);
         *ds = (sp_Delta)spN_sumbytes(ns[1], 0, d);
     }
-    return spN_setcc(ns[0], l - d), spN_setcc(ns[1], r + d), d;
+    spN_setcc(ns[0], l - d), spN_setcc(ns[1], r + d);
 }
 
 static int spD_foldnode(sp_Cursor *C, int lfirst, int l) {
     sp_Node  *p, ***cp = &C->paths[l];
-    int       dn, cL, cR, r = 0, i = spK_idx(C, p = spK_parent(C, l), l);
+    int       d, cL, cR, r = 0, i = spK_idx(C, p = spK_parent(C, l), l);
     sp_Node **ns = &p->children[i];
     sp_Delta  ds;
     if (assert(spN_cc(p) > 1), spN_cc(ns[0]) > SP_FANOUT / 2) return 0;
@@ -531,8 +530,9 @@ static int spD_foldnode(sp_Cursor *C, int lfirst, int l) {
         if (r) cp[1] = &ns[0]->children[cp[1] - ns[1]->children + cL], --cp[0];
         return spN_remove(C->tree, p, spK_levels(C) - l, i + 1, i + 2), 1;
     }
-    dn = spD_balancenode(ns, !r, &ds), assert(dn != 0 && (dn < 0) != r);
-    if (r) cp[1] += dn;
+    d = cL - ((cL + cR + (!r)) >> 1), assert(d != 0 && (d < 0) != r);
+    spD_balancenode(ns, d, &ds);
+    if (r) cp[1] += d;
     p->bytes[i] -= ds, p->bytes[i + 1] += ds;
     return p->mask[i] = spM_sumns(ns[0]), p->mask[i + 1] = spM_sumns(ns[1]), 0;
 }

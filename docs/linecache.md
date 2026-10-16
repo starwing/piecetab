@@ -324,9 +324,9 @@ The sign of the redistribution direction `dl`/`dn` is strictly bound to `*ls == 
 - **C originally on left (`*ls==o`)**: right sibling has more segments → `dl<0`, data moves from right into the tail of the left leaf. C's position in the left leaf is unchanged; no correction needed.
 - **C originally on right (`*ls!=o`)**: left sibling has more segments → `dl>0`, data moves from left into the front of the right leaf. C is pushed back `dl` positions in the right leaf: `C->lnu += dl`.
 
-When `dl==0`/`dn==0`, `db==0`/balancenode returns 0 and exits early, so by the time the assert is reached, `dl≠0` and `(dl<0) != (*ls!=o)` is always true. This invariant is guaranteed by the **rounding direction** of the redistribution formula:
+When `dl==0`, `db==0` and `foldleaf` bails out before the assert; for `foldnode` the caller computes `dn` itself and `assert(dn != 0)` terminates before the sign assert. So by the time the sign assert is reached, `dl≠0` / `dn≠0` and `(dl<0) != (*ls!=o)` / `(dn<0) != r` always holds. This invariant is guaranteed by the **rounding direction** of the redistribution formula:
 - `balanceleaf` — `d = l - ((l + r + 1) >> 1)`, always ceiling division
-- `balancenode` — `d = l - ((l + r + (left != 0)) >> 1)`, `left` = `(*ns == o)`
+- `balancenode` — `d = l - ((l + r + (left != 0)) >> 1)`, `d` is computed by the caller (`left` = `(*ns == o)`, i.e. `!r` in `foldnode`) and passed in; the helper only moves children and reports the byte/break delta
 
 When C is originally on the left, `mid` leaves one extra segment for the left side, and vice versa. This ensures the leaf/node pointed to by the cursor is never the relocation destination from the right side.
 

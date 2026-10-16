@@ -530,9 +530,8 @@ static int lcD_mergeleaf(lc_Cursor *C) {
     return lcM_up(C, l - 1, db, dl), C->paths[l] = &p->children[cc], d;
 }
 
-static int lcD_balancenode(lc_Node **ns, int left, lc_Delta ds[2]) {
-    int d, l = lcN_cc(ns[0]), r = lcN_cc(ns[1]);
-    d = l - ((l + r + (left != 0)) >> 1);
+static void lcD_balancenode(lc_Node **ns, int d, lc_Delta ds[2]) {
+    int l = lcN_cc(ns[0]), r = lcN_cc(ns[1]);
     if (assert(d != 0), d < 0) {
         lcN_copy(ns[0], l, ns[1], 0, -d), lcN_move(ns[1], 0, -d, r + d);
         ds[0] = -(lc_Delta)lcN_sumbytes(ns[0], l, l - d);
@@ -542,14 +541,14 @@ static int lcD_balancenode(lc_Node **ns, int left, lc_Delta ds[2]) {
         ds[0] = (lc_Delta)lcN_sumbytes(ns[1], 0, d);
         ds[1] = (lc_Delta)lcN_sumbreaks(ns[1], 0, d);
     }
-    return lcN_setcc(ns[0], l - d), lcN_setcc(ns[1], r + d), d;
+    lcN_setcc(ns[0], l - d), lcN_setcc(ns[1], r + d);
 }
 
 static int lcD_foldnode(lc_Cursor *C, int lfirst, int l) {
     lc_Node  *p, ***cp = &C->paths[l];
-    int       cL, cR, r = 0, i = lcK_idx(C, p = lcK_parent(C, l), l);
+    int       d, cL, cR, r = 0, i = lcK_idx(C, p = lcK_parent(C, l), l);
     lc_Node **ns = &p->children[i];
-    lc_Delta  ds[2], dn;
+    lc_Delta  ds[2];
     if (assert(lcN_cc(p) > 1), lcN_cc(ns[0]) > LC_FANOUT / 2) return 0;
     if ((i && lfirst) || i == lcN_cc(p) - 1) ns -= 1, i -= 1, r = 1;
     if ((cL = lcN_cc(ns[0])) + (cR = lcN_cc(ns[1])) <= LC_FANOUT) {
@@ -559,8 +558,9 @@ static int lcD_foldnode(lc_Cursor *C, int lfirst, int l) {
         if (r) cp[1] = &ns[0]->children[cp[1] - ns[1]->children + cL], --cp[0];
         return lcN_remove(C->tree->S, p, lcK_levels(C) - l, i + 1, i + 2), 1;
     }
-    dn = lcD_balancenode(ns, !r, ds), assert(dn != 0 && (dn < 0) != r);
-    if (r) cp[1] += dn;
+    d = cL - ((cL + cR + (!r)) >> 1), assert(d != 0 && (d < 0) != r);
+    lcD_balancenode(ns, d, ds);
+    if (r) cp[1] += d;
     p->bytes[i] -= ds[0], p->bytes[i + 1] += ds[0];
     p->breaks[i] -= ds[1], p->breaks[i + 1] += ds[1];
     return 0;

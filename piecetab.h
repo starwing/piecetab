@@ -780,9 +780,8 @@ static void ptD_seambound(pt_Cursor *C, int l, pt_Node **ns, int *cL, int *cR) {
     }
 }
 
-static int ptD_balancenode(pt_Node **ns, int left, pt_Delta *ds) {
-    int d, l = ptN_cc(ns[0]), r = ptN_cc(ns[1]);
-    d = l - ((l + r + (left != 0)) >> 1);
+static void ptD_balancenode(pt_Node **ns, int d, pt_Delta *ds) {
+    int l = ptN_cc(ns[0]), r = ptN_cc(ns[1]);
     if (assert(d != 0), d < 0) {
         ptN_copy(ns[0], l, ns[1], 0, -d), ptN_move(ns[1], 0, -d, r + d);
         *ds = -(pt_Delta)ptN_sumbytes(ns[0], l, l - d);
@@ -790,13 +789,13 @@ static int ptD_balancenode(pt_Node **ns, int left, pt_Delta *ds) {
         ptN_move(ns[1], d, 0, r), ptN_copy(ns[1], 0, ns[0], l - d, d);
         *ds = (pt_Delta)ptN_sumbytes(ns[1], 0, d);
     }
-    ptN_setcc(ns[0], l - d), ptN_setcc(ns[1], r + d);
-    return ptM_clamp(ns[0]), ptM_clamp(ns[1]), d;
+    ptN_setcc(ns[0], l - d), ptM_clamp(ns[0]);
+    ptN_setcc(ns[1], r + d), ptM_clamp(ns[1]);
 }
 
 static int ptD_foldnode(pt_Cursor *C, int lfirst, int l) {
     pt_Node  *p, ***cp = &C->paths[l];
-    int       dn, cL, cR, r = 0, i = ptK_idx(C, p = ptK_parent(C, l), l);
+    int       d, cL, cR, r = 0, i = ptK_idx(C, p = ptK_parent(C, l), l);
     pt_Node **ns = &p->children[i];
     pt_Delta  ds;
     if (assert(ptN_cc(p) > 1), ptN_cc(ns[0]) > PT_FANOUT / 2) return 0;
@@ -811,8 +810,9 @@ static int ptD_foldnode(pt_Cursor *C, int lfirst, int l) {
         if (r) cp[1] = &ns[0]->children[cp[1] - ns[1]->children + cL], --cp[0];
         return ptN_remove(C->tree->S, p, ptK_levels(C) - l, i + 1, i + 2), 1;
     }
-    dn = ptD_balancenode(ns, !r, &ds), assert(dn != 0 && (dn < 0) != r);
-    if (r) cp[1] += dn;
+    d = cL - ((cL + cR + (!r)) >> 1), assert(d != 0 && (d < 0) != r);
+    ptD_balancenode(ns, d, &ds);
+    if (r) cp[1] += d;
     ptM_sethole(p, i, (int)ns[0]->mask);
     ptM_sethole(p, i + 1, (int)ns[1]->mask);
     return (p->bytes[i] -= ds, p->bytes[i + 1] += ds), 0;

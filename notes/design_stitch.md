@@ -469,17 +469,18 @@
 
 **共同流程**
 
-1. `l = cc(ns[0])`，`r = cc(ns[1])`；`d = l - ((l + r + (left != 0)) >> 1)`。
+1. `d` 由调用方给定（`foldnode` 算出后传入），`l = cc(ns[0])`，`r = cc(ns[1])`。
 2. `d < 0`：从右往左搬 `-d` 个 child；把右节点前 `-d` 个 child 复制到左节点末尾；右节点剩余部分前移；bytes delta 为左节点新增字节和（负号表示左节点变化）。
 3. `d > 0`：从左往右搬 `d` 个 child；右节点后移 `d` 槽；把左节点末尾 `d` 个 child 复制到右节点开头；bytes delta 为正。
-4. 更新左右 child_count；返回 `d`。
+4. 更新左右 child_count；`d` 由调用方持有。
 
 **差异**
 
 - `[L]`：`ds[2]`，`ds[0]` 是 bytes，`ds[1]` 是 breaks；调用方还要更新父 `breaks[i]` / `breaks[i+1]`。
-- `[S]`：`*ds` 单通道 bytes；无 mask 更改（`spN_copy/move` 会复制 mask 数组），返回 `spN_setcc(...), spN_setcc(...), d`。
-- `[P]`：`*ds` 单通道 bytes；`ptN_setcc` 后必须 `ptM_clamp(ns[0])` 与 `ptM_clamp(ns[1])`，因为 child_count 缩小后高位 mask 位可能残留；返回 d。
+- `[S]`：`*ds` 单通道 bytes；无 mask 更改（`spN_copy/move` 会复制 mask 数组）。
+- `[P]`：`*ds` 单通道 bytes；`ptN_setcc` 后必须 `ptM_clamp(ns[0])` 与 `ptM_clamp(ns[1])`，因为 child_count 缩小后高位 mask 位可能残留。
 - `[L]` 多出的 breaks 通道是 linecache 行号承诺所必需；`[S]`/`[P]` 使用单 bytes 通道。除这个第二通道外，表达式与控制流同形。
+- **`d` 入参化**：四库统一为 `调用方算 d → helper 搬移并回报 ds`，helper 不再返回 `d`。`d` 的公式 `l - ((l + r + (left != 0)) >> 1)` 由调用方在 `seambound` / `cow` 之后、平衡决策原点算出（`[L]` 直接用当前 `cL/cR`），`left` 取 foldnode 的 `!r`（`r` = 选中对侧邻居的标记）。helper 内的 `assert(d != 0)` 哨兵保留。
 
 ### 3.15 `backwardnode`
 
@@ -632,9 +633,9 @@
 | `findroom` | 627-640 | 599-611 | 881-887 | skeleton / optional | [L]/[S] 搬尾部 children 到 `rt`；[P] assert 无尾部 children。 |
 | `makechain` | 603-625 | 577-597 | 855-879 | skeleton / domain | [L]/[P] 含 `nofail`；[S] 签名使用调用方入口 reserve。扩根分支 [L] 由批量插入 / scan 到达、[S] 由 fill / clear 到达，[P] 由 compact 使用。 |
 | `rebalance` | 569-588 | 543-562 | 821-840 | **exact** | 三库逐语句相同，只差前缀、节点类型、`N_cc`。 |
-| `foldnode` | 548-567 | 523-541 | 797-819 | domain | [L] 无 seambound、双度量；[S] seambound + mask remask；[P] COW + hole mask + 版本断言。 |
+| `foldnode` | 548-567 | 523-541 | 797-819 | domain | [L] 无 seambound、双度量；[S] seambound + mask remask；[P] COW + hole mask + 版本断言。三库均在本函数内算出 `d` 后传入 `balancenode`。 |
 | `seambound` | — | 487-508 | 761-781 | domain | [S] 同 id 合并 + `spA_died`；[P] literal 物理连续合并 + `ptM_clamp`。 |
-| `balancenode` | 533-546 | 510-521 | 783-795 | skeleton | 搬移公式与方向完全相同；[L] `ds[2]`；[S] `*ds`；[P] `*ds` + `ptM_clamp`。 |
+| `balancenode` | 533-546 | 510-521 | 783-795 | skeleton | 搬移公式与方向完全相同；`d` 为调用方入参（`foldnode` 在平衡决策原点算出）；[L] `ds[2]`；[S] `*ds`；[P] `*ds` + `ptM_clamp`。 |
 | `backwardnode` | 590-601 | 564-575 | 842-853 | **exact** | 三库逐语句相同，只差前缀、节点类型、`N_cc`。 |
 | `leaf` | 746-764 | 661-676 | 966-990 | domain | [L] 行内 / 跨行 / 虚拟尾；[S] span 部分删 / 整段删 + seamleaf；[P] hole / literal split + forwardoff。 |
 | `checkstitch` | 501-503 | — | 无 | optional | 只有 [L] 有，服务 `lc_append` 的预 reserve；[S]/[P] 批量插入不分配中间节点链。 |

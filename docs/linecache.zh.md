@@ -324,9 +324,9 @@ L/R 双游标界定删除区间，操作分三段:
 - **C 原在左 (`*ls==o`)**: 右兄弟段数更多 → `dl<0`，数据从右搬入左叶尾部。C 在左叶中位置不变，无需修正。
 - **C 原在右 (`*ls!=o`)**: 左兄弟段数更多 → `dl>0`，数据从左搬入右叶前部。C 在右叶中被推后 `dl` 位: `C->lnu += dl`。
 
-`dl==0`/`dn==0` 时 `db==0`/balancenode 返回 0 已提前退出，故到达 assert 时 `dl≠0` 且 `(dl<0) != (*ls!=o)` 恒真。此不变式由均分公式的 **rounding 方向** 保证:
+`dl==0` 时 `db==0`，`foldleaf` 在断言前直接退出；`foldnode` 由调用方自己算出 `dn`，先由 `assert(dn != 0)` 终止。故到达符号断言时 `dl≠0` / `dn≠0` 且 `(dl<0) != (*ls!=o)` / `(dn<0) != r` 恒真。此不变式由均分公式的 **rounding 方向** 保证:
 - `balanceleaf` — `d = l - ((l + r + 1) >> 1)`，固定向上取整
-- `balancenode` — `d = l - ((l + r + (left != 0)) >> 1)`，`left` = `(*ns == o)`
+- `balancenode` — `d = l - ((l + r + (left != 0)) >> 1)`，`d` 由调用方算出后传入（`left` = `(*ns == o)`，`foldnode` 里即 `!r`）；helper 只搬移 child 并回报 bytes/breaks 差量
 
 C 在原左侧时 `mid` 多留一个段给左侧，反之亦然。保证游标指向的叶/节点永不为
 右侧的搬迁目的地。
