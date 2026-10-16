@@ -8,9 +8,9 @@
  * o->op = rnd % 100 maps through the op table below (weights sum to
  * 100); insert appends e=len bytes to the scanned lines (cursor stays
  * at the insert point), append moves past everything it added, splice
- * deletes extra%20 then inserts len, remove advances extra then deletes
- * to the second cursor; markbreak splits the current line at len and
- * seekline/advline move by line. The cursor expectation is pos for
+ * deletes extra%20 then inserts len, remove deletes extra bytes at the
+ * cursor (extra==0 skips it); markbreak splits the current line at len
+ * and seekline/advline move by line. The cursor expectation is pos for
  * insert/remove, pos+len for splice/append/markbreak and the moved
  * position for the line moves. */
 #define LC_LEAF_FANOUT 4
@@ -67,12 +67,9 @@ static void runop(lc_Cache *c, lc_Cursor *C, fz_Op *o, FILE *lf) {
         assertok(lc_splice(C, o->extra % 20, (unsigned)o->len) == LC_OK);
         exp += o->len;
         break;
-    case FZ_REMOVE: {
-        lc_Cursor R = *C;
-        assertok(lc_advance(&R, (lc_Delta)o->extra) == LC_OK);
-        if (lc_offset(&R) > lc_offset(C)) assertok(lc_remove(C, &R) == LC_OK);
+    case FZ_REMOVE:
+        if (o->extra) assertok(lc_remove(C, o->extra) == LC_OK);
         break;
-    }
     case FZ_MARKBREAK: {
         unsigned len = (unsigned)(o->len % 20) + 1;
         assertok(lc_markbreak(C, len) == LC_OK);

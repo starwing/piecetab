@@ -55,7 +55,7 @@ spantree 中 attr 是**不透明 `sp_Id`**。
 - **节点内义务**：同一叶容器内相邻同 id 段必须合并（append merge、
   spI_merge 同容器部分、spD_mergeleaf）
 - **节点边界允许不合并**：跨容器相邻同 id 段不强求合并，原样保留
-- **树内不得存在 0 span 段**：`poff` 是段内偏移，中间段 `bytes == 0` 会让 `poff >= bytes` 把该段误判为耗尽，导航（`sp_next` 等）与虚拟尾判定失效。0 长段只在"游标指向末尾"处短暂出现，由 `spD_cutrange` 的 `i += (k || p->bytes[i] == 0);`（`spantree.h:454/459`）随切点一并删去；末槽另有 `spD_rmleaf` / `spD_stitch` 的 0 长清理。
+- **树内不得存在 0 span 段**：`poff` 是段内偏移，中间段 `bytes == 0` 会让 `poff >= bytes` 把该段误判为耗尽，导航（`sp_next` 等）与虚拟尾判定失效。0 长段只在"游标指向末尾"处短暂出现，由 `spD_cutrange` 的 `i += (k || p->bytes[i] == 0);`（`spantree.h:459/464`）随切点一并删去；末槽另有 `spD_rmleaf` / `spD_stitch` 的 0 长清理。
 
 代价：最坏情况下每个叶容器至多 1 个额外段负担（约 1.58% 容量，FANOUT
 62），换取跨容器合并义务整体不存在、维护成本与 bug 面收窄。
@@ -252,7 +252,7 @@ backwardoff(off)；否则 backwardoff(-d)——虚拟起点经 backwardoff 天�
 | spK_findleaf(C, l, &poff) | paths[0..l-1] 有效、off = 前缀路程 | 完整 paths、poff 段内、off 段前 |
 | spK_locend(C) | 树非空 | 树尾态 |
 | spK_forwardoff / backwardoff | 正常态、目标在树内 | 正常态、前进/后退 d |
-| spD_remove(C, len) | 任意 | 光标于删除点（offset 不变，段尾态已收尾） |
+| spD_remove(C, len) | `len > 0`、`offset(C) < bytes`（入口已判 no-op 并完成 reserve） | 光标于删除点（offset 不变，段尾态已收尾） |
 | spI_insert(C, ins, useleft) | 光标于插入点（正常/树尾/虚拟三态；树中段尾态 assert 拒绝） | 插入段尾（poff=ins，恒；append 出口 forwardoff(0) 收尾，insert 经 advance 回插入点） |
 | spI_splitins(C, len, id) | 光标于插入点 | 插入段尾（poff = len） |
 | spK_seamleaf(C, right) | 任意 | 叶内相邻同 id 段已合并（i = 光标槽 + right） |
@@ -284,6 +284,23 @@ backwardoff(off)；否则 backwardoff(-d)——虚拟起点经 backwardoff 天�
   且 offset < bytes）；编辑 API 出口 forwardoff(0) 收尾，树尾态豁免
 - **“ns 已完全消失”通知 = 存在性检查**：消费循环首轮零匹配即消失，
   无需 pcount 出参
+
+### 7.6 光标 epoch 与失效
+
+- `sp_Tree.epoch` 与 `sp_Cursor.epoch` 都是 `unsigned`；`sp_seek` 捕获
+  `T->epoch`，`sp_locate` 沿用已捕获值（只校验，不刷新）
+- `sp_valid(C)` = `C && C->tree && C->epoch == C->tree->epoch`；解引用
+  `paths` 的入口先过它——`sp_locate`/`sp_advance`/`sp_fill`/`sp_append`/
+  `sp_insert`/`sp_remove`/`sp_splice` 返回 `SP_ERRPARAM`，
+  `sp_next`/`sp_prev`/`sp_style` 返回 `SP_NONE`
+- 每次成功的原地修改 API 递增一次并由 `spS_ok` 同步刷新当前游标：
+  `sp_fill` / `sp_clear` / `sp_append` / `sp_insert` / `sp_remove` /
+  `sp_splice` 各一次
+- no-op 不递增：`len == 0` 或 `offset >= bytes`（`sp_fill` / `sp_remove`）、
+  `ins == 0`（`sp_append` / `sp_insert`）、`del == 0 && ins == 0`
+  （`sp_splice`）
+- `sp_splice` 的删除分支只在 `del > 0 && offset(C) < bytes` 时走
+  `spD_remove`；虚拟尾编辑只走插入分支
 
 ## 八、fill 算法（当前实现）
 
@@ -488,9 +505,10 @@ peeldown(l, rt):                 # 层 l 的内容已在 rt[levels-l]
 6. **度量记账**：摘挂切出每层 spM_up 减度量，剥回 append 与 stitch
    加回；arb 只改 id 不改变段长 → 全程净 0
 7. **reserve 顺序与预算**：reserve 必须在 pad 之前。fill 预算 =
-   6*levels+7；insert/append = 3*levels+4；remove = 4*levels+5；
-   splice 在任何 mutation 之前统一 reserve `6*levels+8`，覆盖
-   remove 的实际分配上界（`levels+2`）与 append 的 `3*levels+4`
+   6*levels+7；insert/append = 3*levels+4；remove = 4*levels+5（在
+   `sp_remove` 入口完成，`spD_remove` 不再分配）；splice 在任何
+   mutation 之前统一 reserve `6*levels+8`，覆盖 remove 的实际分配
+   上界（`levels+2`）与 append 的 `3*levels+4`
 
 ### 8.10 边界情况
 

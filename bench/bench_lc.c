@@ -26,7 +26,6 @@ typedef struct lc_bench_ud {
     lc_Delta  *advlines;
     long       noffs;
     lc_Cursor  cur;
-    lc_Cursor  rcur;
     long       idx;
     long       calls;
     size_t     sink;
@@ -312,8 +311,7 @@ static int run_remove(void *ud, long iters) {
         size_t off = u->offs[i % u->noffs];
         size_t len = (size_t)(1 + (i % 32));
         if (lc_seek(&u->cur, u->c, off) != LC_OK) return 0;
-        if (lc_seek(&u->rcur, u->c, off + len) != LC_OK) return 0;
-        if (lc_remove(&u->cur, &u->rcur) != LC_OK) return 0;
+        if (lc_remove(&u->cur, len) != LC_OK) return 0;
         u->sink += lc_offset(&u->cur);
     }
     return 1;

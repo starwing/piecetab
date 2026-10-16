@@ -22,7 +22,6 @@ typedef struct bench_sp_ud {
     size_t    *advs;
     long       noffs;
     sp_Cursor  cur;
-    sp_Cursor  rcur;
     long       idx;
     long       calls;
     size_t     spans;
@@ -506,8 +505,7 @@ static int run_remove(void *ud, long iters) {
         if (end > u->total) end = u->total;
         if (end <= off) end = off + 1;
         if (sp_locate(&u->cur, off) != SP_OK) return 0;
-        if (sp_seek(&u->rcur, u->t, end) != SP_OK) return 0;
-        if (sp_remove(&u->cur, &u->rcur) != SP_OK) return 0;
+        if (sp_remove(&u->cur, end - off) != SP_OK) return 0;
     }
     u->idx = k;
     return 1;

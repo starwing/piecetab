@@ -88,15 +88,11 @@ TEST(edit8_sequence) {
         spA_tally(t, counts);
         assertok(spA_check(&bref, counts));
     }
-    {
-        sp_Cursor R;
-        asserteq(sp_seek(&C, t, 5), SP_OK);
-        asserteq(sp_seek(&R, t, 55), SP_OK);
-        asserteq(sp_remove(&C, &R), SP_OK);
-        assertok(sp_checktree(t));
-        spA_tally(t, counts);
-        assertok(spA_check(&bref, counts));
-    }
+    asserteq(sp_seek(&C, t, 5), SP_OK);
+    asserteq(sp_remove(&C, 50), SP_OK);
+    assertok(sp_checktree(t));
+    spA_tally(t, counts);
+    assertok(spA_check(&bref, counts));
     sp_freetree(t);
     asserteq(S->nodes.live_obj, 0);
     sp_close(S);
@@ -308,12 +304,11 @@ TEST(remove_mergeleft_idmismatch) {
     sp_Tree  *t = sp_mkstreamV(
             sp_newtree(S), 1, 1, 2, 1, 3, 1, 40, 1, 5, 1, 6, 1, 4, 1, 7, 1, 8,
             1, 9, 1, 0, 0);
-    sp_Cursor C, R;
+    sp_Cursor C;
     char      buf[256];
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 4), SP_OK);
-    asserteq(sp_seek(&R, t, 6), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 2), SP_OK);
     assertok(sp_checktree(t));
     assertok(sp_checkcursor(&C, 4));
     sp_serialtree(t, buf);
@@ -332,12 +327,11 @@ TEST(remove_mergeleft_healthy) {
             1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 17, 1, 18, 1, 12, 1, 19, 1,
             20, 1, 21, 1, 22, 1, 40, 1, 41, 1, 42, 1, 43, 1, 44, 1, 45, 1, 46,
             1, 47, 1, 0, 0);
-    sp_Cursor C, R;
+    sp_Cursor C;
     char      buf[256];
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 20), SP_OK);
-    asserteq(sp_seek(&R, t, 26), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 6), SP_OK);
     assertok(sp_checktree(t));
     assertok(sp_checkcursor(&C, 20));
     sp_serialtree(t, buf);
@@ -358,12 +352,11 @@ TEST(remove_mergeleft_foldrightbal) {
     sp_Tree  *t = sp_mkstreamV(
             sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 5, 1, 8, 1,
             9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 0, 0);
-    sp_Cursor C, R;
+    sp_Cursor C;
     char      buf[256];
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 5), SP_OK);
-    asserteq(sp_seek(&R, t, 7), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 2), SP_OK);
     assertok(sp_checktree(t));
     assertok(sp_checkcursor(&C, 5));
     sp_serialtree(t, buf);
@@ -383,12 +376,11 @@ TEST(remove_stitch_findroom) {
             10, 9, 10, 10, 10, 11, 10, 12, 10, 13, 10, 14, 10, 15, 10, 16, 10,
             17, 10, 18, 10, 19, 10, 20, 10, 21, 10, 22, 10, 23, 10, 24, 10, 25,
             10, 26, 10, 27, 10, 28, 10, 0, 0);
-    sp_Cursor C, R;
+    sp_Cursor C;
     char      buf[256];
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 5), SP_OK);
-    asserteq(sp_seek(&R, t, 200), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 195), SP_OK);
     assertok(sp_checktree(t));
     assertok(sp_checkcursor(&C, 5));
     sp_serialtree(t, buf);
@@ -449,12 +441,11 @@ TEST(remove_mergeleft_foldleft) {
     sp_Tree  *t = sp_mkstreamV(
             sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 7, 1, 5, 1, 6, 1, 7, 1,
             8, 1, 9, 1, 10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 0, 0);
-    sp_Cursor C, R;
+    sp_Cursor C;
     char      buf[256];
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 6), SP_OK);
-    asserteq(sp_seek(&R, t, 8), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 2), SP_OK);
     assertok(sp_checktree(t));
     assertok(sp_checkcursor(&C, 6));
     sp_serialtree(t, buf);
@@ -472,7 +463,7 @@ TEST(remove_mergeleft_pullref) {
     sp_Tree  *t = sp_mkstreamV(
             sp_newtree(S), 1, 1, 9, 1, 10, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7,
             1, 5, 1, 8, 1, 11, 1, 12, 1, 0, 0);
-    sp_Cursor C, R;
+    sp_Cursor C;
     SpRef     r;
     long      counts[SP_REFN];
     char      buf[256];
@@ -480,8 +471,7 @@ TEST(remove_mergeleft_pullref) {
     spA_seed(&r, t), sp_setarbiter(t, spA_ref, &r);
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 7), SP_OK);
-    asserteq(sp_seek(&R, t, 9), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 2), SP_OK);
     assertok(sp_checktree(t));
     assertok(sp_checkcursor(&C, 7));
     sp_serialtree(t, buf);
@@ -500,12 +490,11 @@ TEST(remove_mergeleft_foldleftbal) {
             sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1,
             10, 1, 11, 1, 10, 1, 12, 1, 11, 1, 13, 1, 14, 1, 15, 1, 16, 1, 17,
             1, 18, 1, 19, 1, 0, 0);
-    sp_Cursor C, R;
+    sp_Cursor C;
     char      buf[256];
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 11), SP_OK);
-    asserteq(sp_seek(&R, t, 13), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 2), SP_OK);
     assertok(sp_checktree(t));
     assertok(sp_checkcursor(&C, 11));
     sp_serialtree(t, buf);
@@ -524,12 +513,11 @@ TEST(remove_mergeleft_foldbelow) {
             sp_newtree(S), 1, 1, 40, 1, 41, 1, 20, 1, 21, 1, 22, 1, 30, 1, 31,
             1, 32, 1, 7, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 10, 1, 11, 1, 12, 1,
             13, 1, 14, 1, 50, 1, 51, 1, 52, 1, 53, 1, 54, 1, 55, 1, 0, 0);
-    sp_Cursor C, R;
+    sp_Cursor C;
     char      buf[256];
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 10), SP_OK);
-    asserteq(sp_seek(&R, t, 12), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 2), SP_OK);
     assertok(sp_checktree(t));
     assertok(sp_checkcursor(&C, 10));
     sp_serialtree(t, buf);
@@ -550,12 +538,11 @@ TEST(remove_mergeleft_foldbelowbal) {
             30, 1, 31, 1, 32, 1, 7, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 10, 1, 11,
             1, 12, 1, 13, 1, 14, 1, 50, 1, 51, 1, 52, 1, 53, 1, 54, 1, 55, 1, 0,
             0);
-    sp_Cursor C, R;
+    sp_Cursor C;
     char      buf[256];
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 13), SP_OK);
-    asserteq(sp_seek(&R, t, 15), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 2), SP_OK);
     assertok(sp_checktree(t));
     assertok(sp_checkcursor(&C, 13));
     sp_serialtree(t, buf);
@@ -663,10 +650,8 @@ TEST(touch8_ref_differ) {
             expected = 1;
             asserteq(sp_insert(&C, 2), SP_OK);
         } else if (op == 3) {
-            sp_Cursor R;
             expected = 1;
-            asserteq(sp_seek(&R, t, 12), SP_OK);
-            asserteq(sp_remove(&C, &R), SP_OK);
+            asserteq(sp_remove(&C, 2), SP_OK);
         } else {
             expected = 2;
             asserteq(sp_splice(&C, 2, 3), SP_OK);

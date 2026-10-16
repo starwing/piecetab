@@ -1253,30 +1253,28 @@ TEST(clearbreaks_cov_slot) {
 TEST(remove_params) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
-    lc_Cursor C, R, X;
+    lc_Cursor C, X;
     memset(&C, 0, sizeof(C));
     memset(&X, 0, sizeof(X));
 
-    asserteq(lc_remove(NULL, &R), LC_ERRPARAM);
-    asserteq(lc_remove(&C, NULL), LC_ERRPARAM);
-    asserteq(lc_remove(&C, &X), LC_ERRPARAM);
+    asserteq(lc_remove(NULL, 1), LC_ERRPARAM);
+    asserteq(lc_remove(&C, 1), LC_ERRPARAM);
+    asserteq(lc_remove(&X, 1), LC_ERRPARAM);
     lc_seek(&C, c, 0);
-    lc_seek(&R, c, 0);
-    asserteq(lc_remove(&C, &X), LC_ERRPARAM); /* X.tree==NULL != c */
-    asserteq(lc_remove(&X, &C), LC_ERRPARAM); /* !X->tree */
+    asserteq(lc_remove(&X, 1), LC_ERRPARAM); /* X not attached */
 
-    /* reversed -> no-op */
+    /* zero length -> no-op */
     lc_scanV(c, 10, 10);
     lc_seek(&C, c, 5);
-    lc_seek(&R, c, 2);
-    asserteq(lc_remove(&C, &R), LC_OK);
+    asserteq(lc_remove(&C, 0), LC_OK);
     asserteq(lc_breaks(c), 2);
     asserteq(lc_bytes(c), 20);
 
-    /* L in trailing region (offset >= bytes) */
+    /* cursor in trailing region (offset >= bytes) */
     lc_seek(&C, c, lc_bytes(c) + 3);
-    lc_seek(&R, c, lc_bytes(c) + 8);
-    asserteq(lc_remove(&C, &R), LC_OK);
+    asserteq(lc_remove(&C, 5), LC_OK);
+    asserteq(lc_breaks(c), 2);
+    asserteq(lc_bytes(c), 20);
 
     lc_delcache(S, c);
     lc_close(S);
@@ -1285,14 +1283,13 @@ TEST(remove_params) {
 TEST(remove_basic) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c;
-    lc_Cursor C, R;
+    lc_Cursor C;
 
     /* remove all */
     c = lc_newcache(S);
     lc_rscanV(c, 100, 10);
     lc_seek(&C, c, 0);
-    lc_seek(&R, c, 1000);
-    lc_remove(&C, &R);
+    lc_remove(&C, 1000);
     asserteq(lc_breaks(c), 0);
     asserteq(lc_bytes(c), 0);
     assertok(lc_checktree(c));
@@ -1303,8 +1300,7 @@ TEST(remove_basic) {
     c = lc_newcache(S);
     lc_rscanV(c, 100, 10);
     lc_seek(&C, c, 11);
-    lc_seek(&R, c, 991);
-    lc_remove(&C, &R);
+    lc_remove(&C, 980);
     asserteq(lc_breaks(c), 2);
     asserteq(lc_bytes(c), 20);
     assertok(lc_checktree(c));
@@ -1315,8 +1311,7 @@ TEST(remove_basic) {
     c = lc_newcache(S);
     lc_scanV(c, 10, 15, 15, 20);
     lc_seek(&C, c, 11);
-    lc_seek(&R, c, 26);
-    lc_remove(&C, &R);
+    lc_remove(&C, 15);
     assertok(lc_checktree(c));
     assertok(lc_checkcursor(&C, 11));
     lc_delcache(S, c);
@@ -1325,8 +1320,7 @@ TEST(remove_basic) {
     c = lc_newcache(S);
     lc_scanV(c, 5, 5, 5, 5, 5, 5, 5, 5);
     lc_seek(&C, c, 5);
-    lc_seek(&R, c, 21);
-    lc_remove(&C, &R);
+    lc_remove(&C, 16);
     assertok(lc_checktree(c));
     assertok(lc_checkcursor(&C, 5));
     lc_delcache(S, c);
@@ -1334,17 +1328,15 @@ TEST(remove_basic) {
     lc_close(S);
 }
 
-/* R overshoots past the tree end (lc_advance col overshoot): rmleaf
- * deletes L's line to the leaf end and drops the virtual remainder
- * (fuzz lc_remove_repro.txt) */
-TEST(remove_rend_overtail) {
+/* len past the tree end clamps to the tail: rmleaf deletes the cursor's
+ * line to the leaf end (fuzz lc_remove_repro.txt) */
+TEST(remove_len_overtail) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
-    lc_Cursor C, R;
+    lc_Cursor C;
     lc_scanV(c, 2, 10);
     lc_seek(&C, c, 6);
-    R = C, lc_advance(&R, 19);
-    asserteq(lc_remove(&C, &R), LC_OK);
+    asserteq(lc_remove(&C, 19), LC_OK);
     assertok(lc_checktree(c));
     assertok(lc_checkcursor(&C, 6));
     asserteq(lc_breaks(c), 1);
@@ -1353,16 +1345,15 @@ TEST(remove_rend_overtail) {
     lc_close(S);
 }
 
-/* virtual R across leaves (same container): trimleft's whole-leaf
+/* clamped len across leaves (same container): trimleft's whole-leaf
  * branch and cutrange's breaks==0 skip consume the emptied tail leaf */
-TEST(remove_rend_overtail_range) {
+TEST(remove_len_overtail_range) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
-    lc_Cursor C, R;
+    lc_Cursor C;
     lc_scanV(c, 5, 5, 5, 5, 5, 5, 5, 5);
     lc_seek(&C, c, 7);
-    R = C, lc_advance(&R, 40);
-    asserteq(lc_remove(&C, &R), LC_OK);
+    asserteq(lc_remove(&C, 40), LC_OK);
     assertok(lc_checktree(c));
     assertok(lc_checkcursor(&C, 7));
     asserteq(lc_breaks(c), 1);
@@ -1372,16 +1363,15 @@ TEST(remove_rend_overtail_range) {
     lc_close(S);
 }
 
-/* virtual R across containers: cutrange's per-level loop skips the
+/* clamped len across containers: cutrange's per-level loop skips the
  * emptied tail subtree at every level */
-TEST(remove_rend_overtail_range2) {
+TEST(remove_len_overtail_range2) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
-    lc_Cursor C, R;
+    lc_Cursor C;
     lc_scanV(c, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5);
     lc_seek(&C, c, 7);
-    R = C, lc_advance(&R, 97);
-    asserteq(lc_remove(&C, &R), LC_OK);
+    asserteq(lc_remove(&C, 97), LC_OK);
     assertok(lc_checktree(c));
     assertok(lc_checkcursor(&C, 7));
     asserteq(lc_breaks(c), 1);
@@ -1399,10 +1389,9 @@ TEST(remove_foldroot) {
             S, 1,
             innerV(botV(leafV(4, 1, 3), leafV(1, 7, 1)),
                    botV(leafV(1, 1, 1, 1), leafV(1, 1, 1, 1))));
-    lc_Cursor C, R;
+    lc_Cursor C;
     lc_seek(&C, c, 3);
-    R = C, lc_advance(&R, 3);
-    asserteq(lc_remove(&C, &R), LC_OK);
+    asserteq(lc_remove(&C, 3), LC_OK);
     assertok(lc_checktree(c));
     assertok(lc_checkcursor(&C, 3));
     lc_delcache(S, c);
@@ -1416,7 +1405,7 @@ TEST(remove_foldroot) {
 TEST(remove_oom_prereserve) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
-    lc_Cursor C, R;
+    lc_Cursor C;
     void     *pn;
     int       oom = 0, r;
     size_t    bytes, breaks, snb;
@@ -1428,10 +1417,9 @@ TEST(remove_oom_prereserve) {
     pn = S->nodes.pages;
     S->nodes.pages = NULL;
     lc_seek(&C, c, 5);
-    R = C, lc_advance(&R, 40);
     S->allocf = oom_alloc;
     S->alloc_ud = &oom;
-    r = lc_remove(&C, &R);
+    r = lc_remove(&C, 40);
     S->allocf = test_alloc;
     S->alloc_ud = NULL;
     asserteq(r, LC_ERRMEM);
@@ -3138,6 +3126,80 @@ TEST(locline_crossleaf) {
     asserteq(lc_line(&C), 4);
     assertok(lc_checkcursor(&C, lc_offset(&C)));
 
+    lc_delcache(S, c);
+    lc_close(S);
+}
+
+/* epoch: any in-place edit invalidates every other cursor on the cache,
+ * while the editing cursor is resynced and stays usable */
+TEST(epoch_invalidate) {
+    lc_State *S = lc_open(&test_alloc, NULL);
+    lc_Cache *c, *c2;
+    lc_Cursor C, D, E;
+    assertok(S != NULL);
+    c = lc_newcache(S);
+    c2 = lc_newcache(S);
+    assertok(c != NULL && c2 != NULL);
+    lc_scanV(c, 4, 4, 4);
+    lc_scanV(c2, 4, 4);
+    asserteq(lc_seek(&E, c2, 0), LC_OK);
+
+    asserteq(lc_seek(&C, c, 0), LC_OK);
+    asserteq(lc_seek(&D, c, 2), LC_OK);
+    asserteq(lc_valid(&C), 1);
+    asserteq(lc_valid(&D), 1);
+
+    /* the editing cursor is resynced, the other one goes stale */
+    asserteq(lc_splice(&C, 1, 1), LC_OK);
+    assertok(lc_checkcursor(&C, 1));
+    assertok(lc_checktree(c));
+    asserteq(lc_valid(&C), 1);
+    asserteq(lc_valid(&D), 0);
+
+    /* every entry that dereferences paths is gated */
+    asserteq(lc_locate(&D, 0), LC_ERRPARAM);
+    asserteq(lc_locline(&D, 0), LC_ERRPARAM);
+    asserteq(lc_advance(&D, 1), LC_ERRPARAM);
+    asserteq(lc_advline(&D, 1), LC_ERRPARAM);
+    asserteq(lc_linelen(&D), 0);
+    asserteq(lc_markbreak(&D, 1), LC_ERRPARAM);
+    asserteq(lc_append(&D, 1, NULL, NULL), LC_ERRPARAM);
+    asserteq(lc_splice(&D, 1, 1), LC_ERRPARAM);
+
+    /* seek recaptures the epoch */
+    asserteq(lc_seek(&D, c, 2), LC_OK);
+    asserteq(lc_valid(&D), 1);
+
+    /* no-op edits do not move the epoch */
+    asserteq(lc_splice(&C, 0, 0), LC_OK);
+    asserteq(lc_append(&C, 0, NULL, NULL), LC_OK);
+    asserteq(lc_valid(&D), 1);
+
+    /* the tree-level scan is an edit too: it invalidates C */
+    lc_scanV(c, 5);
+    asserteq(lc_valid(&C), 0);
+    asserteq(lc_locate(&C, 0), LC_ERRPARAM);
+
+    /* remove is single-cursor: the editing cursor is resynced, other
+     * cursors on the cache go stale, a cursor on another cache is not
+     * touched */
+    asserteq(lc_seek(&C, c, 0), LC_OK);
+    asserteq(lc_seek(&D, c, 2), LC_OK);
+    asserteq(lc_remove(&C, 2), LC_OK);
+    asserteq(lc_valid(&C), 1);
+    asserteq(lc_valid(&D), 0);
+    asserteq(lc_remove(&D, 1), LC_ERRPARAM); /* stale cursor */
+    asserteq(lc_valid(&E), 1);
+
+    /* no-op remove does not move the epoch */
+    asserteq(lc_seek(&D, c, 0), LC_OK);
+    asserteq(lc_remove(&D, 0), LC_OK);
+    asserteq(lc_valid(&C), 1);
+    asserteq(lc_locate(&D, lc_bytes(c) + 1), LC_OK);
+    asserteq(lc_remove(&D, 1), LC_OK); /* trailing region -> no-op */
+    asserteq(lc_valid(&C), 1);
+
+    lc_delcache(S, c2);
     lc_delcache(S, c);
     lc_close(S);
 }

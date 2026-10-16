@@ -279,9 +279,9 @@ c:clear(len)                -- 从游标全清 len 字节（树 op 0 + 全部
 c:clear(ns, len)            -- 从游标清该层 len 字节（eph = 列表区间
                             --   裁剪；普通 = sp_fill CLEAR op）
 c:splice(del, ins)  c:append(ins)  c:insert(ins)
-c:remove(len)               -- 内部第二游标 seek+advance(len)，
-                            --   sp_remove(&C, &R)；编辑动词自动清
-                            --   空全部 eph 列表
+c:remove(len)               -- 等价 c:splice(len, 0)（sp_splice 内直调
+                            --   spD_remove）；编辑动词自动清空全部
+                            --   eph 列表
                             -- 注：c:clear 无无参形态——全树清是树级
                             --   剪枝（t:clear(ns) / t:clear()）
 ```

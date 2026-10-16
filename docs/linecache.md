@@ -39,7 +39,7 @@ A B+ tree. `root` is embedded (not a pointer), so `lc_newcache` never fails with
 typedef struct lc_Cursor lc_Cursor;
 ```
 
-A non-persistent navigator, initialized by `lc_seek`/`lc_seekline`. `paths[0]` points to a slot in the root (`&root.children[...]`), `paths[levels]` points to a leaf slot (`&parent->children[...]`). The four fields `off/lnu/loff/col` jointly encode the cursor's absolute position (byte/line number) and leaf-relative position.
+A non-persistent navigator, initialized by `lc_seek`/`lc_seekline`, which also capture `tree->epoch`. `paths[0]` points to a slot in the root (`&root.children[...]`), `paths[levels]` points to a leaf slot (`&parent->children[...]`). The four fields `off/lnu/loff/col` jointly encode the cursor's absolute position (byte/line number) and leaf-relative position; `epoch` records the tree mutation generation checked by `lc_valid`.
 
 `lc_Diff` is `ptrdiff_t`, used for signed offsets in move APIs.
 
@@ -129,6 +129,7 @@ int lc_advline(lc_Cursor *C, lc_Diff delta);
 #define lc_col(C)        ((C)->col)
 #define lc_lineoffset(C) ((C)->off + (C)->loff)
 unsigned lc_linelen(const lc_Cursor *C);
+int      lc_valid(const lc_Cursor *C);
 ```
 
 - `lc_offset`: The cursor's absolute byte offset (macro, directly dereferences; caller must ensure C is non-NULL).
@@ -136,6 +137,8 @@ unsigned lc_linelen(const lc_Cursor *C);
 - `lc_linelen`: The byte length of the line at the cursor. If `C` is in the trailing region (`lnu == breaks[leaf]`), returns `C->col` (virtual line length). Returns 0 if `C==NULL`.
 - `lc_col`: The cursor's column offset within the current line (0-based, macro).
 - `lc_lineoffset`: The byte offset at the start of the cursor's current line (macro, = offset - col).
+- `lc_valid`: Non-zero when the cursor is attached (`C != NULL && C->tree != NULL`) and its captured `epoch` equals the tree's current epoch. It is a function, not a macro.
+- **Cursor epoch**: every successful in-place edit (`lc_scan`, `lc_markbreak`, `lc_append`, `lc_insert`, `lc_splice`, `lc_remove`) bumps `tree->epoch` once and refreshes the editing cursor; every other cursor on that cache goes stale. No-op edits (`lc_remove(C,0)`, a removal in the trailing region, `lc_splice(C,0,0)`, `lc_append(C,0,NULL,NULL)`) neither reserve nor bump. A stale cursor is rejected before any `paths` dereference: positioning/editing entries return `LC_ERRPARAM`, `lc_linelen` returns 0, while `lc_seek`/`lc_seekline` re-attach it.
 
 ### Mark/Clear Line Breaks
 
@@ -156,21 +159,20 @@ int lc_markbreak(lc_Cursor *C, unsigned len);
 
 **Return values**: Same as `lc_splice` — `LC_OK`, `LC_ERRPARAM`, `LC_ERRMEM`.
 
-### lc_remove — Erase Interval Between Cursors
+### lc_remove — Erase `len` Bytes at the Cursor
 
 ```c
-int lc_remove(lc_Cursor *L, lc_Cursor *R);
+int lc_remove(lc_Cursor *C, size_t len);
 ```
 
-**Behavior**: Deletes all bytes (including line breaks) between cursors L and R; content to the right shifts left. L and R must belong to the same tree and `lc_offset(L) < lc_offset(R)`.
+**Behavior**: Deletes `len` bytes (including line breaks) starting at the cursor; content to the right shifts left and `C` stays at the deletion point. `len` is clamped to the tree tail, so it may exceed the remaining bytes. When the deletion reaches the leaf end, `C`'s whole line is removed (its `col` prefix is not kept) and `C` ends in the trailing region.
 
 **Parameter validation**:
-- `L==NULL` or `R==NULL` or `!L->tree` or `L->tree != R->tree`: returns `LC_ERRPARAM`
-- Empty interval, inverted order, or L out of bounds: returns `LC_OK`, no-op
-- R beyond the tree end (trailing region) is valid: the removal runs to
-  the tail and L's line is deleted whole (its prefix is not kept)
+- `C==NULL`, `C->tree==NULL`, or a stale cursor (epoch mismatch): returns `LC_ERRPARAM`
+- `len == 0`, or `C` already in the trailing region: returns `LC_OK`, no-op
+- `len` beyond the tree end: clamped to the remaining bytes
 
-**Return values**: `LC_OK` (success or no-op), `LC_ERRPARAM` (invalid parameters). After the operation, R is invalidated (tree structure changed); L points to the deletion point.
+**Return values**: `LC_OK` (success or no-op), `LC_ERRPARAM` (invalid parameters), `LC_ERRMEM` (the entry reservation failed; the tree is unchanged). A successful removal bumps the tree epoch: the editing cursor is refreshed and every other cursor on that cache goes stale.
 
 **Implementation**: Same-leaf and cross-leaf deletions are handled internally (three-phase method: trim→cut→stitch). The entry point pre-allocates `levels + 2` pool nodes; when that reservation fails, `LC_ERRMEM` is returned before any mutation.
 
@@ -184,12 +186,12 @@ int lc_splice(lc_Cursor *C, size_t del, unsigned ins);
 
 **Behavior**:
 - Cursor in trailing region: `C->col += ins` returns immediately
-- Delete + insert bytes: internal `lc_advance` + `lc_remove` handles deletion, then uses the direct byte-append path to add back the inserted bytes. If the tree becomes empty after deletion, the tree is reset.
+- Delete + insert bytes: the delete path runs the same internal routine as `lc_remove` (`lcD_remove`, after a single entry reservation), then the direct byte-append path adds back the inserted bytes. If the tree becomes empty after deletion, the tree is reset.
 - Insert bytes only: if the cursor is within a valid line, `leaf->bytes[C->lnu] += ins` lengthens the current line; `C->col += ins` moves the cursor.
 
-**Return values**: `LC_OK` (success), `LC_ERRPARAM` (invalid parameters), `LC_ERRMEM` (the `lc_remove` entry reservation failed; the tree is unchanged).
+**Return values**: `LC_OK` (success), `LC_ERRPARAM` (invalid parameters), `LC_ERRMEM` (the deletion entry reservation failed; the tree is unchanged).
 
-**Note**: Deletion intervals may span arbitrary leaf boundaries. `lc_splice` internally delegates deletion to `lc_remove` — `splice(C, del, ins)` is equivalent to `remove + addbytes`. `lc_clearbreaks` is a convenience macro for `splice(len, len)`.
+**Note**: Deletion intervals may span arbitrary leaf boundaries. `lc_splice` uses the same deletion path as `lc_remove` (one entry reservation, one epoch bump) — `splice(C, del, ins)` is equivalent to `remove + addbytes`. `lc_clearbreaks` is a convenience macro for `splice(len, len)`.
 
 ### lc_append — Insert Text/Lines at Midpoint
 
@@ -256,12 +258,13 @@ C->nu     : cumulative line count of all preceding leaves
 C->loff   : within the current leaf, sum of bytes before line C->lnu (leaf-internal byte offset)
 C->lnu    : line index within the current leaf (0-based)
 C->col    : column offset within the current line
+C->epoch  : tree mutation epoch captured at seek/seekline time
 
 offset = off + loff + col
 line   = nu + lnu
 ```
 
-Design intent: `off`+`nu` anchors the leaf position, `loff`+`lnu` provides precise positioning within the leaf, `col` fine-tunes within the line. The three groups accumulate to a global offset without scanning.
+Design intent: `off`+`nu` anchors the leaf position, `loff`+`lnu` provides precise positioning within the leaf, `col` fine-tunes within the line. The three groups accumulate to a global offset without scanning. `epoch` is checked by `lc_valid` and guards every `paths` dereference against use after an in-place edit.
 
 ### Virtual Lines (Trailing Region)
 

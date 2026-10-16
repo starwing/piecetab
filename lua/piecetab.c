@@ -478,9 +478,8 @@ static int lpt_hunkapply(lc_Cache *lc, const ut_Hunk *hs, int n, pt_Buffer b) {
         if ((r = lc_splice(&C, 0, ins)) != LC_OK) break;
     }
     if (r < 0 && n > 0 && hs[0].pa < lc_bytes(lc)) {
-        lc_Cursor C1, C2;
-        lc_seek(&C1, lc, hs[0].pa), lc_seek(&C2, lc, lc_bytes(lc));
-        lc_remove(&C1, &C2);
+        lc_Cursor C1;
+        lc_seek(&C1, lc, hs[0].pa), lc_remove(&C1, lc_bytes(lc) - hs[0].pa);
     }
     return r;
 }
@@ -872,6 +871,9 @@ static int Ldoc_linelen(lua_State *L) {
         lpt_checkerror(L, lpt_docsync(L, d, LPT_UNL, pt_offset(&d->C)));
         assert(d->lc), lc_seek(&C, d->lc, pt_offset(&d->C));
         lpt_checkerror(L, lpt_docsync(L, d, lc_line(&C) + 1, LPT_UNL));
+        /* the sync above edits lc through its own cursors, which leaves C
+         * stale; C is a cache cursor, so seek it again at the same offset */
+        assert(d->lc), lc_seek(&C, d->lc, pt_offset(&d->C));
         last = lc_line(&C) == lc_breaks(d->lc);
         if (last) lc_seek(&C, d->lc, pt_bytes(pt_buffer(&d->C)));
     }

@@ -425,7 +425,7 @@ lpt_docsync(L, d, tbytes, tlines):
 | --- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | 1   | literal 引用语义 vs Lua GC string                                          | 全拷贝入 arena 惯例（`lpt_toliteral`）                                                     |
 | 2   | `pt_edit` 超长返 ERRPARAM                                                | **动词按路径分**；spantree API 宜从设计起动词即路径                                        |
-| 3   | 判 detach 依赖内部字段                                                     | 已解决：`pt_valid`（函数）/ `lc_valid`（宏）                                                           |
+| 3   | 判 detach 依赖内部字段                                                     | 已解决：`pt_valid` / `lc_valid`（均为函数）                                                           |
 | 4   | "读 n 停 n"半步问题                                                        | `pt_read` 分块直读；read 类 API 是绑定读端标配                                             |
 | 5   | C 资源先于 userdata → error 窗口泄漏                                       | **userdata-first** 惯例（§9.2）                                                            |
 | 6   | 栈上裸 cursor 编辑无兜底                                                   | 编辑必经 cursor userdata；构造器内手动闭环是唯一例外                                       |

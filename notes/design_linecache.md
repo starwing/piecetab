@@ -6,7 +6,7 @@
 
 单头文件 Clean C 库，前缀 `lc_`。以 B+ 计量树 (Metric B+ Tree) 维护字节偏移→行号之映射。
 
-**功用**: 文本编辑器中维护行号缓存。支持行断点插入/删除 (`lc_markbreak`/`lc_clearbreaks`)、区间删除 (`lc_remove`)、区间删插字节 (`lc_splice`)、中部插入 (`lc_append`/`lc_insert`)、批量加载 (`lc_scan`)。
+**功用**: 文本编辑器中维护行号缓存。支持行断点插入/删除 (`lc_markbreak`/`lc_clearbreaks`)、区间删除 (`lc_remove`)、区间删插字节 (`lc_splice`)、中部插入 (`lc_append`/`lc_insert`)、批量加载 (`lc_scan`)；游标带 `epoch` 失效判定 (`lc_valid`)。
 
 关联: `piecetab.h` (piece table, 前缀 `pt_`)，linecache 为其先行实验。
 
@@ -56,6 +56,7 @@ struct lc_Cache {
     size_t         breaks;   /* 总行数 */
     size_t         bytes;    /* 总字节数 */
     unsigned short levels;   /* 0 = root->children 即叶层 */
+    unsigned short epoch;    /* 原地修改代次（成功 API 递增一次） */
 };
 ```
 
@@ -70,12 +71,14 @@ struct lc_Cursor {
     size_t     loff;  /* 叶内字节偏移 */
     size_t     nu;    /* 叶起始行号 */
     size_t     off;   /* 叶起始字节偏移 */
+    unsigned   epoch; /* seek/seekline 时捕获的 tree->epoch */
 };
 ```
 
 - `paths[0] == &c->root.children[...]`，`paths[levels]` 指向叶槽（内为 `lc_Leaf*` 需 cast）
 - 绝对偏移 = off + loff + col; 绝对行号 = nu + lnu
-- 非持久 — 由 `lc_seek`/`lc_seekline` 初始化
+- 非持久 — 由 `lc_seek`/`lc_seekline` 初始化并捕获 `tree->epoch`（`lc_locate`/`lc_locline` 沿用已捕获值）
+- 失效判定 `lc_valid(C)` = 已附着且 `C->epoch == C->tree->epoch`；解引用 `paths` 的入口都先过它
 
 ### lc_Pool / lc_State
 
@@ -122,8 +125,9 @@ grep '^LC_API' linecache.h
 | 定位     | `lc_seek`, `lc_seekline`                                        | 按偏移/行号定位游标                                                            |
 | 移动     | `lc_advance`, `lc_advline`                                      | 字节/行偏移移动（越界 clamp）                                                  |
 | 查询     | `lc_offset`, `lc_line`, `lc_linelen`, `lc_col`, `lc_lineoffset` | 游标状态查询（宏）                                                             |
+| 查询     | `lc_valid`                                                      | 游标已附着且 epoch 未过期                                                      |
 | 断点     | `lc_markbreak`, `lc_clearbreaks`                                | 单点插入 / 区间清除行断（宏）                                                  |
-| 编辑     | `lc_remove`, `lc_splice`, `lc_append`, `lc_insert`              | 区间删除 / 区间删插字节 / 中部插入或纯字节追加（sc=NULL） / 插入游标处（不动） |
+| 编辑     | `lc_remove`, `lc_splice`, `lc_append`, `lc_insert`              | 按长度区间删除（`len` 超尾截断） / 区间删插字节 / 中部插入或纯字节追加（sc=NULL） / 插入游标处（不动） |
 
 ## 六、内部函数命名体系
 
@@ -172,10 +176,11 @@ grep '^static' linecache.h
 1. **嵌入 root**: `lc_Cache.root` 是值非指针 — 省一次分配，免 OOM 于建树
 2. **叶无 child_count**: 行数由父 `breaks[i]` 决定，冗余由上层约束保证
 3. **度量双计**: bytes + breaks 双数组允许 O(log n) 双向导航
-4. **lc_splice 事务性**: 删除路径委托 `lc_remove`（入口 reserve，失败在任何修改之前返回 `LC_ERRMEM`）；插入路径仅改叶内字节、不分配；任一步失败时树保持删除前状态
+4. **lc_splice 事务性**: 删除路径在入口 reserve `levels + 2` 后直调 `lcD_remove`（失败在任何修改之前返回 `LC_ERRMEM`；公共 `lc_remove` 用同一入口形态）；插入路径仅改叶内字节、不分配；任一步失败时树保持删除前状态
 5. **stitch 事务性**: `lc_remove` 入口 reserve `levels + 2` 个节点，`stitch` 入口 assert 池内已有该数量、且光标处于容器末段（`idx >= cc - 1`），stitch 全程不再分配。`lc_append` 走 `lcD_checkstitch` 做同一 reserve
 6. **balanceleaf rounding**: `d = l - ((l + r + 1) >> 1)` 向上取整，与 foldleaf 游标修正断言强耦合（`assert((dl<0) != (*ls!=o))`）— 修改均分公式需同步改调用方
-7. **cutrange 的 0 长特判**：`lcD_cutrange:487` / `:492` 用 `i += (k || p->breaks[i] == 0);` 把切点处的 0 长槽**随切点一起**删去（不搬进 `rt`、也不留给 stitch）。linecache 的负载度量是**行数** `breaks[]`，故写 `breaks[i] == 0`；piecetab / spantree 的度量是 span，写 `p->bytes[i] == 0`（`ptD_cutrange:720/725`、`spD_cutrange:454/459`）——同一个意图，不同度量。理由是"树内不得存在 0 长槽"：中间槽 `bytes == 0` 会让 `poff >= bytes` 把该槽误判为耗尽，导航（`lc_next` 等）与虚拟尾判定失效；删除路径靠这行特判维持，survivor 因此永不为 0 长槽。
+7. **游标 epoch**: `lc_Cache.epoch` 是原地修改代次，`lc_Cursor.epoch` 在 `lc_seek`/`lc_seekline` 时捕获，`lc_valid(C)` 判定已附着且相等。解引用 `paths` 的入口（`lc_locate`/`lc_locline`/`lc_advance`/`lc_advline`/`lc_linelen`/`lc_markbreak`/`lc_append`/`lc_insert`/`lc_splice`/`lc_remove`）先过 `lc_valid`，过期游标返回 `LC_ERRPARAM`（`lc_linelen` 返回 0）；编辑成功后由 `lcS_ok` 递增 tree epoch 并刷新当前游标。无操作路径（`len == 0`、`off >= bytes`、`ins == 0`、`del == 0 && ins == 0`、`lc_append` 空 sc）不 reserve 也不递增；`lc_remove` / `lc_splice` 各只递增一次，`lc_markbreak` 在 `len > rm` 需先 `lc_splice` 补齐时递增两次（`lc_splice` 一次 + 收尾一次）。`lc_scan` 是树级修改，同样递增并失效其他游标。
+8. **cutrange 的 0 长特判**：`lcD_cutrange:487` / `:492` 用 `i += (k || p->breaks[i] == 0);` 把切点处的 0 长槽**随切点一起**删去（不搬进 `rt`、也不留给 stitch）。linecache 的负载度量是**行数** `breaks[]`，故写 `breaks[i] == 0`；piecetab / spantree 的度量是 span，写 `p->bytes[i] == 0`（`ptD_cutrange:723/728`、`spD_cutrange:459/464`）——同一个意图，不同度量。理由是"树内不得存在 0 长槽"：中间槽 `bytes == 0` 会让 `poff >= bytes` 把该槽误判为耗尽，导航（`lc_next` 等）与虚拟尾判定失效；删除路径靠这行特判维持，survivor 因此永不为 0 长槽。
 
 ### 9.1 `mergeleaf` 的 fill-L 与 `d` 机制（leaf occupancy + repair path）
 
@@ -362,8 +367,9 @@ grep '^static.*lcX_' linecache.h
 | `lc_append` | — | C==NULL→ERRPARAM | 正常追加 | 回滚sC→ERRMEM |
 | `lc_insert` | — | 同 append | 同 append | 同 append |
 | `lc_markbreak` | — | C==NULL/len==0→ERRPARAM | 直接建单行树 | splice 预分配失败→ERRMEM（树不变） |
-| `lc_splice` | off≥bytes→仅col+=ins | del=0,ins=0→完全无操作 | col+=ins | 委托 remove（入口 reserve） |
-| `lc_remove` | L≥R→无操作；R 越尾合法→删至树尾，L 所在行整体删除 | NULL/非同树→ERRPARAM | 无操作 | 入口 reserve 失败→ERRMEM（树不变） |
+| `lc_splice` | off≥bytes→仅col+=ins | del=0,ins=0→完全无操作 | col+=ins | 入口 reserve 后直调 `lcD_remove` |
+| `lc_remove` | `len==0` 或 `off>=bytes`→无操作；`len` 超尾→截断到树尾，`C` 所在行整体删除 | 过期/未附着游标→ERRPARAM；`len==0`→无操作 | 无操作 | 入口 reserve `levels+2` 失败→ERRMEM（树不变） |
+| `lc_valid` | 过期→0 | C==NULL→0 | 未附着→0 | 无分配 |
 | `lc_seek` | **软 clamp**, col=excess | C/c==NULL→ERRPARAM | 跳 locend, col=n | 无分配 |
 | `lc_seekline` | **硬 ERR_PARAM** | C/c==NULL→ERRPARAM | paths[0]=root.children | 无分配 |
 | `lc_advance` | clamp 到端 | C/tree==NULL→ERRPARAM | — | 无分配 |
@@ -379,4 +385,9 @@ grep '^static.*lcX_' linecache.h
 - **lc_splice(C, 0, 0) → 完全无操作**。绑定层不需要包 `if (del > 0)` 守卫。
 - **lc_append(C, 0, NULL, NULL)** → 仅 `lcD_addbytes(C, 0)`，全无操作（`!e` 提前 return）。
 - **Scanner 回调返回 0 = eof**（不是空行）。linecache 不支持零长行。
-- **`lc_remove` 用双游标定区间**，非长度参数。两游标同位置 → 无操作。
+- **`lc_remove(C, len)` 用长度定区间**。`len == 0` 或游标已在树尾之后 → 无操作；
+  `len` 超出树尾自动截断到树尾。
+- **过期游标（epoch 不符）**：解引用 `paths` 的入口返回 `LC_ERRPARAM`
+  （`lc_linelen` / `lc_valid` 返回 0）；`lc_seek` / `lc_seekline` 是重新附着的入口。
+- **`lc_markbreak` 在 `len > rm`（需先 `lc_splice` 补齐）时递增两次 epoch**：
+  `lc_splice` 一次 + 收尾一次；失效判定只看相等性，故语义不受影响。

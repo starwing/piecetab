@@ -10,9 +10,8 @@
 
 ### 0.1 代码基准
 
-- 基准提交：`9f51e03b3817f9ad1806a4896332a2fc02486711`。
-- 基准文件：`linecache.h` 1174 行、`spantree.h` 1235 行、`piecetab.h` 1461 行。
-- 本文所有行号以该提交下的三份头文件为准；行号漂移时先按函数名定位，再用本文给出的函数体语义核对。
+- 基准：本文件所在提交下的三份头文件——`linecache.h` 1182 行、`spantree.h` 1246 行、`piecetab.h` 1456 行。
+- 本文所有行号以该状态为准；行号漂移时先按函数名定位，再用本文给出的函数体语义核对。
 - 三库的公共 API 实现集中在文件末尾的 `/* APIs */` 段，内部原语按 `/* utils */`、`/* navigation */`、`/* remove */`、`/* insertion */`、`/* scan */` 等段排列；本文的章节顺序与之一致。
 
 ### 0.2 参考文档与数据模型
@@ -49,10 +48,11 @@
 
 - `Node` 共同 field：`children[FANOUT]`、`bytes[FANOUT]`、`child_count`。
 - `Tree` / `Cache` 共同 field：嵌入 `root`、`levels`、`bytes`。
-- `Cursor` 共同 field：`paths[MAX_LEVEL]`、`tree`、`poff`、`off`。
+- `Cursor` 共同 field：`paths[MAX_LEVEL]`、`tree`、`poff`、`off`、`epoch`。
+- `Tree` / `Cache` 共同 field 追加 `epoch`：每次成功的原地修改 API 递增一次；`valid(C)` = `C && C->tree && C->epoch == C->tree->epoch`，解引用 `paths` 的入口先过 `valid`，过期游标返回 `ERRPARAM`（`linelen` / `next` / `prev` / `style` 一类返回 `0` / `NONE`）。
 - `State` 共同 field：`nodes` pool、`Node rt[MAX_LEVEL]` scratch。
 - 叶层槽的共同语义：`[L]` 是 `lc_Leaf *`，`[S]` 是 `sp_Id`，`[P]` 是 literal / `pt_Hole *`；槽位都通过 `paths[levels]` 访问。
-- 共同声明位置：`[L]` `linecache.h:108-121`、`160-177`；`[S]` `spantree.h:112-119`、`165-185`；`[P]` `piecetab.h:131-141`、`209-269`。
+- 共同声明位置：`[L]` `linecache.h:108-122`、`157-175`；`[S]` `spantree.h:115-121`、`172-187`；`[P]` `piecetab.h:130-137`、`208-242`。
 
 共同宏与语义：
 
@@ -71,36 +71,36 @@
 
 #### [L] linecache.h
 
-以下列各库额外 field；共同 field 见 §1.1。声明位置：`linecache.h:156-173`、`108-121`。
+以下列各库额外 field；共同 field 见 §1.1。声明位置：`linecache.h:157-175`、`108-122`。
 
 - `lc_Leaf`：独立叶类型，唯一 field 是 `unsigned bytes[LC_LEAF_FANOUT]`；有效行数由父槽 `breaks[i]` 记录。
 - `lc_Node` 额外 field：`breaks[LC_FANOUT]`（在共同 `children`、`bytes`、`child_count` 之外）。
 - `lc_Cache` 额外 field：`breaks`（总行数）；共同 `root`、`levels`、`bytes` 不重复。
-- `lc_Cursor` 额外 field：`col`、`lnu`、`loff`、`nu`；共同 `paths`、`tree`、`off` 不重复。
+- `lc_Cursor` 额外 field：`col`、`lnu`、`loff`、`nu`；共同 `paths`、`tree`、`off`、`epoch` 不重复。
 
 - `LC_FANOUT=16`、`LC_LEAF_FANOUT=34`、`LC_MAX_LEVEL=21`（`linecache.h:139-145`、`104-106`）。
 - 叶是独立类型 `lc_Leaf`；有效行数由父节点同槽的 `breaks[i]` 记录。
-- 绝对行号 `nu + lnu`；绝对字节 `off + loff + col`（`linecache.h:85-90`）。
+- 绝对行号 `nu + lnu`；绝对字节 `off + loff + col`（`linecache.h:86-89`）。
 - 叶槽 `paths[levels]` 里存 `lc_Leaf *`，读叶必须 `lcK_leaf(C)` 解引用（`linecache.h:257`）。
-- `lcM_up(C, l, db, dl)` 同时维护 `bytes` 与 `breaks` 两条度量（`linecache.h:277-285`）。
-- 虚拟尾：`lnu == breaks[i]` 时当前行耗尽，`col` 表示尾后残段长度；`lc_linelen` 在该态直接返回 `col`（`linecache.h:1071-1077`）。
+- `lcM_up(C, l, db, dl)` 同时维护 `bytes` 与 `breaks` 两条度量（`linecache.h:279-287`）。
+- 虚拟尾：`lnu == breaks[i]` 时当前行耗尽，`col` 表示尾后残段长度；`lc_linelen` 在该态直接返回 `col`（`linecache.h:1085-1091`）。
 
 **为什么 remove 要为 [L] 额外维护行语义**：linecache 的承诺是“按行/列导航”。叶内是行长数组，父 `breaks[i]` 是行数，cursor 是“叶号 + 叶内行号 + 行内列偏移”的行索引型游标。任何 remove 都必须同时更新 `bytes` 和 `breaks`；跨行删除还要维护“行内前缀”和“尾后虚拟区”。
 
 #### [S] spantree.h
 
-以下列各库额外 field；共同 field 见 §1.1。声明位置：`spantree.h:161-181`、`112-119`。
+以下列各库额外 field；共同 field 见 §1.1。声明位置：`spantree.h:172-187`、`115-121`。
 
 - `sp_Node` 额外 field：`mask[SP_FANOUT]`（叶 ns 集或子树 OR）；共同 `children`、`bytes`、`child_count` 不重复。
 - `sp_Tree` 额外 field：`arb`、`aud`；共同 `root`、`levels`、`bytes` 不重复。
 - `sp_Cursor` 使用共同 field；叶槽存 `sp_Id`，通过 `spL_id` / `spL_setid` 与指针槽互转。
 - 类型别名：`sp_Id = size_t`、`sp_Mask = size_t`。
 
-- `SP_FANOUT=34`、`SP_MAX_LEVEL=16`（`spantree.h:139-140`、`109-110`）。
-- 叶层与内部层使用同一 `sp_Node` 类型；叶槽 `children[i]` 存的是 `sp_Id`，通过 `spL_id` / `spL_setid` 与指针互转（`spantree.h:252-253`）。
-- `bytes[i]` 叶层是 span 长度，内部层是子树累计；`mask[i]` 叶层是该 span 的 ns 集合，内部层是子树的 OR（`spM_sumns`、`spM_remask`，`spantree.h:264-271`）。
+- `SP_FANOUT=34`、`SP_MAX_LEVEL=16`（`spantree.h:142-143`、`111-113`）。
+- 叶层与内部层使用同一 `sp_Node` 类型；叶槽 `children[i]` 存的是 `sp_Id`，通过 `spL_id` / `spL_setid` 与指针互转（`spantree.h:257-258`）。
+- `bytes[i]` 叶层是 span 长度，内部层是子树累计；`mask[i]` 叶层是该 span 的 ns 集合，内部层是子树的 OR（`spM_sumns`、`spM_remask`，`spantree.h:272-276`）。
 - cursor 只有 `poff/off`，绝对偏移 `off + poff`（`spantree.h:82`）。
-- 虚拟尾：`poff` 可以大于等于当前 span 长；`sp_seek` / `sp_locate` / `sp_advance` 会保留越尾量（`spantree.h:350-430`）。remove 入口先把 `len` clamp 到树内（`spantree.h:685`）。
+- 虚拟尾：`poff` 可以大于等于当前 span 长；`sp_seek` / `sp_locate` / `sp_advance` 会保留越尾量（`spantree.h:353-435`）。remove 入口在 `sp_remove` 判 no-op 并 reserve（`spantree.h:1226-1232`），`spD_remove` 把 `len` clamp 到树内（`spantree.h:685-694`）。
 
 **为什么 remove 要为 [S] 维护 mask 与 arbiter**：spantree 存不透明的结果 id，id 代表最终渲染结果或混合列表句柄；树必须通知外部 id 的 born/died/merge/touch 事件。叶内 ns 集合并为 mask，内部 mask 是子树 OR，导航 `sp_next/sp_prev` 靠它剪枝。因此 remove 需要同时维护字节与 mask，并调用 `spA_*` 回调。
 
@@ -138,7 +138,8 @@
 | `levels==0` 含义 | root children 就是叶 | 同 | 同 |
 | 总度量 | `bytes` + `breaks` | `bytes` + mask 聚合 | `bytes` + mask 聚合 |
 | 虚拟尾 | 支持；`col` 存残段 | 支持；`poff` 可越尾 | 越尾直接 `locend` |
-| remove 入口 | `remove(L,R)` 双游标 | `remove(L,R)` 双游标 | `remove(C,len)` 长度式 |
+| remove 入口 | `remove(C,len)` 长度式 | `remove(C,len)` 长度式 | `remove(C,len)` 长度式 |
+| cursor 失效 | `epoch` + `valid(C)` | 同 | 同 |
 
 ---
 
@@ -147,23 +148,21 @@
 ### 2.1 入口与分派
 
 1. 参数与范围校验
-   - `[L]` `remove(L,R)` 要求 `L`、`R` 非空且同树；`offL < offR && offL < bytes` 才继续，否则 no-op。
-   - `[S]` `remove(L,R)` 要求非空同树；`offL >= offR` 直接 OK；然后调用 `spD_remove(C, offR - offL)`，由它把 `len` clamp 到树尾。
-   - `[P]` `remove(C,len)` 要求 `C`、`C->tree` 非空；`len == 0` 或 `offset(C) >= bytes` 直接 OK；否则 clamp `len`。
+   - 三库同为 `remove(C, len)`：先过 `valid(C)`，过期游标返回 `ERRPARAM`；`len == 0` 或 `offset(C) >= bytes` 直接 OK（no-op，不 reserve、不递增 epoch）。
+   - `[L]` / `[S]` 在 `remove` 路径内部把 `len` clamp 到 `bytes - offset(C)`（`[L]` `lcD_remove`、`[S]` `spD_remove`）；`[P]` 在 `pt_remove` 入口 clamp。
 2. 构造右端
-   - `[L]` 右端由调用方给出，直接用 `R`。
+   - `[L]` `R = *C; lc_advance(&R, len)`；`R` 越尾时保留虚拟尾，表示删到树尾且 `C` 所在当前行整体删除。
    - `[S]` `R = *C; sp_advance(&R, len)`；若 `R` 越尾，用 `spK_locend(&R)` 落到树尾态。
    - `[P]` `R = *C; pt_advance(&R, len)`；越尾会直接 `ptK_locend`（无虚拟尾）。
 3. reserve / 事务
    - `[L]` `remove` 在分派前 reserve `levels + 2` 个 node；失败返回 `LC_ERRMEM`，树和 cursor 保持调用前状态。
-   - `[S]` `spD_remove` 在构造 R、clamp 后 reserve `4 * levels + 5` 个 node；失败返回 `SP_ERRMEM`。
+   - `[S]` `sp_remove` 在入口 reserve `4 * levels + 5` 个 node；失败返回 `SP_ERRMEM`，`spD_remove` 不再分配。
    - `[P]` `pt_remove` 先 reserve `4 * levels + 5`，再 `ptK_markdirty(C)` fork transient tree；两步都成功后才开始改结构。
 4. 同容器判定
-   - `[L]` 直接比较 `L->paths[levels] != R->paths[levels]`：不同则跨叶，相同则叶内。
-   - `[S]` `spD_diverlevel(L,R)` 求最小差异层 `l`；`l <= levels` 走跨容器 `rmrange`，`l > levels` 走同 span `rmleaf`。
+   - `[L]` / `[S]` 比较 `paths[]` 求最小差异层 `l`（`[L]` 在 `remove` 路径内联、`[S]` 用 `spD_diverlevel`）；`l <= levels` 走跨容器 `rmrange`，`l > levels` 走同容器 `rmleaf`。
    - `[P]` 先 `ptK_markdirty` + COW 共享路径，然后比较 `paths[]` 得到 `l`；`l <= levels` 走跨 piece `rmrange`，否则同 piece `rmleaf`。
 
-**为什么入口不同**：`[L]`/`[S]` 是双游标 API，`[P]` 是长度式 API；`[P]` 还要在结构修改前 fork transient tree，所以 COW / markdirty 属于入口层差异。
+**为什么入口不同**：三库都是游标 + 长度式 `remove(C, len)`；`[P]` 还要在结构修改前 fork transient tree，所以 COW / markdirty 属于入口层差异。
 
 ### 2.2 同容器路径
 
@@ -211,7 +210,7 @@
 ### 2.5 reserve / 事务时机
 
 - `[L]` `remove` 入口 reserve `levels+2`；三库 `stitch` 入口都 assert `nodes.freed_obj >= levels+2 && idx >= cc-1`；`[L]` 的 `lc_append` 走 `checkstitch` 预 reserve 后再进 `stitch`。`makechain` 的 `nofail=1` 表示入口已 reserve。
-- `[S]` `spD_remove` 入口 reserve `4*levels+5`；`stitch` 入口 assert `nodes.freed_obj >= levels+2`。`spD_makechain` 使用调用方入口 reserve 的契约。
+- `[S]` `sp_remove` 入口 reserve `4*levels+5`（`spD_remove` 不再分配）；`stitch` 入口 assert `nodes.freed_obj >= levels+2`。`spD_makechain` 使用调用方入口 reserve 的契约。
 - `[P]` `pt_remove` 入口 reserve `4*levels+5` 后再 `markdirty`；`stitch` 入口 assert 同样的 freelist。`makechain` 有 `nofail`，但 remove 只经 `ptD_findroom` 调用它，而 `findroom` assert `fl >= 0`，所以 remove 不会走扩根分支。
 
 ---
@@ -234,8 +233,8 @@
 
 **差异**
 
-- `[L]` 双游标；入口条件 `offL < offR && offL < bytes`；reserve `levels+2`；同叶判定直接比较 `paths[levels]`。`offR` 可以落在虚拟尾：R 可以落在虚拟尾，表示删到树尾，同时 L 所在当前行整体删除。
-- `[S]` 双游标；`remove` 只做同树 / `offL < offR` 校验，真正逻辑在 `spD_remove(C,len)`；`spD_remove` 把 `len` clamp 到 `bytes - offset(C)`，然后 `sp_advance(&R,len)`；越尾用 `spK_locend`。
+- `[L]` 游标 + 长度；入口条件 `len > 0 && offset(C) < bytes`；reserve `levels+2`；`R` 由 `lc_advance` 构造且可落在虚拟尾（删到树尾，`C` 所在当前行整体删除）；差异层在 `remove` 路径内联求出（`linecache.h:1154-1160`、核心 `766-775`）。
+- `[S]` 游标 + 长度；入口条件 `len == 0 || offset(C) >= bytes` 为 no-op，随后入口 reserve；真正逻辑在 `spD_remove(C,len)`，它把 `len` clamp 到 `bytes - offset(C)`，再 `sp_advance(&R,len)`，越尾用 `spK_locend`（`spantree.h:1226-1232`、核心 `685-694`）。
 - `[P]` 长度式；`off >= bytes` 直接 OK；clamp 到树尾；先 reserve 再 `ptK_markdirty`，然后为 `R` 设置 transient tree / paths，并沿共享路径 COW。COW 是 [P] 的入口层领域语义。
 
 ### 3.2 `rmrange`
@@ -250,7 +249,7 @@
 
 **差异**
 
-- `[L]` 不接收 `fl`，在 `rmrange` 内部用 `for (l = 0; l <= levels; ++l) if (L->paths[l] != R->paths[l]) break;` 求第一差异层；额外保存 `rm = L->col`，最后 `L->col = 0; addbytes(L, rm)`。
+- `[L]` 接收 `fl`（与 `[S]` / `[P]` 同形），由 `remove` 路径求出；额外保存 `rm = L->col`，最后 `L->col = 0; addbytes(L, rm)`。
 - `[S]` 接收 `fl`，由 `spD_remove` 用 `spD_diverlevel` 求出；清空 `rt` 后直接 trim / cut / stitch。
 - `[P]` 接收 `fl`，由 `pt_remove` 在 COW 后求出；清空 `rt` 时还要设置 `rt[k].version = L->tree->root.version`，供 `ptN_purge` 判断哪些共享节点属于本次修改版本。
 - **为什么 [L] 多 `rm` + `addbytes`**：删除起点可能在行内；`trimright` 按行粒度截断，必须把行内前缀暂存，最后由 `addbytes` 重新加到 stitched 第一行。`[S]`/`[P]` 是纯字节模型；跨行前缀逻辑属于 `[L]`。
@@ -606,12 +605,12 @@
 1. 最坏情况发生在 `k = 0`（`kl = levels`）且需要 rootpush：消耗 `rootpush(1) + chain(0..levels)(levels + 1) = levels + 2` 个节点。
 2. 各轮 `makechain` 的覆盖层区间随 `kl` 逐轮递减，互不重叠（`notes/design_insert_delete_v2.md:477`）；因此所有轮次合计不超过 `levels + 2`。
 3. `[L]` remove 的同叶路径 `rmleaf` 不分配节点；交叉路径的唯一分配就是上述 `makechain`。
-4. `lc_remove` 入口 reserve `levels + 2`，覆盖 `stitch` 的全部节点分配；`lc_append` 另在入口经 `checkstitch` 做同一 reserve（`linecache.h:1140`、`499-500`、`601-623`）。
+4. `lc_remove` 入口 reserve `levels + 2`，覆盖 `stitch` 的全部节点分配；`lc_append` 另在入口经 `checkstitch` 做同一 reserve（`linecache.h:1154-1160`、`501-502`、`603-625`）。
 
 **[S] / [P] 的预算说明**
 
-- `[S]` remove 的唯一节点分配源是交叉路径的 `makechain`，其上界同为 `levels + 2`；`4*levels+5` 覆盖该上界并留余量（`spantree.h:680`、`572-593`）。
-- `[P]` remove 的节点分配还包含 COW path-copy（`ptK_cow`）与同 piece literal 分裂（`ptI_splitroot` / `ptI_splitchild`）；`4*levels+5` 是设计给出的保守预算（`piecetab.h:1368`、`1334-1338`、`857-881`，`design_spantree.md` §8.9 给出同量级预算）。
+- `[S]` remove 的唯一节点分配源是交叉路径的 `makechain`，其上界同为 `levels + 2`；`4*levels+5` 覆盖该上界并留余量（`spantree.h:1226-1232`、`577-597`）。
+- `[P]` remove 的节点分配还包含 COW path-copy（`ptK_cow`）与同 piece literal 分裂（`ptI_splitroot` / `ptI_splitchild`）；`4*levels+5` 是设计给出的保守预算（`piecetab.h:1358-1377`、`542-551`、`855-879`，`design_spantree.md` §8.9 给出同量级预算）。
 - 本节只证明 `[L]` 的 `levels+2` 恰好等于最坏 `makechain` 上界；`[S]` / `[P]` 的完整组合上界按其设计文档预算执行。
 
 ---
@@ -622,8 +621,8 @@
 
 | 函数（不带库前缀） | [L] 行 | [S] 行 | [P] 行 | 分类 | 关键差异 / 证据 |
 |---|---|---|---|---|---|
-| `remove` | 1140-1157 | 1218-1222（核心 680-698） | 1361-1381 | domain / interface | [L]/[S] 双游标；[P] 长度式；[P] 先 reserve + `markdirty` + COW；[L]/[S] 入口 reserve 时机不同。 |
-| `rmrange` | 735-745 | 649-655 | 936-943 | skeleton / domain | [L] 内部求 `fl`、保存 `rm=col`、末尾 `addbytes`；[P] 额外设置 `rt[k].version`。 |
+| `remove` | 1154-1160（核心 766-775） | 1226-1232（核心 685-694） | 1358-1377 | domain / interface | 三库同为 `(C, len)`；[P] 先 reserve + `markdirty` + COW；reserve 预算 `[L]` `levels+2`、`[S]`/`[P]` `4*levels+5`。 |
+| `rmrange` | 737-744 | 654-660 | 934-941 | skeleton / domain | 三库都接收 `fl`；[L] 保存 `rm=col`、末尾 `addbytes`；[P] 额外设置 `rt[k].version`。 |
 | `trimright` | 450-456 | 433-437 | 697-701 | domain | [L] 行粒度扣 `db/dl`；[S] `spA_touch` 缩 span；[P] `ptM_up` 只扣度量。 |
 | `trimleft` | 458-472 | 439-443 | 703-713 | domain | [L] 物理移动行数组并扣 `col`；[S] `spA_touch`；[P] hole `H_remove` / literal 改指针长度。 |
 | `cutrange` | 474-496 | 445-464 | 715-735 | skeleton | 共同循环形状；[L] 双度量 + 释放叶；[S] `spA_died` + mask 数组；[P] `rt->version` + hole mask。 |
@@ -649,7 +648,7 @@
 | `N_makespace` | 301-304 | 291-294 | 455-458 | skeleton | 形状相同；[P] mask 位段随 move 维护。 |
 | `N_purge` / `N_remove` | 306-322 | 296-312 | 417-453 | skeleton / domain | [L] 释放叶 / 节点；[S] 叶槽 `spA_died`；[P] 只释放 hole 和 `version` 匹配节点 + `ptM_clamp`。 |
 | `seamleaf` | — | 404-415 | 553-565 | domain | [S] 同 id；[P] 相邻物理连续 literal。 |
-| `diverlevel` | —（`rmrange` 内联） | 674-678 | —（`remove` 内联） | interface / optional | [S] 独立 helper；[L]/[P] 内联。 |
+| `diverlevel` | —（`remove` 路径内联，`766-775`） | 679-683 | —（`remove` 内联） | interface / optional | [S] 独立 helper（`spD_remove`、`sp_fill` 两处调用者）；[L]/[P] 各只有一处调用者，内联。 |
 | `sumbytes` / `sumbreaks` | 267-274 | 264-265 | 383-384 | exact（前缀差异） | 区间求和；[L] 多 leaf / breaks 两版；[S]/[P] 只 node bytes。 |
 | `P_reserve` / `P_alloc` / `P_free` | 201-247 | 214-240 | 296-322 | exact（前缀差异） | pool freelist 形状相同；三库 `P_init` 都断言 `obj_size < PAGE_SIZE / 2`。 |
 | `K_parent` / `K_idx` / `K_leaf` | 255-257 | 247-248、252-253 | 352-353、356-358 | domain | `parent/idx` 公式相同；[L] 有 `K_leaf`；[S] 用 `spL_id`；[P] 用 `ptN_lit` / `ptN_hole`。 |
@@ -679,7 +678,7 @@
 |---|---|---|---|
 | D3 | `makechain` 的 `nofail` | `[L]`/`[P]` 含 `nofail` / reserve；`[S]` 签名使用调用方入口 reserve。 | 复用批量插入 / compact 路径；`[S]` 的那条路径由入口 reserve 覆盖。 |
 | D4 | `findroom` 签名 | `[L]` `(C, l, nofail) -> int`；`[S]` `(C, l) -> int`；`[P]` `(C, l) -> void`。 | `[S]` 的唯一调用者 `stitchnode` 已由入口 reserve 覆盖；`[P]` 的单调用者契约由 assert 证明。 |
-| D6 | 第一差异层 helper | `[S]` 有独立 `diverlevel`；`[L]` / `[P]` 在 `remove` / `rmrange` 内联。 | `[S]` 有两处调用者，抽 helper 消除重复；`[L]` / `[P]` 各只有一处。 |
+| D6 | 第一差异层 helper | `[S]` 有独立 `diverlevel`；`[L]` / `[P]` 在 `remove` 路径内联（`[L]` `lcD_remove`、`[P]` `pt_remove`）。 | `[S]` 有两处调用者（`spD_remove`、`sp_fill`），抽 helper 消除重复；`[L]` / `[P]` 各只有一处。 |
 | D9 | `balancenode` 的 delta 形状 | `[L]` `Delta ds[2]`（bytes + breaks）；`[S]` / `[P]` `Delta *ds`。 | `[L]` 的第二通道由行语义使用；签名差异保留。 |
 | D10 | `M_up` 早退 | `[L]` 两通道皆 0 时返回；`[S]` 每层重算 mask；`[P]` mask 保持原值且 `db == 0` 时返回。 | 三库 mask 语义不同，早退条件随之不同。 |
 | D13 | `mergeleaf` 返回类型 | `[L]` 返回行 `d`；`[S]` 返回 void；`[P]` 返回字节 `d`。 | 各自叶模型的定位语义不同。 |
@@ -689,9 +688,8 @@
 | 编号 | 项 | 当前差异 | 统一方向 |
 |---|---|---|---|
 | D12 | `N_remove` / `N_purge` 首参 | `[L]`/`[P]` 传 `*_State *`；`[S]` 传 `sp_Tree *`。 | 统一为首参 `Tree *`：`[S]` 的叶槽只存 id，死亡通知必须经树；统一后 `[L]`/`[P]` 的调用方改传 `T`，并消去 `cutrange` 中额外的 `S` 局部。 |
-| D15 | `rmrange` 的 `fl` 参数 | `[L]` 在 `rmrange` 内部求第一差异层；`[S]`/`[P]` 由 `remove` 求出后传入。 | 统一为接收 `fl`，与 `remove(C, len)` 形态的入口扫描一致。 |
 
 ## 6. 研究范围
 
-- 覆盖 `[L]` `linecache.h` 448–1174、`[S]` `spantree.h` 431–1235、`[P]` `piecetab.h` 695–1461 的 remove / stitch 及直接依赖原语；区间从各库的 `/* remove */` 段起，到文件末尾的 `/* APIs */` 段为止。
-- 行号基准：§0.1 的基准提交。
+- 覆盖 `[L]` `linecache.h` 450–1182、`[S]` `spantree.h` 436–1246、`[P]` `piecetab.h` 693–1456 的 remove / stitch 及直接依赖原语；区间从各库的 `/* remove */` 段起，到文件末尾的 `/* APIs */` 段为止。
+- 行号基准：§0.1 的基准文件。

@@ -54,7 +54,8 @@ typedef struct sp_Cursor sp_Cursor;
 
 游标**不持有**树引用；调用方须保证树在游标使用期间存活。与
 `pt_Cursor`/`lc_Cursor` 一致，游标不会停留在树中段尾（唯一段尾位置是
-树尾）。
+树尾）。游标在 `sp_seek` 时捕获 `tree->epoch`；`sp_valid` 报告其是否仍
+附着且未过期，所有解引用 `paths` 的入口都拒绝过期游标。
 
 ### sp_Delta、sp_Id、sp_Mask
 
@@ -232,6 +233,7 @@ int  sp_hasns(const sp_Mask *mask, int ns);
 int  sp_seek(sp_Cursor *C, sp_Tree *T, size_t off);
 int  sp_locate(sp_Cursor *C, size_t off);
 int  sp_advance(sp_Cursor *C, sp_Delta d);
+int  sp_valid(const sp_Cursor *C);
 #define sp_offset(C) ((C)->off + (C)->poff)
 ```
 
@@ -243,8 +245,17 @@ int  sp_advance(sp_Cursor *C, sp_Delta d);
 - **`sp_advance`**：按有符号字节增量移动。起点/终点自动 clamp；越过
   树尾进入虚拟区。
 - **`sp_offset`**：返回绝对字节偏移的宏。
+- **`sp_valid`**：游标已附着且捕获的 `epoch` 等于树当前 epoch 时返回
+  非零（函数，非宏）。
+- **游标 epoch**：每次成功的原地编辑（`sp_splice`、`sp_append`、
+  `sp_insert`、`sp_fill`、`sp_clear`、`sp_remove`）把 `tree->epoch`
+  递增一次并刷新编辑游标，同树上其他游标随即失效。no-op 编辑
+  （`sp_remove(C,0)`、trailing 区域删除、`sp_append(C,0)`、
+  `sp_insert(C,0)`、`sp_fill(C,id,0)`、`sp_splice(C,0,0)`）既不 reserve
+  也不递增。`sp_locate` 沿用捕获值，`sp_seek` 是重新附着的入口。
 
-导航函数均返回 `SP_OK` 或 `SP_ERRPARAM`。
+导航函数返回 `SP_OK` 或 `SP_ERRPARAM`；`sp_next`/`sp_prev`/`sp_style`
+对过期游标返回 `SP_NONE`。
 
 ### 4.5 标记
 
@@ -291,7 +302,7 @@ sp_Id sp_prev(sp_Cursor *C, int ns, size_t *plen);
 int sp_splice(sp_Cursor *C, size_t del, size_t ins);
 int sp_append(sp_Cursor *C, size_t ins);
 int sp_insert(sp_Cursor *C, size_t ins);
-int sp_remove(sp_Cursor *L, sp_Cursor *R);
+int sp_remove(sp_Cursor *C, size_t len);
 ```
 
 - **`sp_splice`**：在游标处删除 `del` 字节，再插入 `ins` 字节。删除自动
@@ -299,9 +310,9 @@ int sp_remove(sp_Cursor *L, sp_Cursor *R);
 - **`sp_append`**：在游标处插入 `ins` 字节，继承**左**段 id（类似
   vim/sam 的 `a`）。
 - **`sp_insert`**：在游标处插入 `ins` 字节，继承**右**段 id（类似 `i`）。
-- **`sp_remove`**：删除 `sp_offset(L)` 到 `sp_offset(R)` 之间的字节。
-  `L`、`R` 必须属于同一棵树；`L >= R` 为 no-op。游标/树非法返回
-  `SP_ERRPARAM`。
+- **`sp_remove`**：在游标处删除 `len` 字节，自动 clamp 到树尾；`C` 停在
+  删除起点，右方字节左移。`len == 0` 或游标在树尾虚拟区为 no-op。游标
+  为 NULL 或过期返回 `SP_ERRPARAM`。
 
 编辑函数均返回 `SP_OK`、`SP_ERRPARAM` 或 `SP_ERRMEM`。`SP_ERRMEM` 时
 树保持结构一致。

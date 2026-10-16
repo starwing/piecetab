@@ -43,7 +43,7 @@ TEST(reserve_oom) {
     int       cnt = 1 << 20;
     sp_State *S = sp_open(&oom_alloc, &cnt);
     sp_Tree  *t = sp_newtree(S);
-    sp_Cursor C, R;
+    sp_Cursor C;
     sp_Drain  d;
     asserteq(sp_seek(&C, t, 0), SP_OK);
     asserteq(sp_append(&C, 16), SP_OK);
@@ -53,8 +53,7 @@ TEST(reserve_oom) {
     asserteq(sp_insert(&C, 1), SP_ERRMEM);
     asserteq(sp_splice(&C, 1, 1), SP_ERRMEM);
     asserteq(sp_seek(&C, t, 0), SP_OK);
-    asserteq(sp_seek(&R, t, 3), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_ERRMEM);
+    asserteq(sp_remove(&C, 3), SP_ERRMEM);
     asserteq(sp_fill(&C, 9, 2), SP_ERRMEM);
     asserteq(sp_bytes(t), 16);
     sp_refillpool(&S->nodes, d);
@@ -489,12 +488,12 @@ TEST(insert_empty) {
     sp_freetree(t), sp_close(S);
 }
 
-/* ---- removal: sp_remove double cursor, splice ---- */
+/* ---- removal: sp_remove cursor + length, splice ---- */
 
 TEST(remove) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t = sp_newtree(S);
-    sp_Cursor L, R;
+    sp_Cursor L;
     sp_Id     ids[16];
     size_t    lens[16];
     int       n;
@@ -502,8 +501,7 @@ TEST(remove) {
     t = sp_mkstreamV(t, 1, 3, 2, 5, 3, 2, 0, 0);
     assertok(sp_checktree(t));
     asserteq(sp_seek(&L, t, 1), SP_OK);
-    asserteq(sp_seek(&R, t, 2), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 1), SP_OK);
     asserteq(sp_bytes(t), 9);
     assertok(sp_checktree(t));
     sp_seek(&L, t, 0);
@@ -521,8 +519,7 @@ TEST(remove) {
     t = sp_mkstreamV(t, 1, 3, 2, 5, 2, 4, 0, 0);
     assertok(sp_checktree_allow_unseamedspan(t, 1)); /* pre-merge input */
     asserteq(sp_seek(&L, t, 3), SP_OK);
-    asserteq(sp_seek(&R, t, 8), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 5), SP_OK);
     assertok(sp_checktree(t));
     collect_stream(&L, ids, lens, &n);
     asserteq(n, 2);
@@ -532,8 +529,7 @@ TEST(remove) {
     asserteq(lens[1], 4);
     /* remove whole tree */
     asserteq(sp_seek(&L, t, 0), SP_OK);
-    asserteq(sp_seek(&R, t, 7), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 7), SP_OK);
     asserteq(sp_bytes(t), 0);
     assertok(sp_checktree(t));
     sp_seek(&L, t, 0);
@@ -541,9 +537,9 @@ TEST(remove) {
         size_t zl;
         asserteq(sp_style(&L, &zl, NULL), SP_NONE);
     }
-    /* no-op and cross-tree errors */
+    /* no-op with len 0 */
     asserteq(sp_seek(&L, t, 0), SP_OK);
-    asserteq(sp_remove(&L, &L), SP_OK);
+    asserteq(sp_remove(&L, 0), SP_OK);
     assertok(sp_checktree(t));
     sp_freetree(t), sp_close(S);
 }
@@ -959,17 +955,13 @@ TEST(fill_multi) {
     asserteq(ids[0], 8);
     asserteq(lens[0], 13);
     /* edits after fill still work: remove a tail chunk */
-    {
-        sp_Cursor R;
-        asserteq(sp_seek(&C, t, 5), SP_OK);
-        asserteq(sp_seek(&R, t, 8), SP_OK);
-        asserteq(sp_remove(&C, &R), SP_OK);
-        assertok(sp_checktree(t));
-        collect_stream(&C, ids, lens, &n);
-        asserteq(n, 1);
-        asserteq(ids[0], 8);
-        asserteq(lens[0], 10);
-    }
+    asserteq(sp_seek(&C, t, 5), SP_OK);
+    asserteq(sp_remove(&C, 3), SP_OK);
+    assertok(sp_checktree(t));
+    collect_stream(&C, ids, lens, &n);
+    asserteq(n, 1);
+    asserteq(ids[0], 8);
+    asserteq(lens[0], 10);
     sp_freetree(t), sp_close(S);
 }
 
@@ -1100,7 +1092,7 @@ TEST(api_param) {
     int       cnt = 0;
     sp_State *S, *S2;
     sp_Tree  *t;
-    sp_Cursor C, R, B;
+    sp_Cursor C, B;
     size_t    len;
     /* construction OOM and NULL paths */
     asserteq(sp_open(&oom_alloc, &cnt), NULL);
@@ -1121,15 +1113,14 @@ TEST(api_param) {
     asserteq(sp_seek(NULL, t, 0), SP_ERRPARAM);
     asserteq(sp_seek(&C, NULL, 0), SP_ERRPARAM);
     memset(&B, 0, sizeof(sp_Cursor));
+    memset(&C, 0, sizeof(sp_Cursor));
     asserteq(sp_advance(NULL, 1), SP_ERRPARAM);
     asserteq(sp_advance(&B, 1), SP_ERRPARAM);
     asserteq(sp_style(NULL, &len, NULL), SP_NONE);
     asserteq(sp_next(NULL, 0, &len), SP_NONE);
     asserteq(sp_prev(NULL, 0, &len), SP_NONE);
-    asserteq(sp_remove(NULL, &R), SP_ERRPARAM);
-    asserteq(sp_remove(&C, NULL), SP_ERRPARAM);
-    asserteq(sp_remove(&C, &B), SP_ERRPARAM);
-    asserteq(sp_remove(&B, &C), SP_ERRPARAM);
+    asserteq(sp_remove(NULL, 1), SP_ERRPARAM);
+    asserteq(sp_remove(&B, 1), SP_ERRPARAM);
     asserteq(sp_append(NULL, 1), SP_ERRPARAM);
     asserteq(sp_insert(NULL, 1), SP_ERRPARAM);
     asserteq(sp_splice(NULL, 0, 1), SP_ERRPARAM);
@@ -1218,12 +1209,12 @@ TEST(splice_edges) {
 }
 
 /* remaining cursor-bound param checks: a cursor whose tree pointer is
- * NULL (construction checks only), and remove across two trees */
+ * NULL (construction checks only), and remove at / beyond the tail */
 TEST(api_param2) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t = sp_newtree(S);
     sp_Tree  *t2 = sp_newtree(S);
-    sp_Cursor C, R, B;
+    sp_Cursor C, B;
     size_t    len;
     memset(&B, 0, sizeof(sp_Cursor));
     asserteq(sp_style(&B, &len, NULL), SP_NONE);
@@ -1232,20 +1223,16 @@ TEST(api_param2) {
     asserteq(sp_append(&B, 1), SP_ERRPARAM);
     asserteq(sp_insert(&B, 1), SP_ERRPARAM);
     asserteq(sp_splice(&B, 0, 1), SP_ERRPARAM);
-    asserteq(sp_seek(&C, t, 0), SP_OK);
-    asserteq(sp_seek(&R, t2, 0), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_ERRPARAM);
-    /* remove with the L cursor at the tree tail clamps to nothing */
+    asserteq(sp_remove(&B, 1), SP_ERRPARAM);
+    /* remove with the cursor at the tree tail clamps to nothing */
     asserteq(sp_seek(&C, t2, 0), SP_OK);
     asserteq(sp_append(&C, 4), SP_OK);
     asserteq(sp_seek(&C, t2, 4), SP_OK);
-    asserteq(sp_seek(&R, t2, 6), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 2), SP_OK);
     asserteq(sp_bytes(t2), 4);
-    /* both cursors beyond the tree end: the offset guard fires */
+    /* the cursor beyond the tree end: the offset guard fires */
     asserteq(sp_seek(&C, t2, 8), SP_OK);
-    asserteq(sp_seek(&R, t2, 10), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 2), SP_OK);
     asserteq(sp_bytes(t2), 4);
     sp_freetree(t2), sp_freetree(t), sp_close(S);
 }
@@ -1472,13 +1459,12 @@ TEST(next_deep) {
 TEST(remove_same_container) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 2, 2, 1, 3, 1, 4, 2, 0, 0);
-    sp_Cursor L, R;
+    sp_Cursor L;
     sp_Id     ids[16];
     size_t    lens[16];
     int       n;
     asserteq(sp_seek(&L, t, 2), SP_OK);
-    asserteq(sp_seek(&R, t, 3), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 1), SP_OK);
     collect_stream(&L, ids, lens, &n);
     asserteq(n, 3);
     asserteq(ids[0], 1);
@@ -1498,13 +1484,12 @@ TEST(rmleaf_rebalance) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t = sp_mkstreamV(
             sp_newtree(S), 1, 4, 2, 1, 3, 1, 3, 1, 3, 1, 0, 0);
-    sp_Cursor L, R;
+    sp_Cursor L;
     sp_Id     ids[16];
     size_t    lens[16];
     int       n;
     asserteq(sp_seek(&L, t, 7), SP_OK);
-    asserteq(sp_seek(&R, t, 8), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 1), SP_OK);
     collect_stream(&L, ids, lens, &n);
     asserteq(n, 3);
     asserteq(ids[0], 1);
@@ -1563,13 +1548,12 @@ TEST(remove_empty_mid) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t = sp_mkstreamV(
             sp_newtree(S), 1, 1, 2, 1, 2, 2, 2, 1, 3, 1, 0, 0);
-    sp_Cursor L, R;
+    sp_Cursor L;
     sp_Id     ids[16];
     size_t    lens[16];
     int       n;
     asserteq(sp_seek(&L, t, 2), SP_OK);
-    asserteq(sp_seek(&R, t, 4), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 2), SP_OK);
     collect_stream(&L, ids, lens, &n);
     asserteq(n, 3);
     asserteq(ids[0], 1);
@@ -1588,13 +1572,12 @@ TEST(remove_empty_deep) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t = sp_mkstreamV(
             sp_newtree(S), 1, 1, 2, 1, 2, 2, 2, 1, 3, 1, 0, 0);
-    sp_Cursor L, R;
+    sp_Cursor L;
     sp_Id     ids[16];
     size_t    lens[16];
     int       n;
     asserteq(sp_seek(&L, t, 2), SP_OK);
-    asserteq(sp_seek(&R, t, 4), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 2), SP_OK);
     collect_stream(&L, ids, lens, &n);
     asserteq(n, 3);
     asserteq(ids[0], 1);
@@ -1636,14 +1619,13 @@ TEST(remove_empty_leaf) {
     sp_Tree  *t = sp_mkstreamV(
             sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1,
             10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 0, 0);
-    sp_Cursor L, R;
+    sp_Cursor L;
     sp_Id     ids[32];
     size_t    lens[32];
     int       n;
     assertok(sp_checktree(t));
     asserteq(sp_seek(&L, t, 12), SP_OK);
-    asserteq(sp_seek(&R, t, 16), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 4), SP_OK);
     asserteq(sp_bytes(t), 12);
     assertok(sp_checktree(t));
     sp_seek(&L, t, 0);
@@ -1661,8 +1643,7 @@ TEST(remove_empty_leaf) {
             10, 1, 11, 1, 12, 1, 13, 1, 14, 1, 15, 1, 16, 1, 0, 0);
     assertok(sp_checktree(t));
     asserteq(sp_seek(&L, t, 0), SP_OK);
-    asserteq(sp_seek(&R, t, 2), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 2), SP_OK);
     asserteq(sp_bytes(t), 14);
     assertok(sp_checktree(t));
     sp_seek(&L, t, 0);
@@ -1742,13 +1723,12 @@ TEST(prev_deep) {
 TEST(remove_head) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 26, 2, 22, 2, 34, 1, 26, 4, 0, 0);
-    sp_Cursor L, R;
+    sp_Cursor L;
     sp_Id     ids[16];
     size_t    lens[16];
     int       n;
     asserteq(sp_seek(&L, t, 2), SP_OK);
-    asserteq(sp_seek(&R, t, 5), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 3), SP_OK);
     collect_stream(&L, ids, lens, &n);
     asserteq(n, 1);
     asserteq(ids[0], 26);
@@ -1762,13 +1742,12 @@ TEST(remove_head) {
 TEST(remove_drain) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 2, 2, 1, 0, 0);
-    sp_Cursor L, R;
+    sp_Cursor L;
     sp_Id     ids[16];
     size_t    lens[16];
     int       n;
     asserteq(sp_seek(&L, t, 2), SP_OK);
-    asserteq(sp_seek(&R, t, 3), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 1), SP_OK);
     collect_stream(&L, ids, lens, &n);
     asserteq(n, 1);
     asserteq(ids[0], 1);
@@ -1783,10 +1762,9 @@ TEST(fold_balance) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t = sp_mkstreamV(
             sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 0, 0);
-    sp_Cursor L, R;
+    sp_Cursor L;
     asserteq(sp_seek(&L, t, 5), SP_OK);
-    asserteq(sp_seek(&R, t, 6), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 1), SP_OK);
     sp_assertstream(S, t, "[1:1][2:1][3:1][4:1][5:1]");
     assertok(sp_checktree(t));
     sp_freetree(t), sp_close(S);
@@ -1812,13 +1790,12 @@ TEST(foldnode_free) {
 TEST(remove_tail) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 2, 2, 2, 0, 0);
-    sp_Cursor L, R;
+    sp_Cursor L;
     sp_Id     ids[16];
     size_t    lens[16];
     int       n;
     asserteq(sp_seek(&L, t, 2), SP_OK);
-    asserteq(sp_seek(&R, t, 4), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 2), SP_OK);
     collect_stream(&L, ids, lens, &n);
     asserteq(n, 1);
     asserteq(ids[0], 1);
@@ -1833,13 +1810,12 @@ TEST(remove_tail) {
 TEST(remove_range_tail) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 2, 2, 2, 3, 2, 0, 0);
-    sp_Cursor L, R;
+    sp_Cursor L;
     sp_Id     ids[16];
     size_t    lens[16];
     int       n;
     asserteq(sp_seek(&L, t, 2), SP_OK);
-    asserteq(sp_seek(&R, t, 6), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 4), SP_OK);
     assertok(sp_checktree(t));
     assertok(sp_checkcursor(&L, 2));
     collect_stream(&L, ids, lens, &n);
@@ -1854,13 +1830,12 @@ TEST(remove_range_tail) {
 TEST(rebalance_root) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t = sp_mkstreamV(sp_newtree(S), 1, 1, 2, 1, 0, 0);
-    sp_Cursor L, R;
+    sp_Cursor L;
     sp_Id     ids[16];
     size_t    lens[16];
     int       n;
     asserteq(sp_seek(&L, t, 1), SP_OK);
-    asserteq(sp_seek(&R, t, 2), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 1), SP_OK);
     collect_stream(&L, ids, lens, &n);
     asserteq(n, 1);
     asserteq(ids[0], 1);
@@ -2239,11 +2214,7 @@ TEST(differ) {
             mops_add(step, 9, pos, l1, 0, 0);
             mremove(pos, l1);
             asserteq(sp_seek(&C, t, pos), SP_OK);
-            {
-                sp_Cursor R;
-                asserteq(sp_seek(&R, t, pos + l1), SP_OK);
-                asserteq(sp_remove(&C, &R), SP_OK);
-            }
+            asserteq(sp_remove(&C, l1), SP_OK);
             mcompare(t, step);
             assertok(sp_checkcursor(&C, pos));
             continue;
@@ -2267,11 +2238,7 @@ TEST(differ) {
         case 2:
             mremove(pos, l1);
             asserteq(sp_seek(&C, t, pos), SP_OK);
-            {
-                sp_Cursor R;
-                asserteq(sp_seek(&R, t, pos + l1), SP_OK);
-                asserteq(sp_remove(&C, &R), SP_OK);
-            }
+            asserteq(sp_remove(&C, l1), SP_OK);
             break;
         case 3:
             mremove(pos, l1);
@@ -2522,12 +2489,8 @@ TEST(ns_edit) {
     asserteq(sp_next(&C, 1, &len), SP_NONE);
     asserteq(len, 0);
     /* remove keeps the mask on the surviving run */
-    {
-        sp_Cursor R;
-        asserteq(sp_seek(&C, t, 5), SP_OK);
-        asserteq(sp_seek(&R, t, 10), SP_OK);
-        asserteq(sp_remove(&C, &R), SP_OK);
-    }
+    asserteq(sp_seek(&C, t, 5), SP_OK);
+    asserteq(sp_remove(&C, 5), SP_OK);
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 0), SP_OK);
     {
@@ -2867,12 +2830,11 @@ TEST(remove_mergeleft_rtfull) {
     sp_Tree  *t = sp_mkstreamV(
             sp_newtree(S), 1, 1, 8, 1, 9, 1, 10, 1, 8, 2, 11, 1, 12, 1, 13, 1,
             14, 1, 15, 1, 16, 1, 17, 1, 0, 0);
-    sp_Cursor C, R;
+    sp_Cursor C;
     char      buf[256];
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 2), SP_OK);
-    asserteq(sp_seek(&R, t, 5), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 3), SP_OK);
     assertok(sp_checktree(t));
     assertok(sp_checkcursor(&C, 2));
     sp_serialtree(t, buf);
@@ -2888,12 +2850,11 @@ TEST(remove_mergeleft_idmismatch) {
     sp_Tree  *t = sp_mkstreamV(
             sp_newtree(S), 1, 1, 2, 1, 3, 1, 40, 1, 5, 1, 6, 1, 4, 1, 7, 1, 8,
             1, 9, 1, 10, 1, 11, 1, 12, 1, 0, 0);
-    sp_Cursor C, R;
+    sp_Cursor C;
     char      buf[256];
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 4), SP_OK);
-    asserteq(sp_seek(&R, t, 6), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 2), SP_OK);
     assertok(sp_checktree(t));
     assertok(sp_checkcursor(&C, 4));
     sp_serialtree(t, buf);
@@ -2911,12 +2872,11 @@ TEST(remove_mergeleft_healthy) {
     sp_Tree  *t = sp_mkstreamV(
             sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 7, 1, 9, 1, 6, 1,
             8, 1, 0, 0);
-    sp_Cursor C, R;
+    sp_Cursor C;
     char      buf[256];
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 6), SP_OK);
-    asserteq(sp_seek(&R, t, 8), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 2), SP_OK);
     assertok(sp_checktree(t));
     assertok(sp_checkcursor(&C, 6));
     sp_serialtree(t, buf);
@@ -2931,12 +2891,11 @@ TEST(remove_mergeleft_foldrightbal) {
     sp_Tree  *t = sp_mkstreamV(
             sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 4, 1, 7, 1, 8, 1,
             9, 1, 10, 1, 11, 1, 12, 1, 0, 0);
-    sp_Cursor C, R;
+    sp_Cursor C;
     char      buf[256];
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 4), SP_OK);
-    asserteq(sp_seek(&R, t, 6), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 2), SP_OK);
     assertok(sp_checktree(t));
     assertok(sp_checkcursor(&C, 4));
     sp_serialtree(t, buf);
@@ -2951,12 +2910,11 @@ TEST(remove_stitch_findroom) {
     sp_Tree  *t = sp_mkstreamV(
             sp_newtree(S), 1, 10, 2, 10, 3, 10, 4, 10, 5, 10, 6, 10, 11, 10, 7,
             10, 8, 10, 9, 10, 10, 10, 0, 0);
-    sp_Cursor C, R;
+    sp_Cursor C;
     char      buf[256];
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 5), SP_OK);
-    asserteq(sp_seek(&R, t, 70), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 65), SP_OK);
     assertok(sp_checktree(t));
     assertok(sp_checkcursor(&C, 5));
     sp_serialtree(t, buf);
@@ -2971,12 +2929,11 @@ TEST(remove_mergeleft_foldleft) {
     sp_Tree  *t = sp_mkstreamV(
             sp_newtree(S), 1, 1, 5, 1, 6, 1, 7, 1, 8, 1, 9, 1, 13, 1, 9, 1, 10,
             1, 11, 1, 12, 1, 14, 1, 15, 1, 0, 0);
-    sp_Cursor C, R;
+    sp_Cursor C;
     char      buf[256];
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 6), SP_OK);
-    asserteq(sp_seek(&R, t, 7), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 1), SP_OK);
     assertok(sp_checktree(t));
     assertok(sp_checkcursor(&C, 6));
     sp_serialtree(t, buf);
@@ -2995,7 +2952,7 @@ TEST(remove_mergeleft_pullref) {
     sp_Tree  *t = sp_mkstreamV(
             sp_newtree(S), 1, 1, 2, 1, 9, 1, 3, 1, 4, 1, 5, 1, 3, 1, 6, 1, 0,
             0);
-    sp_Cursor C, R;
+    sp_Cursor C;
     SpRef     r;
     long      counts[SP_REFN];
     char      buf[256];
@@ -3003,8 +2960,7 @@ TEST(remove_mergeleft_pullref) {
     spA_seed(&r, t), sp_setarbiter(t, spA_ref, &r);
     assertok(sp_checktree(t));
     asserteq(sp_seek(&C, t, 4), SP_OK);
-    asserteq(sp_seek(&R, t, 6), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 2), SP_OK);
     assertok(sp_checktree(t));
     assertok(sp_checkcursor(&C, 4));
     sp_serialtree(t, buf);
@@ -3175,7 +3131,7 @@ TEST(stylemask) {
 TEST(idref_fill) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t = sp_newtree(S);
-    sp_Cursor C, R;
+    sp_Cursor C;
     SpRef     r;
     long      counts[SP_REFN];
     int       i;
@@ -3223,8 +3179,7 @@ TEST(idref_fill) {
     /* remove across segments: whole deaths for 4 and 2, the 0 run is
      * silent; the surviving tail keeps 2 alive */
     asserteq(sp_seek(&C, t, 0), SP_OK);
-    asserteq(sp_seek(&R, t, 6), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 6), SP_OK);
     assertok(sp_checkcursor(&C, 0));
     spA_tally(t, counts);
     assertok(spA_check(&r, counts));
@@ -3239,7 +3194,7 @@ TEST(idref_fill) {
 TEST(idref_edit) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t = sp_newtree(S);
-    sp_Cursor C, R;
+    sp_Cursor C;
     SpRef     r;
     long      counts[SP_REFN];
     memset(&r, 0, sizeof(SpRef));
@@ -3275,8 +3230,7 @@ TEST(idref_edit) {
     asserteq(r.ref[2], 1);
     /* remove the 1 run: whole death; the 2 tail survives */
     asserteq(sp_seek(&C, t, 0), SP_OK);
-    asserteq(sp_seek(&R, t, 12), SP_OK);
-    asserteq(sp_remove(&C, &R), SP_OK);
+    asserteq(sp_remove(&C, 12), SP_OK);
     assertok(sp_checkcursor(&C, 0));
     spA_tally(t, counts);
     assertok(spA_check(&r, counts));
@@ -3747,7 +3701,7 @@ TEST(touch_growleft_branches) {
 TEST(touch_remove) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t;
-    sp_Cursor L, R;
+    sp_Cursor L;
     SpEvt     e;
     sp_Id     ids[8];
     /* mid-leaf remove touches the current leaf once */
@@ -3755,8 +3709,7 @@ TEST(touch_remove) {
     memset(&e, 0, sizeof(e));
     sp_setarbiter(t, spA_rec, &e);
     asserteq(sp_seek(&L, t, 1), SP_OK);
-    asserteq(sp_seek(&R, t, 2), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 1), SP_OK);
     ids[0] = 1;
     spA_expect_touch_only(&e, ids, 1);
     assertok(sp_checktree(t) && sp_checkcursor(&L, 1));
@@ -3769,8 +3722,7 @@ TEST(touch_remove) {
     memset(&e, 0, sizeof(e));
     sp_setarbiter(t, spA_rec, &e);
     asserteq(sp_seek(&L, t, 2), SP_OK);
-    asserteq(sp_seek(&R, t, 7), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 5), SP_OK);
     asserteq(spA_touchcount(&e), 0);
     asserteq(e.n, 1);
     asserteq(e.ids[0], 0);
@@ -3785,8 +3737,7 @@ TEST(touch_remove) {
     memset(&e, 0, sizeof(e));
     sp_setarbiter(t, spA_rec, &e);
     asserteq(sp_seek(&L, t, 2), SP_OK);
-    asserteq(sp_seek(&R, t, 7), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 5), SP_OK);
     ids[0] = 1, ids[1] = 2;
     spA_expect_touch_only(&e, ids, 2);
     assertok(sp_checktree(t) && sp_checkcursor(&L, 2));
@@ -3799,8 +3750,7 @@ TEST(touch_remove) {
     memset(&e, 0, sizeof(e));
     sp_setarbiter(t, spA_rec, &e);
     asserteq(sp_seek(&L, t, 2), SP_OK);
-    asserteq(sp_seek(&R, t, 10), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 8), SP_OK);
     asserteq(spA_touchcount(&e), 1);
     asserteq(e.ids[0], 1);
     asserteq(e.olds[0], 1);
@@ -3814,8 +3764,7 @@ TEST(touch_remove) {
     memset(&e, 0, sizeof(e));
     sp_setarbiter(t, spA_rec, &e);
     asserteq(sp_seek(&L, t, 2), SP_OK);
-    asserteq(sp_seek(&R, t, 7), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 5), SP_OK);
     asserteq(spA_touchcount(&e), 0);
     assertok(sp_checktree(t) && sp_checkcursor(&L, 2));
     sp_assertstream(S, t, "[1:2][3:2]");
@@ -3827,8 +3776,7 @@ TEST(touch_remove) {
     memset(&e, 0, sizeof(e));
     sp_setarbiter(t, spA_rec, &e);
     asserteq(sp_seek(&L, t, 1), SP_OK);
-    asserteq(sp_seek(&R, t, 2), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 1), SP_OK);
     asserteq(spA_touchcount(&e), 0);
     assertok(sp_checktree(t) && sp_checkcursor(&L, 1));
     sp_assertstream(S, t, "[1:2]");
@@ -3844,11 +3792,10 @@ TEST(remove_containertail) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t = sp_mkstreamV(
             sp_newtree(S), 1, 1, 2, 1, 3, 1, 4, 1, 5, 1, 6, 1, 0, 0);
-    sp_Cursor L, R;
+    sp_Cursor L;
     assertok(t->levels > 0);
     asserteq(sp_seek(&L, t, 3), SP_OK);
-    asserteq(sp_seek(&R, t, 4), SP_OK);
-    asserteq(sp_remove(&L, &R), SP_OK);
+    asserteq(sp_remove(&L, 1), SP_OK);
     assertok(sp_checktree(t) && sp_checkcursor(&L, 3));
     sp_assertstream(S, t, "[1:1][2:1][3:1][5:1][6:1]");
     sp_freetree(t);
@@ -4054,11 +4001,7 @@ TEST(touch_ref) {
     assertok(spA_check(&re.ref, counts));
     /* cross partial remove: touch 1 and 2 */
     asserteq(sp_seek(&C, t, 5), SP_OK);
-    {
-        sp_Cursor R;
-        asserteq(sp_seek(&R, t, 16), SP_OK);
-        asserteq(sp_remove(&C, &R), SP_OK);
-    }
+    asserteq(sp_remove(&C, 11), SP_OK);
     asserteq(spA_touchcount(&re.evt), 6);
     assertok(sp_checktree(t) && sp_checkcursor(&C, 5));
     spA_tally(t, counts);
@@ -4097,11 +4040,7 @@ TEST(touch_differ) {
             mtouch_remove(pos, l1);
             mremove(pos, l1);
             asserteq(sp_seek(&C, t, pos), SP_OK);
-            {
-                sp_Cursor R;
-                asserteq(sp_seek(&R, t, pos + l1), SP_OK);
-                asserteq(sp_remove(&C, &R), SP_OK);
-            }
+            asserteq(sp_remove(&C, l1), SP_OK);
             mtouch_check(&e, step);
             mcompare(t, step);
             assertok(sp_checkcursor(&C, pos));
@@ -4130,11 +4069,7 @@ TEST(touch_differ) {
             mtouch_remove(pos, l1);
             mremove(pos, l1);
             asserteq(sp_seek(&C, t, pos), SP_OK);
-            {
-                sp_Cursor R;
-                asserteq(sp_seek(&R, t, pos + l1), SP_OK);
-                asserteq(sp_remove(&C, &R), SP_OK);
-            }
+            asserteq(sp_remove(&C, l1), SP_OK);
             break;
         case 3:
             mtouch_remove(pos, l1);
@@ -4165,6 +4100,79 @@ TEST(touch_differ) {
             abort();
         }
     }
+    sp_freetree(t);
+    asserteq(S->nodes.live_obj, 0);
+    sp_close(S);
+}
+
+/* epoch: an in-place edit invalidates every other cursor on the tree,
+ * while the editing cursor is resynced and stays usable */
+TEST(epoch_invalidate) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t;
+    sp_Cursor C, D;
+    sp_Mask   m;
+    size_t    len;
+    assertok(S != NULL);
+    t = sp_newtree(S);
+    assertok(t != NULL);
+    sp_mkstreamV(t, 1, 4, 2, 4, 3, 4, 0, 0);
+    sp_setns(t, 0, 4, 1);
+
+    asserteq(sp_seek(&C, t, 0), SP_OK);
+    asserteq(sp_seek(&D, t, 2), SP_OK);
+    asserteq(sp_valid(&C), 1);
+    asserteq(sp_valid(&D), 1);
+
+    /* the editing cursor is resynced, the other one goes stale */
+    asserteq(sp_fill(&C, 9, 2), SP_OK);
+    assertok(sp_checkcursor(&C, 2));
+    assertok(sp_checktree(t));
+    asserteq(sp_valid(&C), 1);
+    asserteq(sp_valid(&D), 0);
+
+    /* every entry that dereferences paths is gated */
+    asserteq(sp_locate(&D, 0), SP_ERRPARAM);
+    asserteq(sp_advance(&D, 1), SP_ERRPARAM);
+    asserteq(sp_next(&D, 0, &len), SP_NONE);
+    asserteq(sp_prev(&D, 0, &len), SP_NONE);
+    m = 1;
+    assertok(sp_style(&D, &len, &m) == SP_NONE && m == 0);
+    asserteq(sp_fill(&D, 1, 1), SP_ERRPARAM);
+    asserteq(sp_append(&D, 1), SP_ERRPARAM);
+    asserteq(sp_insert(&D, 1), SP_ERRPARAM);
+    asserteq(sp_splice(&D, 1, 1), SP_ERRPARAM);
+    asserteq(sp_remove(&D, 1), SP_ERRPARAM);
+
+    /* seek recaptures the epoch */
+    asserteq(sp_seek(&D, t, 2), SP_OK);
+    asserteq(sp_valid(&D), 1);
+
+    /* no-op edits do not move the epoch */
+    asserteq(sp_append(&C, 0), SP_OK);
+    asserteq(sp_insert(&C, 0), SP_OK);
+    asserteq(sp_splice(&C, 0, 0), SP_OK);
+    asserteq(sp_remove(&C, 0), SP_OK);
+    asserteq(sp_valid(&D), 1);
+
+    /* a remove at / beyond the tree tail is a no-op too */
+    asserteq(sp_seek(&C, t, sp_bytes(t) + 2), SP_OK);
+    asserteq(sp_remove(&C, 3), SP_OK);
+    asserteq(sp_valid(&D), 1);
+
+    /* the tree-level clear is an edit too */
+    asserteq(sp_clear(t, 1, 0), SP_OK);
+    asserteq(sp_valid(&C), 0);
+    asserteq(sp_valid(&D), 0);
+    asserteq(sp_locate(&C, 0), SP_ERRPARAM);
+
+    /* remove: the editing cursor keeps its site, the other goes stale */
+    asserteq(sp_seek(&C, t, 0), SP_OK);
+    asserteq(sp_seek(&D, t, 2), SP_OK);
+    asserteq(sp_remove(&C, 2), SP_OK);
+    asserteq(sp_valid(&C), 1);
+    asserteq(sp_valid(&D), 0);
+
     sp_freetree(t);
     asserteq(S->nodes.live_obj, 0);
     sp_close(S);

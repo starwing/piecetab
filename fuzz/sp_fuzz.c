@@ -65,12 +65,9 @@ static void runop(sp_Cursor *C, fz_Op *o, FILE *lf) {
         assertok(sp_splice(C, o->extra % 20, o->len) == SP_OK);
         exp += o->len;
         break;
-    case FZ_REMOVE: {
-        sp_Cursor R = *C;
-        sp_advance(&R, (sp_Delta)o->extra);
-        if (sp_offset(&R) > sp_offset(C)) assertok(sp_remove(C, &R) == SP_OK);
+    case FZ_REMOVE:
+        if (o->extra) assertok(sp_remove(C, o->extra) == SP_OK);
         break;
-    }
     case FZ_NEXT: {
         size_t n, k = o->extra % 5 + 1;
         while (k && sp_next(C, 0, &n) != SP_NONE) --k;
@@ -119,7 +116,7 @@ static void runop(sp_Cursor *C, fz_Op *o, FILE *lf) {
         break;
     case FZ_CLEAR:
         assertok(sp_clear(C->tree, (int)(o->extra % 8) + 1, 0) == SP_OK);
-        assertok(sp_locate(C, o->off) == SP_OK); /* the tree moved */
+        assertok(sp_seek(C, C->tree, o->off) == SP_OK); /* the tree moved */
         break;
     }
     if (!sp_checkcursor(C, exp)) {

@@ -39,7 +39,7 @@ typedef struct lc_Cache lc_Cache;
 typedef struct lc_Cursor lc_Cursor;
 ```
 
-非持久导航器，由 `lc_seek`/`lc_seekline` 初始化。`paths[0]` 指向根中槽位 (`&root.children[...]`), `paths[levels]` 指向叶槽位 (`&parent->children[...]`)。`off/lnu/loff/col` 四字段联合编码游标的绝对（字节/行号）与叶内相对位置。
+非持久导航器，由 `lc_seek`/`lc_seekline` 初始化并捕获 `tree->epoch`。`paths[0]` 指向根中槽位 (`&root.children[...]`), `paths[levels]` 指向叶槽位 (`&parent->children[...]`)。`off/lnu/loff/col` 四字段联合编码游标的绝对（字节/行号）与叶内相对位置；`epoch` 记录树修改代次，由 `lc_valid` 校验。
 
 `lc_Diff` 为 `ptrdiff_t`，用于移动 API 的符号偏移。
 
@@ -129,6 +129,7 @@ int lc_advline(lc_Cursor *C, lc_Diff delta);
 #define lc_col(C)        ((C)->col)
 #define lc_lineoffset(C) ((C)->off + (C)->loff)
 unsigned lc_linelen(const lc_Cursor *C);
+int      lc_valid(const lc_Cursor *C);
 ```
 
 - `lc_offset`: 游标绝对字节偏移（宏，直接解引用，调用方须保证 C 非 NULL）。
@@ -136,6 +137,8 @@ unsigned lc_linelen(const lc_Cursor *C);
 - `lc_linelen`: 游标当前行之字节长度。若 `C` 在 trailing 区域（`lnu == breaks[leaf]`），返回 `C->col`（虚拟行长度）。若 `C==NULL` 返回 0。
 - `lc_col`: 游标在当前行内列偏移（0-based，宏）。
 - `lc_lineoffset`: 游标当前行起始字节偏移（宏，= offset - col）。
+- `lc_valid`: 游标已附着（`C != NULL && C->tree != NULL`）且捕获的 `epoch` 等于树当前 epoch 时返回非零（函数，非宏）。
+- **游标 epoch**: 每次成功的原地编辑（`lc_scan`, `lc_markbreak`, `lc_append`, `lc_insert`, `lc_splice`, `lc_remove`）把 `tree->epoch` 递增一次并刷新编辑游标，同 cache 上其他游标随即失效。no-op 编辑（`lc_remove(C,0)`、trailing 区域删除、`lc_splice(C,0,0)`、`lc_append(C,0,NULL,NULL)`）既不 reserve 也不递增。过期游标在任何 `paths` 解引用之前被挡：定位/编辑入口返回 `LC_ERRPARAM`，`lc_linelen` 返回 0，`lc_seek`/`lc_seekline` 是重新附着的入口。
 
 ### 标记/清除行断点
 
@@ -156,20 +159,20 @@ int lc_markbreak(lc_Cursor *C, unsigned len);
 
 **返回值**: 同 `lc_splice` — `LC_OK`, `LC_ERRPARAM`, `LC_ERRMEM`。
 
-### lc_remove — 擦除游标间区间
+### lc_remove — 从游标处擦除 `len` 字节
 
 ```c
-int lc_remove(lc_Cursor *L, lc_Cursor *R);
+int lc_remove(lc_Cursor *C, size_t len);
 ```
 
-**行为**: 删除游标 L 到 R 之间所有字节（含行断），右方内容前移。L、R 须属同一树且 `lc_offset(L) < lc_offset(R)`。
+**行为**: 从游标起删除 `len` 字节（含行断），右方内容前移，`C` 停在删除起点。`len` clamp 至树尾，故可超出剩余字节。删除触及叶尾时 `C` 所在行整体删除（行前缀不保留），`C` 落在 trailing 区域。
 
 **参数校验**:
-- `L==NULL` 或 `R==NULL` 或 `!L->tree` 或 `L->tree != R->tree`: 返回 `LC_ERRPARAM`
-- 空区间、逆序、L 越界: 返回 `LC_OK`，no-op
-- R 越树尾（trailing 区）合法: 删除跑到树尾，L 所在行整体删除（行前缀不保留）
+- `C==NULL` 或 `C->tree==NULL` 或游标过期（epoch 不符）: 返回 `LC_ERRPARAM`
+- `len == 0` 或 `C` 已在 trailing 区域: 返回 `LC_OK`，no-op
+- `len` 超出树尾: 截断到剩余字节
 
-**返回值**: `LC_OK`（成功或 no-op），`LC_ERRPARAM`（参数非法）。操作后 R 失效（树结构已变），L 指向删除点。
+**返回值**: `LC_OK`（成功或 no-op），`LC_ERRPARAM`（参数非法），`LC_ERRMEM`（入口预分配失败，树不变）。成功的删除递增 tree epoch：编辑游标被刷新，同 cache 上其他游标失效。
 
 **实现**: 同叶与跨叶删除均由内部处理（三段法：trim→cut→stitch）。入口预分配 `levels + 2` 个池节点；预分配失败时在任何修改之前返回 `LC_ERRMEM`。
 
@@ -183,12 +186,12 @@ int lc_splice(lc_Cursor *C, size_t del, unsigned ins);
 
 **行为**:
 - 游标在 trailing 区域: `C->col += ins` 直接返回
-- 删+补字节: 内部 `lc_advance` + `lc_remove` 处理删除，再经直接字节追加路径加回插入字节。删除后若树已空，重置树。
+- 删+补字节: 删除路径走与 `lc_remove` 相同的内部例程（`lcD_remove`，入口 reserve 一次），再经直接字节追加路径加回插入字节。删除后若树已空，重置树。
 - 插入字节: 若游标在有效行内，`leaf->bytes[C->lnu] += ins` 加长当前行；`C->col += ins` 移动游标。
 
-**返回值**: `LC_OK`（成功），`LC_ERRPARAM`（参数非法），`LC_ERRMEM`（`lc_remove` 入口预分配失败，树不变）。
+**返回值**: `LC_OK`（成功），`LC_ERRPARAM`（参数非法），`LC_ERRMEM`（删除入口预分配失败，树不变）。
 
-**注意**: 删除区间可跨任意叶边界。`lc_splice` 内部委托 `lc_remove` 处理删除——`splice(C, del, ins)` 等价于 `remove + addbytes`。`lc_clearbreaks` 是 `splice(len, len)` 的便捷宏。
+**注意**: 删除区间可跨任意叶边界。`lc_splice` 与 `lc_remove` 走同一删除路径（入口 reserve 一次、epoch 递增一次）——`splice(C, del, ins)` 等价于 `remove + addbytes`。`lc_clearbreaks` 是 `splice(len, len)` 的便捷宏。
 
 ### lc_append — 在中部插入文本/行
 
@@ -255,12 +258,13 @@ C->nu     : 所有前驱叶的累计行数
 C->loff   : 当前叶内，C->lnu 行之前各行之和（叶内字节偏移）
 C->lnu    : 当前叶内行索引 (0-based)
 C->col    : 当前行内列偏移
+C->epoch  : seek/seekline 时捕获的 tree 原地修改代次
 
 offset = off + loff + col
 line   = nu + lnu
 ```
 
-设计意图: `off`+`nu` 锚定叶位置，`loff`+`lnu` 为叶内精确定位，`col` 为行内微调。三组累加成全局偏移，无需扫描。
+设计意图: `off`+`nu` 锚定叶位置，`loff`+`lnu` 为叶内精确定位，`col` 为行内微调。三组累加成全局偏移，无需扫描。`epoch` 由 `lc_valid` 校验，为每次 `paths` 解引用挡住编辑后的过期使用。
 
 ### 虚拟行（trailing region）
 

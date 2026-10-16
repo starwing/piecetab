@@ -58,7 +58,9 @@ current span and `poff` is the offset inside it. The absolute byte offset is:
 The cursor does **not** own the tree; the caller must keep the tree alive
 while the cursor is in use. Like `pt_Cursor`/`lc_Cursor`, the cursor is never
 left at a segment end except at the tree end (the "no mid-tree segment-tail"
-invariant).
+invariant). The cursor also captures `tree->epoch` at `sp_seek` time;
+`sp_valid` reports whether it is still attached and current, and every entry
+that dereferences `paths` rejects a stale cursor.
 
 ### sp_Delta, sp_Id, sp_Mask
 
@@ -259,6 +261,7 @@ int  sp_hasns(const sp_Mask *mask, int ns);
 int  sp_seek(sp_Cursor *C, sp_Tree *T, size_t off);
 int  sp_locate(sp_Cursor *C, size_t off);
 int  sp_advance(sp_Cursor *C, sp_Delta d);
+int  sp_valid(const sp_Cursor *C);
 #define sp_offset(C) ((C)->off + (C)->poff)
 ```
 
@@ -270,8 +273,18 @@ int  sp_advance(sp_Cursor *C, sp_Delta d);
 - **`sp_advance`**: moves by a signed byte delta. Movement clamps at the
   start and end; past the end it enters the virtual trailing area.
 - **`sp_offset`**: macro returning the absolute byte offset.
+- **`sp_valid`**: non-zero when the cursor is attached and its captured
+  `epoch` equals the tree's current epoch (function, not macro).
+- **Cursor epoch**: every successful in-place edit (`sp_splice`, `sp_append`,
+  `sp_insert`, `sp_fill`, `sp_clear`, `sp_remove`) bumps `tree->epoch` once
+  and refreshes the editing cursor; every other cursor on that tree goes
+  stale. No-op edits (`sp_remove(C,0)`, a removal in the trailing area,
+  `sp_append(C,0)`, `sp_insert(C,0)`, `sp_fill(C,id,0)`, `sp_splice(C,0,0)`)
+  neither reserve nor bump. `sp_locate` keeps the epoch captured by
+  `sp_seek`, which is the entry that re-attaches a stale cursor.
 
-All navigation functions return `SP_OK` or `SP_ERRPARAM`.
+Navigation functions return `SP_OK` or `SP_ERRPARAM`; `sp_next`/`sp_prev`/
+`sp_style` return `SP_NONE` for a stale cursor.
 
 ### 4.5 Marking
 
@@ -326,7 +339,7 @@ cannot livelock.
 int sp_splice(sp_Cursor *C, size_t del, size_t ins);
 int sp_append(sp_Cursor *C, size_t ins);
 int sp_insert(sp_Cursor *C, size_t ins);
-int sp_remove(sp_Cursor *L, sp_Cursor *R);
+int sp_remove(sp_Cursor *C, size_t len);
 ```
 
 - **`sp_splice`**: deletes `del` bytes at the cursor, then inserts `ins`
@@ -336,9 +349,10 @@ int sp_remove(sp_Cursor *L, sp_Cursor *R);
   segment id (like `a` in vim/sam).
 - **`sp_insert`**: inserts `ins` bytes at the cursor, inheriting the **right**
   segment id (like `i`).
-- **`sp_remove`**: deletes bytes from `sp_offset(L)` to `sp_offset(R)`.
-  `L` and `R` must belong to the same tree; if `L >= R` it is a no-op.
-  Returns `SP_ERRPARAM` on invalid cursors/trees.
+- **`sp_remove`**: deletes `len` bytes at the cursor, clamping at the tree
+  end; `C` stays at the deletion point and the remaining bytes shift left.
+  `len == 0`, or a cursor in the trailing virtual area, is a no-op. Returns
+  `SP_ERRPARAM` for a NULL or stale cursor.
 
 All editing functions return `SP_OK`, `SP_ERRPARAM`, or `SP_ERRMEM`. On
 `SP_ERRMEM` the tree is left structurally consistent.
