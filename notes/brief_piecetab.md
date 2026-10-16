@@ -165,8 +165,8 @@ grep '^static' piecetab.h
 | 前缀   | 全称        | 职责                  | 代表函数                                                                                                                                                                                                              |
 | ------ | ----------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ptK_` | Kurser      | 游标导航 + 编辑态入口 | `findleaf`, `locend`, `forwardoff`, `backwardoff`; `markdirty`, `cow`, `beginedit`（COW 类，归属存疑，见命名议题）; `seamleaf`（叶内相邻连续 literal 合并原语，含 paths 修正）                                                                    |
-| `ptI_` | Insert      | 插入/裂叶             | `onepiece`, `splitroot`, `splitchild`, `fillrt`, `stitchrt`, `splitins`（对应 lc 的 `lcB_`）                                                                                                                          |
-| `ptD_` | Delete      | 删除/平衡/缝合        | `trimleft`, `trimright`, `cutrange`, `cutpiece`, `rmleaf`, `rmrange`, `makechain`, `findroom`, `backwardnode`, `balancenode`, `foldnode`, `seambound`, `rebalance`, `mergeleaf`, `stitch`, `stitchnode`, `checkstitch`, `cowpaths` |
+| `ptI_` | Insert      | 插入/追尾             | `onepiece`, `splitroot`, `splitchild`, `insertrt`, `fillrt`, `append`（对应 lc 的 `lcB_append`）                                                                                                                          |
+| `ptD_` | Delete      | 删除/平衡/缝合        | `trimright`, `trimleft`, `cutrange`, `mergeleaf`, `seambound`, `balancenode`, `foldnode`, `rebalance`, `backwardnode`, `makechain`, `findroom`, `stitchnode`, `stitch`, `range`, `cutpiece`, `leaf` |
 | `ptM_` | Mask/Metric | 位图 + 度量传播       | `ishole`, `sethole`, `iterhole`（mask）; `up`（度量+mask 一体向上传播）                                                                                                                                               |
 | `ptN_` | Node        | 节点运作              | `sumbytes`, `copy`, `move`, `remove`, `makespace`, `purge`（版本感知递归释放）                                                                                                                                        |
 | `ptH_` | Hole        | hole 操作             | `new`, `append`, `remove`（宏 `fit`, `reserve`）                                                                                                                                                                      |
@@ -215,7 +215,7 @@ grep '^static' piecetab.h
   返回值为调用者持有引用，源树被返回值续命故无条件安全）并 detach cursor。
   clean cursor 时 commit/rollback 均 retain 当前树返回
 - **树内硬不变式**：同叶相邻两 literal 不得物理相连（`pt_checknode` 校验）；
-  插入路径双向合并 + 删除路径 `seamleaf`（cutpiece/append/splitins）+ commit
+  插入路径双向合并 + 删除路径 `seamleaf`（cutpiece/append）+ commit
   合并共同维护。`ptK_seamleaf(C, right)` 为叶内合并原语：合并 (i-1, i) 对
   （i = 游标槽 + right，right∈{0,1}），检查物理连续则合并删槽，并修正
   paths[levels]（含删槽后右侧槽左移同步）。foldnode 在
@@ -239,21 +239,21 @@ grep '^static' piecetab.h
 
 ## 九、编辑流程概要
 
-### ptI_splitins（pt_edit / pt_append 共用插入路径）
+### ptI_append（pt_edit / pt_append 共用插入路径）
 
 1. `ptI_fillrt` 在 `S->rt[0]` 装配新 piece（+ 原 piece 裂出的右半），
    need = 1 或 2 槽
 2. 叶容器有空位 (`m = min(need, 空位)`) 直接 makespace+copy；不足则
-   `ptI_stitchrt`: 自底向上寻非满层（全满 `ptI_splitroot` 加深）→
+   `ptI_insertrt`: 自底向上寻非满层（全满 `ptI_splitroot` 加深）→
    逐层 `ptI_splitchild` → 缝入剩余槽
 3. `ptM_up` 分段传播度量差
 
 ### pt_remove
 
 1. 右游标 R = C + advance(len)；`ptD_cowpaths` COW 两路径并求分叉层 `fl`
-2. 同叶 → `ptD_rmleaf`（`ptD_cutpiece` 叶内四情形切割；literal 中裂需
+2. 同叶 → `ptD_leaf`（`ptD_cutpiece` 叶内四情形切割；literal 中裂需
    makeroom 式裂层）。每情形后调 `ptK_seamleaf` 处理新相邻对
-3. 跨叶 → `ptD_rmrange`: `trimright(L)`/`trimleft(R)` →
+3. 跨叶 → `ptD_range`: `trimright(L)`/`trimleft(R)` →
    `ptD_cutrange`（洋葱剥层：L 右侧删除、R 右余存入 `rt[k]`）→
    `ptD_stitch`（`mergeleaf` 试合并断口叶 → `stitchnode` 逐层缝回 rt →
    `rebalance` 收尾，游标落删除点）。缝入/平衡产生的叶内边界 seam 由
@@ -325,10 +325,10 @@ just pt-lines         # 未覆盖行源码
 | `b`      | pt_Buffer                          | 公共 API                     |
 | `t`/`nt` | pt_Tree / new tree                 | 生命周期函数                 |
 | `poff`   | piece 内偏移（cursor 字段）        |                              |
-| `po`     | poff 快照                          | `ptI_fillrt`, `ptI_splitins` |
+| `po`     | poff 快照                          | `ptI_fillrt`, `ptI_append` |
 | `h`      | hole 标志(int) 或 pt_Hole*         | 插入路径 / hole 操作         |
-| `ph`     | previous-piece hole 标志           | `ptI_fillrt`, `ptI_splitins` |
-| `m`      | pt_Mask 迭代副本 / min 槽数        | `ptM_iterhole` / `splitins`  |
+| `ph`     | previous-piece hole 标志           | `ptI_fillrt`, `ptI_append` |
+| `m`      | pt_Mask 迭代副本 / min 槽数        | `ptM_iterhole` / `append`  |
 | `v`      | pt_Ver                             | `ptN_purge`                  |
 | `nn`     | new node                           | COW/makechain                |
 | `nd`     | node destination（cow 后当前节点） | `ptI_splitchild`             |

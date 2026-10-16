@@ -100,7 +100,7 @@
 - 叶层与内部层使用同一 `sp_Node` 类型；叶槽 `children[i]` 存的是 `sp_Id`，通过 `spL_id` / `spL_setid` 与指针互转（`spantree.h:257-258`）。
 - `bytes[i]` 叶层是 span 长度，内部层是子树累计；`mask[i]` 叶层是该 span 的 ns 集合，内部层是子树的 OR（`spM_sumns`、`spM_remask`，`spantree.h:272-276`）。
 - cursor 只有 `poff/off`，绝对偏移 `off + poff`（`spantree.h:82`）。
-- 虚拟尾：`poff` 可以大于等于当前 span 长；`sp_seek` / `sp_locate` / `sp_advance` 会保留越尾量（`spantree.h:353-435`）。remove 入口在 `sp_remove` 判 no-op 并 reserve（`spantree.h:1226-1232`），`spD_remove` 把 `len` clamp 到树内（`spantree.h:685-694`）。
+- 虚拟尾：`poff` 可以大于等于当前 span 长；`sp_seek` / `sp_locate` / `sp_advance` 会保留越尾量（`spantree.h:353-435`）。remove 入口在 `sp_remove` 判 no-op 并 reserve（`spantree.h:1223-1229`），`spD_remove` 把 `len` clamp 到树内（`spantree.h:684-695`）。
 
 **为什么 remove 要为 [S] 维护 mask 与 arbiter**：spantree 存不透明的结果 id，id 代表最终渲染结果或混合列表句柄；树必须通知外部 id 的 born/died/merge/touch 事件。叶内 ns 集合并为 mask，内部 mask 是子树 OR，导航 `sp_next/sp_prev` 靠它剪枝。因此 remove 需要同时维护字节与 mask，并调用 `spA_*` 回调。
 
@@ -117,8 +117,8 @@
 - `PT_FANOUT=31`、`PT_MAX_LEVEL=17`、`PT_MAX_HOLESIZE=64`（`piecetab.h:165-177`、`128-129`）。
 - 叶层与内部层使用同一 `pt_Node` 类型；叶槽 `children[i]` 是 literal 指针或 `pt_Hole *`，由 `mask` 第 i 位区分（`ptM_ishole`，`piecetab.h:386-387`）。
 - `mask` 是单字位图（`PT_FANOUT <= PT_MASK_BITS`，`piecetab.h:204-206`）；内部层第 i 位表示子树含 hole。收缩 `child_count` 后必须 `ptM_clamp`（`piecetab.h:393`、`455-458`）。
-- `version` 与 `ptK_cow`：修改共享节点前必须 path-copy；`pt_remove` 先 `ptP_reserve`，再 `ptK_markdirty`，再沿共享路径 COW（`piecetab.h:544-556`、`572-581`、`1361-1381`）。
-- 越尾处理：`pt_seek` / `pt_locate` / `pt_advance` 直接 `ptK_locend`，超出量归零（`piecetab.h:500-510`、`528-542`）；remove 入口 clamp 到 `bytes`（`piecetab.h:1366`）。
+- `version` 与 `ptK_cow`：修改共享节点前必须 path-copy；`pt_remove` 先 `ptP_reserve`，再 `ptK_markdirty`，再沿共享路径 COW（`piecetab.h:542-554`、`570-579`、`1357-1376`）。
+- 越尾处理：`pt_seek` / `pt_locate` / `pt_advance` 直接 `ptK_locend`，超出量归零（`piecetab.h:498-508`、`526-540`）；remove 入口 clamp 到 `bytes`（`piecetab.h:1361`）。
 
 **为什么 remove 要为 [P] 维护 COW / hole / literal**：piecetab 是带编辑态 hole 的字节 piece 表；literal 不可变且可能来自外部 buffer，hole 是可原地改写的数据。remove 需要：对共享节点 path-copy；对 hole 用 `memmove` 缩数据；对 literal 则切指针/长度，必要时分裂 piece；合并叶内相邻且物理连续的 literal；并且 mask 位必须与 hole 状态同步。
 
@@ -159,8 +159,8 @@
    - `[S]` `sp_remove` 在入口 reserve `4 * levels + 5` 个 node；失败返回 `SP_ERRMEM`，`spD_remove` 不再分配。
    - `[P]` `pt_remove` 先 reserve `4 * levels + 5`，再 `ptK_markdirty(C)` fork transient tree；两步都成功后才开始改结构。
 4. 同容器判定
-   - `[L]` / `[S]` 比较 `paths[]` 求最小差异层 `l`（`[L]` 在 `remove` 路径内联、`[S]` 用 `spD_diverlevel`）；`l <= levels` 走跨容器 `rmrange`，`l > levels` 走同容器 `rmleaf`。
-   - `[P]` 先 `ptK_markdirty` + COW 共享路径，然后比较 `paths[]` 得到 `l`；`l <= levels` 走跨 piece `rmrange`，否则同 piece `rmleaf`。
+   - `[L]` / `[S]` 比较 `paths[]` 求最小差异层 `l`（`[L]` 在 `remove` 路径内联、`[S]` 用 `spD_diverlevel`）；`l <= levels` 走跨容器 `range`，`l > levels` 走同容器 `leaf`。
+   - `[P]` 先 `ptK_markdirty` + COW 共享路径，然后比较 `paths[]` 得到 `l`；`l <= levels` 走跨 piece `range`，否则同 piece `leaf`。
 
 **为什么入口不同**：三库都是游标 + 长度式 `remove(C, len)`；`[P]` 还要在结构修改前 fork transient tree，所以 COW / markdirty 属于入口层差异。
 
@@ -168,9 +168,9 @@
 
 共同形状：删除范围完全落在同一个叶 / span / piece 内。
 
-- `[L]` `rmleaf(C, del)`：区分行内删除、跨行删除、删到叶尾；行内只缩短 `leaf->bytes[lnu]`；跨行要 `memmove` 行数组、把前缀 `col` 与残余行拼成一行；删到叶尾时前缀留在 `C->col` 虚拟区；出口按需 `foldleaf` + `rebalance`，并重算 `loff`。
-- `[S]` `rmleaf(C, del)`：部分删用 `spA_touch(C,p,i,-del,0)` 缩短当前 span；整段删用 `spN_remove` 摘槽，再用 `spK_seamleaf` 合并相邻同 id span；出口修正 cursor，必要时 `spD_rebalance`。
-- `[P]` `rmleaf(C, del)`：hole 直接 `ptH_remove`；literal 整段删或首尾切；中间删要先把 literal 分裂成左右两个 literal；为分裂新槽会向上找一层空位，必要时 `ptI_splitroot`/`ptI_splitchild`；出口 `ptD_rebalance`，并用 `ptK_forwardoff(C,0)` 把停在 piece 尾的 cursor 推到下一 piece（树尾除外）。
+- `[L]` `leaf(C, del)`：区分行内删除、跨行删除、删到叶尾；行内只缩短 `leaf->bytes[lnu]`；跨行要 `memmove` 行数组、把前缀 `col` 与残余行拼成一行；删到叶尾时前缀留在 `C->col` 虚拟区；出口按需 `foldleaf` + `rebalance`，并重算 `loff`。
+- `[S]` `leaf(C, del)`：部分删用 `spA_touch(C,p,i,-del,0)` 缩短当前 span；整段删用 `spN_remove` 摘槽，再用 `spK_seamleaf` 合并相邻同 id span；出口修正 cursor，必要时 `spD_rebalance`。
+- `[P]` `leaf(C, del)`：hole 直接 `ptH_remove`；literal 整段删或首尾切；中间删要先把 literal 分裂成左右两个 literal；为分裂新槽会向上找一层空位，必要时 `ptI_splitroot`/`ptI_splitchild`；出口 `ptD_rebalance`，并用 `ptK_forwardoff(C,0)` 把停在 piece 尾的 cursor 推到下一 piece（树尾除外）。
 
 ### 2.3 跨容器路径
 
@@ -229,15 +229,15 @@
 3. reserve：失败必须在任何结构修改前返回。
 4. 构造 / 接收右端。
 5. 求第一差异层 `fl` 或同容器标记。
-6. `fl` 在树内层 → 跨容器 `rmrange`；否则 → 同容器 `rmleaf`。
+6. `fl` 在树内层 → 跨容器 `range`；否则 → 同容器 `leaf`。
 
 **差异**
 
-- `[L]` 游标 + 长度；入口条件 `len > 0 && offset(C) < bytes`；reserve `levels+2`；`R` 由 `lc_advance` 构造且可落在虚拟尾（删到树尾，`C` 所在当前行整体删除）；差异层在 `remove` 路径内联求出（`linecache.h:1154-1160`、核心 `766-775`）。
-- `[S]` 游标 + 长度；入口条件 `len == 0 || offset(C) >= bytes` 为 no-op，随后入口 reserve；真正逻辑在 `spD_remove(C,len)`，它把 `len` clamp 到 `bytes - offset(C)`，再 `sp_advance(&R,len)`，越尾用 `spK_locend`（`spantree.h:1226-1232`、核心 `685-694`）。
+- `[L]` 游标 + 长度；入口条件 `len > 0 && offset(C) < bytes`；reserve `levels+2`；`R` 由 `lc_advance` 构造且可落在虚拟尾（删到树尾，`C` 所在当前行整体删除）；差异层在 `remove` 路径内联求出（`linecache.h:1154-1160`、核心 `766-777`）。
+- `[S]` 游标 + 长度；入口条件 `len == 0 || offset(C) >= bytes` 为 no-op，随后入口 reserve；真正逻辑在 `spD_remove(C,len)`，它把 `len` clamp 到 `bytes - offset(C)`，再 `sp_advance(&R,len)`，越尾用 `spK_locend`（`spantree.h:1223-1229`、核心 `684-695`）。
 - `[P]` 长度式；`off >= bytes` 直接 OK；clamp 到树尾；先 reserve 再 `ptK_markdirty`，然后为 `R` 设置 transient tree / paths，并沿共享路径 COW。COW 是 [P] 的入口层领域语义。
 
-### 3.2 `rmrange`
+### 3.2 `range`
 
 **共同流程**
 
@@ -303,7 +303,7 @@
 - `[L]` 的“当前槽长度”是 `p->breaks[i]`；还维护 `breaks[i] -= dl`、`dl += sumbreaks(...)`、`M_up(..., -db, -dl)`。`N_purge` 在 `k == 0` 时释放 `lc_Leaf`，`k > 0` 时递归释放 `lc_Node`。
 - `[S]` 的“当前槽长度”是 `p->bytes[i]`；只有 bytes 通道。`spN_remove` 接收 `sp_Tree *`，在 `k == 0` 叶槽处逐槽调用 `spA_died(T, id)`，叶槽只存 id，释放动作交由池。`spN_copy` 同时复制 `children`、`bytes`、`mask` 三个数组。
 - `[P]` 的“当前槽长度”是 `p->bytes[i]`；`ptN_remove(S,p,k,s,e)` 内部用 `p->version` 调 `ptN_purge`：只 purge 版本匹配的共享节点 / 释放 hole；`ptN_copy` 同时处理单字 `mask` 的位段；`ptN_remove` 末尾 `ptM_clamp(p)`，若 `cc == 0` 还清 `children[0]` / `bytes[0]`。
-- `[P]` 在 `rmrange` 中把 `rt[k].version` 设为当前 root version，`cutrange` 里 `ptN_purge(..., rt->version)` 才能正确区分“本次版本新切下的节点”和“共享旧节点”。
+- `[P]` 在 `range` 中把 `rt[k].version` 设为当前 root version，`cutrange` 里 `ptN_purge(..., rt->version)` 才能正确区分“本次版本新切下的节点”和“共享旧节点”。
 - **共同 assert**：三库都在函数内 `assert(s <= e && e <= cc(p))`，先取 `cc = cc(p)`，再 purge、前移、`setcc`。
 
 ### 3.6 `mergeleaf`
@@ -413,7 +413,7 @@
 - `[S]` `makechain(C, from, to)`：签名不含 `nofail` / reserve；扩根时旧 root 的 `bytes[0] = bytes(C)`，`mask[0] = spM_sumns(nn)`；新空节点 `memset(nn,0,sizeof *nn)`；叶槽只存 id，对象分配由调用方入口 reserve 覆盖。
 - `[P]` `makechain(C, from, to, nofail)`：有 reserve；扩根分支还 `assert(to == levels(C))`，并计算旧 root 是否含 hole：`h = (p->mask & ptM_mask(cc)) != 0`，新 root 的 child 0 位用 `ptM_sethole(p,0,h)` 设置；新空节点要设 `version = root.version`、`mask = 0`；最后 `ptM_sethole(p, cc-1, 0)`。
 - **`nofail` 与批量插入复用**：`[L]` 的 `lcD_makechain` / `[P]` 的 `ptD_makechain` 同时服务批量插入 / compact，那条路径允许失败并返回 `ERRMEM`；`nofail == 0` 是给批量插入用的。remove 路径传 `nofail == 1`，表示入口已 reserve。`[S]` 的 `makechain` 使用调用方入口 reserve 的契约，签名不含 `nofail`。这属于代码复用领域差异。
-- **扩根分支也是代码复用差异**：`[L]`/`[S]` 的 `from < 0` 分支来自批量插入 / scan 的树长高；remove 只是复用 `makechain` 时可能走到该分支。`[P]` 的 `from < 0` 分支只被 compact 路径使用，remove 路径被 `findroom` 的 `assert(fl >= 0)` 挡住；`[P]` remove 需要增长树时走 `rmleaf` 里的 `ptI_splitroot` / `ptI_splitchild`。`[S]` 的 remove 路径不触发搬尾与扩根这两条分支（`cutrange` 在 `fl` 层已保证余位），它们由 `sp_fill` / `sp_clear` 经 `filterrange` → `stitch` 到达；`[L]` 的 `from < 0` 还由 `lc_append` / `lc_scan` 的树长高到达。这是与 `nofail` 同类的代码复用领域差异，其存在源于批量插入 / compact / fill 复用。
+- **扩根分支也是代码复用差异**：`[L]`/`[S]` 的 `from < 0` 分支来自批量插入 / scan 的树长高；remove 只是复用 `makechain` 时可能走到该分支。`[P]` 的 `from < 0` 分支只被 compact 路径使用，remove 路径被 `findroom` 的 `assert(fl >= 0)` 挡住；`[P]` remove 需要增长树时走 `leaf` 里的 `ptI_splitroot` / `ptI_splitchild`。`[S]` 的 remove 路径不触发搬尾与扩根这两条分支（`cutrange` 在 `fl` 层已保证余位），它们由 `sp_fill` / `sp_clear` 经 `spF_range` → `stitch` 到达；`[L]` 的 `from < 0` 还由 `lc_append` / `lc_scan` 的树长高到达。这是与 `nofail` 同类的代码复用领域差异，其存在源于批量插入 / compact / fill 复用。
 
 ### 3.11 `rebalance`
 
@@ -490,15 +490,15 @@
 3. 最后 `paths[l] -= d`。
 4. 只改 `paths[]`，不改 `nu/off/lnu/loff/col`；调用方自己负责绝对位置字段。
 
-**差异**：无。`[L]` `linecache.h:588-599`、`[S]` `spantree.h:559-570`、`[P]` `piecetab.h:844-855`。
+**差异**：无。`[L]` `linecache.h:590-601`、`[S]` `spantree.h:564-575`、`[P]` `piecetab.h:842-853`。
 
-### 3.16 `rmleaf`
+### 3.16 `leaf`
 
 **共同骨架**：删除范围在同一叶 / span / piece 内；分为“部分删除当前叶槽”和“整段删除当前叶槽”；出口修正 cursor，必要时触发 fold / rebalance；整段删除可能减少 child_count，需要修父。
 
 **差异**
 
-- `[L]` `rmleaf(C,del)`：
+- `[L]` `leaf(C,del)`：
   1. `end = C->lnu`，`lc = p->breaks[i]`。
   2. 若 `del < leaf->bytes[end] - C->col`：只缩短当前行 `leaf->bytes[end] -= del`，`M_up(C,l,-del,0)`，返回 0。
   3. 否则 `del += C->col`，`removed = C->col`；从 `end` 开始消费完整行，逐行扣 `del` 和 `removed`。
@@ -506,14 +506,14 @@
   5. 若 `end < lc`，把残余行与 `C->col - del` 合成一行。
   6. 若 `end == lc`，剩余 `del` 是虚拟超出量，不写入内容；`removed` 按实际删除量修正。
   7. `M_up(C,l,removed,-(end - C->lnu))`；若 `foldleaf` 合并了叶，则 `rebalance(C,l-1)`；最后 `loff = sumbytes(leaf,0,lnu)`，返回 1。
-- `[S]` `rmleaf(C,del)`：
+- `[S]` `leaf(C,del)`：
   1. `assert(C->poff + del <= p->bytes[i])`。
   2. 若 `C->poff > 0 || C->poff + del < p->bytes[i]`：`spA_touch(C,p,i,-del,0)` 只缩短 span。
   3. 否则整段删：`spN_remove(T,p,0,i,i+1)`，`spK_seamleaf(C)` 合并相邻同 id，`cc--`。
   4. `M_up(C,l-1,-del)`。
   5. 若 `cc == 0`，cursor 落到 `children[0]`；否则若 `i == cc`，cursor 左移到最后一个 child 并同步 `poff/off`。
   6. 若 `cc < oc`，`spD_rebalance(C,l-1)`。
-- `[P]` `rmleaf(C,del)`：
+- `[P]` `leaf(C,del)`：
   1. `endpoff = C->poff + del`，`doff = C->off + C->poff`；`assert(endpoff <= p->bytes[i])`。
   2. 若当前是 literal 且 `C->poff > 0 && endpoff < p->bytes[i]`：要先把 literal 中间删变成“左 literal + 右 literal”，需要叶容器多一个槽。从当前层向上找第一个 `cc + 1 <= PT_FANOUT` 的层；若全满，`ptI_splitroot(C)`，`l = 1`；然后逐层 `ptI_splitchild(C,l)`，最后重新取 `p/i`。这是 [P] 独有的“增长树以容纳 piece 分裂”路径。
   3. `ptD_cutpiece(C, C->poff, endpoff)` 做真正的切 / 删；`ptM_up(C, l-1, -del)`。
@@ -604,13 +604,13 @@
 
 1. 最坏情况发生在 `k = 0`（`kl = levels`）且需要 rootpush：消耗 `rootpush(1) + chain(0..levels)(levels + 1) = levels + 2` 个节点。
 2. 各轮 `makechain` 的覆盖层区间随 `kl` 逐轮递减，互不重叠（`notes/design_insert_delete_v2.md:477`）；因此所有轮次合计不超过 `levels + 2`。
-3. `[L]` remove 的同叶路径 `rmleaf` 不分配节点；交叉路径的唯一分配就是上述 `makechain`。
-4. `lc_remove` 入口 reserve `levels + 2`，覆盖 `stitch` 的全部节点分配；`lc_append` 另在入口经 `checkstitch` 做同一 reserve（`linecache.h:1154-1160`、`501-502`、`603-625`）。
+3. `[L]` remove 的同叶路径 `leaf` 不分配节点；交叉路径的唯一分配就是上述 `makechain`。
+4. `lc_remove` 入口 reserve `levels + 2`，覆盖 `stitch` 的全部节点分配；`lc_append` 另在入口经 `checkstitch` 做同一 reserve（`linecache.h:1154-1160`、`501-503`、`603-625`）。
 
 **[S] / [P] 的预算说明**
 
-- `[S]` remove 的唯一节点分配源是交叉路径的 `makechain`，其上界同为 `levels + 2`；`4*levels+5` 覆盖该上界并留余量（`spantree.h:1226-1232`、`577-597`）。
-- `[P]` remove 的节点分配还包含 COW path-copy（`ptK_cow`）与同 piece literal 分裂（`ptI_splitroot` / `ptI_splitchild`）；`4*levels+5` 是设计给出的保守预算（`piecetab.h:1358-1377`、`542-551`、`855-879`，`design_spantree.md` §8.9 给出同量级预算）。
+- `[S]` remove 的唯一节点分配源是交叉路径的 `makechain`，其上界同为 `levels + 2`；`4*levels+5` 覆盖该上界并留余量（`spantree.h:1223-1229`、`577-597`）。
+- `[P]` remove 的节点分配还包含 COW path-copy（`ptK_cow`）与同 piece literal 分裂（`ptI_splitroot` / `ptI_splitchild`）；`4*levels+5` 是设计给出的保守预算（`piecetab.h:1357-1376`、`542-554`、`855-879`，`design_spantree.md` §8.9 给出同量级预算）。
 - 本节只证明 `[L]` 的 `levels+2` 恰好等于最坏 `makechain` 上界；`[S]` / `[P]` 的完整组合上界按其设计文档预算执行。
 
 ---
@@ -621,42 +621,42 @@
 
 | 函数（不带库前缀） | [L] 行 | [S] 行 | [P] 行 | 分类 | 关键差异 / 证据 |
 |---|---|---|---|---|---|
-| `remove` | 1154-1160（核心 766-775） | 1226-1232（核心 685-694） | 1358-1377 | domain / interface | 三库同为 `(C, len)`；[P] 先 reserve + `markdirty` + COW；reserve 预算 `[L]` `levels+2`、`[S]`/`[P]` `4*levels+5`。 |
-| `rmrange` | 737-744 | 654-660 | 934-941 | skeleton / domain | 三库都接收 `fl`；[L] 保存 `rm=col`、末尾 `addbytes`；[P] 额外设置 `rt[k].version`。 |
-| `trimright` | 450-456 | 433-437 | 697-701 | domain | [L] 行粒度扣 `db/dl`；[S] `spA_touch` 缩 span；[P] `ptM_up` 只扣度量。 |
-| `trimleft` | 458-472 | 439-443 | 703-713 | domain | [L] 物理移动行数组并扣 `col`；[S] `spA_touch`；[P] hole `H_remove` / literal 改指针长度。 |
-| `cutrange` | 474-496 | 445-464 | 715-735 | skeleton | 共同循环形状；[L] 双度量 + 释放叶；[S] `spA_died` + mask 数组；[P] `rt->version` + hole mask。 |
-| `mergeleaf` | 503-529 | 466-480 | 737-761 | domain | [L] 行 item 填充并返回行 `d`；[S] 按同 id 整段合并、无返回值；[P] 按 literal/hole 异质合并、返回字节 `d`。 |
-| `stitch` | 708-723 | 634-647 | 917-934 | domain | [L] mergeleaf `d` + `foldleaf`；[S] 先删末尾 0 长 span、无 `d`；[P] mergeleaf 字节 `d` + `d > poff` 回退。 |
-| `stitchnode` | 640-664 | 608-632 | 891-915 | skeleton | 外层 `k/m/findroom/fold/backward` 同形；[L] 双度量 + `findroom` 返回 int；[S] mask remask + int；[P] mask remask + void findroom。 |
-| `findroom` | 625-638 | 594-606 | 883-889 | skeleton / optional | [L]/[S] 搬尾部 children 到 `rt`；[P] assert 无尾部 children。 |
-| `makechain` | 601-623 | 572-592 | 857-881 | skeleton / domain | [L]/[P] 含 `nofail`；[S] 签名使用调用方入口 reserve。扩根分支 [L] 由批量插入 / scan 到达、[S] 由 fill / clear 到达，[P] 由 compact 使用。 |
-| `rebalance` | 567-586 | 538-557 | 823-842 | **exact** | 三库逐语句相同，只差前缀、节点类型、`N_cc`。 |
-| `foldnode` | 546-565 | 518-536 | 799-821 | domain | [L] 无 seambound、双度量；[S] seambound + mask remask；[P] COW + hole mask + 版本断言。 |
-| `seambound` | — | 482-503 | 758-778 | domain | [S] 同 id 合并 + `spA_died`；[P] literal 物理连续合并 + `ptM_clamp`。 |
-| `balancenode` | 531-544 | 505-516 | 785-797 | skeleton | 搬移公式与方向完全相同；[L] `ds[2]`；[S] `*ds`；[P] `*ds` + `ptM_clamp`。 |
-| `backwardnode` | 588-599 | 559-570 | 844-855 | **exact** | 三库逐语句相同，只差前缀、节点类型、`N_cc`。 |
-| `rmleaf` | 747-765 | 657-672 | 969-991 | domain | [L] 行内 / 跨行 / 虚拟尾；[S] span 部分删 / 整段删 + seamleaf；[P] hole / literal split + forwardoff。 |
-| `checkstitch` | 499-500 | — | 无 | optional | 只有 [L] 有，服务 `lc_append` 的预 reserve；[S]/[P] 批量插入不分配中间节点链。 |
-| `balanceleaf` | 666-679 | — | 无 | domain / optional | [L] 独立叶 / 行长数组 / 父 breaks 占用率专有。 |
-| `foldleaf` | 681-706 | — | 无 | domain / optional | 同上；[S]/[P] 无独立叶，fold 在 `foldnode` 叶层处理。 |
-| `addbytes` | 725-733 | — | 无 | domain / optional | [L] 行长度 + 虚拟尾专有；[S]/[P] 无行长度 / 虚拟尾。 |
-| `cutpiece` | — | 无 | 940-962 | domain / optional | [P] literal/hole 异质叶专有。 |
-| `H_remove` | — | 无 | 475-481 | domain / optional | [P] hole 可变数据专有。 |
-| `M_up` | 277-285 | 314-322 | 407-415 | skeleton | [L] 双通道 `bytes/breaks`；[S] 单 bytes + mask OR；[P] 单 bytes + hole remask，含 `db==0` 纯 mask 传播。 |
-| `N_copy` / `N_move` | 287-299 | 277-289 | 432-446 | skeleton | [L] children/bytes/breaks；[S] children/bytes/mask 数组；[P] children/bytes + mask 位段。 |
-| `N_makespace` | 301-304 | 291-294 | 455-458 | skeleton | 形状相同；[P] mask 位段随 move 维护。 |
-| `N_purge` / `N_remove` | 306-322 | 296-312 | 417-453 | skeleton / domain | [L] 释放叶 / 节点；[S] 叶槽 `spA_died`；[P] 只释放 hole 和 `version` 匹配节点 + `ptM_clamp`。 |
-| `seamleaf` | — | 404-415 | 553-565 | domain | [S] 同 id；[P] 相邻物理连续 literal。 |
-| `diverlevel` | —（`remove` 路径内联，`766-775`） | 679-683 | —（`remove` 内联） | interface / optional | [S] 独立 helper（`spD_remove`、`sp_fill` 两处调用者）；[L]/[P] 各只有一处调用者，内联。 |
-| `sumbytes` / `sumbreaks` | 267-274 | 264-265 | 383-384 | exact（前缀差异） | 区间求和；[L] 多 leaf / breaks 两版；[S]/[P] 只 node bytes。 |
-| `P_reserve` / `P_alloc` / `P_free` | 201-247 | 214-240 | 296-322 | exact（前缀差异） | pool freelist 形状相同；三库 `P_init` 都断言 `obj_size < PAGE_SIZE / 2`。 |
-| `K_parent` / `K_idx` / `K_leaf` | 255-257 | 247-248、252-253 | 352-353、356-358 | domain | `parent/idx` 公式相同；[L] 有 `K_leaf`；[S] 用 `spL_id`；[P] 用 `ptN_lit` / `ptN_hole`。 |
+| `remove` | 1154-1160（核心 766-777） | 1223-1229（核心 684-695） | 1357-1376 | domain / interface | 三库同为 `(C, len)`；[P] 先 reserve + `markdirty` + COW；reserve 预算 `[L]` `levels+2`、`[S]`/`[P]` `4*levels+5`。 |
+| `range` | 737-744 | 654-659 | 934-940 | skeleton / domain | 三库都接收 `fl`；[L] 保存 `rm=col`、末尾 `addbytes`；[P] 额外设置 `rt[k].version`。 |
+| `trimright` | 452-458 | 438-442 | 695-699 | domain | [L] 行粒度扣 `db/dl`；[S] `spA_touch` 缩 span；[P] `ptM_up` 只扣度量。 |
+| `trimleft` | 460-474 | 444-448 | 701-711 | domain | [L] 物理移动行数组并扣 `col`；[S] `spA_touch`；[P] hole `H_remove` / literal 改指针长度。 |
+| `cutrange` | 476-499 | 450-469 | 713-733 | skeleton | 共同循环形状；[L] 双度量 + 释放叶；[S] `spA_died` + mask 数组；[P] `rt->version` + hole mask。 |
+| `mergeleaf` | 505-531 | 471-485 | 735-759 | domain | [L] 行 item 填充并返回行 `d`；[S] 按同 id 整段合并、无返回值；[P] 按 literal/hole 异质合并、返回字节 `d`。 |
+| `stitch` | 710-725 | 639-652 | 915-932 | domain | [L] mergeleaf `d` + `foldleaf`；[S] 先删末尾 0 长 span、无 `d`；[P] mergeleaf 字节 `d` + `d > poff` 回退。 |
+| `stitchnode` | 642-666 | 613-637 | 889-913 | skeleton | 外层 `k/m/findroom/fold/backward` 同形；[L] 双度量 + `findroom` 返回 int；[S] mask remask + int；[P] mask remask + void findroom。 |
+| `findroom` | 627-640 | 599-611 | 881-887 | skeleton / optional | [L]/[S] 搬尾部 children 到 `rt`；[P] assert 无尾部 children。 |
+| `makechain` | 603-625 | 577-597 | 855-879 | skeleton / domain | [L]/[P] 含 `nofail`；[S] 签名使用调用方入口 reserve。扩根分支 [L] 由批量插入 / scan 到达、[S] 由 fill / clear 到达，[P] 由 compact 使用。 |
+| `rebalance` | 569-588 | 543-562 | 821-840 | **exact** | 三库逐语句相同，只差前缀、节点类型、`N_cc`。 |
+| `foldnode` | 548-567 | 523-541 | 797-819 | domain | [L] 无 seambound、双度量；[S] seambound + mask remask；[P] COW + hole mask + 版本断言。 |
+| `seambound` | — | 487-508 | 761-781 | domain | [S] 同 id 合并 + `spA_died`；[P] literal 物理连续合并 + `ptM_clamp`。 |
+| `balancenode` | 533-546 | 510-521 | 783-795 | skeleton | 搬移公式与方向完全相同；[L] `ds[2]`；[S] `*ds`；[P] `*ds` + `ptM_clamp`。 |
+| `backwardnode` | 590-601 | 564-575 | 842-853 | **exact** | 三库逐语句相同，只差前缀、节点类型、`N_cc`。 |
+| `leaf` | 746-764 | 661-676 | 966-990 | domain | [L] 行内 / 跨行 / 虚拟尾；[S] span 部分删 / 整段删 + seamleaf；[P] hole / literal split + forwardoff。 |
+| `checkstitch` | 501-503 | — | 无 | optional | 只有 [L] 有，服务 `lc_append` 的预 reserve；[S]/[P] 批量插入不分配中间节点链。 |
+| `balanceleaf` | 668-681 | — | 无 | domain / optional | [L] 独立叶 / 行长数组 / 父 breaks 占用率专有。 |
+| `foldleaf` | 683-708 | — | 无 | domain / optional | 同上；[S]/[P] 无独立叶，fold 在 `foldnode` 叶层处理。 |
+| `addbytes` | 727-735 | — | 无 | domain / optional | [L] 行长度 + 虚拟尾专有；[S]/[P] 无行长度 / 虚拟尾。 |
+| `cutpiece` | — | 无 | 942-964 | domain / optional | [P] literal/hole 异质叶专有。 |
+| `H_remove` | — | 无 | 478-486 | domain / optional | [P] hole 可变数据专有。 |
+| `M_up` | 279-287 | 319-327 | 405-413 | skeleton | [L] 双通道 `bytes/breaks`；[S] 单 bytes + mask OR；[P] 单 bytes + hole remask，含 `db==0` 纯 mask 传播。 |
+| `N_copy` / `N_move` | 289-301 | 282-294 | 430-444 | skeleton | [L] children/bytes/breaks；[S] children/bytes/mask 数组；[P] children/bytes + mask 位段。 |
+| `N_makespace` | 303-306 | 296-299 | 453-461 | skeleton | 形状相同；[P] mask 位段随 move 维护。 |
+| `N_purge` / `N_remove` | 308-326 | 301-317 | 415-451 | skeleton / domain | [L] 释放叶 / 节点；[S] 叶槽 `spA_died`；[P] 只释放 hole 和 `version` 匹配节点 + `ptM_clamp`。 |
+| `seamleaf` | — | 409-420 | 556-568 | domain | [S] 同 id；[P] 相邻物理连续 literal。 |
+| `diverlevel` | —（`remove` 路径内联，`766-777`） | 678-682 | —（`remove` 内联） | interface / optional | [S] 独立 helper（`spD_remove`、`sp_fill` 两处调用者）；[L]/[P] 各只有一处调用者，内联。 |
+| `sumbytes` / `sumbreaks` | 269-277 | 269-270 | 381-382 | exact（前缀差异） | 区间求和；[L] 多 leaf / breaks 两版；[S]/[P] 只 node bytes。 |
+| `P_reserve` / `P_alloc` / `P_free` | 203-267 | 199-261 | 274-320 | exact（前缀差异） | pool freelist 形状相同；三库 `P_init` 都断言 `obj_size < PAGE_SIZE / 2`。 |
+| `K_parent` / `K_idx` / `K_leaf` | 257-259 | 252-253、257-258 | 355-356、360-361 | domain | `parent/idx` 公式相同；[L] 有 `K_leaf`；[S] 用 `spL_id`；[P] 用 `ptN_lit` / `ptN_hole`。 |
 
 **严格 exact-sync 清单**
 
-1. `backwardnode`：`[L]` `linecache.h:588-599`、`[S]` `spantree.h:559-570`、`[P]` `piecetab.h:844-855`。
-2. `rebalance`：`[L]` `linecache.h:567-586`、`[S]` `spantree.h:538-557`、`[P]` `piecetab.h:823-842` 逐语句相同。
+1. `backwardnode`：`[L]` `linecache.h:590-601`、`[S]` `spantree.h:564-575`、`[P]` `piecetab.h:842-853`。
+2. `rebalance`：`[L]` `linecache.h:569-588`、`[S]` `spantree.h:543-562`、`[P]` `piecetab.h:821-840` 逐语句相同。
 
 **骨架级同步（公式 / 控制流可复制，领域通道按各库保留）**
 

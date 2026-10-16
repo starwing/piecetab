@@ -665,7 +665,7 @@ static void ptI_fillrt(pt_Cursor *C, const char *s, size_t len, int h) {
     }
 }
 
-static void ptI_splitins(pt_Cursor *C, const char *s, size_t len, int h) {
+static void ptI_append(pt_Cursor *C, const char *s, size_t len, int h) {
     pt_Node *p, *rt = C->tree->S->rt;
     int      cc, need, m, i, l = ptK_levels(C);
     size_t   n, po = C->poff;
@@ -931,13 +931,12 @@ static void ptD_stitch(pt_Cursor *C) {
     C->poff -= d, ptM_up(C, ptK_levels(C), 0);
 }
 
-static void ptD_rmrange(pt_Cursor *L, pt_Cursor *R, int fl) {
+static void ptD_range(pt_Cursor *L, pt_Cursor *R, int fl) {
     pt_Node *rt = L->tree->S->rt;
     int      k;
     for (k = 0; k < PT_MAX_LEVEL; ++k)
         ptN_setcc(&rt[k], 0), rt[k].version = L->tree->root.version;
-    ptD_trimright(L), ptD_trimleft(R);
-    ptD_cutrange(L, R, fl), ptD_stitch(L);
+    ptD_trimright(L), ptD_trimleft(R), ptD_cutrange(L, R, fl), ptD_stitch(L);
 }
 
 static void ptD_cutpiece(pt_Cursor *C, size_t lo, size_t hi) {
@@ -964,7 +963,7 @@ static void ptD_cutpiece(pt_Cursor *C, size_t lo, size_t hi) {
     }
 }
 
-static void ptD_rmleaf(pt_Cursor *C, size_t del) {
+static void ptD_leaf(pt_Cursor *C, size_t del) {
     pt_Node *p = ptK_parent(C, ptK_levels(C));
     int      l = ptK_levels(C), i = ptK_idx(C, p, l), oc = ptN_cc(p);
     size_t   endpoff = C->poff + del, doff = C->off + C->poff;
@@ -1320,7 +1319,7 @@ PT_API int pt_edit(pt_Cursor *C, size_t del, const char *s, size_t len) {
         ptH_append(p, i - 1, p->bytes[i - 1], s, len), C->off += len;
         return ptM_up(C, l - 1, (pt_Delta)len), ptS_ok(C);
     }
-    return ptI_splitins(C, s, len, 1), ptS_ok(C);
+    return ptI_append(C, s, len, 1), ptS_ok(C);
 }
 
 PT_API int pt_append(pt_Cursor *C, const char *s, size_t len) {
@@ -1346,7 +1345,7 @@ PT_API int pt_append(pt_Cursor *C, const char *s, size_t len) {
         p->children[i] = (pt_Node *)s, p->bytes[i] += len, C->poff = len;
         return ptM_up(C, ptK_levels(C) - 1, (pt_Delta)len), ptS_ok(C);
     }
-    return ptI_splitins(C, s, len, 0), ptS_ok(C);
+    return ptI_append(C, s, len, 0), ptS_ok(C);
 }
 
 PT_API int pt_insert(pt_Cursor *C, const char *s, size_t len) {
@@ -1372,7 +1371,7 @@ PT_API int pt_remove(pt_Cursor *C, size_t len) {
     for (l = dl; dl < ptK_levels(C); ++dl) ptK_cow(C, dl, 0);
     for (dl = l; dl < ptK_levels(&R); ++dl) ptK_cow(&R, dl, 0);
     l += (l == ptK_levels(C) && C->paths[l] == R.paths[l]);
-    l <= ptK_levels(C) ? ptD_rmrange(C, &R, l) : ptD_rmleaf(C, len);
+    l <= ptK_levels(C) ? ptD_range(C, &R, l) : ptD_leaf(C, len);
     return ptS_ok(C);
 }
 

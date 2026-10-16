@@ -37,7 +37,7 @@ spantree 中 attr 是**不透明 `sp_Id`**。
 
 - piecetab piece = `(len, src)`；spantree 段 = `(len, sp_Id)`——
   形态一一对应，唯内容引用换属性 id
-- **分裂**：`ptI_splitins` ↔ spantree 段分裂（sp_fill 边界 / splice）
+- **分裂**：`ptI_append` ↔ spantree 段分裂（sp_fill 边界 / splice）
 - **合并**：`ptD_mergeleaf` + stitch ↔ spantree 节点内合并（单 id
   比较；跨容器不合并，见 §2.1）
 - **字节度量**：两者都不管行，只管字节块；编辑平移 = 度量树前缀和
@@ -55,7 +55,7 @@ spantree 中 attr 是**不透明 `sp_Id`**。
 - **节点内义务**：同一叶容器内相邻同 id 段必须合并（append merge、
   spI_merge 同容器部分、spD_mergeleaf）
 - **节点边界允许不合并**：跨容器相邻同 id 段不强求合并，原样保留
-- **树内不得存在 0 span 段**：`poff` 是段内偏移，中间段 `bytes == 0` 会让 `poff >= bytes` 把该段误判为耗尽，导航（`sp_next` 等）与虚拟尾判定失效。0 长段只在"游标指向末尾"处短暂出现，由 `spD_cutrange` 的 `i += (k || p->bytes[i] == 0);`（`spantree.h:459/464`）随切点一并删去；末槽另有 `spD_rmleaf` / `spD_stitch` 的 0 长清理。
+- **树内不得存在 0 span 段**：`poff` 是段内偏移，中间段 `bytes == 0` 会让 `poff >= bytes` 把该段误判为耗尽，导航（`sp_next` 等）与虚拟尾判定失效。0 长段只在"游标指向末尾"处短暂出现，由 `spD_cutrange` 的 `i += (k || p->bytes[i] == 0);`（`spantree.h:459/464`）随切点一并删去；末槽另有 `spD_leaf` / `spD_stitch` 的 0 长清理。
 
 代价：最坏情况下每个叶容器至多 1 个额外段负担（约 1.58% 容量，FANOUT
 62），换取跨容器合并义务整体不存在、维护成本与 bug 面收窄。
@@ -66,13 +66,12 @@ spantree 中 attr 是**不透明 `sp_Id`**。
 
 保留的叶内合并机制：
 
-- `spK_seamleaf(C, right)`：合并叶容器内相邻同 id 段，同步
+- `spK_seamleaf(C)`：合并叶容器内相邻同 id 段（当前槽与其前驱），同步
   paths/off/poff 与 mask OR + died
 - `spD_seambound`：foldnode 合并/平衡决策前预合并接缝，同步
   `p->bytes[i]/[i+1]` 父指标（SEAM A/B）
-- fill/insert/append：fillrt 内合并 rt（born 后同 id 即并）+ splitins
-  尾部两次 seamleaf + filterleaf 尾部两次 seamleaf；appendspan 容器末
-  段同 id 合并
+- fill/insert/append：spF_fillrt 内合并 rt（born 后同 id 即并）；
+  spF_leaf 尾部 seamleaf；spF_appendspan 容器末段同 id 合并
 - remove：cutpiece 删段后 seamleaf；spD_mergeleaf（挂回后同容器）；
   L 容器掏空时直接挂回 rt[0]
 - foldnode：seambound 预合并后 cL+cR 决策
@@ -235,9 +234,8 @@ style id 同款抽象。
 | sp_clear | sp_seek(&C, T, 0) | 初始游标构造，非路径信息丢失 |
 
 内部 Cursor helper 已全部改为相对维护：sp_prev 树头回退用
-spK_lochead；spI_splitins 满容器分裂后光标本就在新段；sp_insert 用
-spK_backwardoff 回插入点；sp_clear 不重定位 Cursor——全程无
-locate/forwardoff/locend。
+spK_lochead；sp_insert 用 spK_backwardoff 回插入点；sp_clear 不重定位
+Cursor——全程无 locate/forwardoff/locend。
 
 **sp_advance 实现**：advance = 相对 seek，不调 sp_locate。空树不再是
 no-op——spantree 越尾进虚拟态，advance(5) 空树 = 虚拟 offset 5，与
@@ -253,16 +251,14 @@ backwardoff(off)；否则 backwardoff(-d)——虚拟起点经 backwardoff 天�
 | spK_locend(C) | 树非空 | 树尾态 |
 | spK_forwardoff / backwardoff | 正常态、目标在树内 | 正常态、前进/后退 d |
 | spD_remove(C, len) | `len > 0`、`offset(C) < bytes`（入口已判 no-op 并完成 reserve） | 光标于删除点（offset 不变，段尾态已收尾） |
-| spI_insert(C, ins, useleft) | 光标于插入点（正常/树尾/虚拟三态；树中段尾态 assert 拒绝） | 插入段尾（poff=ins，恒；append 出口 forwardoff(0) 收尾，insert 经 advance 回插入点） |
-| spI_splitins(C, len, id) | 光标于插入点 | 插入段尾（poff = len） |
-| spK_seamleaf(C, right) | 任意 | 叶内相邻同 id 段已合并（i = 光标槽 + right） |
-| spI_pad(C) | 任意 | 树尾态（offset 不变） |
-| spF_filterleaf(C, len, in, right) | 区间头 | 区间尾（单出口；非树尾时 poff < 段长） |
-| spF_filterrange(C, R, fl, in) | L 可含半叶、R 实光标、fl=spD_diverlevel(L,R) | L 落在 fill 尾 |
+| spK_seamleaf(C) | 任意 | 当前槽与前驱同 id 段已合并 |
+| spI_pad(C, len) | 当前段非零 id、poff ∈ {0, n} | 新增零 id 段，C 在该段起点 |
+| spF_leaf(C, len, in) | 区间头 | 区间尾（单出口；非树尾时 poff < 段长） |
+| spF_range(C, R, fl, in) | L 可含半叶、R 实光标、fl=spD_diverlevel(L,R) | L 落在 fill 尾 |
 | spF_appendrt(C) | C->poff == 0、rt 为待落段 | 段已落回、C 在插入内容尾 |
-| spF_appendvirt(C, id, len) | 树尾/虚拟态 | fill 段尾（off = 段起点、poff = len） |
-| spF_appendspan(C, id, len) | 链尾段（assert i ≥ cc-1） | 链尾（随 append 推进） |
-| spD_rmrange(L, R, fl) / spD_rmleaf(C, del) | trim 已完成 / 光标于删除点 | 删除点收尾（`spD_rmleaf` 末尾 `cc < oc` 时 `spD_rebalance`） |
+| spF_virt(C, id, len) | 树尾/虚拟态 | fill 段尾（off = 段起点、poff = len） |
+| spF_appendspan(C, id, len, m) | 链尾段（assert i ≥ cc-1） | 链尾（随 append 推进） |
+| spD_range(L, R, fl) / spD_leaf(C, del) | trim 已完成 / 光标于删除点 | 删除点收尾（`spD_leaf` 末尾 `cc < oc` 时 `spD_rebalance`） |
 | spD_cutrange(L, R, fl) | `fl = spD_diverlevel(L, R)`、L/R 已 trim | `rt[k]`（k = levels-kl）装被切下的层；L 侧只留切点前、R 侧清空待 graft；切点处 0 长槽用 `i += (k \|\| p->bytes[i] == 0);` 随切点删去（§2.1） |
 | spD_stitch(C) | 链尾段（mergeleaf 前提） | C 位置保持 |
 
@@ -314,9 +310,8 @@ sp_fill（度量不变、单 id 覆写 + arbiter）是其他 B+ 树
 
 1. **rt 单数组**：只用 `S->rt`（`sp_Node *rt = S->rt`），禁本地 rt
    数组、禁 mt+rt 双数组
-2. **filterrange 内禁 spI_ 系**：剥洋葱/摘挂/stitch 不得调
-   spI_splitins/insertrt/splitchild/splitroot/fillrt；spI_pad 与
-   filterleaf 豁免
+2. **spF_range 内禁 spI_ 系**：剥洋葱/摘挂/stitch 不得重新进入插入/追加路径；
+   已切下的 rt 层只做 graft/stitch。
 3. **批量**：摘挂层循环批量；禁止逐段 seek
 4. **一次扫描**：区间内容经剥洋葱线性处理
 
@@ -327,27 +322,27 @@ sp_fill(C, id, len):
   1. [参数检查] C 有效；len == 0 -> SP_OK
   2. [reserve] spP_reserve(6 * levels + 7)
   3. [filtervirtual] 若 sp_offset(C) >= spK_bytes(C)：
-       spF_appendvirt(C, id, len)；返回
+       spF_virt(C, id, len)；返回
   4. [当前段内] i = 当前叶槽；若 len < p->bytes[i] - C->poff：
-       spF_filterleaf(C, len, id, 1)；返回
+       spF_leaf(C, len, id)；返回
   5. [跨段] r = sp_seek(&R, T, sp_offset(C) + len)；assert ok
        fl = spD_diverlevel(C, &R)；若 fl > levels 则 fl = levels
-  6. [filterrange] spF_filterrange(C, R, fl, id)；返回
+  6. [spF_range] spF_range(C, R, fl, id)；返回
      —— C 已在 fill 尾
 ```
 
-- 虚拟/树尾起点直接走 `spF_appendvirt`，不做 R pad、不延长末叶
-- 当前段内走单段 `spF_filterleaf`；跨段才构造 R 并进入 filterrange
-- `filterrange` 返回时 L 落在原 R 段起点 / fill 尾，外部不需要
-  locate / 二次 filterleaf
+- 虚拟/树尾起点直接走 `spF_virt`，不做 R pad、不延长末叶
+- 当前段内走单段 `spF_leaf`；跨段才构造 R 并进入 spF_range
+- `spF_range` 返回时 L 落在原 R 段起点 / fill 尾，外部不需要
+  locate / 二次 spF_leaf
 
-### 8.3 filterrange 三步算法
+### 8.3 spF_range 三步算法
 
 前置条件：R 是实光标；`fl = spD_diverlevel(L, R)` 且 `fl <= levels`；
 L 可处于叶内任意位置（`spF_cutleaf` 负责把 L 右半段切进 rt）。
 
 ```
-spF_filterrange(L, R, fl, in):
+spF_range(L, R, fl, in):
   1. 剥填 L 右
      a. 清空 rt（所有层 cc = 0）
      b. spF_cutleaf：若 L->poff > 0，把当前叶的右半段（原 id/mask）
@@ -379,12 +374,12 @@ spF_filterrange(L, R, fl, in):
 
 ### 8.4 关键不变式
 
-1. `filterrange` 的输入不要求 `L->poff == 0`；`spF_cutleaf` 负责切
+1. `spF_range` 的输入不要求 `L->poff == 0`；`spF_cutleaf` 负责切
    L 右半
-2. `filterrange` 返回时 L 落在原 R 段起点 / fill 尾，这是
+2. `spF_range` 返回时 L 落在原 R 段起点 / fill 尾，这是
    `spF_peelleaf` + `spD_stitch` 的自然结果；若现有 stitch 不满足，
    应修 stitch/peel 的光标推进，而不是在外部 locate
-3. 全程无 R pad：虚拟尾段由 `spF_appendvirt` 作为独立新段插入
+3. 全程无 R pad：虚拟尾段由 `spF_virt` 作为独立新段插入
 4. 剥填阶段节点数净减，因此不需要 fl 层以下的 makechain/扩根
 
 ### 8.5 机制：剥洋葱、append merge、前缀剥填
@@ -437,12 +432,12 @@ peeldown(l, rt):                 # 层 l 的内容已在 rt[levels-l]
 
 ### 8.6 refcount 写回规则
 
-- `spF_filterleaf` 裂叶分支：若 `left > 0` 先 `spA_born(oid)` 复制左
-  半引用；右半与 nid 段经 `spI_fillrt` / `spF_appendrt` 落回
+- `spF_leaf` 裂叶分支：若 `left > 0` 先 `spA_born(oid)` 复制左
+  半引用；右半与 nid 段经 `spF_fillrt` / `spF_appendrt` 落回
 - `spF_cutleaf` / `spF_peelleaf` 的裂段同样先 `spA_born(oid)` 补一份
   引用
-- 合并两个同 id 段时（`spI_fillrt` 左邻合并 / `spF_appendspan` /
-  `spF_appendvirt` merge 分支）必须 `spA_died` 一次
+- 合并两个同 id 段时（`spF_fillrt` 左邻合并 / `spF_appendspan` /
+  `spF_virt` merge 分支）必须 `spA_died` 一次
 - 新段插入不额外调 born/died；新 id 的引用由 `spA_born` / `spA_merge`
   负责
 - `spF_append` 剥叶时逐段 `spA_merge(C, in, old, &m)`，`!nid` 时
@@ -450,13 +445,13 @@ peeldown(l, rt):                 # 层 l 的内容已在 rt[levels-l]
 
 ### 8.7 helper 抽象（实现映射）
 
-- `spF_appendvirt(C, id, len)`：树尾/虚拟起点 fill 入口。构造 rt（有
+- `spF_virt(C, id, len)`：树尾/虚拟起点 fill 入口。构造 rt（有
   pad 先放 `(id=0, len=pad)`，再放 `(nid=spA_born(id), len=len)`）→
-  spI_fillrt → spF_appendrt → Cursor 指向 fill 段（off = 段起点，
+  spF_fillrt → spF_appendrt → Cursor 指向 fill 段（off = 段起点，
   poff = len）
-- `spF_filterleaf(C, len, in, right)`：单段染写；`right` 控制是否与
-  右邻 `spK_seamleaf(C, 0)` 合并
-- `spI_fillrt(C, id, len, m)`：向 `S->rt` 追加/合并一段；返回 0 = 合
+- `spF_leaf(C, len, in)`：单段染写；落回后 `spK_seamleaf(C)`
+  合并相邻同 id 段
+- `spF_fillrt(C, id, len, m)`：向 `S->rt` 追加/合并一段；返回 0 = 合
   并/复用，1 = 新增槽；左邻合并必须 `C->off += len`
 - `spF_appendrt(C)`：`assert(C->poff == 0)`；把 rt 落回 L 链（满
   时 `spI_makeroom` 再插），推进 C 到插入内容尾
@@ -468,7 +463,7 @@ peeldown(l, rt):                 # 层 l 的内容已在 rt[levels-l]
 - `spF_peelleaf(C, R, in)`：处理 R 段本身，含虚拟区 zero-id 段
 - `spF_cutleaf(C)` / `spF_cutright(C, fl)`：切 L 右半 / 切 L
   路径各层右兄弟进 rt，并 spM_up 记账
-- `spF_filterrange(C, R, fl, in)`：三步总入口
+- `spF_range(C, R, fl, in)`：三步总入口
 - `spD_stitch`：缝回 R 右并保证 L 落在 fill 尾；underfill 时参考
   `lcD_stitch` 做 foldnode + rebalance
 
@@ -500,7 +495,7 @@ peeldown(l, rt):                 # 层 l 的内容已在 rt[levels-l]
    递归完成后 R Cursor 废弃；L 光标由 spF_append 推至链尾
 4. **append merge 原语**：spF_ 版（lcB_append 框架），必须含节点内
    同 id 合并
-5. **filterleaf 裂叶路径**：构造 rt（左半段 + nid 段）后统一经
+5. **spF_leaf 裂叶路径**：构造 rt（左半段 + nid 段）后统一经
    spF_appendrt 落回
 6. **度量记账**：摘挂切出每层 spM_up 减度量，剥回 append 与 stitch
    加回；arb 只改 id 不改变段长 → 全程净 0
@@ -516,7 +511,7 @@ peeldown(l, rt):                 # 层 l 的内容已在 rt[levels-l]
 - 空后缀：R 右森林 = R 残留段们（rt[0]）
 - 空 mid：直接进入 R 处理
 - 树尾 fill：R 段右半 0 长**不产生**；L 段 `pl == 0` 时左半同理
-- 虚拟 fill（R > bytes，含空树）：走 appendvirt 独立新段插入
+- 虚拟 fill（R > bytes，含空树）：走 spF_virt 独立新段插入
 - 满树验证例子：fanout=4，fl 层 = [L,N1,R,N2] 全满，fl=0（根）——
   剥回 + 密铺后根 = [L,N1',R']，stitch 挂 N2 + R 残留 → 根 cc = 4，
   全程无溢出无扩根
@@ -579,9 +574,8 @@ op 载荷 ns 不限，属 arb 私有解码）。建议基于 in mask 增量操�
   （l < levels 时重算 OR(子槽)，l == levels 叶槽不动）；**无 db==0
   早退**——纯 mask 传播 = `spM_up(C, levels-1, 0)`
 - `spM_up` 只爬光标路径——路径外的槽 mask 更新全部手工：
-  spI_onepiece（0）、spI_fillrt（新/旧槽）、spI_splitins/inherit
-  （双继承）、spI_splitroot/splitchild（OR）、spF_cutleaf（复制原
-  mask）、spF_filterleaf（写回 m + `spM_up(C, levels-1, 0)`）、
+  spI_onespan（0）、spF_fillrt（新/旧槽）、spI_splitroot/splitchild（OR）、spF_cutleaf（复制原
+  mask）、spF_leaf（写回 m + `spM_up(C, levels-1, 0)`）、
   spF_appendspan（新槽 mask / 合并 OR）、spK_seamleaf 与
   spD_seambound（OR + died）、spD_mergeleaf（OR）、spD_makechain
   （bytes 与 mask 置 0）、spD_stitchnode（每轮 remask）、
@@ -610,7 +604,7 @@ op 载荷 ns 不限，属 arb 私有解码）。建议基于 in mask 增量操�
 
 先例：piecetab.h `ptC_nexthole`（剪枝下降）+ `ptC_freeze`（容器内批
 量物化 + 压缩 + 纯 mask 传播 + rebalance）。sp_clear 拒绝逐段
-filterleaf/fill 方案。
+spF_leaf/fill 方案。
 
 ```
 sp_clear(T, ns, id):
@@ -655,7 +649,7 @@ arb(ud, in, old, mask):
 |---|---|---|
 | `arb(0, old)` | 死亡：一个持有 old 的段槽消失（合并/删除/trim 归零/freetree）；真清写 fill(0) 同形 | ret=0 → 仅 old--；返回 0 |
 | `arb(in, 0)` | 新生：一个持有 in 的段槽出现（写空段/分裂碎片/继承） | ret=in → 仅 in++；**必须原样返回 in** |
-| `arb(in, old)` | 合并决策（`spA_merge`；**in==old 已短路，不调 arb、mask 不变**） | ret=merge(in,old)；出口统一规则 +ret/−old（ret==old 两笔自然抵消）；分裂碎片计数由 filterleaf 的保护/补片承担 |
+| `arb(in, old)` | 合并决策（`spA_merge`；**in==old 已短路，不调 arb、mask 不变**） | ret=merge(in,old)；出口统一规则 +ret/−old（ret==old 两笔自然抵消）；分裂碎片计数由 spF_leaf 的保护/补片承担 |
 | `arb(id, id)` | touch 通知（`spA_touch`）：叶 `(id, len)` 被公开编辑改为 `(id, len')`，`len' != len` | **必须原样返回 id、mask 不得改变**；返回值不写回、不改结构；每次公开编辑最多 3 次；debug 断言返回 == id |
 
 **树侧事件清单**（全部经 arb；id 0 不计不发；`T->arb == NULL` 时全部
@@ -664,15 +658,15 @@ arb(ud, in, old, mask):
 | 站点 | 调用 |
 |---|---|
 | spN_purge（加树参；k==0 分支逐叶） | `arb(0, id)`——统一覆盖 cutrange ×3 与 freetree |
-| 合并吸收（spK_seamleaf / spD_seambound / spD_mergeleaf / spF_appendspan 并入 / spC_clearnode 并入 / spI_fillrt rt 内合并） | `arb(0, id)`/次 |
+| 合并吸收（spK_seamleaf / spD_seambound / spD_mergeleaf / spF_appendspan 并入 / spC_clearnode 并入 / spF_fillrt rt 内合并） | `arb(0, id)`/次 |
 | spD_cutpiece 整槽删除、spD_trimright/trimleft 减至 0 | `arb(0, id)` |
-| spI_fillrt 新段与右半槽 | `arb(id, 0)`，返回值写入槽；rt 内合并补 `arb(0, id)` 抵消 |
-| spF_filterleaf | 见下 |
+| spF_fillrt 新段与右半槽 | `arb(id, 0)`，返回值写入槽；rt 内合并补 `arb(0, id)` 抵消 |
+| spF_leaf | 见下 |
 | spF_cutleaf / spF_peelleaf | `arb(id, 0)` 补片 |
 | spA_touch（spI_grow / spI_growleft 三分支 / spD_trimright / spD_trimleft / spD_cutpiece 部分删除分支） | `arb(id, id)`；id 0 不触发；整叶死亡/长度归零走 died 不 touch；纯平移零 touch |
 | spF_cutright / spF_peeldown / spD_stitch | 静默（逻辑移动零事件） |
 
-**filterleaf 保护/补片/cancel**：
+**spF_leaf 保护/补片/cancel**：
 
 ```
 k = (poff > 0) + (poff + len < n)         /* 存活片段数 */
@@ -796,10 +790,10 @@ Lua 绑定与 editor 接入定案（spantree.h 零改动）。
 - **v4**：边界裂后置——摘挂只处理整段们，严格段数守恒；表述修正为 [iL+1..cc] 全切 + 前缀剥填递归
 - **v5 前缀剥填**（定案）：fl 层全切进 rt + 前缀剥填 + stitch 挂回 R 右森林；密铺论证保证不溢出
 - **v6**：删 R 路径空壳；append merge 含节点内同 id 合并；光标 = L 链 seek 到 off+len；树尾 fill 不保留 0 长半段
-- **v7**：阶段 1 仅当 fl < levels；后置裂复用两次 filterleaf；stitch 以链尾光标；findroom 放宽为第一个 cc<FANOUT 的已切层
+- **v7**：阶段 1 仅当 fl < levels；后置裂复用两次 spF_leaf；stitch 以链尾光标；findroom 放宽为第一个 cc<FANOUT 的已切层
 - **v8**（2026-08-14）：恢复虚拟 fill pad 语义；C 虚拟 → pad id0；R 虚拟 → pad + arb(0,0) notice；R == bytes 不 pad
-- **v9**（2026-08-20）：去掉 R pad 与 fill 内 locate；filterrange 接受 L 整叶/半叶开头，三步 + 自身负责最终光标位置
-- **v10**（2026-08-22，当前实现）：落地为 spantree.h，删去 `spF_fillto`/`spF_fillrange`/`spF_splitleaf`；`sp_fill` 薄分流；filterrange 内部 clear rt → cutleaf → cutright → peel → peeldown → peelleaf → stitch；`spF_peel` 带 `keep`，虚拟区用 zero-id 段剥填
+- **v9**（2026-08-20）：去掉 R pad 与 fill 内 locate；spF_range 接受 L 整叶/半叶开头，三步 + 自身负责最终光标位置
+- **v10**（2026-08-22，当前实现）：落地为 spantree.h，删去 `spF_fillto`/`spF_fillrange`/`spF_splitleaf`；`sp_fill` 薄分流；spF_range 内部 clear rt → cutleaf → cutright → peel → peeldown → peelleaf → stitch；`spF_peel` 带 `keep`，虚拟区用 zero-id 段剥填
 
 ### 13.3 ns 标记迭代史
 
@@ -816,7 +810,7 @@ Lua 绑定与 editor 接入定案（spantree.h 零改动）。
 
 ### 13.5 其他历史决议与教训
 
-- 2026-08-13：坐标系与术语定案（层号 l、fl、rt[k] 层语义）；2026-08-14：光标三态与内部函数契约、sp_advance 不调 sp_locate、reserve 预算、splice = remove + edit；2026-08-16：id 生命周期三态契约（report_sp_idref.md）、eph 层、pt_checkcursor 禁树中段尾、ptD_rmleaf 裂段光标逃逸修复
+- 2026-08-13：坐标系与术语定案（层号 l、fl、rt[k] 层语义）；2026-08-14：光标三态与内部函数契约、sp_advance 不调 sp_locate、reserve 预算、splice = remove + edit；2026-08-16：id 生命周期三态契约（report_sp_idref.md）、eph 层、pt_checkcursor 禁树中段尾、ptD_leaf 裂段光标逃逸修复
 - 2026-09-01：三态改四态（`spA_arb` → `spA_merge` 带 in==old 短路 + `spA_touch` 通知态），依据 `notes/design_spantree_identity.md` §3；fill/clear 的 no-op 同 id 路径不再产生 `arb(id,id)`，绑定层收到的 `arb(id,id)` 只可能来自 touch
 - 2026-08-15 实施修订：删 `!changed && !db` 早停——每层无条件重算 OR + 爬到顶
 - 历史测试教训：多次迭代会覆盖早期定案语义，重写文档须对照 #if 0 测试（fill_virtual 的 pad 语义曾因 v7 误删而被 v8 恢复）

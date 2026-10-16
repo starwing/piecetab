@@ -734,7 +734,7 @@ static void lcD_addbytes(lc_Cursor *C, unsigned ins) {
     C->col += ins;
 }
 
-static void lcD_rmrange(lc_Cursor *L, lc_Cursor *R, int fl) {
+static void lcD_range(lc_Cursor *L, lc_Cursor *R, int fl) {
     lc_Node *rt = L->tree->S->rt;
     int      k;
     unsigned rm = (assert(L->tree->S == R->tree->S), L->col);
@@ -743,7 +743,7 @@ static void lcD_rmrange(lc_Cursor *L, lc_Cursor *R, int fl) {
     L->col = 0, lcD_addbytes(L, rm);
 }
 
-static int lcD_rmleaf(lc_Cursor *C, size_t del) {
+static int lcD_leaf(lc_Cursor *C, size_t del) {
     lc_Node *p;
     int      l = lcK_levels(C), i = lcK_idx(C, p = lcK_parent(C, l), l);
     lc_Leaf *lf = lcN_leaf(p, i);
@@ -771,7 +771,7 @@ static void lcD_remove(lc_Cursor *C, size_t len) {
     R = *C, lc_advance(&R, (lc_Delta)len);
     for (l = 0; l < lcK_levels(C) && C->paths[l] == R.paths[l]; ++l) continue;
     l += (l == lcK_levels(C) && C->paths[l] == R.paths[l]);
-    l <= lcK_levels(C) ? lcD_rmrange(C, &R, l) : (void)lcD_rmleaf(C, len);
+    l <= lcK_levels(C) ? lcD_range(C, &R, l) : (void)lcD_leaf(C, len);
 }
 
 /* insertion */

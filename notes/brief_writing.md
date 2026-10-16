@@ -57,15 +57,26 @@
 ## 4. 命名
 
 - 每个库使用唯一前缀（如 `pt` / `lc` / `at` / `sp` / `ut` / `cg` / `tf` / `tm` / `comp`）；具体见对应 `notes/brief_*.md` / `notes/design_*.md`。
-- 公共 API `at_advance`；内部函数 `ptI_splitins`（`I` = 分类码）；函数宏同函数——所有函数名最多只能有一个下划线。
+- 公共 API `at_advance`；内部函数 `ptI_append`（`I` = 分类码）；函数宏同函数——所有函数名最多只能有一个下划线。
 - 库内类型 `pt_Node`（typedef 写两遍）；数据宏 `PT_OK`（不带名字空间）；分类码只属函数 / 宏，不进类型名。
 - 绑定层内部函数不带分类码——统一 `lpt_` / `ltf_` 前缀；Lua 绑定导出函数以 `L` 开头且不带分类码。
 - 内部函数必须符合 `ptX_name`：前缀 + 分类码 + 小写名，全名只能有一个下划线；带尾下划线的内部函数允许调用其他带尾下划线的内部函数。
-- 正例：`ptI_splitins`、`ptD_balancenode`、`ptC_freeze`；反例：`ptI_split_ins`、`ptD_rmrange_rt`。
 - 局部变量和参数禁止下划线；struct field 可以有下划线。
 - 例外：参数名镜像同名 struct field 并用于直接赋值时，允许保留该下划线（如 `ptA_alloc(..., size_t obj_size)` 形态）。
 - 内部类型名尽量不带大写分类码 / 命名空间；只有参考对象本身也带时才跟随参考对象。
 - 公共 API 名称不参与这条改名约束。
+
+### 4.1 分类码与函数名分工
+
+命名先看逻辑块的分类码代表什么：
+
+- **名词块**：分类码已表示主要对象。主入口若写成 `xxNoun_verbnoun`，去掉重复名词，写成 `xxNoun_verb`。名词块内并列多个 `verb1noun` / `verb2noun` 时统一去掉名词。
+- **动词块**：分类码已表示主要动作。主入口允许 `xxVerb_verb`，例如 `lcD_remove`、`spD_remove`。动词块内并列多个 `verbnoun1` / `verbnoun2` 时统一去掉动词，例如 `xxD_rmrange` / `xxD_rmleaf` -> `xxD_range` / `xxD_leaf`、`spF_filterrange` / `spF_filterleaf` -> `spF_range` / `spF_leaf`。
+- **同一对象、不同动词并列时，动词是区分信息，保留**。例如 `rt` 对象组保持 `fillrt` / `insertrt` / `flushrt`，`spF_fillrt` / `spF_appendrt` / `spF_flushrt` 也保持各自动词。
+- 只有整组都能转成有意义、不撞名、不造假同族的名字时才统一改名；否则整组保留。`appendrt` / `appendspan` / `append` 不能因为共享 `append` 就统一处理：`appendrt` 属于 `rt` 对象组，`appendspan` 属于 append 子流程。
+- 改名必须匹配库里既有的动词语义：`insert` = 插入后光标不动，`append` = 插入并让光标追尾到内容之后。名字与实际光标契约不符时必须改名，例如 piecetab 的插入主入口按实际语义叫 `ptI_append`，而不是 `ptI_insert`。
+
+- 正例：`ptI_append`、`ptI_insertrt`、`ptI_fillrt`、`ptD_balancenode`、`ptC_freeze`；反例：`ptI_split_ins`、`ptD_range_rt`。
 
 ## 5. struct field
 
@@ -103,10 +114,10 @@
 - 提交语义不切分自然逻辑中的连贯操作：`return` 前有两个平行 / 对称操作时，要么全部收进同一个 `return ..., PT_OK;`，要么全部留在 `return` 前，禁止只合并其中一个。
 - **C89 中 void 函数不允许 `return void_expr;`**；需要“调用 void helper 后按整数结果返回”时，可让 helper 返回 `int`（0/1 仅作提交语义），调用方写 `return helper(...), 0;`。判断能否删除该 `int` 的唯一前提是内部是否还需要这个 0/1 提交语义。
 - 尽量避免块状裸 return；纯块内裸 `return;` 与 `else` 的取舍按 §2 优先级。
-- `r = expr; if (r != status) ...` 这类“赋值后立即按状态判断”尽量内联为 `if ((r = ptD_rmrange(...)) != PT_OK) return r;`；NULL 查找同理 `if ((a = lookup(...)) == NULL) return err;`。
+- `r = expr; if (r != status) ...` 这类“赋值后立即按状态判断”尽量内联为 `if ((r = ptD_range(...)) != PT_OK) return r;`；NULL 查找同理 `if ((a = lookup(...)) == NULL) return err;`。
 - 指针特殊规则：`if ((v = expr) == NULL)` 因 `== NULL` 超 80，但 `if (!(v = expr))` 能放进 80 时允许 `!` 形式；其余情况优先显式 `== NULL` / `!= NULL`。
 - 相同逻辑组合的代码，合并后整行 ≤80 时允许用逗号表达式合并（可先在不改变逻辑的前提下重排让相近代码相邻）；不同步骤（先取指针、再用指针算位置）不硬并。
-- 同一逻辑的赋值 + `assert` + `(void)` 可按逗号表达式合并（如 `r = ptD_rmrange(...), assert(r == PT_OK), (void)r;`）；合并后若 `if` 块只剩这一条语句，去掉大括号。
+- 同一逻辑的赋值 + `assert` + `(void)` 可按逗号表达式合并（如 `r = ptD_range(...), assert(r == PT_OK), (void)r;`）；合并后若 `if` 块只剩这一条语句，去掉大括号。
 - `assert` 为保证后续使用不越界时尽量贴近使用处，优先级：① 使用处本就在逗号链中 → 插到紧邻该表达式之前；② 唯一更贴近的方式要额外加括号（如包进函数参数）→ 按可读性取舍；③ 使用点是 `[]` 下标，不能把逗号表达式放进下标 → 写在外面：`assert(i < cc), child = (pt_Node *)n->children[i];`
 - 循环内 `if (cond) break;` / `if (cond) continue;` 允许；能前置 / 重构时优先前置；禁止裸 `break;`/`continue;`。
 - 优先 `for` 样式：`init; while (cond) body, incr;` 应写成 `for (init; cond; incr) body;`。

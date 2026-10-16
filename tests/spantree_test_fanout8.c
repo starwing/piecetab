@@ -554,7 +554,7 @@ TEST(remove_mergeleft_foldbelowbal) {
     sp_freetree(t), sp_close(S);
 }
 
-/* rmleaf on a 5-leaf container: the rebalance fold loop returns at
+/* spD_leaf on a 5-leaf container: the rebalance fold loop returns at
  * the first level (the child stays healthy) */
 TEST(rebalance_healthy) {
     sp_State *S = sp_open(NULL, NULL);
@@ -577,7 +577,7 @@ TEST(rebalance_healthy) {
     sp_freetree(t), sp_close(S);
 }
 
-/* rmleaf dropping a 4-leaf container next to a full one: the rebalance
+/* spD_leaf dropping a 4-leaf container next to a full one: the rebalance
  * fold balances instead of merging (cL + cR > FANOUT) */
 TEST(rebalance_balance) {
     sp_State *S = sp_open(NULL, NULL);

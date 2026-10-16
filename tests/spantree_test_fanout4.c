@@ -1181,7 +1181,7 @@ TEST(traversal_edges) {
 }
 
 /* splice into an empty tree and splice that empties the whole tree
- * before re-inserting (onepiece paths in sp_splice) */
+ * before re-inserting (spI_onespan paths in sp_splice) */
 TEST(splice_edges) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t = sp_newtree(S);
@@ -1196,7 +1196,7 @@ TEST(splice_edges) {
     asserteq(n, 1);
     asserteq(ids[0], 0);
     asserteq(lens[0], 3);
-    /* wipe the whole tree then insert: remove empties, then onepiece */
+    /* wipe the whole tree then insert: remove empties, then spI_onespan */
     asserteq(sp_seek(&C, t, 0), SP_OK);
     asserteq(sp_splice(&C, 3, 2), SP_OK);
     asserteq(sp_bytes(t), 2);
@@ -1477,10 +1477,10 @@ TEST(remove_same_container) {
     sp_freetree(t), sp_close(S);
 }
 
-/* remove the last whole segment of the last container: rmleaf empties
+/* remove the last whole segment of the last container: spD_leaf empties
  * the container, rebalance folds it into the left sibling, and the
  * single-child root shrinks */
-TEST(rmleaf_rebalance) {
+TEST(leaf_rebalance) {
     sp_State *S = sp_open(NULL, NULL);
     sp_Tree  *t = sp_mkstreamV(
             sp_newtree(S), 1, 4, 2, 1, 3, 1, 3, 1, 3, 1, 0, 0);
@@ -1737,7 +1737,7 @@ TEST(remove_head) {
     sp_freetree(t), sp_close(S);
 }
 
-/* single-segment container removed whole at the tree tail: rmleaf
+/* single-segment container removed whole at the tree tail: spD_leaf
  * empties the container and rebalance folds it into the left neighbor */
 TEST(remove_drain) {
     sp_State *S = sp_open(NULL, NULL);

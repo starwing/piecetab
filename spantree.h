@@ -651,15 +651,14 @@ static void spD_stitch(sp_Cursor *C) {
     spM_up(C, spK_levels(C), 0);
 }
 
-static void spD_rmrange(sp_Cursor *L, sp_Cursor *R, int fl) {
+static void spD_range(sp_Cursor *L, sp_Cursor *R, int fl) {
     sp_Node *rt = L->tree->S->rt;
     int      k;
     for (k = 0; k < SP_MAX_LEVEL; ++k) spN_setcc(&rt[k], 0);
-    spD_trimright(L), spD_trimleft(R);
-    spD_cutrange(L, R, fl), spD_stitch(L);
+    spD_trimright(L), spD_trimleft(R), spD_cutrange(L, R, fl), spD_stitch(L);
 }
 
-static void spD_rmleaf(sp_Cursor *C, size_t del) {
+static void spD_leaf(sp_Cursor *C, size_t del) {
     sp_Node *p;
     int      l = spK_levels(C), i = spK_idx(C, p = spK_parent(C, l), l);
     int      cc = spN_cc(p), oc = cc;
@@ -690,12 +689,12 @@ static void spD_remove(sp_Cursor *C, size_t len) {
     R = *C, sp_advance(&R, (sp_Delta)len);
     if (sp_offset(&R) >= spK_bytes(&R)) spK_locend(&R);
     l = spD_diverlevel(C, &R);
-    l <= spK_levels(C) ? spD_rmrange(C, &R, l) : spD_rmleaf(C, len);
+    l <= spK_levels(C) ? spD_range(C, &R, l) : spD_leaf(C, len);
 }
 
 /* insertion */
 
-static void spI_onepiece(sp_Cursor *C, size_t len, sp_Id id) {
+static void spI_onespan(sp_Cursor *C, size_t len, sp_Id id) {
     sp_Node *r = &C->tree->root;
     spL_setid(r, 0, id), r->bytes[0] = len, r->mask[0] = 0;
     C->tree->bytes = len, C->paths[0] = &r->children[0], spN_setcc(r, 1);
@@ -830,7 +829,7 @@ static void spF_appendrt(sp_Cursor *C) {
     C->poff = 0, C->off = base + ins, C->paths[l] = &p->children[last + 1];
 }
 
-static int spF_filterleaf(sp_Cursor *C, size_t len, sp_Id in) {
+static int spF_leaf(sp_Cursor *C, size_t len, sp_Id in) {
     sp_Node *p, *rt = C->tree->S->rt;
     int      l = spK_levels(C), i = spK_idx(C, p = spK_parent(C, l), l);
     sp_Id    nid, oid = spL_id(p, i);
@@ -886,13 +885,13 @@ static void spF_append(sp_Cursor *C, sp_Id in, int n, int keep) {
 static int spF_peel(sp_Cursor *C, sp_Id in, int n, int k, int keep) {
     sp_Node *c, *rt = C->tree->S->rt;
     int      i, cn;
-    if (assert(n), k == 0) return spF_append(C, in, n, keep), 1;
+    if (assert(n), k == 0) return spF_append(C, in, n, keep), 0;
     for (i = 0; i < n; ++i) {
         c = rt[k].children[i], cn = spN_cc(c);
         spN_copy(&rt[k - 1], 0, c, 0, spN_setcc(&rt[k - 1], cn));
         spP_free(&C->tree->S->nodes, c), spF_peel(C, in, cn, k - 1, keep);
     }
-    return keep ? 1 : (spF_flushrt(&rt[k], n), 1);
+    return keep || (spF_flushrt(&rt[k], n), 1);
 }
 
 static void spF_peelleaf(sp_Cursor *C, sp_Cursor *R, sp_Id in) {
@@ -958,7 +957,7 @@ static void spF_cutright(sp_Cursor *C, int fl) {
     spM_up(C, fl - 1, -db);
 }
 
-static void spF_filterrange(sp_Cursor *C, sp_Cursor *R, int fl, sp_Id in) {
+static void spF_range(sp_Cursor *C, sp_Cursor *R, int fl, sp_Id in) {
     sp_Node **first = C->paths[fl], *rt = C->tree->S->rt;
     int       i, k, max, l = spK_levels(C);
     size_t    poffL = C->poff;
@@ -974,7 +973,7 @@ static void spF_filterrange(sp_Cursor *C, sp_Cursor *R, int fl, sp_Id in) {
     spD_stitch(C);
 }
 
-static int spF_appendvirt(sp_Cursor *C, sp_Id id, size_t len) {
+static int spF_virt(sp_Cursor *C, sp_Id id, size_t len) {
     int      cc, l = spK_levels(C);
     sp_Node *rt = C->tree->S->rt, *p = spK_parent(C, l);
     size_t   start = sp_offset(C), old = spK_bytes(C), pad = start - old;
@@ -1165,14 +1164,12 @@ SP_API int sp_fill(sp_Cursor *C, sp_Id id, size_t len) {
     if (len == 0) return SP_OK;
     r = spP_reserve(C->tree->S, &C->tree->S->nodes, 6 * spK_levels(C) + 7);
     if (r != SP_OK) return r;
-    if (sp_offset(C) >= spK_bytes(C))
-        return spF_appendvirt(C, id, len), spS_ok(C);
+    if (sp_offset(C) >= spK_bytes(C)) return spF_virt(C, id, len), spS_ok(C);
     i = spK_idx(C, p = spK_parent(C, spK_levels(C)), spK_levels(C));
-    if (len < p->bytes[i] - C->poff)
-        return spF_filterleaf(C, len, id), spS_ok(C);
+    if (len < p->bytes[i] - C->poff) return spF_leaf(C, len, id), spS_ok(C);
     r = sp_seek(&R, C->tree, sp_offset(C) + len), assert(r == SP_OK);
     if ((fl = spD_diverlevel(C, &R)) > spK_levels(C)) fl = spK_levels(C);
-    return spF_filterrange(C, &R, fl, id), spS_ok(C);
+    return spF_range(C, &R, fl, id), spS_ok(C);
 }
 
 SP_API int sp_clear(sp_Tree *T, int ns, sp_Id id) {
@@ -1195,7 +1192,7 @@ SP_API int sp_append(sp_Cursor *C, size_t ins) {
     start = sp_offset(C), old = spK_bytes(C);
     pad = start > old ? start - old : 0;
     if (spK_bytes(C) == 0)
-        return spI_onepiece(C, pad + ins, 0), C->poff = pad + ins, spS_ok(C);
+        return spI_onespan(C, pad + ins, 0), C->poff = pad + ins, spS_ok(C);
     r = spP_reserve(C->tree->S, &C->tree->S->nodes, 3 * spK_levels(C) + 4);
     if (r != SP_OK) return r;
     if (spI_grow(C, (sp_Delta)ins, 1))
@@ -1216,7 +1213,7 @@ SP_API int sp_insert(sp_Cursor *C, size_t ins) {
     r = spP_reserve(C->tree->S, &C->tree->S->nodes, 3 * spK_levels(C) + 4);
     if (r != SP_OK) return r;
     pad = start > old ? start - old : 0;
-    if (!old) return spI_onepiece(C, pad + ins, 0), C->poff = pad, spS_ok(C);
+    if (!old) return spI_onespan(C, pad + ins, 0), C->poff = pad, spS_ok(C);
     if (spI_grow(C, (sp_Delta)ins, 0)) return spS_ok(C);
     p = spK_parent(C, spK_levels(C)), i = spK_idx(C, p, spK_levels(C));
     if (C->poff > p->bytes[i]) C->poff = p->bytes[i];

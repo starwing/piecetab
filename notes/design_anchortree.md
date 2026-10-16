@@ -113,7 +113,7 @@ struct at_Tree {
 };
 ```
 
-- `at_State.rt[]` 是删除/stitch 的暂存根区，仅 `atD_rmrange` 使用；
+- `at_State.rt[]` 是删除/stitch 的暂存根区，仅 `atD_range` 使用；
   `at_reset`/`at_deltree` 不清它，它不作为持久状态。
 - `at_Tree.seam` 是本次删除/切割的幸存目标 edge；非 `NULL` 时 `atN_purge`
   把被回收叶子 edge 的两个桶逐槽搬到它上面，`NULL` 时直接回收。
@@ -285,14 +285,14 @@ typedef struct at_Cursor {
   桶 cur 写 fresh、LEFT 桶与 id0 保持；`advance=ins` 时 RIGHT 桶 cur 保持、
   LEFT 桶与 id0 写 fresh。`atI_splitpoint` 的 point 模式不改 cur，由
   `atI_addpoint`/`at_newanchor` 的 epoch 失效契约收口。
-  `atE_purge` 只服务 `at_delanchor`，不再触碰任何 Cursor。`atD_rmrange` 是
+  `atE_purge` 只服务 `at_delanchor`，不再触碰任何 Cursor。`atD_range` 是
   例外：仅当 `L->poff == 0`（L 零长末槽将被 purge、其桶前置到 seam）且旧
   `cur` 属于 L 桶时，才保留旧 `cur` 或改用 `left_end`；`L->poff > 0` 时一律
   fresh seam，避免越过 seam 新前插的 left 节点。
 - 结构 mutation 后 Cursor 现场：`at_remove`/`at_insert`/`at_append`/`at_splice`
   在操作内维护同一个 Cursor 并刷新 epoch，不调用 `at_locate`/`at_seek`
   事后归位；插入由 `atI_insert` 按 §7.1 的 `advance` 规则维护
-  paths/off/poff/cur；rmleaf 链不变；rmrange 按 §7.2 设置续扫槽。
+  paths/off/poff/cur；atD_leaf 链不变；atD_range 按 §7.2 设置续扫槽。
   `at_delanchor` 不维护 Cursor，旧 Cursor 失效；`at_newanchor` 成功递增
   epoch 但不刷新传入 Cursor，调用方须重新 seek/locate。
 - 空树归一：任何 mutation 出口若 `root.child_count == 0`，必须统一写
@@ -704,11 +704,11 @@ Rx 在 `atI_insert` 内部的分派：
   没有 spD_makechain 的 `from < 0` 新建 root 分支，stitch 内实际 node 分配
   总数 ≤ levels。
 - `fl = atD_diverlevel(C, &R)`。`fl > levels` 表示同 edge 删除：
-  `atD_rmleaf(C, del)` 只处理当前槽；桶链不变，Cursor 不清现场、不 rewind，
+  `atD_leaf(C, del)` 只处理当前槽；桶链不变，Cursor 不清现场、不 rewind，
   `cur` 继续有效。部分删除只改 bytes；整条 edge 删除时按现有
   首 edge/EOF 零长规则处理，并且只在 `i + 1 == cc` 时发生。
 - 跨 edge 时 `T->seam = atK_edge(&R)`，断言 seam 不是左边界 edge；
-  `atD_rmrange(C, &R, fl)` 用 `rt[]` 暂存 R 侧、trim 左右边界、cutrange purge
+  `atD_range(C, &R, fl)` 用 `rt[]` 暂存 R 侧、trim 左右边界、cutrange purge
   L 侧。`atN_purge` 通过 `atE_mvlink` 把被回收叶子 edge 的桶搬到 seam。
 - `atE_mvlink` 采用“块倒序、块内正序”的整块前插：单次遍历源链更新
   `anchor->start/end` 并找尾，尾接 dst 旧头，dst 头设为源链头；单块 O(源链长)，
@@ -716,10 +716,10 @@ Rx 在 `atI_insert` 内部的分派：
 - 释放顺序保持 cutrange/stitch 原序（L右 → R左 → 中间；
   `atD_stitchnode`/fold/rebalance 删除的节点已先清空，不再触发搬链）。
   `atD_stitch` 对 L 零长末槽的清理是最后一个搬链点；块前插使 L 的左右链位于
-  seam 每个桶最前，这是 rmrange 续扫不 skip 的前提。块间顺序除此之外不保证。
+  seam 每个桶最前，这是 atD_range 续扫不 skip 的前提。块间顺序除此之外不保证。
 - L 零长末槽清理写成 `atN_purge(...) + atN_setcc(p, cc - 1)`：L 已是最后一个
   槽，只需把链搬进 seam。
-- rmrange 不 rewind。`cur` 默认为 `{0,0}`；只有 `L->poff == 0` 且旧
+- atD_range 不 rewind。`cur` 默认为 `{0,0}`；只有 `L->poff == 0` 且旧
   `cur.id != 0` 时才可能沿用旧现场：
   - `L->poff > 0`：L edge 存活，其桶原地不动；删除后 Cursor 落 seam，
     `cur = {0,0}`，从 seam left 桶头重扫。seam 可能刚被前插了 left 节点，
@@ -734,18 +734,18 @@ Rx 在 `atI_insert` 内部的分派：
   完成，O(左链长)。
 - 删除后 `T->seam` 清回 `NULL`；`atD_remove` 返回 `AT_OK`。`at_remove` 只在真正
   发生 mutation 时递增 epoch 并刷新 C；`atD_remove` 内部不碰 epoch。
-- 空树归一：`atD_rmleaf`/`atD_rmrange`/`atD_remove` 任一出口若
+- 空树归一：`atD_leaf`/`atD_range`/`atD_remove` 任一出口若
   `root.child_count == 0`，统一写 `paths[0] = root.children; off = poff = 0;
   cur = atU_point(0, 1)`，并保持 `T->seam == NULL` 断言。
-- rmleaf/rmrange 返回时的现场不变量：`at_offset(C) == pos`；`atK_edge(C)` 必须是
+- atD_leaf/atD_range 返回时的现场不变量：`at_offset(C) == pos`；`atK_edge(C)` 必须是
   有效叶子槽；`cur.id != 0` 时其 anchor 端点 edge 必须等于 `atK_edge(C)`。
-  rmrange 成功返回时 `poff == 0`（`atD_stitch` 的 merge-leaf 步骤已把 poff 合进
+  atD_range 成功返回时 `poff == 0`（`atD_stitch` 的 merge-leaf 步骤已把 poff 合进
   off）；
-  rmleaf 保留原 `poff`。不再存在“允许 `cur.id` 与 `atK_edge(C)` 不同、
-  由 `at_next` 恢复”的例外；`at_splice`/`at_remove` 直接接在 rmrange 后使用时
+  atD_leaf 保留原 `poff`。不再存在“允许 `cur.id` 与 `atK_edge(C)` 不同、
+  由 `at_next` 恢复”的例外；`at_splice`/`at_remove` 直接接在 atD_range 后使用时
   依赖该不变量。
 - `atD_stitch` 末尾结构断言 `assert(cc != 0 && i < cc)` 及
-  `atD_stitch`/`atD_rmleaf` 的现场维护规则保持；不恢复 spD_stitch inline
+  `atD_stitch`/`atD_leaf` 的现场维护规则保持；不恢复 spD_stitch inline
   tail 修正。
 
 ### 7.3 `at_splice(C, del, ins)` 与公共 API
@@ -789,7 +789,7 @@ Rx 在 `atI_insert` 内部的分派：
 - 删除阶段按 §7.2；插入阶段按 §7.1。`atI_insert`/`atD_remove` 等内部 helper
   不检查、不递增 epoch；公共入口统一 `T->epoch += 1, C->epoch = T->epoch`，
   `at_splice` 只 bump 一次。
-- 删除与插入都不调用 `at_seek`/`at_locate` 事后归位：删除由 stitch/rmleaf
+- 删除与插入都不调用 `at_seek`/`at_locate` 事后归位：删除由 stitch/atD_leaf
   自维护并按 §7.2 设置 cur；插入由 `atI_insert` 按 §7.1 的 `advance` 规则维护
   paths/off/poff/cur。
 
@@ -935,7 +935,7 @@ Rx 在 `atI_insert` 内部的分派：
 | `atA_*`（`slot`/`alloc`/`free`/`fromid`/`clear`/`side`）   | 无                                         | 稠密 id 池与 freelist 属 anchortree 领域                                                                                                                      |
 | `atE_*`（`head`/`unlink`/`mvlink`/`next`/`first`/`purge`） | `spA_born`/`died`/`merge` + `spL_*` 读路径 | left/right 桶链表与空 edge 回收属领域                                                                                                                         |
 | `atK_*` + `at_next`                                        | `spK_*` + `sp_next`/`spN_findslot`         | `atK_forwardoff` 支持虚拟尾；`atK_fromedge` 是 edge 现场 helper                                                                                              |
-| `atD_*`                                                    | `spD_*`                                    | `makechain` 无 new-root、`findroom` 禁右兄弟、merge-leaf 步骤内联于 `stitch`（无 id/mask 合并）、`rmleaf` 整条 edge 删除必在末槽、`stitch` 以末尾结构断言收口 |
+| `atD_*`                                                    | `spD_*`                                    | `makechain` 无 new-root、`findroom` 禁右兄弟、merge-leaf 步骤内联于 `stitch`（无 id/mask 合并）、`atD_leaf` 整条 edge 删除必在末槽、`stitch` 以末尾结构断言收口 |
 | `atI_*`                                                    | `spI_*` + `sp_append`/`sp_insert`          | `splitroot`/`splitchild`/`makeroom` 同形；`insert` 合并 sp_append/sp_insert 的事务检查与 spI_grow 的当前 span 增长，空树转 `makefirst`，`advance` 提交两种 Cursor 终态；`growleft` 与 spI_growleft 同形，叶内/跨叶共用一趟下降，advance 在循环外选择两个提交变体；`split` 只做 insertion split，point split 由 `splitpoint` 服务 `atI_addpoint`；无 span id/mask |
 
 ## 十二、与其他树库的差异
@@ -989,10 +989,10 @@ edge，由 `atI_insert` 消费）、`atI_splitpoint`（返回新 edge，由
   语义。`atI_split` 只做 insertion split，按 RIGHT 桶迁移写 cur；
   `atI_splitpoint` 把新 edge 返回给 `atI_addpoint`。`atI_addpoint` 是第二个
   主入口，直接调用 `atI_splitpoint`。
-- 删除不集中 rewind：`atD_rmleaf` 链不变，`atD_rmrange` 按 §7.2 设置续扫槽；
+- 删除不集中 rewind：`atD_leaf` 链不变，`atD_range` 按 §7.2 设置续扫槽；
   `atE_purge` 不再有 Cursor 契约（只服务 `at_delanchor`，现场自成一体）。
 - remove 相关短 helper 按用户指定内联（`atD_trimright`/`atD_trimleft` →
-  `atD_rmrange`、merge-leaf 步骤 → `atD_stitch`），仅在不超 25 行且逻辑等价时
+  `atD_range`、merge-leaf 步骤 → `atD_stitch`），仅在不超 25 行且逻辑等价时
   执行。
 
 ### 12.4 领域差异（允许保留）

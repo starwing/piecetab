@@ -708,7 +708,7 @@ static void atD_stitch(at_Cursor *L, at_Node *rt) {
     assert(cc != 0 && atK_idx(L, p, l) < cc);
 }
 
-static void atD_rmrange(at_Cursor *L, at_Cursor *R, int fl) {
+static void atD_range(at_Cursor *L, at_Cursor *R, int fl) {
     at_Node *p, *rt = L->tree->S->rt;
     at_Point q, c = atU_point(0, 0);
     int      k, l, i;
@@ -724,7 +724,7 @@ static void atD_rmrange(at_Cursor *L, at_Cursor *R, int fl) {
     atD_cutrange(L, R, rt, fl), atD_stitch(L, rt), L->cur = c;
 }
 
-static void atD_rmleaf(at_Cursor *C, size_t del) {
+static void atD_leaf(at_Cursor *C, size_t del) {
     at_Node *p;
     int      l = atK_levels(C), i = atK_idx(C, p = atK_parent(C, l), l);
     int      cc = atN_cc(p), oc = cc;
@@ -762,9 +762,9 @@ static int atD_remove(at_Cursor *C, size_t del) {
         r = (at_offset(&R) == atK_bytes(C));
         assert(C->tree->seam != atK_edge(C));
         assert(r || C->tree->seam->parent->bytes[C->tree->seam->idx] > 0);
-        return atD_rmrange(C, &R, fl), C->tree->seam = NULL, AT_OK;
+        return atD_range(C, &R, fl), C->tree->seam = NULL, AT_OK;
     }
-    return atD_rmleaf(C, del), C->tree->seam = NULL, AT_OK;
+    return atD_leaf(C, del), C->tree->seam = NULL, AT_OK;
 }
 
 static int atE_purge(at_Tree *T, at_Edge *e) {

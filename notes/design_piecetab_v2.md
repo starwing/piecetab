@@ -78,7 +78,7 @@ levels = 3 的树：从 root 到 piece 共 levels+2 = 5 层
 ```
 
 **mask 维护铁律**：任何可能引入/移除 hole 的编辑操作，除 `ptM_up` 更新度量外，
-**必须调用 `ptM_remask` / `ptM_up` 沿 paths 向上传播 mask 位**。`ptI_splitins` 仅处理了度量，
+**必须调用 `ptM_remask` / `ptM_up` 沿 paths 向上传播 mask 位**。`ptI_append` 仅处理了度量，
 mask 上推由调用方负责。
 
 **不变量：位 ≥ cc 恒为 0** — cc 收缩处（`ptN_remove`、`ptD_balancenode`、
@@ -405,9 +405,9 @@ int  pt_remove(pt_Cursor *C, size_t len);
 
 - 同 `pt_insert`（literal 引用语义），但 cursor 追尾到插入内容之后
 - 适用于批量载入文件块（配合 mmap 或 scratch）
-- 实现上等价于 `pt_insert` + `pt_advance(len)`，但内部统一走 `ptI_splitins`
+- 实现上等价于 `pt_insert` + `pt_advance(len)`，但内部统一走 `ptI_append`
 
-**实现注意事项**：`ptI_splitins` 仅处理 `ptM_up`（度量），不做 `ptM_remask`（mask 传播）。`pt_edit` 和 `pt_append` 的调用方负责在 `ptI_splitins` 后调用 `ptM_remask` / `ptM_up`（见 §一.1 铁律）。
+**实现注意事项**：`ptI_append` 仅处理 `ptM_up`（度量），不做 `ptM_remask`（mask 传播）。`pt_edit` 和 `pt_append` 的调用方负责在 `ptI_append` 后调用 `ptM_remask` / `ptM_up`（见 §一.1 铁律）。
 
 **`pt_splice(C, del, s, len)`** — splice via literal（引用语义，追尾）
 

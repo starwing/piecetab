@@ -2221,7 +2221,7 @@ TEST(remove_brute2) {
     pt_close(S);
 }
 
-/* L1102-1103: tail rmleaf -> rebalance(l-1) -> foldnode balances leaves
+/* L1102-1103: tail ptD_leaf -> rebalance(l-1) -> foldnode balances leaves
    (4+1 > FANOUT so balancenode path, tree stays legal) */
 TEST(remove_fold_balance2) {
     pt_State *S = pt_open(&test_alloc, NULL);
@@ -2248,7 +2248,7 @@ TEST(remove_fold_balance2) {
     pt_close(S);
 }
 
-/* tail rmleaf -> rebalance -> foldnode merges leaves (2+1 <= FANOUT):
+/* tail ptD_leaf -> rebalance -> foldnode merges leaves (2+1 <= FANOUT):
    inner cc drops to 1 while root cc == 2; tree must stay legal */
 TEST(remove_fold_merge) {
     pt_State *S = pt_open(&test_alloc, NULL);
@@ -2424,7 +2424,7 @@ TEST(remove_stitch_overflow) {
     pt_close(S);
 }
 
-/* levels=1: single-leaf rmleaf folds the root's two leaf children.  The
+/* levels=1: single-leaf ptD_leaf folds the root's two leaf children.  The
    leaf boundary holds adjacent literals (legal across leaves, e.g. after
    compact); the fold splice point turns them into an in-leaf adjacency
    that foldnode never absorbs. */
@@ -2454,7 +2454,7 @@ TEST(remove_fold_adjacent_lit) {
    All construct in-leaf adjacent literals that are also physically
    contiguous (same origin buffer), then exercise the merge sites:
    case1 (append bridges prev), case2 (append bridges next),
-   splitins po==n (inserted data bridges the following piece). */
+   ptI_append po==n (inserted data bridges the following piece). */
 
 TEST(seam_insert_append_left) {
     static const char buf[] = "abcdefXYZ";
@@ -2548,7 +2548,7 @@ TEST(seam_remove_tail_shrink) {
     pt_Buffer         b = treeV(0, leafV(litV_(buf + 0, 3), litV_(buf + 4, 4)));
     pt_Cursor         c;
     pt_seek(&c, b, 5); /* inside "efgh", 4 bytes remain to the end */
-    asserteq(pt_remove(&c, 4), PT_OK); /* clamp: rmleaf tail-shrink last */
+    asserteq(pt_remove(&c, 4), PT_OK); /* clamp: ptD_leaf tail-shrink last */
     assertok(pt_checktree(c.tree));
     assertok(pt_checkcursor(&c, 5));
     pt_asserttree(c.tree, 0, leafV(litV_(buf + 0, 3), litV_(buf + 4, 2)));
@@ -3005,7 +3005,7 @@ TEST(edit_mid_split) {
     pt_Buffer b = pt_empty(S);
     pt_Cursor c;
     int       i;
-    /* hole with 12 bytes, insert 5 at middle -> 17 > CAP -> splitins */
+    /* hole with 12 bytes, insert 5 at middle -> 17 > CAP -> ptI_append */
     {
         static char splbuf[13];
         for (i = 0; i < 12; ++i) splbuf[i] = 'a';
@@ -4910,7 +4910,7 @@ TEST(remove_cow_deep) {
 }
 
 /* remove mid-piece from a literal in a deeply full tree;
- * triggers ptD_rmleaf splitroot+splitchild path (L1221-1222) */
+ * triggers ptD_leaf splitroot+splitchild path (L1221-1222) */
 TEST(remove_literal_mid_fulltree) {
     pt_State *S = pt_open(&test_alloc, NULL);
     /* build tree where every node (root to leaf) is full (cc=PT_FANOUT) */
@@ -4947,7 +4947,7 @@ TEST(remove_literal_mid_fulltree) {
     pt_close(S);
 }
 
-/* cov: ptD_rmleaf mid-literal split in a completely full tree */
+/* cov: ptD_leaf mid-literal split in a completely full tree */
 TEST(remove_cov_midsplit) {
     pt_State *S = pt_open(&test_alloc, NULL);
     pt_Buffer b;
@@ -5490,7 +5490,7 @@ TEST(compact_oom_makechain) {
     pt_close(S);
 }
 
-/* edit whose deletion stops mid-literal (rmleaf splits the piece): the
+/* edit whose deletion stops mid-literal (ptD_leaf splits the piece): the
  * cursor must not rest at a mid-tree piece end, and reads must run
  * through the delete point. See audit_pieceend_pt.md. */
 TEST(edit_pieceend_escape) {

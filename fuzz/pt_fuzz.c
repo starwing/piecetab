@@ -53,7 +53,7 @@ static unsigned fz_dseed; /* independent stream so replay reproduces */
 
 /* FZ_SEAM_PCT% of slices are placed immediately after the previous one,
  * producing physically-adjacent literals that exercise the seam-merge /
- * bridge paths (append merge, splitins bridge, remove exposure).  A gap
+ * bridge paths (append merge, ptI_append bridge, remove exposure).  A gap
  * of 16 bytes keeps the rest non-adjacent (the pre-seam-fix behaviour). */
 #ifndef FZ_SEAM_PCT
 # define FZ_SEAM_PCT 100

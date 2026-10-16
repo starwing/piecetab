@@ -57,7 +57,7 @@
 > （design_spantree.md §9.7，2026-08-16 定案）保证"id 进出树必过
 > arb"：新生 `arb(id, 0)`（写空段/分裂碎片/继承，必须原样返回
 > id）、死亡 `arb(0, id)`（合并/删除/trim 归零/freetree）、合并
-> `arb(id, old)`（出口双向计数；filterleaf 以保护 +1 防瞬态
+> `arb(id, old)`（出口双向计数；spF_leaf 以保护 +1 防瞬态
 > ref==0 误回收）。refcnt 全部 C 侧维护（无 Lua 调用路径）。
 
 ## 一、定位
@@ -380,7 +380,7 @@ lst_Cur userdata（v3 沿革，前缀 lst）
   `arb(id, old)` = 合并 → **出口无条件双向计数**：
   `ret != 0 → ++ref[ret]；old != 0 → --ref[old]`（先加后减，
   ret==old 净 0 自洽；时序结构问题已由 C 侧解决，无 ret!=old
-  分支）。filterleaf 的保护 +1（碎片预支）与早退 cancel（抵消
+  分支）。spF_leaf 的保护 +1（碎片预支）与早退 cancel（抵消
   保护）保留（§9.7）。
   **合成 id ref 0 → 回收**：id 槽入 freelist + 链头节点（a）ref--
   级联释放（链节点同为合成区槽，递归）；叶子（op/attr id）ref--
@@ -417,7 +417,7 @@ lst_Cur userdata（v3 沿革，前缀 lst）
 |---|---|---|
 | 新生（写空段/分裂碎片/继承） | `arb(id, 0)` | 返回值（= id）写入新块；arb 负责 ref++ |
 | 死亡（合并/删除/trim 归零/freetree） | `arb(0, id)` | 返回值（0）被丢弃（真清写写回 0）；arb 负责 ref-- |
-| 更新（合并） | `arb(id, old)` | **出口无条件双向计数**：`ret != 0 → ++ref[ret]；old != 0 → --ref[old]`（先加后减，ret==old 净 0）；filterleaf 以保护 `arb(old, 0)`（k≥1 碎片预支）+ 早退 cancel `arb(0, old)` 支撑时序（§9.7） |
+| 更新（合并） | `arb(id, old)` | **出口无条件双向计数**：`ret != 0 → ++ref[ret]；old != 0 → --ref[old]`（先加后减，ret==old 净 0）；spF_leaf 以保护 `arb(old, 0)`（k≥1 碎片预支）+ 早退 cancel `arb(0, old)` 支撑时序（§9.7） |
 | pad（虚拟段） | `arb(0, 0)` | 空操作，返回值与 mask 弃用 |
 
 **绑定层 arb 实现（伪代码定案）**：
@@ -455,7 +455,7 @@ arb(ud, in, old, mask):                    /* 三态合一 */
   链 hash = 沿途 (a, b) 对序列 FNV-1a——同构同 hash。
 - 链节点 churn：未命中建 k 个新槽（k = 构成数 ≤ 64）——槽
   freelist 复用，8B/槽。
-- ref 时序保证：filterleaf 在合并 arb 前先发保护 `arb(old, 0)`
+- ref 时序保证：spF_leaf 在合并 arb 前先发保护 `arb(old, 0)`
   （k≥1 碎片预支）→ 出口 --old 有保护垫底；早退时 cancel `arb(0,
   old)` 抵消保护（出口 ++ret/--old 净 0 + 保护 +1 + cancel -1 =
   净 0）；k=0 时出口归零 = 整段死亡（arb 保留 old 入链则建链的
@@ -664,7 +664,7 @@ id 到 ns mask 的解码；绑定层 `lst_merge` / `lst_sty` 只做薄转发。
 | arb 签名 (id, old, mask) | 绑定随迁（ltree_arb 四参，返回 sp_Id） | §9.2 |
 | arb(0,0) pad 语义回调 | 同 v1：in == 0 分支返回 0，返回值与 mask 弃用 | §3.2 |
 | sp_next/sp_prev/sp_style 值返回 | 绑定迁移值接收 + ns 透传（v1 编译已断，必迁） | §9.2 |
-| **id 生命周期（v4 新依赖）** | arb 三态契约（design_spantree §9.7）：树保证新生 arb(id,0)/死亡 arb(0,id)/合并 arb(id,old) 出口无条件双向计数 + filterleaf 保护/cancel | §3.2 |
+| **id 生命周期（v4 新依赖）** | arb 三态契约（design_spantree §9.7）：树保证新生 arb(id,0)/死亡 arb(0,id)/合并 arb(id,old) 出口无条件双向计数 + spF_leaf 保护/cancel | §3.2 |
 | 按 ns 查区间 | span(ns) = 拆解取该 ns 槽（attr id 输出；**inclusive 起始**——off 段命中）；next(ns)/prev(ns) = 游标推进（exclusive 段跳）；eph ns 走 sv_ 二分 | §9.2/§3.4 |
 | 按 ns 全树清 | comp:namespace(name, nil) = 各绑定树 sp_clear(T, nsn, CLEAR(ns))；eph = 各绑定树 sv_ 清空；ns 注册表移除 | §9.4 |
 | 编辑自动清 eph | 树 4 + 游标 4 编辑动词先 sv_resetall；普通 ns fill/clear 不清 | §3.4 |
@@ -751,7 +751,7 @@ id 到 ns mask 的解码；绑定层 `lst_merge` / `lst_sty` 只做薄转发。
   类 + Tree 类 + Cursor 类、span/styled/unmark、四元组返回、id
   失效语义注释；模块表 = Tree metatable 双形态说明）。
 - C 侧：spantree.h arb 三态契约与全量调用点（新生/死亡/合并出口
-  双向 + filterleaf 保护/cancel）+ 对应 fanout4/8 用例；
+  双向 + spF_leaf 保护/cancel）+ 对应 fanout4/8 用例；
   sp_stylemask 并入 sp_style（pmask 出参，NULL 跳过），C 测试改
   stylemask 用例。
 - `just lua/test` 全绿 + `just luals` 零诊断；**editor_test.lua

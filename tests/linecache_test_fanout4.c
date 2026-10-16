@@ -1328,7 +1328,7 @@ TEST(remove_basic) {
     lc_close(S);
 }
 
-/* len past the tree end clamps to the tail: rmleaf deletes the cursor's
+/* len past the tree end clamps to the tail: lcD_leaf deletes the cursor's
  * line to the leaf end (fuzz lc_remove_repro.txt) */
 TEST(remove_len_overtail) {
     lc_State *S = lc_open(&test_alloc, NULL);
