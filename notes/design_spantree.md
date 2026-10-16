@@ -225,17 +225,20 @@ style id 同款抽象。
 - `sp_checkcursor` 校验（pt/lc 同款）：offset >= bytes 豁免，否则
   poff < 段长
 
-### 7.3 seek/locate/advance 调用清单（例外论证，禁其余调用点）
+### 7.3 定位原语调用清单（例外论证，禁其余调用点）
 
 | 调用点 | 原语 | 理由 |
 |---|---|---|
 | sp_fill | sp_seek 构造 R | 构造区间右端；空树/树尾由 seek 落虚拟/树尾态 |
 | spD_remove | sp_advance(&R, len) | R 为 C 的栈副本，构造区间右端的自然原语 |
+| spD_remove | spK_locend(&R) | R 越尾时统一落树尾态 |
 | sp_clear | sp_seek(&C, T, 0) | 初始游标构造，非路径信息丢失 |
+| sp_next | spK_locend(C) | ns != 0 的 mask 剪枝可在非末段耗尽，树尾态由右脊下降重建（§7.5） |
+| sp_prev | spK_lochead(C) | ns != 0 的剪枝在树头前耗尽，树头态由左脊下降重建（§7.5） |
 
-内部 Cursor helper 已全部改为相对维护：sp_prev 树头回退用
-spK_lochead；sp_insert 用 spK_backwardoff 回插入点；sp_clear 不重定位
-Cursor——全程无 locate/forwardoff/locend。
+内部 Cursor helper 一律相对维护：sp_insert 用 spK_backwardoff 回插入
+点，sp_clear 不重定位 Cursor，编辑路径的落点收尾用
+spK_forwardoff/backwardoff。定位原语只出现在上表各处。
 
 **sp_advance 实现**：advance = 相对 seek，不调 sp_locate。空树不再是
 no-op——spantree 越尾进虚拟态，advance(5) 空树 = 虚拟 offset 5，与
@@ -271,11 +274,15 @@ backwardoff(off)；否则 backwardoff(-d)——虚拟起点经 backwardoff 天�
   一匹配段，返回整段 plen = 段长、**落匹配段头**（poff = 0）；树尾/
   虚拟/空树（poff >= 段长）返 SP_NONE。匹配判定 =
   `(段 mask & bit(ns-1)) != 0`
+- **next 耗尽出口**：`ns == 0` 时无剪枝，上升到根即证明当前段就是树
+  尾段，出口以当前段长直接提交尾坐标（`poff = bc`，`off` 保持尾段起
+  点）；`ns != 0` 时剪枝可停在非末段，出口用 `spK_locend` 沿右脊重建
+  树尾态。两条路径的出口态逐字段一致
 - **消费循环**：`style 预查当前段（mask 判定）→ 处理 → next 步进`——
   peek 恒可用，无死循环，非匹配子树经 next 剪枝跳过
 - **prev(ns≠0)**：poff > 0 时当前段匹配 → 返回当前段（plen = poff，
-  落段头）；不匹配或段头 → 向前单步循环；树头返 SP_NONE。prev(0) =
-  同款
+  落段头）；不匹配或段头 → 向前单步循环；树头返 SP_NONE（树头态由
+  `spK_lochead` 重建，该出口只由 ns != 0 的剪枝到达）。prev(0) = 同款
 - **树内严禁段尾态**：API 返回时光标不得处于树中段尾（poff == 段长
   且 offset < bytes）；编辑 API 出口 forwardoff(0) 收尾，树尾态豁免
 - **“ns 已完全消失”通知 = 存在性检查**：消费循环首轮零匹配即消失，

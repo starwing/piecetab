@@ -1,6 +1,6 @@
 # Roadmap
 
-> 当前状态（2026-08-30 更新）：
+> 当前状态（2026-10-16 更新）：
 > - 核心 C 库已落地：linecache / piecetab / undotree / cellgrid / termfeed /
 >   spantree / **textmatch**，均为 Clean C 单头 + 测试/CI/覆盖率。
 > - editor.lua 已完成多层高亮、spantree/vtext、LSP 集成、光标同步与渲染整理。
@@ -64,15 +64,22 @@
       block 链表，close/reset 时释放仍存活树的 arena，不再要求调用方先
       `pt_release` 所有 buffer。
 
+## 已完成（2026-10）
+
+### 树库尾定位（nextedge 家族）
+
+- [x] 无后继出口统一为「能证明当前槽就是树尾槽就直接提交，否则重建尾
+      态」：anchortree `atK_nextedge` 上升结束即证明当前 edge 是树尾
+      edge，直接用当前 edge 的 `bc` 提交尾坐标并写 done `{0,1}`；piecetab
+      `pt_next` 早已是直接提交（无 mask 剪枝）；spantree `sp_next` 的
+      `ns == 0` 出口同样直接提交，`ns != 0` 保留 `spK_locend` 沿右脊重建
+      树尾态（mask 剪枝可停在非末段，直接提交会把后续写入落到文档中
+      间）；linecache 无同类函数（行导航是 `lcK_forwardline` 单调下降）。
+- [x] `*K_locend` / `*K_lochead` 保留给 seek/locate/advance 与导航耗尽
+      出口；spantree 定位原语调用点清单见 `notes/design_spantree.md` §7.3。
+
 ## 下一步候选（未完成）
 
-- **各树库 `*K_nextedge` 尾定位简化**：anchortree `atK_nextedge` 的
-  `l < 0` 分支已改为直接 `C->poff = bc`、`C->cur = {0,1}`：上升过程结束
-  意味着 `paths/off` 已指向最后一条 edge，由当前 edge 的 `bc` 提交尾坐标
-  即可。spantree.h 的 `sp_next`（`if (--l < 0) return spK_locend(C), ...`）
-  应同步检查/应用；linecache.h / piecetab.h 中同类 `*K_locend` 调用若也由
-  对应 nextedge 循环到达，同样评估。`*K_locend` 仍供 locate/advance 使用，
-  保留。
 - **多返回值内部 helper 跨库统一**：`atD_balancenode` / `spD_balancenode`
   当前均为 `int d + <Delta> *ds`；计划改为调用方计算 `d`、helper 单返回 `ds`，
   需 anchortree / spantree / piecetab / linecache 等所有树库同步修改。

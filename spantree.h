@@ -263,9 +263,6 @@ static int spP_reserve(sp_State *S, sp_Pool *p, size_t n) {
 static void spA_died(sp_Tree *T, sp_Id id)
 { sp_Mask m = 0; if (T->arb && id) (void)T->arb(T->aud, 0, id, &m); }
 
-static sp_Id spN_none(size_t *plen)
-{ return (void)(plen && (*plen = 0)), SP_NONE; }
-
 static size_t spN_sumbytes(const sp_Node *n, int i, int end)
 { size_t s = 0; for (; i < end; ++i) s += n->bytes[i]; return s; }
 
@@ -1031,6 +1028,9 @@ SP_API int sp_hasns(const sp_Mask *m, int ns)
 
 SP_API int sp_valid(const sp_Cursor *C)
 { return C && C->tree && C->epoch == C->tree->epoch; }
+
+static sp_Id spS_none(size_t *plen)
+{ return (void)(plen && (*plen = 0)), SP_NONE; }
 /* clang-format on */
 
 SP_API size_t sp_bytes(const sp_Tree *t) { return t ? t->bytes : 0; }
@@ -1104,14 +1104,15 @@ SP_API sp_Id sp_next(sp_Cursor *C, int ns, size_t *plen) {
     int      i, l;
     size_t   bc;
     sp_Node *p;
-    if (!sp_valid(C)) return spN_none(plen);
-    if (spK_bytes(C) == 0 || (ns && !spM_check(ns))) return spN_none(plen);
+    if (!sp_valid(C)) return spS_none(plen);
+    if (spK_bytes(C) == 0 || (ns && !spM_check(ns))) return spS_none(plen);
     bit = ns ? spM_bit(ns) : 0;
     l = spK_levels(C), i = spK_idx(C, p = spK_parent(C, l), l);
-    if (C->poff >= p->bytes[i]) return spN_none(plen);
+    if (C->poff >= p->bytes[i]) return spS_none(plen);
     bc = p->bytes[i];
     while ((i = spN_findslot(p, i + 1, 1, bit, &bc)) == spN_cc(p)) {
-        if (--l < 0) return spK_locend(C), spN_none(plen);
+        if (--l < 0)
+            return (bit ? spK_locend(C) : (C->poff = bc)), spS_none(plen);
         i = spK_idx(C, p = spK_parent(C, l), l);
     }
     C->paths[l] = &p->children[i];
@@ -1126,15 +1127,15 @@ SP_API sp_Id sp_prev(sp_Cursor *C, int ns, size_t *plen) {
     size_t   bc = 0;
     int      i, l;
     sp_Node *p;
-    if (!sp_valid(C)) return spN_none(plen);
-    if (spK_bytes(C) == 0 || (ns && !spM_check(ns))) return spN_none(plen);
+    if (!sp_valid(C)) return spS_none(plen);
+    if (spK_bytes(C) == 0 || (ns && !spM_check(ns))) return spS_none(plen);
     bit = ns ? spM_bit(ns) : 0;
     l = spK_levels(C), i = spK_idx(C, p = spK_parent(C, l), l);
     if (C->poff > 0 && (!bit || (p->mask[i] & bit)))
         return (void)(plen && (*plen = C->poff)), C->poff = 0, spL_id(p, i);
-    if (C->off == 0) return (C->poff = 0), spN_none(plen);
+    if (C->off == 0) return (C->poff = 0), spS_none(plen);
     while ((i = spN_findslot(p, i - 1, -1, bit, &bc)) < 0) {
-        if (--l < 0) return assert(bit), spK_lochead(C), spN_none(plen);
+        if (--l < 0) return assert(bit), spK_lochead(C), spS_none(plen);
         i = spK_idx(C, p = spK_parent(C, l), l);
     }
     C->paths[l] = &p->children[i];
@@ -1148,9 +1149,9 @@ SP_API sp_Id sp_style(sp_Cursor *C, size_t *plen, sp_Mask *pmask) {
     sp_Node *p;
     int      i;
     if (pmask) *pmask = 0;
-    if (!sp_valid(C) || spK_bytes(C) == 0) return spN_none(plen);
+    if (!sp_valid(C) || spK_bytes(C) == 0) return spS_none(plen);
     i = spK_idx(C, p = spK_parent(C, spK_levels(C)), spK_levels(C));
-    if (C->poff >= p->bytes[i]) return spN_none(plen);
+    if (C->poff >= p->bytes[i]) return spS_none(plen);
     if (plen) *plen = p->bytes[i] - C->poff;
     if (pmask) *pmask = p->mask[i];
     return spL_id(p, i);

@@ -977,8 +977,11 @@ edge，由 `atI_insert` 消费）、`atI_splitpoint`（返回新 edge，由
 - `at_locate`/`at_next`/`atK_nextedge`/`atI_splitroot`/`atI_splitchild`/
   `atI_makeroom` 与 sp 对应函数同形；`at_next` 的桶扫描与 `atK_nextedge`
   在 anchortree 内合并为“bucket 扫描 + edge 提交”两层，`sp_next` 则用
-  `spN_findslot` + `spK_locend` 单函数完成；两者语义一致，形态差异来自
-  edge bucket 表示。无后继时 `atK_nextedge` 直接写 done。
+  `spN_findslot` 单函数完成；两者语义一致，形态差异来自 edge bucket 表示。
+- 无后继出口：edge 层无 mask 剪枝，上升结束即证明当前 edge 是树尾 edge，
+  `atK_nextedge` 用当前 edge 的 `bytes` 直接提交尾坐标并写 done `{0,1}`；
+  `sp_next` 的 mask 剪枝可在非末段耗尽，`ns != 0` 时用 `spK_locend` 沿右脊
+  重建树尾态，`ns == 0` 时与 anchortree 同款直接提交（design_spantree §7.5）。
 - 插入由一个内部主入口 `atI_insert(ins, advance)` 维护 paths/off/poff/cur：
   空树转 `atI_makefirst`，当前 span 增长内联，按 Rx 直接选择 `atI_growleft`
   或 `atI_split`。`atI_insert` 的当前 span 增长与 `spI_grow` 同形；`advance`
