@@ -260,9 +260,7 @@ struct tf_State {
     int  buf_len;
     char buf[TF_MAX_BUFLEN];
 
-    /* replay: residual bytes re-parsed as fresh input (flush / CSI overflow /
-     * SS3 reject). Source sits at tail: buf[TF_MAX_BUFLEN - replay .. -1]
-     * 0 = none. */
+    /* replay: residual bytes re-parsed as fresh input; 0 = none */
     int replay;
 
     /* control string / kitty text buffer */
@@ -276,8 +274,7 @@ struct tf_State {
     tf_Reader  *reader; /* current reader (tf_feed) */
     void       *reader_ud;
 
-    /* tf_waitkey: read target, injected via tf_feed -- standard chunk
-     * path, not a separate input source */
+    /* tf_waitkey: read target injected via tf_feed, not a source */
     tf_WaitCtx wait;
 };
 
@@ -484,8 +481,7 @@ static int tfT_feed(tf_State *S, tf_Key *key, int b) {
     struct tf_Node *n = S->node, *child;
     int             restart = S->state == TF_STATE_ESCAPE && b == 0x1b;
     if (!n || restart) {
-        /* IDLE matches from any first byte; the ESCAPE+ESC ALT-peel
-         * also starts a fresh sequence at the root */
+        /* IDLE matches any first byte; ESC+ESC ALT-peel restarts */
         if (S->state != TF_STATE_IDLE && !restart) return 0;
         if (!(n = S->root)) return 0;
     }

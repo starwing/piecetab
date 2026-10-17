@@ -69,6 +69,39 @@ LC_STATIC void lc_restorepages(lc_Pool *p, void *saved) {
     *tail = (char *)p->pages, p->pages = saved;
 }
 
+/* lcT_keep -- install only the first n objects of a drained chain as the
+ * whole freelist; the remainder stays in *d for lc_refillpool.  The count is
+ * honest, so a reserve asking for n early-returns instead of topping the pool
+ * up: the real chain is the budget the operation must live within, and one
+ * draw past its end trips the lcP_ralloc check. */
+LC_STATIC void lcT_keep(lc_Drain *d, lc_Pool *p, size_t n) {
+    void **pp = &d->chain;
+    size_t take = 0;
+    assertok(n > 0 && d->count >= n);
+    while (take < n && *pp) pp = (void **)*pp, take += 1;
+    p->freed = d->chain, p->freed_obj = take;
+    d->count -= take, d->chain = *pp, *pp = NULL;
+}
+
+/* lcT_ones -- scanner of one-byte lines: *n lines, then stop.  A 1-byte line
+ * keeps every byte/line metric equal, so fixtures read in either unit. */
+LC_STATIC unsigned lcT_ones(void *ud, size_t prev) {
+    size_t *n = (size_t *)ud;
+    (void)prev;
+    return *n ? (*n -= 1, 1u) : 0;
+}
+
+/* lcT_assertfullpath -- the cursor path is fully saturated: every node it
+ * passes is at LC_FANOUT and its leaf holds LC_LEAF_FANOUT lines */
+LC_STATIC void lcT_assertfullpath(lc_Cursor *C) {
+    lc_Node *p;
+    int      l, i = 0;
+    for (l = 0; l <= lcK_levels(C); ++l)
+        asserteq(lcN_cc(lcK_parent(C, l)), LC_FANOUT);
+    p = lcK_parent(C, lcK_levels(C)), i = lcK_idx(C, p, lcK_levels(C));
+    asserteq((int)p->breaks[i], (int)LC_LEAF_FANOUT);
+}
+
 /* ================================================================ */
 /*  tree invariant checker                                           */
 /* ================================================================ */
@@ -111,6 +144,10 @@ LC_STATIC int lc_checknode(const lc_Node *n, int rl, int mc) {
 
 LC_STATIC int lc_checktree_allow_empty(const lc_Cache *c, int allow_empty) {
     size_t bsum, lsum;
+    /* levels > 0 forbids a single-child root (allow_empty: OOM fixtures) */
+    if (!allow_empty && c->levels > 0)
+        check(c->root.child_count >= 2, "[chk] ROOT cc=%u < 2 at levels=%u\n",
+              c->root.child_count, c->levels);
     if (c->root.child_count == 0) {
         check(c->bytes == 0 && c->breaks == 0,
               "[chk] EMPTY tree has bytes=%lu brs=%lu\n", test_lu(c->bytes),
@@ -236,6 +273,67 @@ LC_STATIC void lc_dumpcursor(const lc_Cursor *C, const char *tag) {
                 (void *)*C->paths[l], test_lu(p->bytes[i]),
                 test_lu(p->breaks[i]));
     }
+}
+
+/* --------- lc_serial: canonical text image of the whole tree ------- */
+
+/* full tree image (shape + metrics + document); buf holds LC_SERIAL_CAP */
+#define LC_SERIAL_CAP 65536
+
+LC_STATIC char *lc_serial_num(char *pp, size_t v) {
+    char tmp[24];
+    int  n = 0;
+    do tmp[n++] = (char)('0' + (v % 10)), v /= 10;
+    while (v);
+    while (n) *pp++ = tmp[--n];
+    return pp;
+}
+
+LC_STATIC char *lc_serial_str(char *pp, const char *s) {
+    while (*s) *pp++ = *s++;
+    return pp;
+}
+
+LC_STATIC char *lc_serial_metric(const lc_Node *p, char *pp) {
+    int i;
+    for (i = 0; i < lcN_cc(p); ++i) {
+        pp = lc_serial_str(pp, "|"), pp = lc_serial_num(pp, p->bytes[i]);
+        pp = lc_serial_str(pp, "/"), pp = lc_serial_num(pp, p->breaks[i]);
+    }
+    return lc_serial_str(pp, "|");
+}
+
+LC_STATIC char *lc_serial_lines(const lc_Node *p, char *pp) {
+    int i, j;
+    for (i = 0; i < lcN_cc(p); ++i) {
+        const lc_Leaf *lf = (const lc_Leaf *)p->children[i];
+        for (j = 0; j < (int)p->breaks[i]; ++j)
+            pp = lc_serial_num(pp, lf->bytes[j]), *pp++ = ',';
+    }
+    return pp;
+}
+
+LC_STATIC char *lc_serial_(const lc_Node *p, int l, char *pp, char *end) {
+    int i;
+    pp = lc_serial_str(pp, "N"), pp = lc_serial_num(pp, (size_t)lcN_cc(p));
+    pp = lc_serial_metric(p, pp);
+    if (l == 0)
+        pp = lc_serial_lines(p, pp);
+    else
+        for (i = 0; i < lcN_cc(p); ++i)
+            pp = lc_serial_(p->children[i], l - 1, pp, end);
+    assert(pp < end);
+    return pp;
+}
+
+LC_STATIC size_t lc_serial(const lc_Cache *c, char *buf) {
+    char *pp = buf, *end = buf + LC_SERIAL_CAP;
+    pp = lc_serial_str(pp, "T"), pp = lc_serial_num(pp, c->levels);
+    pp = lc_serial_str(pp, "/"), pp = lc_serial_num(pp, c->bytes);
+    pp = lc_serial_str(pp, "/"), pp = lc_serial_num(pp, c->breaks);
+    pp = lc_serial_str(pp, "|");
+    pp = lc_serial_(&c->root, c->levels, pp, end);
+    return *pp = 0, (size_t)(pp - buf);
 }
 
 /* ================================================================ */
@@ -401,6 +499,42 @@ LC_STATIC lc_Cache *cacheV(lc_State *S, unsigned levels, lc_Node *root) {
     lc_checktree_allow_empty(c, 1);
     return assert(c), c;
 }
+
+/* lcT_satnode -- saturated subtree: depth 0 is a full leaf holder
+ * (LC_FANOUT leaves of LC_LEAF_FANOUT one-byte lines), each extra level stacks
+ * LC_FANOUT saturated children and recomputes the metrics */
+LC_STATIC lc_Node *lcT_satnode(lc_State *S, int depth) {
+    lc_Node *n = (lc_Node *)lcP_alloc(S, &S->nodes);
+    int      i, k;
+    assertok(n != NULL);
+    lcN_setcc(n, LC_FANOUT);
+    for (i = 0; i < LC_FANOUT; ++i) {
+        if (depth == 0) {
+            lc_Leaf *lf = (lc_Leaf *)lcP_alloc(S, &S->leaves);
+            assertok(lf != NULL);
+            for (k = 0; k < LC_LEAF_FANOUT; ++k) lf->bytes[k] = 1;
+            n->children[i] = (lc_Node *)lf;
+            n->bytes[i] = LC_LEAF_FANOUT;
+            n->breaks[i] = LC_LEAF_FANOUT;
+        } else {
+            lc_Node *c = lcT_satnode(S, depth - 1);
+            n->children[i] = c;
+            n->bytes[i] = lcN_sumbytes(c, 0, lcN_cc(c));
+            n->breaks[i] = lcN_sumbreaks(c, 0, lcN_cc(c));
+        }
+    }
+    return n;
+}
+
+/* lcT_sattree -- saturated tree with the given depth above the leaves (1 or 2):
+ * every node on any cursor path is full and so is its leaf, the worst case for
+ * lcB_makeroom (root split plus one split per level) and for the stitch root
+ * extension */
+LC_STATIC lc_Cache *lcT_sattree_(lc_State *S, int depth) {
+    return cacheV(S, (unsigned)depth, lcT_satnode(S, depth));
+}
+
+#define lcT_sattree(S) lcT_sattree_((S), 1)
 
 /* fix the fxxking stupid clang-analyzer-core.UndefinedBinaryOperatorResult */
 #define lc_nonnull(x) (assert((x) != NULL), (x))

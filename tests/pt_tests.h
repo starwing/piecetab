@@ -52,11 +52,26 @@ PT_STATIC void pt_refillpool(pt_Pool *p, pt_Drain d) {
     p->freed = d.chain, p->freed_obj += d.count;
 }
 
+/* pt_keep -- install only the first n objects of a drained chain as the
+ * whole freelist; the rest stays in *d for pt_refillpool.  The count is
+ * honest, so a reserve asking for n early-returns instead of topping the
+ * pool up: the real chain is the budget the operation must live within,
+ * and one draw past its end trips the ptP_ralloc check. */
+PT_STATIC void pt_keep(pt_Drain *d, pt_Pool *p, size_t n) {
+    void **pp = &d->chain;
+    size_t take = 0;
+    assert(n > 0 && d->count >= n);
+    while (take < n && *pp) pp = (void **)*pp, take += 1;
+    p->freed = d->chain, p->freed_obj = take;
+    d->count -= take, d->chain = *pp, *pp = NULL;
+}
+
 /* ================================================================ */
 /*  tree invariant checker                                           */
 /* ================================================================ */
 
-PT_STATIC int pt_checknode(const pt_Node *n, int rl, int mc, int *has_hole) {
+PT_STATIC int pt_checknode(
+        const pt_Node *n, int rl, int mc, int ae, int *has_hole) {
     int i, hh;
     check(n->child_count >= mc, "[chk] N[%p] rl=%d cc=%d<%d\n", (void *)n, rl,
           n->child_count, mc);
@@ -76,17 +91,20 @@ PT_STATIC int pt_checknode(const pt_Node *n, int rl, int mc, int *has_hole) {
                 if (i > 0 && !ptM_ishole(n, i - 1)
                     && ptN_lit(n, i - 1) + n->bytes[i - 1] == ptN_lit(n, i)) {
                     int j;
-                    test_log("[chk] ADJACENT literals i=%d,%d node=%p:",
-                             i - 1, i, (void *)n);
+                    test_log(
+                            "[chk] ADJACENT literals i=%d,%d node=%p:", i - 1,
+                            i, (void *)n);
                     for (j = 0; j < n->child_count; ++j)
-                        test_log(" [%p,%lu]", (const void *)n->children[j],
-                                 test_lu(n->bytes[j]));
+                        test_log(
+                                " [%p,%lu]", (const void *)n->children[j],
+                                test_lu(n->bytes[j]));
                     return test_log("\n"), 0;
                 }
             }
         } else {
             pt_Node *c = n->children[i];
-            if (!pt_checknode(c, rl - 1, mc ? PT_FANOUT / 2 : 0, &hh)) return 0;
+            if (!pt_checknode(c, rl - 1, ae ? 0 : PT_FANOUT / 2, ae, &hh))
+                return 0;
             check(n->bytes[i] == ptN_sumbytes(c, 0, c->child_count),
                   "[chk] INNER rl=%d i=%d bytes=%lu sum=%lu node=%p\n", rl, i,
                   test_lu(n->bytes[i]),
@@ -108,8 +126,11 @@ PT_STATIC int pt_checktree_allow_empty(pt_Buffer snap, int allow_empty) {
         check(snap->bytes == 0, "[chk] EMPTY tree has bytes=%lu\n",
               test_lu(snap->bytes));
     } else if (snap->levels > 0 || snap->root.child_count > 1)
+        /* a non-leaf root keeps more than one child (the root is exempt
+         * from the half-full rule, like every B-tree root) */
         return pt_checknode(
-                &snap->root, snap->levels, allow_empty ? 0 : 1, &hh);
+                &snap->root, snap->levels,
+                snap->levels ? 2 : (allow_empty ? 0 : 1), allow_empty, &hh);
     else {
         if (ptM_ishole(&snap->root, 0)) {
             check(snap->root.bytes[0] > 0

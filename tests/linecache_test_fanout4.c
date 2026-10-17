@@ -1398,70 +1398,300 @@ TEST(remove_foldroot) {
     lc_close(S);
 }
 
-/* OOM before mutation: lc_remove must reserve nodes up front.  Cross-leaf
- * remove with the nodes pool drained makes lcD_stitch's reserve fail; the
- * old code hit that reserve only after trim/cutrange had already mutated
- * the tree, so the assert in lcD_stitch aborted on a half-deleted tree. */
-TEST(remove_oom_prereserve) {
+/* foldnode(0) can drop cc(root) 2->1 after the mid-loop shrinkroot */
+TEST(remove_shrinkroot_after_fold) {
     lc_State *S = lc_open(&test_alloc, NULL);
     lc_Cache *c = lc_newcache(S);
     lc_Cursor C;
-    void     *pn;
-    int       oom = 0, r;
-    size_t    bytes, breaks, snb;
-
-    lc_rscanV(c, 8, 10); /* two leaves, cross-leaf remove frees no nodes */
+    unsigned  lens[] = {5, 3, 6, 1, 5, 3, 2, 5, 2, 3, 5, 3,
+                        6, 5, 3, 1, 6, 2, 6, 2, 4, 3, 0};
+    unsigned *p = lens;
+    lc_scan(c, lc_scanner, &p);
+    asserteq(lc_bytes(c), 81);
+    asserteq(lc_breaks(c), 22);
+    lc_seek(&C, c, 56);
+    asserteq(lc_remove(&C, 52), LC_OK);
     assertok(lc_checktree(c));
-    bytes = lc_bytes(c), breaks = lc_breaks(c), snb = S->nodes.live_obj;
-    (void)lc_drainpool(&S->nodes);
-    pn = S->nodes.pages;
-    S->nodes.pages = NULL;
-    lc_seek(&C, c, 5);
-    S->allocf = oom_alloc;
-    S->alloc_ud = &oom;
-    r = lc_remove(&C, 40);
-    S->allocf = test_alloc;
-    S->alloc_ud = NULL;
-    asserteq(r, LC_ERRMEM);
-    asserteq(lc_bytes(c), bytes);
-    asserteq(lc_breaks(c), breaks);
-    asserteq(S->nodes.live_obj, snb);
-    assertok(lc_checktree(c));
-    assertok(lc_checkcursor(&C, 5));
-    lc_restorepages(&S->nodes, pn);
+    assertok(lc_checkcursor(&C, 56));
+    lc_asserttree(
+            c, 0,
+            botV(leafV(5, 3, 6, 1), leafV(5, 3, 2, 5), leafV(2, 3, 5),
+                 leafV(3, 6, 5)));
     lc_delcache(S, c);
     lc_close(S);
 }
 
-/* lc_splice must propagate the remove OOM instead of asserting after a
- * partially-deleted tree. */
-TEST(splice_oom_remove) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c = lc_newcache(S);
-    lc_Cursor C;
-    void     *pn;
-    int       oom = 0, r;
-    size_t    bytes, breaks;
+/* ---- reserve exactness, measured on the public API ----
+ *
+ * Each need test hands the pool exactly the budget the reserve asks for, with
+ * page allocation dead, so the reserve early-returns and the operation itself
+ * has to live on that chain: the lcP_ralloc check is the judge and one draw
+ * past the end trips it.  A case that leaves the chain empty drew the whole
+ * budget, so the budget cannot be too small; a case with one object less must
+ * be refused with the tree untouched, so it cannot be too large. */
 
-    lc_rscanV(c, 8, 10);
-    assertok(lc_checktree(c));
-    bytes = lc_bytes(c), breaks = lc_breaks(c);
-    (void)lc_drainpool(&S->nodes);
-    pn = S->nodes.pages;
-    S->nodes.pages = NULL;
-    lc_seek(&C, c, 5);
-    S->allocf = oom_alloc;
-    S->alloc_ud = &oom;
-    r = lc_splice(&C, 40, 0);
-    S->allocf = test_alloc;
-    S->alloc_ud = NULL;
-    asserteq(r, LC_ERRMEM);
-    asserteq(lc_bytes(c), bytes);
-    asserteq(lc_breaks(c), breaks);
-    assertok(lc_checktree(c));
-    assertok(lc_checkcursor(&C, 5));
-    lc_restorepages(&S->nodes, pn);
+/* append: the stitch may extend the root, so the budget is levels + 2.  The
+ * witness is a saturated tree with the cursor inside the second leaf of the
+ * last bottom node: cutleaf splits that leaf, mergeleaf cannot take the tail
+ * back, and the stitch's findroom scans a path whose every slot is F-1, so it
+ * root-extends. */
+/* one append budget case at the given tree depth: the witness is a saturated
+ * tree with the cursor inside the second leaf of the last leaf holder, so
+ * cutleaf splits that leaf, mergeleaf cannot take the tail back and the
+ * stitch's findroom scans a path whose every slot is F-1 -- it extends the
+ * root and draws levels + 2 in one go */
+static void append_need_at(lc_State *S, int *pcnt, int depth) {
+    lc_Cache *t = lcT_sattree_(S, depth), *e;
+    lc_Cursor C;
+    lc_Drain  d;
+    size_t    total, pos, need, one = 1;
+    char      before[LC_SERIAL_CAP], after[LC_SERIAL_CAP];
+
+    assertok((int)t->levels == depth && lc_checktree(t));
+    total = lc_bytes(t), need = (size_t)depth + 2;
+    pos = total - (size_t)LC_FANOUT * LC_LEAF_FANOUT + LC_LEAF_FANOUT + 1;
+    asserteq(lc_seek(&C, t, pos), LC_OK);
+    lcT_assertfullpath(&C);
+    asserteq(C.lnu, 1);
+    lc_serial(t, before);
+
+    /* B: one node short is refused, tree and cursor stay put */
+    d = lc_drainpool(&S->nodes), lcT_keep(&d, &S->nodes, need - 1);
+    *pcnt = 0, one = 1;
+    asserteq(lc_append(&C, 0, lcT_ones, &one), LC_ERRMEM);
+    assertok(S->nodes.freed_obj == need - 1 && lc_checkcursor(&C, pos));
+    lc_refillpool(&S->nodes, d), *pcnt = 1 << 20;
+    lc_serial(t, after);
+    assertok(strcmp(before, after) == 0);
+
+    /* A: exactly the budget, drawn dry, same tree as a live-pool run */
+    d = lc_drainpool(&S->nodes), lcT_keep(&d, &S->nodes, need);
+    *pcnt = 0, one = 1;
+    asserteq(lc_append(&C, 0, lcT_ones, &one), LC_OK);
+    asserteq(S->nodes.freed_obj, 0);
+    lc_refillpool(&S->nodes, d), *pcnt = 1 << 20;
+    assertok(lc_checktree(t) && lc_checkcursor(&C, pos + 1));
+    e = lcT_sattree_(S, depth);
+    asserteq(lc_seek(&C, e, pos), LC_OK);
+    one = 1;
+    asserteq(lc_append(&C, 0, lcT_ones, &one), LC_OK);
+    assertok(lc_comparetree(t, e));
+    lc_delcache(S, e), lc_delcache(S, t);
+}
+
+TEST(append_need) {
+    int       cnt = 1 << 20;
+    lc_State *S = lc_open(&oom_alloc, &cnt);
+    append_need_at(S, &cnt, 1);
+    append_need_at(S, &cnt, 2);
+    lc_close(S);
+}
+
+/* insert is append plus a cursor rewind, so it shares the append budget and
+ * the same witness must run on exactly levels + 2 objects */
+TEST(insert_need) {
+    int       cnt = 1 << 20;
+    lc_State *S = lc_open(&oom_alloc, &cnt);
+    lc_Cache *t = lcT_sattree(S);
+    lc_Cursor C;
+    lc_Drain  d;
+    size_t    total, pos, need, one = 1;
+
+    assertok(t->levels == 1 && lc_checktree(t));
+    total = lc_bytes(t), need = (size_t)t->levels + 2;
+    pos = total - (size_t)LC_FANOUT * LC_LEAF_FANOUT + LC_LEAF_FANOUT + 1;
+    asserteq(lc_seek(&C, t, pos), LC_OK);
+    lcT_assertfullpath(&C);
+    d = lc_drainpool(&S->nodes), lcT_keep(&d, &S->nodes, need), cnt = 0;
+    asserteq(lc_insert(&C, 0, lcT_ones, &one), LC_OK);
+    asserteq(S->nodes.freed_obj, 0);
+    lc_refillpool(&S->nodes, d), cnt = 1 << 20;
+    assertok(lc_checktree(t) && lc_checkcursor(&C, pos));
+    lc_delcache(S, t);
+    lc_close(S);
+}
+
+/* scan: the fill loop's only guard is lcD_checkchain, whose exact need is
+ * to - from nodes.  A tail scan over a tree whose root still has room makes
+ * the round a "parent has room" one: the chain is one node whatever the
+ * depth, and the old to - from + 1 asked one more than the chain draws. */
+TEST(scan_need) {
+    int       cnt = 1 << 20;
+    lc_State *S = lc_open(&oom_alloc, &cnt);
+    lc_Cache *t = lc_newcache(S), *e = lc_newcache(S);
+    lc_Drain  d;
+    size_t    n, need = 1;
+    char      want[LC_SERIAL_CAP], got[LC_SERIAL_CAP];
+
+    /* base: LC_FANOUT - 1 full bottom nodes, so the scan's next round still
+     * finds a free slot in the root */
+    n = (size_t)LC_FANOUT * (LC_FANOUT - 1) * LC_LEAF_FANOUT;
+    asserteq(lc_scan(e, lcT_ones, &n), LC_OK);
+    assertok(e->levels == 1 && e->root.child_count == LC_FANOUT - 1);
+    n = LC_LEAF_FANOUT;
+    asserteq(lc_scan(e, lcT_ones, &n), LC_OK);
+    assertok(e->levels == 1 && e->root.child_count == LC_FANOUT);
+    lc_serial(e, want);
+
+    n = (size_t)LC_FANOUT * (LC_FANOUT - 1) * LC_LEAF_FANOUT;
+    asserteq(lc_scan(t, lcT_ones, &n), LC_OK);
+    n = LC_LEAF_FANOUT;
+    d = lc_drainpool(&S->nodes), lcT_keep(&d, &S->nodes, need), cnt = 0;
+    asserteq(lc_scan(t, lcT_ones, &n), LC_OK);
+    asserteq(S->nodes.freed_obj, 0);
+    lc_refillpool(&S->nodes, d), cnt = 1 << 20;
+    assertok(lc_checktree(t));
+    lc_serial(t, got);
+    if (strcmp(want, got) != 0) {
+        test_log("scan_need\nwant=%s\ngot =%s\n", want, got);
+        abort();
+    }
+    assertok(lc_checktree(t));
+    lc_delcache(S, e), lc_delcache(S, t);
+    lc_close(S);
+}
+
+/* markbreak at the tree end: the leaf is full, so lcB_makeroom splits the
+ * root and then one node per level -- exactly levels + 2 on a saturated tree
+ * (lcB_makeroom's own count c), drawn dry */
+TEST(markbreak_need) {
+    int       cnt = 1 << 20;
+    lc_State *S = lc_open(&oom_alloc, &cnt);
+    lc_Cache *t = lcT_sattree(S), *e;
+    lc_Cursor C;
+    lc_Drain  d;
+    size_t    total, need, off;
+    char      before[LC_SERIAL_CAP], after[LC_SERIAL_CAP];
+
+    assertok(t->levels == 1 && lc_checktree(t));
+    total = lc_bytes(t), need = (size_t)t->levels + 2;
+    asserteq(lc_seek(&C, t, total), LC_OK);
+    lcT_assertfullpath(&C);
+    lc_serial(t, before);
+
+    d = lc_drainpool(&S->nodes), lcT_keep(&d, &S->nodes, need - 1), cnt = 0;
+    asserteq(lc_markbreak(&C, 1), LC_ERRMEM);
+    assertok(S->nodes.freed_obj == need - 1 && lc_checkcursor(&C, total + 1));
+    lc_refillpool(&S->nodes, d), cnt = 1 << 20;
+    lc_serial(t, after);
+    assertok(strcmp(before, after) == 0);
+
+    /* A: exactly c nodes, drawn dry, same result as a live-pool run */
+    asserteq(lc_seek(&C, t, total), LC_OK);
+    d = lc_drainpool(&S->nodes), lcT_keep(&d, &S->nodes, need), cnt = 0;
+    asserteq(lc_markbreak(&C, 1), LC_OK);
+    asserteq(S->nodes.freed_obj, 0);
+    lc_refillpool(&S->nodes, d), cnt = 1 << 20;
+    off = lc_offset(&C);
+    assertok(lc_checktree(t));
+    lc_serial(t, after);
+    e = lcT_sattree(S);
+    asserteq(lc_seek(&C, e, total), LC_OK);
+    asserteq(lc_markbreak(&C, 1), LC_OK);
+    assertok(lc_offset(&C) == off);
+    lc_serial(e, before);
+    assertok(strcmp(before, after) == 0);
+    lc_delcache(S, e), lc_delcache(S, t);
+    lc_close(S);
+}
+
+/* one zero-budget remove: the live-pool twin is the reference, then the same
+ * deletion on a fully drained pool with page allocation dead must reproduce
+ * it -- lc_remove draws no node at all, the cut's frees pay for every stitch
+ * chain */
+static void remove_need_one(
+        lc_State *S, int *pcnt, size_t pos, size_t len, size_t exp) {
+    lc_Cache *t = lcT_sattree(S), *e = lcT_sattree(S);
+    lc_Cursor C;
+    lc_Drain  nd, ld;
+    void     *pn, *pl;
+    char      want[LC_SERIAL_CAP], got[LC_SERIAL_CAP];
+
+    asserteq(lc_seek(&C, e, pos), LC_OK);
+    asserteq(lc_remove(&C, len), LC_OK);
+    lc_serial(e, want);
+    asserteq(lc_seek(&C, t, pos), LC_OK);
+    nd = lc_drainpool(&S->nodes), ld = lc_drainpool(&S->leaves);
+    pn = S->nodes.pages, S->nodes.pages = NULL;
+    pl = S->leaves.pages, S->leaves.pages = NULL;
+    *pcnt = 0;
+    asserteq(lc_remove(&C, len), LC_OK);
+    lc_restorepages(&S->nodes, pn), lc_restorepages(&S->leaves, pl);
+    lc_refillpool(&S->nodes, nd), lc_refillpool(&S->leaves, ld);
+    *pcnt = 1 << 20;
+    assertok(lc_checktree(t) && lc_checkcursor(&C, exp));
+    lc_serial(t, got);
+    if (strcmp(want, got) != 0) {
+        test_log(
+                "remove_need pos=%lu len=%lu\nwant=%s\ngot =%s\n", test_lu(pos),
+                test_lu(len), want, got);
+        abort();
+    }
+    lc_delcache(S, e), lc_delcache(S, t);
+}
+
+/* removal needs nothing: same-leaf (lcD_leaf), cross-node (cutrange plus
+ * stitch), clamped tail and wiping the tree out all run on an empty pool */
+TEST(remove_need) {
+    int       cnt = 1 << 20;
+    lc_State *S = lc_open(&oom_alloc, &cnt);
+    lc_Cache *c = lcT_sattree(S);
+    size_t    total = lc_bytes(c);
+
     lc_delcache(S, c);
+    remove_need_one(S, &cnt, 5, 2, 5);
+    remove_need_one(S, &cnt, 0, total / 4, 0);
+    remove_need_one(S, &cnt, total - 10, 1000, total - 10);
+    remove_need_one(S, &cnt, 0, total, 0);
+    lc_close(S);
+}
+
+/* one zero-budget splice: the insert leg only rewrites a line length and the
+ * delete leg is the zero-budget removal, so lc_splice must not draw either */
+static void splice_need_one(
+        lc_State *S, int *pcnt, size_t pos, size_t del, unsigned ins,
+        size_t exp) {
+    lc_Cache *t = lcT_sattree(S), *e = lcT_sattree(S);
+    lc_Cursor C;
+    lc_Drain  nd, ld;
+    void     *pn, *pl;
+    char      want[LC_SERIAL_CAP], got[LC_SERIAL_CAP];
+
+    asserteq(lc_seek(&C, e, pos), LC_OK);
+    asserteq(lc_splice(&C, del, ins), LC_OK);
+    lc_serial(e, want);
+    asserteq(lc_seek(&C, t, pos), LC_OK);
+    nd = lc_drainpool(&S->nodes), ld = lc_drainpool(&S->leaves);
+    pn = S->nodes.pages, S->nodes.pages = NULL;
+    pl = S->leaves.pages, S->leaves.pages = NULL;
+    *pcnt = 0;
+    asserteq(lc_splice(&C, del, ins), LC_OK);
+    lc_restorepages(&S->nodes, pn), lc_restorepages(&S->leaves, pl);
+    lc_refillpool(&S->nodes, nd), lc_refillpool(&S->leaves, ld);
+    *pcnt = 1 << 20;
+    assertok(lc_checktree(t) && lc_checkcursor(&C, exp));
+    lc_serial(t, got);
+    if (strcmp(want, got) != 0) {
+        test_log(
+                "splice_need pos=%lu del=%lu ins=%u\nwant=%s\ngot =%s\n",
+                test_lu(pos), test_lu(del), ins, want, got);
+        abort();
+    }
+    lc_delcache(S, e), lc_delcache(S, t);
+}
+
+TEST(splice_need) {
+    int       cnt = 1 << 20;
+    lc_State *S = lc_open(&oom_alloc, &cnt);
+    lc_Cache *c = lcT_sattree(S);
+    size_t    total = lc_bytes(c);
+
+    lc_delcache(S, c);
+    splice_need_one(S, &cnt, 5, 2, 0, 5);         /* delete only */
+    splice_need_one(S, &cnt, 5, 0, 3, 8);         /* insert only */
+    splice_need_one(S, &cnt, 5, 4, 3, 8);         /* both legs */
+    splice_need_one(S, &cnt, 0, total / 4, 0, 0); /* cross-node delete */
+    splice_need_one(S, &cnt, 0, total, 3, 3);     /* wipe out, then re-add */
     lc_close(S);
 }
 
@@ -1579,18 +1809,23 @@ TEST(splice_trailing) {
     lc_close(S);
 }
 
-/* splice_brute: exhaustive pos+del+ins enumeration on multi-level tree.
- * 128 lines of 2 bytes each = 256 total bytes, levels >= 2.
- * pos=0..257 (1 past end -> trailing), del=0..257 (past end -> clamp),
- * ins=0..1 (byte insert). */
+/* splice_brute: exhaustive pos+del+ins enumeration on a multi-level tree with
+ * a zero budget: 128 lines of 2 bytes each (levels >= 2), every case drained
+ * on both pools with page allocation dead.  lc_splice must never draw an
+ * object -- the delete leg's frees pay for the stitch chains and the insert
+ * leg only rewrites a line length -- so the ralloc check is the judge for the
+ * whole parameter space.  pos=0..257 (1 past end -> trailing), del=0..257
+ * (past end -> clamp), ins=0..1 (byte insert). */
 TEST(splice_brute) {
     lc_State *S;
     lc_Cache *c;
     lc_Cursor C;
-    int       pos, del, ins;
+    lc_Drain  nd, ld;
+    void     *pn, *pl;
+    int       pos, del, ins, cnt = 1 << 20;
     int const n = 128, nb = n * 2;
 
-    S = lc_open(&test_alloc, NULL);
+    S = lc_open(&oom_alloc, &cnt);
     assertok(S);
 
     for (pos = 0; pos <= nb + 1; ++pos)
@@ -1606,7 +1841,12 @@ TEST(splice_brute) {
                 }
                 assertok(lc_checktree(c));
                 lc_seek(&C, c, pos);
-                lc_splice(&C, del, ins);
+                nd = lc_drainpool(&S->nodes), ld = lc_drainpool(&S->leaves);
+                pn = S->nodes.pages, S->nodes.pages = NULL;
+                pl = S->leaves.pages, S->leaves.pages = NULL;
+                asserteq(lc_splice(&C, del, ins), LC_OK);
+                lc_restorepages(&S->nodes, pn), lc_restorepages(&S->leaves, pl);
+                lc_refillpool(&S->nodes, nd), lc_refillpool(&S->leaves, ld);
                 if (!lc_checktree(c)) {
                     test_log(
                             "splice pos=%d del=%d ins=%d tree\n", pos, del,
@@ -1681,8 +1921,15 @@ TEST(splice_brute3) {
                 lc_Cache *c = brute3_cache(S, shapes[si]);
                 lc_Cursor C;
                 size_t    hang;
+                lc_Drain  nd, ld;
+                void     *pn, *pl;
                 lc_seek(&C, c, pos);
-                lc_splice(&C, len, 0);
+                nd = lc_drainpool(&S->nodes), ld = lc_drainpool(&S->leaves);
+                pn = S->nodes.pages, S->nodes.pages = NULL;
+                pl = S->leaves.pages, S->leaves.pages = NULL;
+                asserteq(lc_splice(&C, len, 0), LC_OK);
+                lc_restorepages(&S->nodes, pn), lc_restorepages(&S->leaves, pl);
+                lc_refillpool(&S->nodes, nd), lc_refillpool(&S->leaves, ld);
                 hang = pos >= lc_bytes(c) ? (size_t)C.col : 0;
                 if (!lc_checktree_allow_empty(c, 1)
                     || lc_bytes(c) != total - len - hang
@@ -2186,12 +2433,13 @@ TEST(append_noscanner) {
 }
 
 TEST(append_oom_brute) {
-    lc_State *S = lc_open(&test_alloc, NULL);
-    lc_Cache *c;
-    lc_Cursor C;
-    int       pos, ins, e, oom, rem, r;
-    int       cnt = 0;
-    int const n = 32;
+    lc_State   *S = lc_open(&test_alloc, NULL);
+    lc_Cache   *c;
+    lc_Cursor   C;
+    int         pos, ins, e, oom, rem, r;
+    int         cnt = 0;
+    int const   n = 32;
+    static char ser_before[LC_SERIAL_CAP], ser_after[LC_SERIAL_CAP];
 
     assertok(S);
     for (pos = 0; pos <= n * 2 + 1; ++pos)
@@ -2203,6 +2451,7 @@ TEST(append_oom_brute) {
                     lc_rscanV(c, 64, 2);
                     assertok(lc_checktree(c));
                     lc_seek(&C, c, pos);
+                    lc_serial(c, ser_before);
                     (void)lc_drainpool(&S->nodes);
                     (void)lc_drainpool(&S->leaves);
                     rem = ins;
@@ -2212,12 +2461,16 @@ TEST(append_oom_brute) {
                     S->allocf = test_alloc;
                     S->alloc_ud = NULL;
                     if (r == LC_ERRMEM) {
-                        if (!lc_checktree(c)
+                        /* a failed append must leave tree and cursor alone */
+                        lc_serial(c, ser_after);
+                        if (strcmp(ser_before, ser_after) != 0
                             || !lc_checkcursor(&C, (size_t)pos)) {
                             test_log(
                                     "OOM brute fail pos=%d ins=%d e=%d"
                                     " oom=%d\n",
                                     pos, ins, e, oom);
+                            test_log("  before: %s\n", ser_before);
+                            test_log("  after : %s\n", ser_after);
                             lc_dumptree(c, "oom brute fail");
                             lc_dumpcursor(&C, "oom brute fail");
                             abort();
@@ -2230,6 +2483,73 @@ TEST(append_oom_brute) {
                     lc_delcache(S, c);
                 }
     test_log("  test_append_oom_brute: %d OOM cases\n", cnt);
+    lc_close(S);
+}
+
+/* findroom evicts at level 1 here, so the root must survive the rollback */
+TEST(append_oom_keeproot) {
+    lc_State   *S;
+    lc_Cache   *c;
+    lc_Cursor   C;
+    lc_Drain    nd, ld;
+    int         oom = 2, rem = 16;
+    static char before[LC_SERIAL_CAP], after[LC_SERIAL_CAP];
+
+    S = lc_open(&test_alloc, NULL);
+    assertok(S);
+    c = lc_newcache(S);
+    lc_rscanV(c, 64, 2);
+    asserteq(lc_bytes(c), 128);
+    asserteq(lc_breaks(c), 64);
+    lc_seek(&C, c, 0);
+    lc_serial(c, before);
+    nd = lc_drainpool(&S->nodes);
+    ld = lc_drainpool(&S->leaves);
+    S->allocf = oom_alloc;
+    S->alloc_ud = &oom;
+    asserteq(lc_append(&C, 0, brute_scanner, &rem), LC_ERRMEM);
+    S->allocf = test_alloc;
+    S->alloc_ud = NULL;
+    assertok(lc_checktree(c));
+    assertok(lc_checkcursor(&C, 0));
+    lc_serial(c, after);
+    assertok(strcmp(before, after) == 0);
+    lc_refillpool(&S->nodes, nd);
+    lc_refillpool(&S->leaves, ld);
+    lc_delcache(S, c);
+    lc_close(S);
+}
+
+/* cr == 0 at a leaf boundary: a failed append must keep the document */
+TEST(append_oom_keepcontent) {
+    lc_State   *S;
+    lc_Cache   *c;
+    lc_Cursor   C;
+    lc_Drain    nd, ld;
+    static char before[LC_SERIAL_CAP], after[LC_SERIAL_CAP];
+
+    S = lc_open(&test_alloc, NULL);
+    assertok(S);
+    c = cacheV(S, 0, botV(leafV(2, 2), leafV(2, 2), leafV(2, 2)));
+    lc_serial(c, before);
+    nd = lc_drainpool(&S->nodes);
+    ld = lc_drainpool(&S->leaves);
+    {
+        unsigned bs[] = {3, 3, 3, 3, 0}, *p = bs;
+        int      oom = 0;
+        S->allocf = oom_alloc;
+        S->alloc_ud = &oom;
+        lc_seek(&C, c, 12);
+        asserteq(lc_append(&C, 0, lc_scanner, &p), LC_ERRMEM);
+        S->allocf = test_alloc;
+        S->alloc_ud = NULL;
+        assertok(lc_checkcursor(&C, 12));
+        lc_serial(c, after);
+        assertok(strcmp(before, after) == 0);
+    }
+    lc_refillpool(&S->nodes, nd);
+    lc_refillpool(&S->leaves, ld);
+    lc_delcache(S, c);
     lc_close(S);
 }
 
@@ -2510,62 +2830,6 @@ TEST(append_oom_rollback) {
     }
 
     lc_restorepages(&S->nodes, pn);
-    lc_delcache(S, c);
-    lc_close(S);
-}
-
-/* stitch reserve: full 256-seg tree, seek 254, insert 48*1b.
- * freelists cleared -> every page alloc goes through oom_alloc.
- * O(1) reserve: oom=3 fails (findroom+stitch need 4 allocfs);
- * oom=4 succeeds. */
-TEST(append_oom_full) {
-    unsigned  ins[] = {45, 1, 0};
-    unsigned *p;
-    lc_State *S;
-    lc_Cache *c;
-    lc_Cursor C;
-    int       oom, r;
-
-    /* oom=3: cutleaf(1 leaf) + findroom reserve(1 node) + stitch reserve(2
-     * node) = 4. 4th allocf fails -> OOM -> rollback. */
-    S = lc_open(&test_alloc, NULL);
-    c = lc_newcache(S);
-    lc_rscanV(c, 256, 1);
-    assertok(lc_checktree(c));
-    (void)lc_drainpool(&S->nodes);
-    (void)lc_drainpool(&S->leaves);
-    oom = 3;
-    p = ins;
-    S->allocf = oom_alloc;
-    S->alloc_ud = &oom;
-    lc_seek(&C, c, 254);
-    r = lc_append(&C, 0, lc_rscanner, &p);
-    S->allocf = test_alloc, S->alloc_ud = NULL;
-    asserteq(r, LC_ERRMEM);
-    assertok(lc_checktree(c));
-    assertok(lc_checkcursor(&C, 254));
-    lc_delcache(S, c);
-    lc_close(S);
-
-    /* oom=4: stitch gets its page -> insert succeeds.
-     * New reserve O(1): mix of findroom reserve(3) + stitch reserve(5)
-     * needs 4 allocfs total (vs 5 in old O(n) reserve). */
-    S = lc_open(&test_alloc, NULL);
-    c = lc_newcache(S);
-    lc_rscanV(c, 256, 1);
-    assertok(lc_checktree(c));
-    (void)lc_drainpool(&S->nodes);
-    (void)lc_drainpool(&S->leaves);
-    oom = 4;
-    p = ins;
-    S->allocf = oom_alloc;
-    S->alloc_ud = &oom;
-    lc_seek(&C, c, 254);
-    r = lc_append(&C, 0, lc_scanner, &p);
-    S->allocf = test_alloc;
-    S->alloc_ud = NULL;
-    asserteq(r, LC_OK);
-    assertok(lc_checktree(c));
     lc_delcache(S, c);
     lc_close(S);
 }

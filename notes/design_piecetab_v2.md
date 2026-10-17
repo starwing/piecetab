@@ -78,8 +78,9 @@ levels = 3 的树：从 root 到 piece 共 levels+2 = 5 层
 ```
 
 **mask 维护铁律**：任何可能引入/移除 hole 的编辑操作，除 `ptM_up` 更新度量外，
-**必须调用 `ptM_remask` / `ptM_up` 沿 paths 向上传播 mask 位**。`ptI_append` 仅处理了度量，
-mask 上推由调用方负责。
+**必须沿 paths 向上传播 mask 位**：`ptM_up(C, l, db)` 在每层更新 `bytes[i]` 后调
+`ptM_remask(p, i, levels - l)`，mask 变化或度量为非 0 时继续上推，因此所有编辑路径
+都经 `ptM_up` 完成度量与 mask 的同步传播。
 
 **不变量：位 ≥ cc 恒为 0** — cc 收缩处（`ptN_remove`、`ptD_balancenode`、
 `ptI_splitroot`/`ptI_splitchild` 裂半、`ptD_mergeleaf` merged 路径）统一以
@@ -228,9 +229,10 @@ transient tree，一方成功修改后另一方在下一次公共入口被判失
   `epoch` → `ptC_freeze` 及其推进循环（每轮 `ptP_reserve(nodes, levels)` → 冻结该叶
   hole 数据、合并相连 literal 槽 → 欠满则 `ptD_rebalance` fold/borrow）→ detach 返回 b。
   clean cursor（`!C->dirty`）时仅 `pt_retain` 当前树并 detach 返回。
-- **rollback**：`b = C->tree->from` 先 `pt_retain(b)`，再 `pt_release(C->tree)` 沿
-  from 链回收本 transient 的私有节点，置 `C->tree = NULL`、`C->dirty = 0`、返回 b；
-  返回引用使源树无条件存活（§4.4.1）。clean cursor 时仅 retain 当前树并 detach 返回。
+- **rollback**：`pt_valid` 判定 → clean cursor（`!C->dirty`）仅 `pt_retain` 当前树并
+  detach 返回；dirty cursor 走 `b = C->tree->from` 先 `pt_retain(b)`，再 `pt_release(C->tree)`
+  沿 from 链回收本 transient 的私有节点，置 `C->tree = NULL`、`C->dirty = 0`、返回 b；
+  返回引用使源树无条件存活（§4.4.1）。与 `pt_commit` 同为「先过 `pt_valid`」的事务出口。
 - commit 后 tree 可被共享（返回的 Snapshot）；rollback 返回编辑前源树的新引用。
 - **失败语义**：arena 预留失败 → 返回 `NULL`，树与 `epoch` 均未变；`ptC_freeze` 期
   OOM → 返回 `NULL`，此时 tree 已发生部分冻结、`epoch` 已递增，cursor 经
@@ -393,6 +395,7 @@ int  pt_remove(pt_Cursor *C, size_t len);
 - 若 hole 空间不足 → 裂新 hole，数据跨 hole 分布
 - `del == 0 && len > 0` → 纯插入；`del > 0 && len == 0` → 纯删除；两者皆 0 → no-op
 - `s` 生存期无要求（库已 copy）
+- 入口是复合预算：`ptK_reserve(C, 3 * levels + 3, len > 0 ? 2 : 0)`（删段两端 COW + 匀位 COW + 插段分裂，holes 最多 2 个），随后 `ptK_beginedit`、`ptD_remove`、内联插片
 
 **`pt_insert(C, s, len)`** — 插入 literal（引用语义，原位）
 
@@ -405,16 +408,21 @@ int  pt_remove(pt_Cursor *C, size_t len);
 
 - 同 `pt_insert`（literal 引用语义），但 cursor 追尾到插入内容之后
 - 适用于批量载入文件块（配合 mmap 或 scratch）
-- 实现上等价于 `pt_insert` + `pt_advance(len)`，但内部统一走 `ptI_append`
+- 入口 `ptK_reserve(C, 2 * levels + 2, inhole)`：`inhole` = 游标严格落在 hole 片内部（插入会裂出右半 hole）
+- 主体是插段机器 `ptI_append`：先 `ptK_beginedit`（markdirty + 整条路径 COW），再走
+  「左邻 literal 接尾 / 本槽 literal 接尾 / 前缀重合 literal」三条合并快路径，否则
+  `ptI_putpiece` 填 `rt` 并插入
 
-**实现注意事项**：`ptI_append` 仅处理 `ptM_up`（度量），不做 `ptM_remask`（mask 传播）。`pt_edit` 和 `pt_append` 的调用方负责在 `ptI_append` 后调用 `ptM_remask` / `ptM_up`（见 §一.1 铁律）。
+**实现注意事项**：`ptI_putpiece` 只用 `ptM_up` 传播度量与 mask（`ptM_up` 内含
+`ptM_remask`），因此所有编辑路径自动同步 mask 位（见 §一.1 铁律）。
 
 **`pt_splice(C, del, s, len)`** — splice via literal（引用语义，追尾）
 
 - 先删除 cursor 位置起 `del` 字节
 - 再插入 literal `s[0..len-1]`（引用语义）
 - cursor 追尾到插入内容之后
-- 预 reserve `6*levels+8` 覆盖 remove 与 append 的合计，失败时树保持不变
+- 入口先 `ptK_reserve(C, 3 * levels + 3, len ? 1 : 0)`（nodes + holes），失败时树保持不变；
+  删段 `ptD_remove` 与插段 `ptI_append` 不再各自预留，入口值即一次调用的上界
 - `del=0` → 等价 `pt_append`
 - 若 `s` 在 scratch pool 内，库自动消费 buffer 头
 
@@ -424,6 +432,7 @@ int  pt_remove(pt_Cursor *C, size_t len);
 - 删除路径中若含 hole 且 hole 被清空（父槽 `bytes[i]==0`），hole 对象立即回池
 - 删除后检查相邻 literal 是否可合并（物理连续则合并）
 - cursor 留在删除点
+- 入口 `ptK_reserve(C, 2 * levels + 2, 0)`：覆盖 `ptD_remove` 的路径 COW 与 `foldnode` 的邻居 COW
 
 **epoch 与错误契约（见 §4.7）**
 
@@ -460,16 +469,16 @@ commit 流程：
    `pt_reserve`/`pt_literal` 在 arena 预留等长空间。
 3. `ptC_nexthole(C, 0)` 按 mask 下降定位首个含 hole 叶，`ptS_ok(C)` 递增 tree `epoch`
    （冻结原地改树，须使其上其它 Cursor 失效）。
-4. `ptC_freeze` 冻结该叶：`ptP_reserve(nodes, levels)` 预留本轮节点 → hole 数据追加到
+4. `ptC_freeze` 冻结该叶：每轮开头 `ptK_reserve(C, 1, 0)` 预留本轮节点 → hole 数据追加到
    arena、槽换为指向 arena 的 literal、槽长度改为 hole 当前长度、清除 hole 位
    （`pt_Hole` 回池）→ 合并物理相连 literal 槽 → 叶欠满则 `ptD_rebalance` fold/borrow
-   （fold 吸进邻居可能带来新 hole/接缝，故同一叶上循环至稳定；一轮内 loop 可重复
-   多轮，故 reserve 在每轮开头补充）。
+   （fold 吸进邻居可能带来新 hole/接缝，故同一叶上循环至稳定；loop 可重复多轮，
+   故 reserve 在每轮开头补 1 个节点）。
 5. `ptC_nexthole(C, ptK_levels(C) - 1)` 前进到下一含 hole 叶并重复 4；无更多 hole 时
    结束，detach Cursor（`C->tree = NULL`）并返回 b。
 
 失败语义：步骤 2 的 arena 预留失败 → 返回 `NULL`，树与 `epoch` 均未变；步骤 4 的
-`ptP_reserve` 失败 → 返回 `NULL`，tree 已部分冻结、`epoch` 已递增，Cursor 经
+`ptK_reserve` 失败 → 返回 `NULL`，tree 已部分冻结、`epoch` 已递增，Cursor 经
 `pt_locate(C, off)` 复位到原偏移故仍有效（树保持 dirty，可重试 commit）。
 
 ---

@@ -36,6 +36,20 @@ SP_STATIC void sp_refillpool(sp_Pool *p, sp_Drain d) {
     p->freed = d.chain, p->freed_obj += d.count;
 }
 
+/* spT_keep -- install only the first n objects of a drained chain as the
+ * whole freelist; the remainder stays in *d for sp_refillpool.  The count
+ * is honest, so a reserve asking for n early-returns instead of topping
+ * the pool up: the real chain is the budget the operation must live
+ * within, and one draw past its end trips the spP_ralloc check. */
+SP_STATIC void spT_keep(sp_Drain *d, sp_Pool *p, size_t n) {
+    void **pp = &d->chain;
+    size_t take = 0;
+    assert(n > 0 && d->count >= n);
+    while (take < n && *pp) pp = (void **)*pp, take += 1;
+    p->freed = d->chain, p->freed_obj = take;
+    d->count -= take, d->chain = *pp, *pp = NULL;
+}
+
 /* tree invariant checker: byte sums consistent, child counts within
  * fanout bounds (root exempt from the half-minimum), no zero-length
  * segments in a settled tree. Returns the subtree byte sum (0 also
@@ -92,7 +106,9 @@ SP_STATIC int sp_checktree_allow_unseamedspan(const sp_Tree *t, int allow) {
               test_lu(t->bytes));
         return 1;
     }
-    bsum = sp_checknode(&t->root, t->levels, t->levels ? 1 : 0, &msk, allow);
+    /* a non-leaf root keeps at least two children; only a levels == 0 root
+     * may hold a single leaf container */
+    bsum = sp_checknode(&t->root, t->levels, t->levels ? 2 : 0, &msk, allow);
     check(t->bytes == bsum, "[chk] ROOT bytes=%lu sum=%lu\n", test_lu(t->bytes),
           test_lu(bsum));
     return 1;
@@ -336,6 +352,50 @@ SP_STATIC sp_Tree *treeV_(sp_State *S, unsigned levels, sp_Node *root) {
     t->bytes = 0;
     for (i = 0; i < t->root.child_count; i++) t->bytes += t->root.bytes[i];
     return assert(t), t;
+}
+
+/* spT_sattree -- saturated one-level tree: the root and every child node
+ * hold exactly SP_FANOUT one-byte runs with distinct nonzero ids, so every
+ * node on any cursor path is full: the worst case for insertion, whose
+ * makeroom must then root-split and split one node per level. */
+SP_STATIC sp_Tree *spT_sattree(sp_State *S) {
+    sp_Node *root, *lf[SP_FANOUT];
+    sp_Id    id = 1;
+    int      i, j;
+    for (i = 0; i < SP_FANOUT; ++i) {
+        lf[i] = (sp_Node *)spP_alloc(S, &S->nodes);
+        spN_setcc(lf[i], SP_FANOUT);
+        for (j = 0; j < SP_FANOUT; ++j) {
+            spL_setid(lf[i], j, id), lf[i]->bytes[j] = 1, lf[i]->mask[j] = 0;
+            id += 1;
+        }
+    }
+    root = (sp_Node *)spP_alloc(S, &S->nodes);
+    spN_setcc(root, SP_FANOUT);
+    for (i = 0; i < SP_FANOUT; ++i) {
+        root->children[i] = lf[i];
+        root->bytes[i] = spN_sumbytes(lf[i], 0, SP_FANOUT);
+        root->mask[i] = spM_sumns(lf[i]);
+    }
+    return treeV_(S, 1, root);
+}
+
+/* witness predicate: every node on the cursor path is full */
+SP_STATIC void spT_assertfullpath(sp_Cursor *C) {
+    int l;
+    for (l = 0; l <= spK_levels(C); ++l)
+        asserteq(spN_cc(spK_parent(C, l)), SP_FANOUT);
+}
+
+/* spT_sattail -- the saturated tree with a two-byte very last run, so a
+ * cursor one byte inside it can start a fill that ends exactly at the
+ * tree tail (the endpoint root-extension witness) */
+SP_STATIC sp_Tree *spT_sattail(sp_State *S) {
+    sp_Tree *t = spT_sattree(S);
+    sp_Node *root = &t->root, *lc = root->children[SP_FANOUT - 1];
+    lc->bytes[SP_FANOUT - 1] = 2;
+    root->bytes[SP_FANOUT - 1] += 1, t->bytes += 1;
+    return t;
 }
 
 /* ---- ns test utilities ---- */

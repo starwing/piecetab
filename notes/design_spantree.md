@@ -327,7 +327,7 @@ sp_fill（度量不变、单 id 覆写 + arbiter）是其他 B+ 树
 ```
 sp_fill(C, id, len):
   1. [参数检查] C 有效；len == 0 -> SP_OK
-  2. [reserve] spP_reserve(6 * levels + 7)
+  2. [reserve] spP_reserve(levels + 2)
   3. [filtervirtual] 若 sp_offset(C) >= spK_bytes(C)：
        spF_virt(C, id, len)；返回
   4. [当前段内] i = 当前叶槽；若 len < p->bytes[i] - C->poff：
@@ -506,11 +506,11 @@ peeldown(l, rt):                 # 层 l 的内容已在 rt[levels-l]
    spF_appendrt 落回
 6. **度量记账**：摘挂切出每层 spM_up 减度量，剥回 append 与 stitch
    加回；arb 只改 id 不改变段长 → 全程净 0
-7. **reserve 顺序与预算**：reserve 必须在 pad 之前。fill 预算 =
-   6*levels+7；insert/append = 3*levels+4；remove = 4*levels+5（在
-   `sp_remove` 入口完成，`spD_remove` 不再分配）；splice 在任何
-   mutation 之前统一 reserve `6*levels+8`，覆盖 remove 的实际分配
-   上界（`levels+2`）与 append 的 `3*levels+4`
+7. **reserve 顺序与预算**：reserve 必须在任何 mutation 之前。fill /
+   insert / append / splice 的预算都是 `levels + 2` —— 等于 stitch 的
+   `makechain` 最坏分配上界（`rootpush(1) + chain(levels + 1)`）。
+   `sp_remove` 不预留：删段原地修改，唯一分配源是跨段 `makechain`，
+   而 `cutrange` 的截断保证 `findroom` 在该路径不扩根
 
 ### 8.10 边界情况
 

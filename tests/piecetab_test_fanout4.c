@@ -230,6 +230,58 @@ PT_STATIC pt_Buffer treeV_(pt_State *S, unsigned levels, pt_Node *root) {
     return assert(t), t;
 }
 
+/* pt_sattree -- saturated tree: the root, every inner node and every leaf
+ * container hold exactly PT_FANOUT entries, all pieces are 1-byte literals
+ * at stride 2 (never physically adjacent).  Every node on any cursor path is
+ * therefore full, so an insert must root-split and split one node per level.
+ * Nodes carry the source version, so the fork copies exactly the cursor path.
+ */
+PT_STATIC pt_Buffer pt_sattree_(pt_State *S, unsigned levels, int wide) {
+    static char     buf[4096];
+    static pt_Node *cur[PT_FANOUT * PT_FANOUT * PT_FANOUT],
+            *nx[PT_FANOUT * PT_FANOUT * PT_FANOUT];
+    int i, j, k = 0, nc = PT_FANOUT, nn = 0;
+    assertok(levels <= 3 && wide < nc);
+    for (i = 1; i < (int)levels; ++i) nc *= PT_FANOUT;
+    for (i = 0; i < nc; ++i) {
+        cur[i] = (pt_Node *)ptP_alloc(S, &S->nodes);
+        ptN_setcc(cur[i], PT_FANOUT), cur[i]->version = 0, cur[i]->mask = 0;
+        for (j = 0; j < PT_FANOUT; ++j) {
+            cur[i]->children[j] = (pt_Node *)&buf[k], cur[i]->bytes[j] = 1;
+            k += 2;
+        }
+    }
+    if (wide >= 0) cur[wide]->children[0] = (pt_Node *)"abc";
+    if (wide >= 0) cur[wide]->bytes[0] = 3;
+    while (nc > 1) {
+        for (i = 0, nn = 0; i + PT_FANOUT <= nc; i += PT_FANOUT) {
+            nx[nn] = (pt_Node *)ptP_alloc(S, &S->nodes);
+            ptN_setcc(nx[nn], PT_FANOUT), nx[nn]->version = 0;
+            nx[nn]->mask = 0;
+            for (j = 0; j < PT_FANOUT; ++j) {
+                nx[nn]->children[j] = cur[i + j];
+                nx[nn]->bytes[j] = ptN_sumbytes(cur[i + j], 0, PT_FANOUT);
+            }
+            ++nn;
+        }
+        for (i = 0; i < nn; ++i) cur[i] = nx[i];
+        nc = nn;
+    }
+    return treeV(levels, cur[0]);
+}
+
+/* no wide piece; the wide form makes leaf container w start with a 3-byte
+ * piece, so a remove or edit inside it has to split a literal */
+#define pt_sattree(S, levels)    pt_sattree_((S), (levels), -1)
+#define pt_satwide(S, levels, w) pt_sattree_((S), (levels), (w))
+
+/* witness predicate: every node on the cursor path is full */
+PT_STATIC void pt_assertfullpath(pt_Cursor *C) {
+    int l;
+    for (l = 0; l <= ptK_levels(C); ++l)
+        asserteq(ptN_cc(ptK_parent(C, l)), PT_FANOUT);
+}
+
 /* ================================================================ */
 /*  pt_asserttree -- build expected tree and compare                    */
 /* ================================================================ */
@@ -562,6 +614,295 @@ TEST(insert_oom_reserve) {
     asserteq(pt_insert(&c, "ok", 2), PT_OK);
     asserteq(pt_bytes(c.tree), 2);
     pt_release(c.tree), pt_release(b);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* edit deletes across a leaf-container boundary (so both ends fork) and then
+ * inserts with every node on the path full (so it must split): the entry COW,
+ * the second end's COW, the surviving balance copy and the split overlap ->
+ * 3*levels+3.  The saturated tree with a 3-byte piece in container 1 puts the
+ * cursor on such a boundary, and the tight end shows the budget is spent. */
+TEST(edit_need) {
+    int       cnt = 1000;
+    pt_State *S = pt_open(&oom_alloc, &cnt);
+    pt_Buffer src;
+    pt_Cursor c;
+    pt_Drain  d, dh;
+    size_t    need, pos;
+    unsigned  lv;
+    /* B: one node short -- the reserve refuses before the fork */
+    src = pt_satwide(S, 2, 1);
+    pt_seek(&c, src, 15); /* the 3-byte delete ends in the next container */
+    pt_assertfullpath(&c);
+    pt_release(pt_satwide(S, 2, 1));
+    pt_release(pt_from(S, "x", 1));
+    pt_release(treeV(0, leafV(holeV("hh"), holeV("ii"))));
+    need = 3 * (size_t)ptK_levels(&c) + 3;
+    d = pt_drainpool(&S->nodes);
+    pt_keep(&d, &S->nodes, need - 1);
+    dh = pt_drainpool(&S->holes);
+    pt_keep(&dh, &S->holes, 2);
+    cnt = 0;
+    asserteq(pt_edit(&c, 3, "Z", 1), PT_ERRMEM);
+    assertok(!c.dirty && pt_checktree(src));
+    cnt = 1000;
+    pt_refillpool(&S->holes, dh), pt_refillpool(&S->nodes, d);
+    pt_release(src);
+    /* A: exactly the budget at both depths, spent to the last node */
+    for (lv = 3; lv >= 2; --lv) {
+        pos = lv == 2 ? 15 : 63;
+        src = pt_satwide(S, lv, 1);
+        pt_seek(&c, src, pos);
+        pt_assertfullpath(&c);
+        pt_release(pt_satwide(S, lv, 1));
+        pt_release(treeV(0, leafV(holeV("hh"), holeV("ii"))));
+        need = 3 * (size_t)ptK_levels(&c) + 3;
+        d = pt_drainpool(&S->nodes);
+        pt_keep(&d, &S->nodes, need);
+        dh = pt_drainpool(&S->holes);
+        pt_keep(&dh, &S->holes, 2);
+        cnt = 0;
+        asserteq(pt_edit(&c, 3, "Z", 1), PT_OK);
+        asserteq(S->nodes.freed_obj, 0);
+        cnt = 1000;
+        pt_refillpool(&S->holes, dh), pt_refillpool(&S->nodes, d);
+        assertok(pt_checktree(c.tree) && pt_checkcursor(&c, pos + 1));
+        pt_release(c.tree), pt_release(src);
+    }
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* splice is the same shape: delete across the boundary, then insert */
+TEST(splice_need) {
+    int       cnt = 1000;
+    pt_State *S = pt_open(&oom_alloc, &cnt);
+    pt_Buffer src;
+    pt_Cursor c;
+    pt_Drain  d, dh;
+    size_t    need, pos;
+    unsigned  lv;
+    for (lv = 3; lv >= 2; --lv) {
+        pos = lv == 2 ? 15 : 63;
+        src = pt_satwide(S, lv, 1);
+        pt_seek(&c, src, pos);
+        pt_assertfullpath(&c);
+        pt_release(pt_satwide(S, lv, 1));
+        pt_release(pt_from(S, "x", 1));
+        pt_release(treeV(0, leafV(holeV("hh"))));
+        need = 3 * (size_t)ptK_levels(&c) + 3;
+        d = pt_drainpool(&S->nodes);
+        pt_keep(&d, &S->nodes, need);
+        dh = pt_drainpool(&S->holes);
+        pt_keep(&dh, &S->holes, 1);
+        cnt = 0;
+        asserteq(pt_splice(&c, 3, "Z", 1), PT_OK);
+        asserteq(S->nodes.freed_obj, 0);
+        cnt = 1000;
+        pt_refillpool(&S->holes, dh), pt_refillpool(&S->nodes, d);
+        assertok(pt_checktree(c.tree) && pt_checkcursor(&c, pos + 1));
+        pt_release(c.tree), pt_release(src);
+    }
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* remove forks both ends of the deleted range (up to 2*levels copies) and
+ * the literal split then needs room in a full leaf container; the saturated
+ * wide tree makes all three parts run, and the tight end shows the sum. */
+TEST(remove_need) {
+    int       cnt = 1000;
+    pt_State *S = pt_open(&oom_alloc, &cnt);
+    pt_Buffer src;
+    pt_Cursor c;
+    pt_Drain  d;
+    size_t    need;
+    unsigned  lv;
+    /* B: one node short -- the reserve refuses before the fork */
+    src = pt_satwide(S, 2, 0);
+    pt_seek(&c, src, 1); /* inside "abc" */
+    pt_assertfullpath(&c);
+    pt_release(pt_satwide(S, 2, 0));
+    pt_release(pt_from(S, "x", 1));
+    need = 2 * (size_t)ptK_levels(&c) + 2;
+    d = pt_drainpool(&S->nodes);
+    pt_keep(&d, &S->nodes, need - 1);
+    cnt = 0;
+    asserteq(pt_remove(&c, 1), PT_ERRMEM);
+    assertok(!c.dirty && pt_checktree(src));
+    cnt = 1000;
+    pt_refillpool(&S->nodes, d);
+    pt_release(src);
+    /* A: exactly the budget, at both depths the runner supports */
+    for (lv = 2; lv >= 1; --lv) {
+        src = pt_satwide(S, lv, 0);
+        pt_seek(&c, src, 1);
+        pt_assertfullpath(&c);
+        pt_release(pt_satwide(S, lv, 0));
+        need = 2 * (size_t)ptK_levels(&c) + 2;
+        d = pt_drainpool(&S->nodes);
+        pt_keep(&d, &S->nodes, need);
+        cnt = 0;
+        asserteq(pt_remove(&c, 1), PT_OK);
+        asserteq(S->nodes.freed_obj, 0);
+        cnt = 1000;
+        pt_refillpool(&S->nodes, d);
+        assertok(pt_checktree(c.tree) && pt_checkcursor(&c, 1));
+        pt_release(c.tree), pt_release(src);
+    }
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* the insert budget is copy-on-write of the cursor path (levels nodes) plus
+ * the root split (2) and one node per split level: 2*levels+2.  A saturated
+ * tree makes both parts run to completion, and the tight end shows it. */
+TEST(insert_need) {
+    int       cnt = 1000;
+    pt_State *S = pt_open(&oom_alloc, &cnt);
+    pt_Buffer src;
+    pt_Cursor c;
+    pt_Drain  d;
+    size_t    need;
+    unsigned  lv;
+    /* B: one node short -- the reserve refuses before the fork */
+    src = pt_sattree(S, 2);
+    pt_seek(&c, src, 0);
+    pt_assertfullpath(&c);
+    pt_release(pt_sattree(S, 2));
+    pt_release(pt_from(S, "x", 1)); /* tree object for the fork */
+    need = 2 * (size_t)ptK_levels(&c) + 2;
+    d = pt_drainpool(&S->nodes);
+    pt_keep(&d, &S->nodes, need - 1);
+    cnt = 0;
+    asserteq(pt_insert(&c, "z", 1), PT_ERRMEM);
+    assertok(!c.dirty && pt_checktree(src));
+    cnt = 1000;
+    pt_refillpool(&S->nodes, d);
+    pt_release(src);
+    /* A: exactly the budget, at both depths the runner supports */
+    for (lv = 2; lv >= 1; --lv) {
+        src = pt_sattree(S, lv);
+        pt_seek(&c, src, 0);
+        pt_assertfullpath(&c);
+        pt_release(pt_sattree(S, lv));
+        need = 2 * (size_t)ptK_levels(&c) + 2;
+        d = pt_drainpool(&S->nodes);
+        pt_keep(&d, &S->nodes, need);
+        cnt = 0;
+        asserteq(pt_insert(&c, "z", 1), PT_OK);
+        asserteq(S->nodes.freed_obj, 0);
+        cnt = 1000;
+        pt_refillpool(&S->nodes, d);
+        assertok(pt_checktree(c.tree) && pt_checkcursor(&c, 0));
+        pt_release(c.tree), pt_release(src);
+    }
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* append shares the insert budget: same witness, cursor left after the
+ * appended byte instead of before it */
+TEST(append_need) {
+    int       cnt = 1000;
+    pt_State *S = pt_open(&oom_alloc, &cnt);
+    pt_Buffer src;
+    pt_Cursor c;
+    pt_Drain  d;
+    size_t    need;
+    src = pt_sattree(S, 2);
+    pt_seek(&c, src, 0);
+    pt_assertfullpath(&c);
+    pt_release(pt_sattree(S, 2));
+    pt_release(pt_from(S, "x", 1));
+    need = 2 * (size_t)ptK_levels(&c) + 2;
+    d = pt_drainpool(&S->nodes);
+    pt_keep(&d, &S->nodes, need);
+    cnt = 0;
+    asserteq(pt_append(&c, "z", 1), PT_OK);
+    asserteq(S->nodes.freed_obj, 0);
+    cnt = 1000;
+    pt_refillpool(&S->nodes, d);
+    assertok(pt_checktree(c.tree) && pt_checkcursor(&c, 1));
+    pt_release(c.tree), pt_release(src);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* the insert path splits a hole piece when the cursor sits strictly inside
+ * it: that fresh right half comes from the holes pool, so a drained holes
+ * pool must fail cleanly instead of tripping ptH_new's check (the reserve
+ * is taken before any tree change, so the operation stays transactional) */
+TEST(append_holesplit_oom) {
+    int       cnt = 1000;
+    pt_State *S = pt_open(&oom_alloc, &cnt);
+    pt_Buffer b = treeV(0, leafV(holeV("abcd"), litV("ef")));
+    pt_Cursor c;
+    pt_Drain  dn, dl;
+    pt_seek(&c, b, 2);
+    /* a generous node budget: only the holes pool may be short here */
+    pt_release(
+            treeV(2, innerV(innerV(leafV(litV("a"), litV("b")),
+                                   leafV(litV("c"), litV("d"))),
+                            innerV(leafV(litV("e"), litV("f")),
+                                   leafV(litV("g"), litV("h"))))));
+    pt_release(
+            treeV(2, innerV(innerV(leafV(litV("i"), litV("j")),
+                                   leafV(litV("k"), litV("l"))),
+                            innerV(leafV(litV("m"), litV("n")),
+                                   leafV(litV("o"), litV("p"))))));
+    dn = pt_drainpool(&S->nodes);
+    pt_keep(&dn, &S->nodes, 8);
+    dl = pt_drainpool(&S->holes);
+    cnt = 0;
+    asserteq(pt_append(&c, "Z", 1), PT_ERRMEM);
+    assertok(!c.dirty && pt_checktree(b) && pt_checkcursor(&c, 2));
+    asserteq(S->nodes.freed_obj, 8); /* node part untouched */
+    cnt = 1000;
+    pt_refillpool(&S->holes, dl), pt_refillpool(&S->nodes, dn);
+    pt_release(b);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* same for splice: the delete phase trims the hole and leaves the cursor
+ * inside it, so the insert phase needs a fresh hole as well */
+TEST(splice_holesplit_oom) {
+    int       cnt = 1000;
+    pt_State *S = pt_open(&oom_alloc, &cnt);
+    pt_Buffer b = treeV(0, leafV(holeV("abcdef"), litV("XY")));
+    pt_Cursor c;
+    pt_Drain  dn, dl;
+    pt_seek(&c, b, 2);
+    /* a generous node budget: only the holes pool may be short here */
+    pt_release(
+            treeV(2, innerV(innerV(leafV(litV("a"), litV("b")),
+                                   leafV(litV("c"), litV("d"))),
+                            innerV(leafV(litV("e"), litV("f")),
+                                   leafV(litV("g"), litV("h"))))));
+    pt_release(
+            treeV(2, innerV(innerV(leafV(litV("i"), litV("j")),
+                                   leafV(litV("k"), litV("l"))),
+                            innerV(leafV(litV("m"), litV("n")),
+                                   leafV(litV("o"), litV("p"))))));
+    dn = pt_drainpool(&S->nodes);
+    pt_keep(&dn, &S->nodes, 8);
+    dl = pt_drainpool(&S->holes);
+    cnt = 0;
+    asserteq(pt_splice(&c, 1, "Z", 1), PT_ERRMEM);
+    assertok(!c.dirty && pt_checktree(b) && pt_checkcursor(&c, 2));
+    asserteq(S->nodes.freed_obj, 8);
+    cnt = 1000;
+    pt_refillpool(&S->holes, dl), pt_refillpool(&S->nodes, dn);
+    pt_release(b);
     asserteq(S->nodes.live_obj, 0);
     asserteq(S->holes.live_obj, 0);
     pt_close(S);
@@ -1014,6 +1355,34 @@ TEST(remove_across_leaves) {
     assertok(pt_checktree(c.tree));
     assertok(pt_checkcursor(&c, 2));
     pt_asserttree(c.tree, 0, leafV(litV("aa"), litV("ddd")));
+    pt_release(c.tree), pt_release(b);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* the settle pass inside stitchnode shrinks the dead level: deleting the
+ * first byte empties the leftmost leaf container, foldnode(0) merges the
+ * root's two children, and the trailing shrinkroot drops levels 2 -> 1.
+ * Without that trailing pass the settled tree keeps levels == 2 with a
+ * single root child. */
+TEST(remove_shrinkroot) {
+    pt_State *S = pt_open(&test_alloc, NULL);
+    pt_Buffer b = treeV(
+            2, innerV(innerV(leafV(litV("a"), litV("b")),
+                             leafV(litV("c"), litV("d"))),
+                      innerV(leafV(litV("e"), litV("f")),
+                             leafV(litV("g"), litV("h")))));
+    pt_Cursor c;
+    assertok(pt_checktree(b));
+    pt_seek(&c, b, 0);
+    asserteq(pt_remove(&c, 1), PT_OK);
+    assertok(pt_checktree(c.tree));
+    assertok(pt_checkcursor(&c, 0));
+    pt_asserttree(
+            c.tree, 1,
+            innerV(leafV(litV("b"), litV("c"), litV("d")),
+                   leafV(litV("e"), litV("f")), leafV(litV("g"), litV("h"))));
     pt_release(c.tree), pt_release(b);
     asserteq(S->nodes.live_obj, 0);
     asserteq(S->holes.live_obj, 0);
@@ -4529,6 +4898,89 @@ static void maketree(pt_State *S, pt_Cursor *C, size_t off) {
     C->dirty = 1;
 }
 
+/* every splice on a saturated 64-byte tree forks for real (the source
+ * version is what makes copy-on-write run), so the entry budget must cover
+ * every position and length: 6*levels+8 nodes and one hole */
+TEST(splice_budget_brute) {
+    static const size_t lens[6] = {0, 1, 2, 3, 5, 9};
+    int                 cnt = 1000, nok = 0, ins, r, w;
+    size_t              pos, li, total = 64, epos, need;
+    pt_State           *S = pt_open(&oom_alloc, &cnt);
+    pt_Buffer           src;
+    pt_Cursor           c;
+    pt_Drain            dn, dh;
+    for (w = 0; w < 2; ++w)
+        for (pos = 0; pos <= total; pos += 3)
+            for (li = 0; li < 6; ++li)
+                for (ins = 0; ins <= 1; ++ins) {
+                    if (w)
+                        src = pt_satwide(S, 2, 1);
+                    else
+                        src = pt_sattree(S, 2);
+                    pt_seek(&c, src, pos), epos = pos;
+                    for (r = 0; r < 3; ++r) pt_release(pt_sattree(S, 2));
+                    pt_release(
+                            pt_from(S, "x", 1)); /* tree object for the fork */
+                    if (ins) pt_release(treeV(0, leafV(holeV("hh"))));
+                    need = 3 * (size_t)ptK_levels(&c) + 3;
+                    dn = pt_drainpool(&S->nodes);
+                    pt_keep(&dn, &S->nodes, need);
+                    dh = pt_drainpool(&S->holes);
+                    if (ins) pt_keep(&dh, &S->holes, 1);
+                    cnt = 0;
+                    asserteq(
+                            pt_splice(
+                                    &c, lens[li], ins ? "!" : NULL,
+                                    ins ? 1 : 0),
+                            PT_OK);
+                    nok += 1;
+                    cnt = 1000;
+                    pt_refillpool(&S->holes, dh), pt_refillpool(&S->nodes, dn);
+                    assertok(pt_checktree(c.tree));
+                    assertok(pt_checkcursor(&c, epos + (ins ? 1 : 0)));
+                    if (c.tree != src) pt_release(c.tree);
+                    pt_release(src); /* pt_seek does not retain */
+                }
+    assertok(nok > 400);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* same for remove: the budget is 2*levels+2 nodes and no hole at all */
+TEST(remove_tight_brute) {
+    static const size_t lens[6] = {0, 1, 2, 3, 5, 9};
+    int                 cnt = 1000, tight = 0;
+    size_t              pos, li, total = 64, epos, need;
+    pt_State           *S = pt_open(&oom_alloc, &cnt);
+    pt_Buffer           src;
+    pt_Cursor           c;
+    pt_Drain            dn, dh;
+    for (pos = 0; pos <= total; pos += 3)
+        for (li = 0; li < 6; ++li) {
+            src = pt_sattree(S, 2), pt_seek(&c, src, pos), epos = pos;
+            pt_release(pt_sattree(S, 2));
+            pt_release(pt_from(S, "x", 1));
+            need = 2 * (size_t)ptK_levels(&c) + 2;
+            dn = pt_drainpool(&S->nodes);
+            pt_keep(&dn, &S->nodes, need);
+            dh = pt_drainpool(&S->holes); /* remove must not need one */
+            cnt = 0;
+            asserteq(pt_remove(&c, lens[li]), PT_OK);
+            tight += 1;
+            cnt = 1000;
+            pt_refillpool(&S->holes, dh), pt_refillpool(&S->nodes, dn);
+            assertok(pt_checktree(c.tree));
+            assertok(pt_checkcursor(&c, epos));
+            if (c.tree != src) pt_release(c.tree);
+            pt_release(src);
+        }
+    assertok(tight > 100);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
 TEST(splice_brute) {
     int const nb = 288;
     pt_State *S = pt_open(&test_alloc, NULL);
@@ -5190,7 +5642,88 @@ TEST(fork_cov_oom) {
     pt_close(S);
 }
 
-/* cov: pt_edit hole reserve fails after beginedit succeeds */
+/* cov: node and hole reserves fit, only the tree fork is dry */
+TEST(fork_dry) {
+    int       cnt = 1000;
+    pt_State *S = pt_open(&oom_alloc, &cnt);
+    pt_Buffer b;
+    pt_Cursor c;
+    pt_Drain  td, nd, hd;
+    b = pt_from(S, "abcd", 4);
+    pt_seek(&c, b, 0);
+    asserteq(pt_edit(&c, 0, "h", 1), PT_OK); /* seed a holes page */
+    pt_release(pt_rollback(&c));
+    pt_release(pt_sattree(S, 1)); /* seed a nodes page */
+    td = pt_drainpool(&S->trees);
+    cnt = 0;
+    nd = pt_drainpool(&S->nodes);
+    hd = pt_drainpool(&S->holes);
+    pt_keep(&nd, &S->nodes, 3), pt_keep(&hd, &S->holes, 2);
+    pt_seek(&c, b, 1);
+    asserteq(pt_edit(&c, 0, "y", 1), PT_ERRMEM);
+    asserteq(pt_edit(&c, 2, "y", 1), PT_ERRMEM);
+    asserteq(pt_splice(&c, 0, "y", 1), PT_ERRMEM);
+    asserteq(pt_splice(&c, 2, "y", 1), PT_ERRMEM);
+    assertok(!c.dirty && pt_checktree(b));
+    cnt = 1000;
+    pt_refillpool(&S->holes, hd), pt_refillpool(&S->nodes, nd);
+    pt_refillpool(&S->trees, td);
+    pt_release(b);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* cov: pt_edit refuses when the holes pool and the page allocator are dry */
+/* pt_edit's insert path allocates one hole for the new piece plus one when
+ * the cursor splits an existing hole: exactly two, and both are reserved
+ * before the tree is forked, so a short holes pool refuses cleanly. */
+TEST(edit_needholes) {
+    int       cnt = 1000;
+    pt_State *S = pt_open(&oom_alloc, &cnt);
+    pt_Buffer b = pt_empty(S);
+    pt_Cursor c;
+    pt_Drain  dn, dl;
+    pt_seek(&c, b, 0);
+    asserteq(pt_edit(&c, 0, "0123456789abcdef", 16), PT_OK); /* full hole */
+    pt_locate(&c, 5);
+    pt_release(treeV(0, leafV(holeV("xx"), holeV("yy")))); /* two free holes */
+    pt_release(
+            treeV(2, innerV(innerV(leafV(litV("a"), litV("b")),
+                                   leafV(litV("c"), litV("d"))),
+                            innerV(leafV(litV("e"), litV("f")),
+                                   leafV(litV("g"), litV("h"))))));
+    pt_release(
+            treeV(2, innerV(innerV(leafV(litV("i"), litV("j")),
+                                   leafV(litV("k"), litV("l"))),
+                            innerV(leafV(litV("m"), litV("n")),
+                                   leafV(litV("o"), litV("p"))))));
+    dn = pt_drainpool(&S->nodes);
+    pt_keep(&dn, &S->nodes, 8);
+    dl = pt_drainpool(&S->holes);
+    pt_keep(&dl, &S->holes, 1);
+    cnt = 0;
+    asserteq(pt_edit(&c, 0, "Z", 1), PT_ERRMEM); /* one hole short */
+    assertok(pt_checktree(c.tree) && pt_checkcursor(&c, 5));
+    assertok(S->holes.freed_obj == 1 && S->nodes.freed_obj == 8);
+    cnt = 1000;
+    pt_refillpool(&S->holes, dl);
+    dl = pt_drainpool(&S->holes);
+    pt_keep(&dl, &S->holes, 2); /* exactly two holes again */
+    cnt = 0;
+    asserteq(pt_edit(&c, 0, "Z", 1), PT_OK);
+    asserteq(S->holes.freed_obj, 0); /* both spent by the split */
+    assertok(pt_checktree(c.tree) && pt_checkcursor(&c, 6));
+    cnt = 1000;
+    pt_refillpool(&S->nodes, dn);
+    pt_asserttree(
+            c.tree, 0, leafV(holeV("01234"), holeV("Z"), holeV("56789abcdef")));
+    pt_release(c.tree), pt_release(b);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
 TEST(edit_cov_holeoom) {
     int       cnt = 1000;
     pt_State *S = pt_open(&oom_alloc, &cnt);
@@ -5454,6 +5987,102 @@ TEST(compact_oom) {
     cnt = 1000;
     pt_asserttree(nb, 0, leafV(litV("aabbcc")));
     pt_release(nb), pt_release(b3), pt_release(b2), pt_release(b1);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* the freeze round only needs one node: foldnode's copy-on-write of a stale
+ * neighbour, which the merge right after gives back.  levels == 2 so the old
+ * "levels" budget (2) and the exact one (1) are distinguishable.  The stale
+ * nodes stay owned by the source trees, so releasing the transient tree must
+ * not free them. */
+static void commitneed_tree(
+        pt_State *S, pt_Cursor *C, pt_Buffer *src, pt_Buffer *src2) {
+    *src = treeV(
+            2, innerV(innerV(leafV(litV("pq"), litV("rs")),
+                             leafV(litV("tu"), litV("vw"))),
+                      innerV(leafV(litV("m1"), litV("m2")))));
+    *src2 = treeV(
+            1, innerV(leafV(litV("XY"), litV("Z")),
+                      leafV(litV("n1"), litV("n2"))));
+    editV(C, 0, 2,
+          innerV(innerV(leafV(holeV("ab"), holeV("cd")),
+                        (*src2)->root.children[0]),
+                 (*src)->root.children[0]));
+    C->tree->root.version = ++S->max_version; /* siblings keep source ver */
+    C->tree->root.children[0]->version = C->tree->root.version;
+    C->tree->root.children[0]->children[0]->version = C->tree->root.version;
+    assertok(pt_reserve(C, 0) != NULL); /* arena block for the frozen data */
+}
+
+TEST(commit_need) {
+    int       cnt = 1000;
+    pt_State *S = pt_open(&oom_alloc, &cnt);
+    pt_Cursor C;
+    pt_Drain  d;
+    pt_Buffer snap, src, src2;
+    /* B: no node at all -- the freeze reserve refuses and keeps the tree */
+    commitneed_tree(S, &C, &src, &src2);
+    d = pt_drainpool(&S->nodes);
+    cnt = 0;
+    asserteq(pt_commit(&C), NULL);
+    assertok(C.tree != NULL && pt_checktree(C.tree));
+    cnt = 1000;
+    pt_refillpool(&S->nodes, d);
+    pt_release(C.tree), pt_release(src), pt_release(src2);
+    /* A: exactly one node -- the fold's neighbour copy is the whole need */
+    commitneed_tree(S, &C, &src, &src2);
+    d = pt_drainpool(&S->nodes);
+    pt_keep(&d, &S->nodes, 1);
+    cnt = 0;
+    snap = pt_commit(&C);
+    assertok(snap != NULL && C.tree == NULL);
+    cnt = 1000;
+    pt_refillpool(&S->nodes, d);
+    assertok(pt_checktree(snap));
+    pt_asserttree(
+            snap, 1,
+            innerV(leafV(litV("abcd"), litV("XY"), litV("Z")),
+                   leafV(litV("pq"), litV("rs")),
+                   leafV(litV("tu"), litV("vw"))));
+    pt_release(snap), pt_release(src), pt_release(src2);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+/* makechain spends only the chain it builds: two nodes when the root has to
+ * grow (from < 0) and exactly one when an ancestor already has room.  A
+ * nine-piece source reaches both chains, so the whole compact needs 2 + 1. */
+TEST(compact_need) {
+    int         cnt = 1000;
+    pt_State   *S = pt_open(&oom_alloc, &cnt);
+    static char pcs[9][2];
+    char        ref[9], rd[9];
+    pt_Buffer   b, snap;
+    pt_Cursor   c;
+    pt_Drain    d;
+    int         i;
+    for (i = 0; i < 9; ++i) pcs[i][0] = ref[i] = (char)('a' + i);
+    b = pt_from(S, &pcs[0][0], 1);
+    pt_seek(&c, b, 1);
+    for (i = 1; i < 9; ++i) asserteq(pt_append(&c, &pcs[i][0], 1), PT_OK);
+    snap = pt_commit(&c);
+    pt_release(b), b = snap;
+    pt_release(pt_from(S, "x", 1)); /* the forked tree object */
+    d = pt_drainpool(&S->nodes);
+    pt_keep(&d, &S->nodes, 3);
+    cnt = 0;
+    snap = pt_compact(S, b);
+    assertok(snap != NULL);
+    cnt = 1000;
+    pt_refillpool(&S->nodes, d);
+    assertok(pt_checktree(snap));
+    pt_seek(&c, snap, 0);
+    asserteq(pt_read(&c, rd, 9), 9);
+    assertok(memcmp(rd, ref, 9) == 0);
+    pt_release(snap), pt_release(b);
     asserteq(S->nodes.live_obj, 0);
     asserteq(S->holes.live_obj, 0);
     pt_close(S);

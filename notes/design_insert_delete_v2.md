@@ -142,19 +142,18 @@ scanner 输出直填叶：先补完当前末叶，再分配新叶填至满或 sc
 
 ## 7. lcD_makechain + lcD_findroom — 扩容
 
-`static int lcD_makechain(lc_Cursor *C, int from, int to, int nofail)`
+`static int lcD_makechain(lc_Cursor *C, int from, int to)`
 
-自 `from` 层至 `to - 1` 层逐层建空节点，设 `C->paths`。`from < 0` 时先 rootpush。返回 1 表示发生了 rootpush（调用方据此修正层级）。
+自 `from` 层至 `to - 1` 层逐层建空节点，设 `C->paths`。`from < 0` 时先 rootpush。返回 1 表示发生了 rootpush（调用方据此修正层级）。纯分配：预留由调用方负责（`lcD_findroom` / `lc_scan` 先调 `lcD_checkchain`），本函数不 reserve、不返回错误。
 
 ### 前置条件
 
 - `C->paths[0..from-1]` 已指向有效节点（rootpush 需此路径完整）
-- `C->tree->S` 有足够节点（`nofail` 为假时已预分配）
+- `C->tree->S` 有足够节点（调用方已 `lcP_reserve` 预分配）
 - `from < to`（否则无层需建）
 
 ### 行为
 
-- 若 `nofail` 为假且 `lcP_reserve` 失败：返回 `LC_ERRMEM`
 - 若 `from < 0`（全满需扩根）：
   - `lcP_alloc` 分配空节点 `nn`，`*nn = *p`（旧根内容拷入新节点）
   - 新根：`bytes[0] = tree->bytes`、`breaks[0] = tree->breaks`、`children[0] = nn`、`child_count = 1`
@@ -173,7 +172,7 @@ scanner 输出直填叶：先补完当前末叶，再分配新叶填至满或 sc
 
 ---
 
-`static int lcD_findroom(lc_Cursor *C, int l, int nofail)`
+`static int lcD_findroom(lc_Cursor *C, int l, int nofail, int *touched)`
 
 向上寻首个非末位层 `fl`，搬右兄弟入 `rt`，垂空链至 `l` 层。stitchnode 与 lc_append 共用。
 
@@ -193,7 +192,9 @@ scanner 输出直填叶：先补完当前末叶，再分配新叶填至满或 sc
   - `lcM_up(C, fl - 1, -db, -dl)`：祖先扣减搬出部分
   - `lcN_copy(&rt[k], 0, p, i + 1, c)`：搬右兄弟入 rt
   - `rt[k].child_count = c`，`p->child_count = i + 1`：父节点截断
-- **垂空链**：`assert(fl < l)`（参见"找 fl"段约束），返回 `lcD_makechain(C, fl, l, nofail)`
+- **预留**：`nofail` 为假时先 `lcD_checkchain(C, from, to)`＝`lcP_reserve(S, &S->nodes, to - from + (from < 0))`，失败返回 `LC_ERRMEM`（此时树未被改动）
+- **垂空链**：`assert(fl < l)`（参见"找 fl"段约束），返回 `lcD_makechain(C, fl, l)`
+- **`touched` 出参**：回填本次调用在树里实际动过的最深层——`fl >= 0` 时为 `l - fl`（搬尾在 `fl` 层、垂链铺在 `fl..l` 层，故动过的层恒是前缀 `[0, l-fl]`），`fl < 0`（仅 rootpush，链挂在 `root.children[1]` 上、由回滚的降根整条释放）时为 0。`lc_append` 对各轮取最大值累计为回滚水位 `water`；`lcD_stitchnode` 传 `NULL`。**这是 `[L]` 独有的领域差异**：`[L]` 的 append 是批量的、无法在入口一次预留，失败要靠 `lcB_rollback` 回滚，而回滚必须知道该处理哪些层。
 
 ### 后置条件
 
@@ -357,9 +358,9 @@ d 的语义同 stitchnode 中的 d——"真正期待的行在当前行之前多
 
 ## 11. lcD_rebalance — 缩根
 
-`static void lcD_rebalance(lc_Cursor *C, int l)`
+`static void lcD_rebalance(lc_Cursor *C)`
 
-自 `l` 层向上逐层 foldnode 修复 underfill，最后缩根（root 仅一子时降层）。不修 paths 后的 off/lnu/loff——游标位置由调用方后续复原。
+函数内取 `l = lcK_levels(C) - 1`，自 `l` 层向上逐层 foldnode 修复 underfill，最后缩根（root 仅一子时降层，`lcD_shrinkroot`）。不修 paths 后的 off/lnu/loff——游标位置由调用方后续复原。三库（linecache / spantree / piecetab）此函数逐语句同形。
 
 ### 前置条件
 
@@ -420,7 +421,7 @@ stitch 的主引擎。洋葱序（自叶向根，k=0..levels）将 `rt[k]` 中�
   - 若全部搬完（`m == rtcc`）且 `kl > 0`（非根层），跳过本轮修复。`kl == 0` 恒进入修复——此为保底修复
   - 为何 kl==0 不早退？见下文"保底修复"
 - **保底修复**（kl == 0 且 root.child_count == 1）：
-  - `lcD_rebalance(C, 0)` 缩根（若根仅一子）。缩根使 `lcK_levels(C)` 减 1
+  - `lcD_shrinkroot(C)` 缩根（若根仅一子）。缩根使 `lcK_levels(C)` 减 1
   - `l -= (k - lcK_levels(C))`：因缩根减层，`l` 需下移适配。此调整使后续 foldnode 循环在正确的层级范围执行
   - 为何"保底"？stitchnode 缝合过程中 l 逐次下移、逐步缩小修复范围；但根层（kl==0）是最后一道防线——不论此前 l 停留在何层，kl==0 时强制执行 foldnode + 若根仅一子则缩根，确保整树平衡
 - **foldnode 循环**：`for (fl = kl; fl < l; ++fl) lcD_foldnode(C, (fl == kl), fl)`
@@ -471,7 +472,7 @@ lc_append 之缝合入口。调度 mergeleaf → stitchnode → foldleaf → 位
 
 ### 事务性保证
 
-stitch 为**事务操作**：要么完全成功，要么完全失败（返回 `LC_ERRMEM`）。保证来自入口处的 `lcP_reserve(S, &S->nodes, l + 2)`——预分配 `levels + 2` 个节点供 stitchnode 内全部 `makechain` 调用使用。
+stitch 为**事务操作**：要么完全成功，要么完全失败（返回 `LC_ERRMEM`）。保证来自 `lc_append` 在 `lcD_stitch` 前的 `lcP_reserve(S, &S->nodes, levels + 2)`——预分配 `levels + 2` 个节点供 stitchnode 内全部 `makechain` 调用使用。`lc_remove` / `lc_splice` 不走这条预算：删段的峰值缺口为 0（`cutrange` / `lcN_remove` 先回池，`makechain` 后分配），故两者零预留。
 
 **节点数上界证明**：stitchnode 洋葱序（k=0..levels）中，每轮仅在 `m < rtcc`（当前父节点装不下 rt[k] 全部数据）时调用 `findroom → makechain`。此时 `l = kl = levels - k`。`makechain(from=fl, to=kl)` 消耗 `max(0, kl - fl) + rootpush` 个节点。
 
@@ -481,7 +482,7 @@ stitch 内部其他子调用均不分配节点：`mergeleaf` 仅释放叶子，`
 
 ### 前置条件
 
-- `lcP_reserve` 已预分配 `l + 2` 个节点（保 stitchnode 不 OOM）
+- `lc_append` 已用 `lcP_reserve` 预分配 `levels + 2` 个节点（保 stitchnode 不 OOM）
 - `C` 在末叶或末叶后（`assert(idx >= cc - 1)`）
 - `rt[0..levels]` 存有待缝合数据
 
@@ -491,7 +492,7 @@ stitch 内部其他子调用均不分配节点：`mergeleaf` 仅释放叶子，`
 - `d = (cc && rtcc) ? lcD_mergeleaf(C) : 0`：将裂点叶与 `rt[0].children[0]` 合并。`d` 的语义见 §8——为 0 则表示完全合并（无需 stitch末尾 修正）；> 0 则表示部分合并（`d = LC_LEAF_FANOUT - bc` = 合并后 C 之后的行数）
 - `lcD_stitchnode(C)`：洋葱序缝合（§12），事务性保证永不失败
 - 修正 `paths[l]`：若 `i >= cc`（C 在越界位置），回退至末叶：`i = cc - 1`，`C->paths[l] = &p->children[i]`，`C->lnu = p->breaks[i]`，`C->off -= p->bytes[i]`
-- `lcD_foldleaf(C)`：叶层折叠。折叠后可能 `lcD_rebalance(C, l-1)` 缩根
+- `lcD_foldleaf(C)`：叶层折叠。合并了叶则调 `lcD_rebalance(C)` 修复内部层并缩根
 - **d 修正**（§8 `d` 的语义之应用）：
   - 若 `d > C->lnu`：foldleaf 没有把 C 移到足够远。d 中有一部分行跨到了前一个叶子中。执行 backwardnode 回到前一个叶子：`d -= C->lnu`、`C->lnu = p->breaks[i]`（用当前叶行数做基底）
   - `C->lnu -= d`：最终定位。无论是否 backwardnode，此行必然执行——将 C 在叶内的行索引修正
@@ -533,37 +534,41 @@ S3 结束后调用，通过 sC（cutleaf 后快照）定位裂点叶，补写 `r
 
 ## 15. lcB_rollback — OOM 回滚
 
-`static int lcB_rollback(lc_Cursor *C, lc_Node *rt, lc_Cursor *sC, int sl)`
+`static int lcB_rollback(lc_Cursor *C, lc_Cursor *sC, int sl, int w)`
 
-OOM 时恢复树至 cutleaf 后状态。降根至裂叶时高度（清除 append/findroom 新增的 scanner 数据）、合并裂点叶、释右侧孤子树、缝合 rt。返回 `LC_ERRMEM`。
+OOM 时恢复树至 cutleaf 后状态。降根至裂叶时高度（清除 append/findroom 新增的 scanner 数据）、复原游标、合并裂点叶、按 `rt` 逐层复位。返回 `LC_ERRMEM`。
 
 ### 前置条件
 
 - `sC` 为 cutleaf 后的游标快照，`sl = lcK_levels(sC)`（裂叶时树高度）
+- `w` 为回滚水位：`lc_append` 累计的各轮 `findroom` `touched` 最大值（cutleaf 的 `k == 0` 恒在 `[0, w]` 内）
 - 树已部分修改（append/findroom 可能已写入部分数据、可能已 rootpush 增层）
 - **严格依赖 stitch 事务性**：stitch 第一步 `mergeleaf` 会修改树（合并左右叶）和 rt[0]（`rt[0].children[0]` 被换为旧左叶指针），stitchnode 全程修改 rt 各层数据。若 stitch 中途失败，树和 rt 均处于不一致状态，rollback 无法正确恢复。stitch 的事务性由 §13 的 reserve 保证，故当前实现安全。
 
 ### 行为
 
 - **降根**（`for (k = levels; k > sl; --k)`）：清除 findroom rootpush 增加的层
-  - `lcN_freechildren`：释放 root.children[1..child_count] 所有子树
+  - `lcN_purge`：释放 root.children[1..child_count] 所有子树
   - `tree->bytes = root.bytes[0]`、`tree->breaks = root.breaks[0]`（退度量至裂时水平）
   - `p = root.children[0]`，`root = *p`（旧根内容拷回 root），`lcP_free(nodes, p)`（释包裹节点）
 - **复原游标**：`*C = *sC`，`C->tree->levels = sl`
-- **合并裂点叶**（若 `rt[0].child_count > 0`，即有数据需要复原）：
-  - `memcpy(&lcK_leaf(C)->bytes[C->lnu], rt[0].children[0], rtbc * sizeof(unsigned))`：右半叶行拷回左半叶
-  - `lcM_up(C, sl, rt[0].bytes[0], rt[0].breaks[0])` 度量加回
-  - `*C->paths[sl] = rt[0].children[0]`（右半叶指针放回树），`rt[0].children[0] = (lc_Node *)lf`（左半叶移入 rt 待缝合）
-- **缝合 rt**（洋葱序 `for (l = 0; l <= sl; ++l)`，`k = sl - l`）：
-  - `i = idx(C, p, l) + (k > 0)`（非叶层索引右移一位——因 mergeleaf 搬右兄弟到 rt 时已改 child_count）
-  - `db/dl = rt[k] 和 - p.children[i..cc] 和`（净差量）
-  - `lcN_freechildren` 释旧子，`lcN_copy` 拷入 rt 内容
-  - `lcM_up(C, l-1, db, dl)`，`p->child_count = i + rt[k].child_count`
+- **叶子层复位**（`lcB_rollbackleaf(C, sl, rt)`，`k == 0` 层；它自己把叶子层差量交给祖先，故主循环从 `k = 1` 起）：
+  - `p = parent(C, sl)`，`i = idx(C, p, sl)`，`cc = cc(p)`，`rtcc = cc(rt[0])`
+  - **`rtcc > 0`（cutleaf 裂过叶）**：右半叶行拷回左半叶（`memcpy(&lcK_leaf(C)->bytes[C->lnu], ...)`），`rt[0].bytes[0]/breaks[0]` 改为"左半 + 右半"的合并叶，`*C->paths[sl] = rt[0].children[0]`（原右半叶指针放回游标槽以便被释放），`rt[0].children[0] = lf`（合并叶移入 rt 待缝合）
+  - **`rtcc == 0` 且 `i < cc`（cutleaf 未裂叶：`cr = breaks[i] - lnu == 0`）**：游标那片叶从未离开树、append 只是原地增长它 —— 保留该叶，按 `C->lnu` 截回原行长，`i` 右移一位，只释放其右侧由 append 新建的 child。该分支让"append 失败后文档原样"成立
+  - **`i < cc` 守卫**覆盖"游标停在末子之后的空槽"（`i == cc`，见 §8 尾后语义）：那时没有原叶可截断，退回"自 `i` 起释放"
+  - 叶子层净差量 `db/dl`（含截断差量）→ `lcN_purge(C->tree->S, p, 0, i, cc)`、`lcN_copy(p, i, &rt[0], 0, rtcc)`、`lcN_setcc(p, i + rtcc)`
+  - `lcM_up(C, sl - 1, db, dl)`：把叶子层差量一次性交给祖先路径（`lcM_up` 覆盖 levels `sl-1..0` 与 `tree->bytes/breaks`）
+- **上层复位**（`for (k = 1; k <= sl && k <= w; ++k)`，`l = sl - k`）：
+  - `i = idx(C, p, l)`：先在本层 cursor 槽累加低层净差量（`p->bytes[i] += db, p->breaks[i] += dl`），再 `++i`（非叶层的游标 child 是 append 路径本身、必须保留，其右侧才是待替换的搬运物）
+  - `db/dl = rt[k] 度量和 - p.children[i..cc] 度量和`（本层净差量，累加后交给上一层）
+  - `lcN_purge` 释放旧子，`lcN_copy` 拷入 rt 内容，`p->child_count = i + rt[k].child_count`
+  - 收尾 `lcM_up(C, sl - k, db, dl)` 把剩余差量退给更高层
 - 返回 `LC_ERRMEM`
 
 ### 后置条件
 
-- 树完全恢复至 cutleaf 后状态（scanner 填充数据全部清除）
+- 树完全恢复至 cutleaf 后状态（scanner 填充数据全部清除，逐行内容与总量均不变）
 - C 指向裂点左叶末（与 sC 相同）
 
 ## 16. lc_append — 插入主流程
@@ -579,9 +584,9 @@ OOM 时恢复树至 cutleaf 后状态。降根至裂叶时高度（清除 append
 **S3 — 追搬轮替**：while 循环：
 - `r = lcB_append(C, sc, ud)`：scanner 输出填叶。`r < 0` → rollback；`r == 0` → break（scanner 耗尽）
 - `C->off += C->loff, C->loff = 0, C->lnu = 0`（append 已做此操作，此为防御性）
-- `r = lcD_findroom(C, lcK_levels(C), 0)`：叶父满则扩容搬右兄弟。失败 → rollback
+- `r = lcD_findroom(C, lcK_levels(C), 0, &touched)`：叶父满则扩容搬右兄弟；成功后 `water = max(water, touched)` 记录回滚水位。失败（预留不足，树未动）→ `lcB_rollback(C, &sC, sl, water)`
 
-**S4 — 缝合**：`lcD_stitch(C)`；节点池已由 `lcD_findroom` 的入口 reserve 覆盖，缝合不失败。
+**S4 — 缝合**：`lcD_stitch(C)`；节点池已由 `lc_append` 的 `lcP_reserve(levels + 2)` 覆盖，缝合不失败。
 
 **S5 — 补 e/rm**：
 - `lcB_fixsource(&sC, sl, C->col)`：补裂点残字节 `rm`。若返 1：sC 与 C 同叶 → `C->loff += C->col`；否则 → `C->off += C->col`。`C->col = 0`

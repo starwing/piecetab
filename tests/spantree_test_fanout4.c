@@ -38,7 +38,10 @@ TEST(state) {
 }
 
 /* reserve failure: drained pool + failing page alloc must surface
- * SP_ERRMEM and leave the tree untouched (transactional reserve) */
+ * SP_ERRMEM and leave the tree untouched (transactional reserve).  Only
+ * the entries that still reserve are listed here; append / insert /
+ * fill / remove exactness lives in the *_need tests, which pin both the
+ * draw and the refusal against a counted pool. */
 TEST(reserve_oom) {
     int       cnt = 1 << 20;
     sp_State *S = sp_open(&oom_alloc, &cnt);
@@ -49,14 +52,262 @@ TEST(reserve_oom) {
     asserteq(sp_append(&C, 16), SP_OK);
     d = sp_drainpool(&S->nodes);
     cnt = 0;
-    asserteq(sp_append(&C, 1), SP_ERRMEM);
-    asserteq(sp_insert(&C, 1), SP_ERRMEM);
     asserteq(sp_splice(&C, 1, 1), SP_ERRMEM);
     asserteq(sp_seek(&C, t, 0), SP_OK);
-    asserteq(sp_remove(&C, 3), SP_ERRMEM);
     asserteq(sp_fill(&C, 9, 2), SP_ERRMEM);
-    asserteq(sp_bytes(t), 16);
-    sp_refillpool(&S->nodes, d);
+    sp_refillpool(&S->nodes, d), cnt = 1 << 20;
+    sp_asserttree(t, 0, leafV(0, 16, 0, 0));
+    sp_freetree(t), sp_close(S);
+}
+
+/* need exactness: a saturated tree forces makeroom to root-split plus one
+ * split per level, so insertion needs exactly levels + 2 nodes.  Handing
+ * the pool that many real objects with page allocation dead makes the
+ * entry reserve a no-op (the honest count is already enough), so the
+ * business code itself has to live within the chain: one object less is
+ * refused with the tree untouched, exactly that many is drawn dry, and
+ * the result must be the precise expected tree. */
+TEST(insert_need) {
+    int       cnt = 1 << 20;
+    sp_State *S = sp_open(&oom_alloc, &cnt);
+    sp_Tree  *t = spT_sattree(S), *e;
+    sp_Cursor C;
+    sp_Drain  d;
+    size_t    total = sp_bytes(t), need = (size_t)t->levels + 2;
+    assertok(t->levels == 1 && sp_checktree(t));
+    e = spT_sattree(S);
+    asserteq(sp_seek(&C, t, total), SP_OK);
+    spT_assertfullpath(&C);
+    d = sp_drainpool(&S->nodes), spT_keep(&d, &S->nodes, need - 1), cnt = 0;
+    asserteq(sp_insert(&C, 1), SP_ERRMEM);
+    assertok(S->nodes.freed_obj == need - 1 && sp_checkcursor(&C, total));
+    sp_refillpool(&S->nodes, d), cnt = 1 << 20;
+    assertok(sp_comparetree(t, e));
+    sp_freetree(e);
+    d = sp_drainpool(&S->nodes), spT_keep(&d, &S->nodes, need), cnt = 0;
+    asserteq(sp_insert(&C, 1), SP_OK);
+    asserteq(S->nodes.freed_obj, 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, total));
+    sp_refillpool(&S->nodes, d), cnt = 1 << 20;
+    sp_asserttree(
+            t, 2,
+            innerV(innerV(leafV(1, 1, 2, 1, 3, 1, 4, 1, 0, 0),
+                          leafV(5, 1, 6, 1, 7, 1, 8, 1, 0, 0), NULL),
+                   innerV(leafV(9, 1, 10, 1, 11, 1, 12, 1, 0, 0),
+                          leafV(13, 1, 14, 1, 0, 0),
+                          leafV(15, 1, 16, 1, 0, 1, 0, 0), NULL),
+                   NULL));
+    sp_freetree(t), sp_close(S);
+}
+
+/* append twin: at the tree head the new run goes in front, so the same
+ * saturated path needs the same levels + 2 nodes */
+TEST(append_need) {
+    int       cnt = 1 << 20;
+    sp_State *S = sp_open(&oom_alloc, &cnt);
+    sp_Tree  *t = spT_sattree(S), *e;
+    sp_Cursor C;
+    sp_Drain  d;
+    size_t    need = (size_t)t->levels + 2;
+    assertok(t->levels == 1 && sp_checktree(t));
+    e = spT_sattree(S);
+    asserteq(sp_seek(&C, t, 0), SP_OK);
+    spT_assertfullpath(&C);
+    d = sp_drainpool(&S->nodes), spT_keep(&d, &S->nodes, need - 1), cnt = 0;
+    asserteq(sp_append(&C, 1), SP_ERRMEM);
+    assertok(S->nodes.freed_obj == need - 1 && sp_checkcursor(&C, 0));
+    sp_refillpool(&S->nodes, d), cnt = 1 << 20;
+    assertok(sp_comparetree(t, e));
+    sp_freetree(e);
+    d = sp_drainpool(&S->nodes), spT_keep(&d, &S->nodes, need), cnt = 0;
+    asserteq(sp_append(&C, 1), SP_OK);
+    asserteq(S->nodes.freed_obj, 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 1));
+    sp_refillpool(&S->nodes, d), cnt = 1 << 20;
+    sp_asserttree(
+            t, 2,
+            innerV(innerV(leafV(0, 1, 1, 1, 2, 1, 0, 0),
+                          leafV(3, 1, 4, 1, 0, 0),
+                          leafV(5, 1, 6, 1, 7, 1, 8, 1, 0, 0), NULL),
+                   innerV(leafV(9, 1, 10, 1, 11, 1, 12, 1, 0, 0),
+                          leafV(13, 1, 14, 1, 15, 1, 16, 1, 0, 0), NULL),
+                   NULL));
+    sp_freetree(t), sp_close(S);
+}
+
+/* fill exactness at the tree end: the fill starts one byte inside the
+ * last run and ends exactly at the tree tail, so the whole path is full
+ * and the peel's re-append must root-extend at the end -- exactly
+ * levels + 2 nodes, drawn on a path with nothing to reclaim */
+TEST(fill_tail_need) {
+    int       cnt = 1 << 20;
+    sp_State *S = sp_open(&oom_alloc, &cnt);
+    sp_Tree  *t = spT_sattail(S), *e;
+    sp_Cursor C;
+    sp_Drain  d;
+    size_t    total = sp_bytes(t), need = (size_t)t->levels + 2;
+    assertok(t->levels == 1 && sp_checktree(t));
+    e = spT_sattail(S);
+    asserteq(sp_seek(&C, t, total - 1), SP_OK);
+    spT_assertfullpath(&C);
+    d = sp_drainpool(&S->nodes), spT_keep(&d, &S->nodes, need - 1), cnt = 0;
+    asserteq(sp_fill(&C, 99, 1), SP_ERRMEM);
+    assertok(S->nodes.freed_obj == need - 1 && sp_checkcursor(&C, total - 1));
+    sp_refillpool(&S->nodes, d), cnt = 1 << 20;
+    assertok(sp_comparetree(t, e));
+    sp_freetree(e);
+    d = sp_drainpool(&S->nodes), spT_keep(&d, &S->nodes, need), cnt = 0;
+    asserteq(sp_fill(&C, 99, 1), SP_OK);
+    asserteq(S->nodes.freed_obj, 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, total));
+    sp_refillpool(&S->nodes, d), cnt = 1 << 20;
+    sp_asserttree(
+            t, 2,
+            innerV(innerV(leafV(1, 1, 2, 1, 3, 1, 4, 1, 0, 0),
+                          leafV(5, 1, 6, 1, 7, 1, 8, 1, 0, 0), NULL),
+                   innerV(leafV(9, 1, 10, 1, 11, 1, 12, 1, 0, 0),
+                          leafV(13, 1, 14, 1, 0, 0),
+                          leafV(15, 1, 16, 1, 99, 1, 0, 0), NULL),
+                   NULL));
+    sp_freetree(t), sp_close(S);
+}
+
+/* remove needs no node at all: the cut frees the emptied right-path
+ * nodes before the stitch chains are built, so a deletion must complete
+ * with the whole pool drained, page allocation dead and no reserve --
+ * the ralloc check is the judge, one draw past the end trips it.  The
+ * deeper case spans two levels and shrinks the root twice */
+TEST(remove_need) {
+    int       cnt = 1 << 20;
+    sp_State *S = sp_open(&oom_alloc, &cnt);
+    sp_Tree  *t = spT_sattree(S);
+    sp_Cursor C;
+    sp_Drain  d;
+    assertok(sp_checktree(t));
+    asserteq(sp_seek(&C, t, 0), SP_OK);
+    d = sp_drainpool(&S->nodes), cnt = 0;
+    asserteq(sp_remove(&C, 8), SP_OK);
+    assertok(S->nodes.freed_obj == 2 && sp_checktree(t));
+    assertok(sp_checkcursor(&C, 0));
+    sp_refillpool(&S->nodes, d), cnt = 1 << 20;
+    sp_asserttree(
+            t, 1,
+            innerV(leafV(9, 1, 10, 1, 11, 1, 12, 1, 0, 0),
+                   leafV(13, 1, 14, 1, 15, 1, 16, 1, 0, 0), NULL));
+    sp_freetree(t);
+    t = treeV(
+            2, innerV(innerV(leafV(1, 1, 2, 1, 0, 0), leafV(3, 1, 4, 1, 0, 0),
+                             NULL),
+                      innerV(leafV(5, 1, 6, 1, 0, 0), leafV(7, 1, 8, 1, 0, 0),
+                             NULL),
+                      NULL));
+    asserteq(sp_seek(&C, t, 1), SP_OK);
+    d = sp_drainpool(&S->nodes), cnt = 0;
+    asserteq(sp_remove(&C, 5), SP_OK);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 1));
+    sp_refillpool(&S->nodes, d), cnt = 1 << 20;
+    sp_asserttree(t, 0, leafV(1, 1, 7, 1, 8, 1, 0, 0));
+    sp_freetree(t), sp_close(S);
+}
+
+/* fill exactness through the tree-tail branch: filling at the virtual tail
+ * re-appends through makeroom, whose full path needs the same levels + 2
+ * nodes as the plain append */
+TEST(fill_need) {
+    int       cnt = 1 << 20;
+    sp_State *S = sp_open(&oom_alloc, &cnt);
+    sp_Tree  *t = spT_sattree(S), *e;
+    sp_Cursor C;
+    sp_Drain  d;
+    size_t    total = sp_bytes(t), need = (size_t)t->levels + 2;
+    assertok(t->levels == 1 && sp_checktree(t));
+    e = spT_sattree(S);
+    asserteq(sp_seek(&C, t, total), SP_OK);
+    spT_assertfullpath(&C);
+    d = sp_drainpool(&S->nodes), spT_keep(&d, &S->nodes, need - 1), cnt = 0;
+    asserteq(sp_fill(&C, 99, 1), SP_ERRMEM);
+    assertok(S->nodes.freed_obj == need - 1 && sp_checkcursor(&C, total));
+    sp_refillpool(&S->nodes, d), cnt = 1 << 20;
+    assertok(sp_comparetree(t, e));
+    sp_freetree(e);
+    d = sp_drainpool(&S->nodes), spT_keep(&d, &S->nodes, need), cnt = 0;
+    asserteq(sp_fill(&C, 99, 1), SP_OK);
+    asserteq(S->nodes.freed_obj, 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, total + 1));
+    sp_refillpool(&S->nodes, d), cnt = 1 << 20;
+    sp_asserttree(
+            t, 2,
+            innerV(innerV(leafV(1, 1, 2, 1, 3, 1, 4, 1, 0, 0),
+                          leafV(5, 1, 6, 1, 7, 1, 8, 1, 0, 0), NULL),
+                   innerV(leafV(9, 1, 10, 1, 11, 1, 12, 1, 0, 0),
+                          leafV(13, 1, 14, 1, 0, 0),
+                          leafV(15, 1, 16, 1, 99, 1, 0, 0), NULL),
+                   NULL));
+    sp_freetree(t), sp_close(S);
+}
+
+/* splice budget: the removal leg draws nothing and only widens the pool,
+ * so the whole operation lives on the append budget levels + 2.  The
+ * del == 0 leg is the plain append witness (refusal then exact draw);
+ * the two-phase legs are removals that draw nothing plus a re-insert */
+TEST(splice_need) {
+    int       cnt = 1 << 20;
+    sp_State *S = sp_open(&oom_alloc, &cnt);
+    sp_Tree  *t = spT_sattree(S), *e;
+    sp_Cursor C;
+    sp_Drain  d;
+    size_t    need = (size_t)t->levels + 2;
+    assertok(t->levels == 1 && sp_checktree(t));
+    e = spT_sattree(S);
+    asserteq(sp_seek(&C, t, 0), SP_OK);
+    spT_assertfullpath(&C);
+    d = sp_drainpool(&S->nodes), spT_keep(&d, &S->nodes, need - 1), cnt = 0;
+    asserteq(sp_splice(&C, 0, 1), SP_ERRMEM);
+    assertok(S->nodes.freed_obj == need - 1 && sp_checkcursor(&C, 0));
+    sp_refillpool(&S->nodes, d), cnt = 1 << 20;
+    assertok(sp_comparetree(t, e));
+    sp_freetree(e);
+    d = sp_drainpool(&S->nodes), spT_keep(&d, &S->nodes, need), cnt = 0;
+    asserteq(sp_splice(&C, 0, 1), SP_OK);
+    asserteq(S->nodes.freed_obj, 0);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 1));
+    sp_refillpool(&S->nodes, d), cnt = 1 << 20;
+    sp_asserttree(
+            t, 2,
+            innerV(innerV(leafV(0, 1, 1, 1, 2, 1, 0, 0),
+                          leafV(3, 1, 4, 1, 0, 0),
+                          leafV(5, 1, 6, 1, 7, 1, 8, 1, 0, 0), NULL),
+                   innerV(leafV(9, 1, 10, 1, 11, 1, 12, 1, 0, 0),
+                          leafV(13, 1, 14, 1, 15, 1, 16, 1, 0, 0), NULL),
+                   NULL));
+    sp_freetree(t);
+    t = spT_sattree(S);
+    asserteq(sp_seek(&C, t, 0), SP_OK);
+    d = sp_drainpool(&S->nodes), spT_keep(&d, &S->nodes, need), cnt = 0;
+    asserteq(sp_splice(&C, 1, 1), SP_OK);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 1));
+    sp_refillpool(&S->nodes, d), cnt = 1 << 20;
+    sp_asserttree(
+            t, 1,
+            innerV(leafV(0, 1, 2, 1, 3, 1, 4, 1, 0, 0),
+                   leafV(5, 1, 6, 1, 7, 1, 8, 1, 0, 0),
+                   leafV(9, 1, 10, 1, 11, 1, 12, 1, 0, 0),
+                   leafV(13, 1, 14, 1, 15, 1, 16, 1, 0, 0), NULL));
+    sp_freetree(t);
+    /* ins == 0 is a pure removal, so the budget is 0 and even a fully
+     * drained pool must complete it */
+    t = spT_sattree(S);
+    asserteq(sp_seek(&C, t, 0), SP_OK);
+    d = sp_drainpool(&S->nodes), cnt = 0;
+    asserteq(sp_splice(&C, 1, 0), SP_OK);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 0));
+    sp_refillpool(&S->nodes, d), cnt = 1 << 20;
+    sp_asserttree(
+            t, 1,
+            innerV(leafV(2, 1, 3, 1, 4, 1, 0, 0),
+                   leafV(5, 1, 6, 1, 7, 1, 8, 1, 0, 0),
+                   leafV(9, 1, 10, 1, 11, 1, 12, 1, 0, 0),
+                   leafV(13, 1, 14, 1, 15, 1, 16, 1, 0, 0), NULL));
     sp_freetree(t), sp_close(S);
 }
 
@@ -1317,44 +1568,6 @@ TEST(inherit_edges) {
     sp_freetree(t), sp_close(S);
 }
 
-/* splice whose remove step runs out of memory: the first reserve
- * succeeds, the remove's deeper reserve must fail and surface
- * SP_ERRMEM (del > 0 && r != SP_OK path in sp_splice) */
-TEST(splice_oom) {
-    OomCount  oc = {0, 1 << 20};
-    sp_State *S = sp_open(&oomcount_alloc, &oc);
-    sp_Tree  *t = sp_newtree(S);
-    sp_Cursor C;
-    sp_Drain  d;
-    size_t    keep;
-    assertok(t != NULL);
-    asserteq(sp_seek(&C, t, 0), SP_OK);
-    asserteq(sp_append(&C, 20), SP_OK);
-    asserteq(sp_append(&C, 20), SP_OK);
-    asserteq(sp_append(&C, 20), SP_OK);
-    asserteq(sp_append(&C, 20), SP_OK);
-    asserteq(sp_append(&C, 20), SP_OK);
-    asserteq(sp_append(&C, 20), SP_OK);
-    asserteq(sp_append(&C, 20), SP_OK);
-    asserteq(sp_append(&C, 20), SP_OK);
-    asserteq(sp_append(&C, 20), SP_OK);
-    asserteq(sp_append(&C, 20), SP_OK);
-    assertok(sp_checktree(t));
-    d = sp_drainpool(&S->nodes);
-    keep = 3 * (size_t)t->levels + 4;
-    {
-        size_t i;
-        void  *cur = d.chain;
-        for (i = 0; i < keep && cur; ++i) cur = *(void **)cur;
-        if (cur) *(void **)cur = NULL; /* detach the tail we keep */
-        S->nodes.freed = d.chain, S->nodes.freed_obj = keep;
-    }
-    oc.oom = 0;
-    asserteq(sp_seek(&C, t, 10), SP_OK);
-    asserteq(sp_splice(&C, 5, 3), SP_ERRMEM);
-    sp_freetree(t), sp_close(S);
-}
-
 /* append at the tree head inherits nothing (id 0); append at the
  * tree tail (poff == len) inherits the current segment id */
 TEST(inherit_head_tail) {
@@ -1587,6 +1800,25 @@ TEST(remove_empty_deep) {
     asserteq(ids[2], 3);
     asserteq(lens[2], 1);
     assertok(sp_checktree(t));
+    sp_freetree(t), sp_close(S);
+}
+
+/* the settle pass after stitchnode is what removes the dead level: the
+ * final foldnode(0) merges the root's two children after the in-loop
+ * shrink guard has already run, so without that pass the settled tree is
+ * levels == 2 with a single root child instead of levels == 1 with two */
+TEST(stitch_rootshrink) {
+    sp_State *S = sp_open(NULL, NULL);
+    sp_Tree  *t = treeV(
+            2,
+            innerV(innerV(leafV(1, 1, 0, 0), leafV(2, 1, 0, 0), NULL),
+                   innerV(leafV(3, 1, 0, 0), leafV(4, 1, 0, 0), NULL), NULL));
+    sp_Cursor C;
+    asserteq(sp_seek(&C, t, 0), SP_OK);
+    asserteq(sp_remove(&C, 1), SP_OK);
+    assertok(sp_checktree(t) && sp_checkcursor(&C, 0));
+    sp_asserttree(
+            t, 1, innerV(leafV(2, 1, 3, 1, 0, 0), leafV(4, 1, 0, 0), NULL));
     sp_freetree(t), sp_close(S);
 }
 
@@ -2106,13 +2338,21 @@ static sp_Id arb_uniq(void *ud, sp_Id id, sp_Id old, sp_Mask *mask) {
 
 /* 144 one-byte segments with distinct ids, built through the public
  * API so the tree reaches the same multi-level shape. */
-static void mkfilltree(sp_State *S, sp_Tree *t) {
-    sp_Id  ids[144];
-    size_t lens[144];
-    int    i;
-    (void)S;
+static sp_Tree *mkfilltree(sp_State *S) {
+    sp_Tree *t = sp_newtree(S);
+    sp_Id    ids[144];
+    size_t   lens[144];
+    int      i;
     for (i = 0; i < 144; ++i) ids[i] = (sp_Id)(i + 1), lens[i] = 1;
     sp_mkstream(t, ids, lens, 144);
+    return t;
+}
+
+/* model twin of the sweep's tree shapes: n one-byte runs with ids 1..n */
+static void mkbytemodel(size_t n) {
+    size_t i;
+    mn = (int)n, mbytes = n;
+    for (i = 0; i < n; ++i) msegs[i].len = 1, msegs[i].id = (sp_Id)(i + 1);
 }
 
 #if defined(__clang__)
@@ -2139,19 +2379,16 @@ TEST(fill_brute) {
     sp_Arbiterf *arbs[2];
     char         want[4096], got[4096];
     size_t       pos, len;
-    int          a, i;
+    int          a;
     arbs[0] = arb_overwrite, arbs[1] = arb_uniq;
     for (a = 0; a < 2; ++a)
         for (pos = 0; pos <= 145; ++pos)
             for (len = 1; len <= 146; ++len) {
-                sp_Tree  *t = sp_newtree(S);
+                sp_Tree  *t = mkfilltree(S);
                 sp_Cursor C;
                 SpRef     bref;
                 long      counts[SP_REFN];
-                mkfilltree(S, t);
-                mn = 144, mbytes = 144;
-                for (i = 0; i < 144; ++i)
-                    msegs[i].len = 1, msegs[i].id = (sp_Id)(i + 1);
+                mkbytemodel(144);
                 if (a == 0) {
                     memset(&bref, 0, sizeof(SpRef));
                     spA_seed(&bref, t), sp_setarbiter(t, spA_ref, &bref);
@@ -2189,6 +2426,89 @@ TEST(fill_brute) {
                     abort();
                 }
             }
+    sp_close(S);
+}
+
+/* ---- splice_brute: exhaustive (pos,del,ins) on both witness shapes ---- */
+
+/* sweep shapes: the multi-level fill tree (deep stitch paths), and the
+ * saturated one-level tree whose every path is full -- the witness where an
+ * append must root-split and split once per level, drawing the whole
+ * levels + 2 budget */
+typedef struct {
+    sp_Tree *(*mk)(sp_State *);
+    size_t n;
+} SpShape;
+
+/* one sweep: every (pos, del, ins) with the page allocator dead (*pcnt = 0)
+ * and the pool cut to exactly the entry budget.  The chain is the judge, so
+ * an append that overdraws trips the ralloc check and one that asks for a
+ * page comes back SP_ERRMEM; every case must land the model's segment
+ * stream with the cursor at pos + ins.  Returns the append-only cases that
+ * ended on an empty chain -- del == 0 reclaims nothing, so those are the
+ * ones that drew their whole levels + 2 */
+static size_t splice_sweep(sp_State *S, int *pcnt, const SpShape *sh) {
+    char   want[4096], got[4096];
+    size_t pos, del, ins, need, tight = 0;
+    for (pos = 0; pos <= sh->n + 1; ++pos)
+        for (del = 0; del <= sh->n + 1; ++del)
+            for (ins = 0; ins <= 1; ++ins) {
+                sp_Tree  *t = sh->mk(S);
+                sp_Cursor C;
+                sp_Drain  d;
+                mkbytemodel(sh->n);
+                mremove(pos, del);
+                minsert(pos, ins, 1);
+                asserteq(sp_seek(&C, t, pos), SP_OK);
+                need = ins ? (size_t)t->levels + 2 : 0;
+                d = sp_drainpool(&S->nodes);
+                if (need) spT_keep(&d, &S->nodes, need);
+                *pcnt = 0;
+                asserteq(sp_splice(&C, del, ins), SP_OK);
+                if (del == 0 && ins && S->nodes.freed_obj == 0) tight += 1;
+                sp_refillpool(&S->nodes, d), *pcnt = 1 << 20;
+                mserial(want), sp_serialtree(t, got);
+                if (!sp_checktree(t) || strcmp(want, got) != 0
+                    || !sp_checkcursor(&C, pos + ins)) {
+                    test_log(
+                            "splice_brute n=%lu pos=%lu del=%lu ins=%lu"
+                            " off=%lu\n",
+                            test_lu(sh->n), test_lu(pos), test_lu(del),
+                            test_lu(ins), test_lu(sp_offset(&C)));
+                    test_log("want=%s\ngot =%s\n", want, got);
+                    sp_dumptree(t, "TREE");
+                    mdump();
+                    abort();
+                }
+                sp_freetree(t);
+                if (S->nodes.live_obj != 0) {
+                    test_log(
+                            "splice_brute LEAK n=%lu live=%lu\n",
+                            test_lu(sh->n), test_lu(S->nodes.live_obj));
+                    abort();
+                }
+            }
+    return tight;
+}
+
+TEST(splice_brute) {
+    static const SpShape shapes[] = {
+            {mkfilltree, 144},
+            {spT_sattree, SP_FANOUT * SP_FANOUT},
+    };
+    int       cnt = 1 << 20;
+    sp_State *S = sp_open(&oom_alloc, &cnt);
+    size_t    sh, tight = 0;
+    int       i;
+    /* two built-and-freed trees leave the page supply on the freelist, so
+     * every case cuts its budget out of the chain without a page alloc */
+    for (i = 0; i < 2; ++i) sp_freetree(mkfilltree(S));
+    for (sh = 0; sh < sizeof(shapes) / sizeof(shapes[0]); ++sh)
+        tight += splice_sweep(S, &cnt, &shapes[sh]);
+    /* the saturated shape has to reach the tight end: an append at the tree
+     * head pads a fresh span through makeroom, which root-splits and splits
+     * once per level -- exactly levels + 2 objects, drawn to the last one */
+    assertok(tight > 0);
     sp_close(S);
 }
 

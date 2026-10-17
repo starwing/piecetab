@@ -83,7 +83,7 @@ struct lc_Cursor {
 ### lc_Pool / lc_State
 
 池分配器：每页 `LC_PAGE_SIZE`(65536)，freelist 回收。`nodes` 池 (`sizeof(lc_Node)`) 与 `leaves` 池 (`sizeof(lc_Leaf)`) 独立。
-`lcP_reserve(n)` 保证池中 ≥ n 个可用对象，用于事务（stitch 入口预分配防 OOM）。
+`lcP_reserve(n)` 保证池中 ≥ n 个可用对象；库内三个站点：`lc_append` 的 stitch 预算、`lcD_checkchain`（`lcD_findroom` / `lc_scan`）、`lcB_makeroom`。
 
 ## 三、关键常量
 
@@ -140,7 +140,7 @@ grep '^static' linecache.h
 | ------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `lcK_` | 游标导航  | `findleaf`, `findline`, `findinleaf`, `locend`, `forwardoff`, `backwardoff`, `forwardline`, `backwardline`                                                                                                   |
 | `lcB_` | 行断/插入 | `oneline`, `makeroom`, `splitroot`, `splitchild`, `splitleaf`, `putbreak`, `append`, `cutleaf`, `fixsource`, `rollback`                                                                                      |
-| `lcD_` | 删除/平衡 | `trimleft`, `trimright`, `balanceleaf`, `balancenode`, `foldleaf`, `foldnode`, `rebalance`, `leaf`, `range`, `makechain`, `findroom`, `mergeleaf`, `backwardnode`, `stitch`, `stitchnode`, `checkstitch` |
+| `lcD_` | 删除/平衡 | `trimleft`, `trimright`, `balanceleaf`, `balancenode`, `foldleaf`, `foldnode`, `rebalance`, `shrinkroot`, `leaf`, `range`, `makechain`, `findroom`, `mergeleaf`, `backwardnode`, `stitch`, `stitchnode`, `checkstitch` |
 | `lcM_` | 度量      | `up` (自底向上传播 bytes/breaks 至根)                                                                                                                                                                        |
 | `lcN_` | 节点操作  | `sumbytes`, `sumbreaks`, `makespace`, `copy`, `move`, `remove`, `freechildren`                                                                                                                               |
 | `lcL_` | 叶操作    | `sumbytes` (宏 `lcL_new`, `lcN_leaf`)                                                                                                                                                                          |
@@ -152,7 +152,7 @@ grep '^static' linecache.h
 
 当 append 填满父节点且当前叶也满时返回 >0，触发扩容：
 1. 自底向上寻首个非满层
-2. `lcD_makechain` 建空节点链（reserve 预分配，OOM 安全返回 `LC_ERRMEM`）
+2. `lcD_makechain` 建空节点链（纯分配；预算由 `lcD_checkchain` 或调用方在搬尾部之前给足）
 3. 下轮 append 填入新链
 
 扫完后自顶向下 foldnode→foldleaf→rebalance 平衡树。`i == cc` 状态由 foldleaf 内部消化。
@@ -176,8 +176,8 @@ grep '^static' linecache.h
 1. **嵌入 root**: `lc_Cache.root` 是值非指针 — 省一次分配，免 OOM 于建树
 2. **叶无 child_count**: 行数由父 `breaks[i]` 决定，冗余由上层约束保证
 3. **度量双计**: bytes + breaks 双数组允许 O(log n) 双向导航
-4. **lc_splice 事务性**: 删除路径在入口 reserve `levels + 2` 后直调 `lcD_remove`（失败在任何修改之前返回 `LC_ERRMEM`；公共 `lc_remove` 用同一入口形态）；插入路径仅改叶内字节、不分配；任一步失败时树保持删除前状态
-5. **stitch 事务性**: `lc_remove` 入口 reserve `levels + 2` 个节点，`stitch` 入口 assert 池内已有该数量、且光标处于容器末段（`idx >= cc - 1`），stitch 全程不再分配。`lc_append` 走 `lcD_checkstitch` 做同一 reserve
+4. **`lc_remove` / `lc_splice` 零预留**: 删段的峰值缺口是 0 —— 删段先由 `cutrange` / `lcN_remove` 把切掉的 children 回池，`stitchnode` 的 `makechain` 才分配，回收物即预算（`remove_need` / `splice_need` 以「两池抽干 + 页分配关死 + 零预算」见证）。两者都不 reserve，成功路径只返回 `LC_OK`；`lc_splice` 的 `ins` 相只改叶内字节与 `col`，不分配
+5. **stitch 合同**: `lcD_stitch` 入口只 assert 光标处于容器末段（`i >= cc - 1`），不再 assert 池内下界；节点预算按站点自付——`lc_append` 在 `lcD_stitch` 前 `lcP_reserve(S, &S->nodes, levels + 2)` 一次（`append_need` / `insert_need`），`lcD_findroom` 内 `lcD_checkchain` 逐段（`scan_need`），`lcB_makeroom` 的 `c`（`markbreak_need`）
 6. **balanceleaf rounding**: `d = l - ((l + r + 1) >> 1)` 向上取整，与 foldleaf 游标修正断言强耦合（`assert((dl<0) != (*ls!=o))`）— 修改均分公式需同步改调用方
 7. **游标 epoch**: `lc_Cache.epoch` 是原地修改代次，`lc_Cursor.epoch` 在 `lc_seek`/`lc_seekline` 时捕获，`lc_valid(C)` 判定已附着且相等。解引用 `paths` 的入口（`lc_locate`/`lc_locline`/`lc_advance`/`lc_advline`/`lc_linelen`/`lc_markbreak`/`lc_append`/`lc_insert`/`lc_splice`/`lc_remove`）先过 `lc_valid`，过期游标返回 `LC_ERRPARAM`（`lc_linelen` 返回 0）；编辑成功后由 `lcS_ok` 递增 tree epoch 并刷新当前游标。无操作路径（`len == 0`、`off >= bytes`、`ins == 0`、`del == 0 && ins == 0`、`lc_append` 空 sc）不 reserve 也不递增；`lc_remove` / `lc_splice` 各只递增一次，`lc_markbreak` 在 `len > rm` 需先 `lc_splice` 补齐时递增两次（`lc_splice` 一次 + 收尾一次）。`lc_scan` 是树级修改，同样递增并失效其他游标。
 8. **cutrange 的 0 长特判**：`lcD_cutrange:487` / `:492` 用 `i += (k || p->breaks[i] == 0);` 把切点处的 0 长槽**随切点一起**删去（不搬进 `rt`、也不留给 stitch）。linecache 的负载度量是**行数** `breaks[]`，故写 `breaks[i] == 0`；piecetab / spantree 的度量是 span，写 `p->bytes[i] == 0`（`ptD_cutrange:723/728`、`spD_cutrange:459/464`）——同一个意图，不同度量。理由是"树内不得存在 0 长槽"：中间槽 `bytes == 0` 会让 `poff >= bytes` 把该槽误判为耗尽，导航（`lc_next` 等）与虚拟尾判定失效；删除路径靠这行特判维持，survivor 因此永不为 0 长槽。
@@ -367,8 +367,8 @@ grep '^static.*lcX_' linecache.h
 | `lc_append` | — | C==NULL→ERRPARAM | 正常追加 | 回滚sC→ERRMEM |
 | `lc_insert` | — | 同 append | 同 append | 同 append |
 | `lc_markbreak` | — | C==NULL/len==0→ERRPARAM | 直接建单行树 | splice 预分配失败→ERRMEM（树不变） |
-| `lc_splice` | off≥bytes→仅col+=ins | del=0,ins=0→完全无操作 | col+=ins | 入口 reserve 后直调 `lcD_remove` |
-| `lc_remove` | `len==0` 或 `off>=bytes`→无操作；`len` 超尾→截断到树尾，`C` 所在行整体删除 | 过期/未附着游标→ERRPARAM；`len==0`→无操作 | 无操作 | 入口 reserve `levels+2` 失败→ERRMEM（树不变） |
+| `lc_splice` | off≥bytes→仅col+=ins | del=0,ins=0→完全无操作 | col+=ins | `del` 相直调 `lc_remove`（零预留）；`ins` 相只改叶内字节 / `col` |
+| `lc_remove` | `len==0` 或 `off>=bytes`→无操作；`len` 超尾→截断到树尾，`C` 所在行整体删除 | 过期/未附着游标→ERRPARAM；`len==0`→无操作 | 无操作 | 零预留（峰值缺口 0）；除 `ERRPARAM` 外恒 `LC_OK` |
 | `lc_valid` | 过期→0 | C==NULL→0 | 未附着→0 | 无分配 |
 | `lc_seek` | **软 clamp**, col=excess | C/c==NULL→ERRPARAM | 跳 locend, col=n | 无分配 |
 | `lc_seekline` | **硬 ERR_PARAM** | C/c==NULL→ERRPARAM | paths[0]=root.children | 无分配 |

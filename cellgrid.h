@@ -298,16 +298,14 @@ CG_API int cg_begin(cg_Grid *G, int top, int rows, int cols) {
         r = cgF_resize(G, rows, cols);
     if (r != CG_OK) return r;
     if (G->all_dirty) G->off = 0;
-    /* delta==0 keeps the ring offset rotated by the last scroll frame:
-     * resetting it misaligns cur vs back -> spurious full redraw */
+    /* delta == 0 keeps the ring offset: resetting misaligns cur/back */
     if (G->all_dirty || (delta = G->top - top) == 0)
         return G->top = top, G->scroll = 0, CG_OK;
     G->top = top, G->scroll = delta;
     if (delta < 0 ? -delta >= G->rows : delta >= G->rows)
         return G->off = 0, G->all_dirty = 1, G->scroll = 0, CG_OK;
     G->off = (G->off - delta + G->rows) % G->rows;
-    /* rows the scroll leaves physically blank: blank cur+back so diff
-     * redraws them fully -- skip never matches an empty back row */
+    /* blank scrolled-out rows in cur+back so the diff redraws them */
     if (delta > 0)
         for (row = 0; row < delta; ++row) cgF_blankrow(G, row);
     else
