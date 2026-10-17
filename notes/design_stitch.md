@@ -692,7 +692,8 @@
 
 - `[P]` 的预算来源是 COW：入口要复制整条路径（`levels` 个节点），删段 / 插段还要复制邻居（`foldnode` 的 `ptK_cow`、插段分裂的 `splitroot` / `splitchild`）。这是 `[P]` 与 `[L]`/`[S]` 的唯一预算级差异。
 - `[P]` 的入口独占整段预算：`ptD_remove` / `ptI_append` 内不再预留，因此入口值即一次调用的上界；`ptK_beginedit` 在预留之后执行，失败时树与 cursor 不变。
-- `[P]` 的峰值可用性由单测钉住：`append_need` / `insert_need` / `remove_need` / `edit_need` / `splice_need` 在恰好预算处成功且 `nodes.freed_obj == 0`，少一个节点即 `PT_ERRMEM` 或 `ptP_ralloc` 断言。
+- `[P]` 的峰值可用性由单测钉住：`append_need` / `insert_need` / `remove_need` / `edit_need` / `splice_need` 在恰好预算处成功且 `nodes.freed_obj == 0`，少一个节点即 `PT_ERRMEM` 或 `ptP_ralloc` 断言；这些见证树都是饱和形态（`levels <= 3`，fanout 4 再深需要 4^levels 片）。
+- `[P]` 的线性项在深度上另有见证：`pt_needtree` 用 O(2^levels) 片搭出 L = 4/5 的「右脊」树（cursor 路径每层都满，其余子树最小），`remove_deep_brute` / `edit_deep_brute` 对全部 cursor 位置做 A/B（恰好预算跑通、少一个即 `PT_ERRMEM`）——`edit` 在 L = 5 实测花 `|L| + (L + 2) = 12` 个节点，链长随 `L` 增长的假设由此实测确认；该形态仍留 ≥5 个余量，公式的紧端仍由饱和形态见证。
 
 
 ### 3.21 插入路径的分工与命名（三库对照）

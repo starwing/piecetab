@@ -275,6 +275,67 @@ PT_STATIC pt_Buffer pt_sattree_(pt_State *S, unsigned levels, int wide) {
 #define pt_sattree(S, levels)    pt_sattree_((S), (levels), -1)
 #define pt_satwide(S, levels, w) pt_sattree_((S), (levels), (w))
 
+/* pt_needtree -- right-spine tree for depth scaling: every node on the
+ * last-slot path holds PT_FANOUT children, so an edit at the tree tail has
+ * to root-push and chain one node per level, while the tree keeps only
+ * O(2^levels) containers instead of PT_FANOUT^levels. */
+PT_STATIC pt_Node *pt_needleaf_(pt_State *S, char *buf, unsigned *pk) {
+    pt_Node *n = (pt_Node *)ptP_alloc(S, &S->nodes);
+    unsigned i;
+    ptN_setcc(n, 2), n->version = 0, n->mask = 0;
+    for (i = 0; i < 2; ++i) {
+        n->children[i] = (pt_Node *)(buf + 2 * *pk), n->bytes[i] = 1;
+        *pk += 1;
+    }
+    return n;
+}
+
+PT_STATIC pt_Node *pt_needfill_(
+        pt_State *S, char *buf, unsigned *pk, unsigned h) {
+    pt_Node *n;
+    unsigned i;
+    if (h == 0) return pt_needleaf_(S, buf, pk);
+    n = (pt_Node *)ptP_alloc(S, &S->nodes);
+    ptN_setcc(n, 2), n->version = 0, n->mask = 0;
+    for (i = 0; i < 2; ++i) {
+        n->children[i] = pt_needfill_(S, buf, pk, h - 1);
+        n->bytes[i] = ptN_sumbytes(
+                n->children[i], 0, n->children[i]->child_count);
+    }
+    return n;
+}
+
+PT_STATIC pt_Node *pt_needspine_(
+        pt_State *S, char *buf, unsigned *pk, unsigned h) {
+    pt_Node *n;
+    unsigned i;
+    n = (pt_Node *)ptP_alloc(S, &S->nodes);
+    ptN_setcc(n, PT_FANOUT), n->version = 0, n->mask = 0;
+    if (h == 0) {
+        for (i = 0; i < PT_FANOUT; ++i) {
+            n->children[i] = (pt_Node *)(buf + 2 * *pk), n->bytes[i] = 1;
+            *pk += 1;
+        }
+        return n;
+    }
+    for (i = 0; i + 1 < PT_FANOUT; ++i)
+        n->children[i] = pt_needfill_(S, buf, pk, h - 1);
+    n->children[PT_FANOUT - 1] = pt_needspine_(S, buf, pk, h - 1);
+    for (i = 0; i < PT_FANOUT; ++i)
+        n->bytes[i] = ptN_sumbytes(
+                n->children[i], 0, n->children[i]->child_count);
+    return n;
+}
+
+PT_STATIC pt_Buffer pt_needtree_(pt_State *S, unsigned levels) {
+    static char buf[4096];
+    unsigned    pk = 0;
+    assertok(levels <= 6);
+    return treeV_(S, levels, pt_needspine_(S, buf, &pk, levels));
+}
+
+#define pt_needtree(S, levels) pt_needtree_((S), (levels))
+
 /* witness predicate: every node on the cursor path is full */
 PT_STATIC void pt_assertfullpath(pt_Cursor *C) {
     int l;
@@ -677,6 +738,130 @@ TEST(edit_need) {
 }
 
 /* splice is the same shape: delete across the boundary, then insert */
+/* Depth sweep: the deepest tree the saturated fixtures can build is
+ * levels = 3 (fanout 4 needs 4^levels pieces), so the linear terms of the
+ * reserve formulas are only exercised up to L = 3.  pt_needtree reaches
+ * L = 4..5 with O(2^levels) containers; with exactly the formula's nodes
+ * available and the page allocator dead, every cursor position has to
+ * fit (a shortfall trips ptP_ralloc's check or returns PT_ERRMEM). */
+/* Depth sweep: the saturated fixtures reach levels = 3 at most (fanout 4
+ * needs 4^levels pieces), so the linear terms of the reserve formulas are
+ * only exercised up to L = 3.  pt_needtree reaches L = 4..5 with
+ * O(2^levels) containers.  Every cursor position is checked twice: with
+ * exactly the formula's nodes the operation has to pass with the page
+ * allocator dead, and one node short the entry reserve has to refuse. */
+TEST(remove_deep_brute) {
+    static const size_t lens[3] = {1, 3, 9};
+    int                 cnt = 1000, nok = 0;
+    pt_State           *S = pt_open(&oom_alloc, &cnt);
+    pt_Buffer           src;
+    pt_Cursor           c;
+    pt_Drain            dn;
+    size_t              need, pos, total;
+    unsigned            lv, li;
+
+    for (lv = 5; lv >= 4; --lv) {
+        src = pt_needtree(S, lv), total = pt_bytes(src);
+        pt_release(src);
+        for (pos = 0; pos <= total; ++pos)
+            for (li = 0; li < 3; ++li) {
+                src = pt_needtree(S, lv);
+                pt_seek(&c, src, pos);
+                pt_release(pt_needtree(S, lv));
+                pt_release(pt_from(S, "x", 1));
+                need = 2 * (size_t)ptK_levels(&c) + 2;
+                dn = pt_drainpool(&S->nodes);
+                pt_keep(&dn, &S->nodes, need);
+                cnt = 0;
+                asserteq(pt_remove(&c, lens[li]), PT_OK);
+                nok += 1;
+                cnt = 1000;
+                pt_refillpool(&S->nodes, dn);
+                assertok(pt_checktree(c.tree) && pt_checkcursor(&c, pos));
+                if (c.tree != src) pt_release(c.tree);
+                pt_release(src);
+                if (pos == total) continue;
+                src = pt_needtree(S, lv);
+                pt_seek(&c, src, pos);
+                pt_release(pt_needtree(S, lv));
+                pt_release(pt_from(S, "x", 1));
+                dn = pt_drainpool(&S->nodes);
+                pt_keep(&dn, &S->nodes, need - 1);
+                cnt = 0;
+                asserteq(pt_remove(&c, lens[li]), PT_ERRMEM);
+                cnt = 1000;
+                pt_refillpool(&S->nodes, dn);
+                assertok(
+                        !c.dirty && pt_checktree(src)
+                        && pt_checkcursor(&c, pos));
+                pt_release(src);
+            }
+    }
+    test_log("remove_deep_brute cases=%d\n", nok);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
+TEST(edit_deep_brute) {
+    static const size_t dels[3] = {0, 1, 4};
+    int                 cnt = 1000, nok = 0;
+    pt_State           *S = pt_open(&oom_alloc, &cnt);
+    pt_Buffer           src;
+    pt_Cursor           c;
+    pt_Drain            dn, dh;
+    size_t              need, pos, total;
+    unsigned            lv, di;
+
+    for (lv = 5; lv >= 4; --lv) {
+        src = pt_needtree(S, lv), total = pt_bytes(src);
+        pt_release(src);
+        for (pos = 0; pos <= total; ++pos)
+            for (di = 0; di < 3; ++di) {
+                src = pt_needtree(S, lv);
+                pt_seek(&c, src, pos);
+                pt_release(pt_needtree(S, lv));
+                pt_release(pt_from(S, "x", 1));
+                pt_release(treeV(0, leafV(holeV("hh"), holeV("ii"))));
+                need = 3 * (size_t)ptK_levels(&c) + 3;
+                dn = pt_drainpool(&S->nodes);
+                pt_keep(&dn, &S->nodes, need);
+                dh = pt_drainpool(&S->holes);
+                pt_keep(&dh, &S->holes, 2);
+                cnt = 0;
+                asserteq(pt_edit(&c, dels[di], "Z", 1), PT_OK);
+                nok += 1;
+                cnt = 1000;
+                pt_refillpool(&S->holes, dh), pt_refillpool(&S->nodes, dn);
+                assertok(pt_checktree(c.tree) && pt_checkcursor(&c, pos + 1));
+                if (c.tree != src) pt_release(c.tree);
+                pt_release(src);
+                if (pos == total) continue;
+                src = pt_needtree(S, lv);
+                pt_seek(&c, src, pos);
+                pt_release(pt_needtree(S, lv));
+                pt_release(pt_from(S, "x", 1));
+                pt_release(treeV(0, leafV(holeV("hh"), holeV("ii"))));
+                dn = pt_drainpool(&S->nodes);
+                pt_keep(&dn, &S->nodes, need - 1);
+                dh = pt_drainpool(&S->holes);
+                pt_keep(&dh, &S->holes, 2);
+                cnt = 0;
+                asserteq(pt_edit(&c, dels[di], "Z", 1), PT_ERRMEM);
+                cnt = 1000;
+                pt_refillpool(&S->holes, dh), pt_refillpool(&S->nodes, dn);
+                assertok(
+                        !c.dirty && pt_checktree(src)
+                        && pt_checkcursor(&c, pos));
+                pt_release(src);
+            }
+    }
+    test_log("edit_deep_brute cases=%d\n", nok);
+    asserteq(S->nodes.live_obj, 0);
+    asserteq(S->holes.live_obj, 0);
+    pt_close(S);
+}
+
 TEST(splice_need) {
     int       cnt = 1000;
     pt_State *S = pt_open(&oom_alloc, &cnt);

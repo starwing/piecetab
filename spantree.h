@@ -1105,7 +1105,7 @@ SP_API sp_Id sp_next(sp_Cursor *C, int ns, size_t *plen) {
     bc = p->bytes[i];
     while ((i = spN_findslot(p, i + 1, 1, bit, &bc)) == spN_cc(p)) {
         if (--l < 0)
-            return (bit ? spK_locend(C) : (C->poff = bc)), spS_none(plen);
+            return (bit ? spK_locend(C) : (int)(C->poff = bc)), spS_none(plen);
         i = spK_idx(C, p = spK_parent(C, l), l);
     }
     C->paths[l] = &p->children[i];

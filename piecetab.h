@@ -955,7 +955,7 @@ static void ptD_stitch(pt_Cursor *C) {
         --C->paths[l], C->poff += p->bytes[cc - 1], C->off -= p->bytes[cc - 1];
     if ((size_t)d > C->poff) {
         ptD_backwardnode(C, 1, l), p = ptK_parent(C, l), i = ptK_idx(C, p, l);
-        d -= C->poff, C->poff = p->bytes[i], C->off -= p->bytes[i];
+        d -= (int)C->poff, C->poff = p->bytes[i], C->off -= p->bytes[i];
     }
     C->poff -= d, ptM_up(C, ptK_levels(C), 0);
 }

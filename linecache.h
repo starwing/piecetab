@@ -623,13 +623,13 @@ static int lcD_makechain(lc_Cursor *C, int from, int to) {
     return (*cp = &nn->children[0]), r;
 }
 
-static int lcD_findroom(lc_Cursor *C, int l, int nofail, int *k) {
+static int lcD_findroom(lc_Cursor *C, int l, int nofail, int *pk) {
     int      fl, c, r, i = 0;
     lc_Node *p = NULL, *rt = C->tree->S->rt;
     for (fl = l - 1; fl >= 0; --fl)
         if ((i = lcK_idx(C, p = lcK_parent(C, fl), fl)) < LC_FANOUT - 1) break;
     if (!nofail && (r = lcD_checkchain(C, fl, l)) != LC_OK) return r;
-    if (k && fl >= 0 && *k < lcK_levels(C) - fl) *k = lcK_levels(C) - fl;
+    if (pk && fl >= 0 && *pk < lcK_levels(C) - fl) *pk = lcK_levels(C) - fl;
     if (fl >= 0 && (c = lcN_cc(p) - i - 1) > 0) {
         int      k = lcK_levels(C) - fl;
         lc_Delta db = lcN_sumbytes(p, i + 1, lcN_cc(p));
